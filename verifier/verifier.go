@@ -413,7 +413,15 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	}
 	expiration := token.Expiration().Unix() - v.clock.Now().Unix()
 
-	tokenBytes, err := v.tokenSigner.Sign(token, jwa.ES256, v.signingKey)
+	var signatureAlgorithm jwa.SignatureAlgorithm
+	switch v.signingAlgorithm {
+	case "RS256":
+		signatureAlgorithm = jwa.RS256
+	case "ES256":
+		signatureAlgorithm = jwa.ES256
+	}
+
+	tokenBytes, err := v.tokenSigner.Sign(token, signatureAlgorithm, v.signingKey)
 	if err != nil {
 		logging.Log().Warnf("Was not able to sign the token. Err: %v", err)
 		return 0, "", err
