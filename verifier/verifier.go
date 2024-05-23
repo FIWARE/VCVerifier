@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ import (
 
 var ErrorNoDID = errors.New("no_did_configured")
 var ErrorNoTIR = errors.New("no_tir_configured")
+var ErrorUnsupportedKeyAlgorithm = errors.New("unsupported_key_algorithm")
 var ErrorUnsupportedValidationMode = errors.New("unsupported_validation_mode")
 var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorNoSuchSession = errors.New("no_such_session")
@@ -87,6 +89,8 @@ type CredentialVerifier struct {
 	credentialsConfig CredentialsConfig
 	// Validation services to be used on the credentials
 	validationServices []ValidationService
+	// Algorithm to be used for signing the jwt
+	signingAlgorithm string
 }
 
 // allow singleton access to the verifier
@@ -232,7 +236,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 	trustedParticipantVerificationService := TrustedParticipantValidationService{tirClient: tirClient}
 	trustedIssuerVerificationService := TrustedIssuerValidationService{tirClient: tirClient}
 
-	key, err := initPrivateKey()
+	key, err := initPrivateKey(verifierConfig.KeyAlgorithm)
 
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate a signing key. Err: %v", err)
@@ -256,6 +260,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 			&trustedParticipantVerificationService,
 			&trustedIssuerVerificationService,
 		},
+		verifierConfig.KeyAlgorithm,
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
@@ -328,7 +333,17 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 		logging.Log().Infof("Redirect uri does not match for authorization %s. Was %s but is expected %s.", authorizationCode, redirectUri, tokenSession.redirect_uri)
 		return jwtString, expiration, ErrorRedirectUriMismatch
 	}
-	jwtBytes, err := v.tokenSigner.Sign(tokenSession.token, jwa.ES256, v.signingKey)
+
+	var signatureAlgorithm jwa.SignatureAlgorithm
+
+	switch v.signingAlgorithm {
+	case "RS256":
+		signatureAlgorithm = jwa.RS256
+	case "ES256":
+		signatureAlgorithm = jwa.ES256
+	}
+
+	jwtBytes, err := v.tokenSigner.Sign(tokenSession.token, signatureAlgorithm, v.signingKey)
 	if err != nil {
 		logging.Log().Warnf("Was not able to sign the token. Err: %v", err)
 		return jwtString, expiration, err
@@ -398,7 +413,15 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	}
 	expiration := token.Expiration().Unix() - v.clock.Now().Unix()
 
-	tokenBytes, err := v.tokenSigner.Sign(token, jwa.ES256, v.signingKey)
+	var signatureAlgorithm jwa.SignatureAlgorithm
+	switch v.signingAlgorithm {
+	case "RS256":
+		signatureAlgorithm = jwa.RS256
+	case "ES256":
+		signatureAlgorithm = jwa.ES256
+	}
+
+	tokenBytes, err := v.tokenSigner.Sign(token, signatureAlgorithm, v.signingKey)
 	if err != nil {
 		logging.Log().Warnf("Was not able to sign the token. Err: %v", err)
 		return 0, "", err
@@ -700,8 +723,15 @@ func getHostName(urlString string) (host string, err error) {
 }
 
 // Initialize the private key of the verifier. Might need to be persisted in future iterations.
-func initPrivateKey() (key jwk.Key, err error) {
-	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+func initPrivateKey(keyType string) (key jwk.Key, err error) {
+	var newKey interface{}
+	if keyType == "RS256" {
+		newKey, err = rsa.GenerateKey(rand.Reader, 2048)
+	} else if keyType == "ES256" {
+		newKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	} else {
+		return key, ErrorUnsupportedKeyAlgorithm
+	}
 
 	if err != nil {
 		return nil, err
