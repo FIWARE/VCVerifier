@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"errors"
 	"net/http"
 	"net/url"
@@ -36,11 +37,11 @@ func TestVerifyConfig(t *testing.T) {
 	}
 
 	tests := []test{
-		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none"}, nil},
-		{"If no TIR is configured, the verification should fail.", configModel.Verifier{Did: "did:key:verifier", ValidationMode: "none"}, ErrorNoTIR},
-		{"If no DID is configured, the verification should fail.", configModel.Verifier{TirAddress: "http:tir.de", ValidationMode: "none"}, ErrorNoDID},
-		{"If no DID and TIR is configured, the verification should fail.", configModel.Verifier{ValidationMode: "none"}, ErrorNoDID},
-		{"If no validation mode is configured, verfication should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de"}, ErrorUnsupportedValidationMode},
+		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256"}, nil},
+		{"If no TIR is configured, the verification should fail.", configModel.Verifier{Did: "did:key:verifier", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoTIR},
+		{"If no DID is configured, the verification should fail.", configModel.Verifier{TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID},
+		{"If no DID and TIR is configured, the verification should fail.", configModel.Verifier{ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID},
+		{"If no validation mode is configured, verfication should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", KeyAlgorithm: "RS256"}, ErrorUnsupportedValidationMode},
 	}
 
 	for _, tc := range tests {
@@ -468,10 +469,11 @@ func TestInitVerifier(t *testing.T) {
 	}
 
 	tests := []test{
-		{"A verifier should be properly intantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30}}, nil},
-		{"Without a did, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30}}, ErrorNoDID},
-		{"Without a tir, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", SessionExpiry: 30, ValidationMode: "none"}}, ErrorNoTIR},
-		{"Without a validationMode, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "blub", SessionExpiry: 30}}, ErrorUnsupportedValidationMode},
+		{"A verifier should be properly intantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256"}}, nil},
+		{"Without a did, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256"}}, ErrorNoDID},
+		{"Without a tir, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", SessionExpiry: 30, ValidationMode: "none", KeyAlgorithm: "RS256"}}, ErrorNoTIR},
+		{"Without a validationMode, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "blub", SessionExpiry: 30, KeyAlgorithm: "RS256"}}, ErrorUnsupportedValidationMode},
+		{"Without a valid key algorithm, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "SomethingWeird"}}, ErrorUnsupportedKeyAlgorithm},
 	}
 
 	for _, tc := range tests {
@@ -501,21 +503,35 @@ func TestInitVerifier(t *testing.T) {
 func TestGetJWKS(t *testing.T) {
 	logging.Configure(true, "DEBUG", true, []string{})
 
-	ecdsKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	testKey, _ := jwk.New(ecdsKey)
-
-	verifier := CredentialVerifier{signingKey: testKey}
-
-	jwks := verifier.GetJWKS()
-
-	if jwks.Len() != 1 {
-		t.Errorf("TestGetJWKS: Exactly the current signing key should be included.")
+	type test struct {
+		testName string
+		key      interface{}
 	}
-	returnedKey, _ := jwks.Get(0)
-	expectedKey, _ := testKey.PublicKey()
-	// we compare the json-output to avoid address comparison instead of by-value.
-	if logging.PrettyPrintObject(expectedKey) != logging.PrettyPrintObject(returnedKey) {
-		t.Errorf("TestGetJWKS: Exactly the public key should be returned. Expected %v but was %v.", logging.PrettyPrintObject(expectedKey), logging.PrettyPrintObject(returnedKey))
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+	tests := []test{
+		{"The rsa key should have been successfully returned", rsaKey},
+		{"The ec key should have been successfully returned", ecdsaKey},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			testKey, _ := jwk.New(tc.key)
+			verifier := CredentialVerifier{signingKey: testKey}
+
+			jwks := verifier.GetJWKS()
+
+			if jwks.Len() != 1 {
+				t.Errorf("TestGetJWKS: Exactly the current signing key should be included.")
+			}
+			returnedKey, _ := jwks.Get(0)
+			expectedKey, _ := testKey.PublicKey()
+			// we compare the json-output to avoid address comparison instead of by-value.
+			if logging.PrettyPrintObject(expectedKey) != logging.PrettyPrintObject(returnedKey) {
+				t.Errorf("TestGetJWKS: Exactly the public key should be returned. Expected %v but was %v.", logging.PrettyPrintObject(expectedKey), logging.PrettyPrintObject(returnedKey))
+			}
+		})
 	}
 }
 

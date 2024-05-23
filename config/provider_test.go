@@ -44,6 +44,7 @@ func Test_ReadConfig(t *testing.T) {
 						},
 					},
 					ValidationMode: "none",
+					KeyAlgorithm:   "RS256",
 				},
 				Logging: Logging{
 					Level:       "DEBUG",
@@ -85,6 +86,7 @@ func Test_ReadConfig(t *testing.T) {
 					TirAddress:     "",
 					SessionExpiry:  30,
 					ValidationMode: "none",
+					KeyAlgorithm:   "RS256",
 				},
 				Logging: Logging{
 					Level:       "INFO",

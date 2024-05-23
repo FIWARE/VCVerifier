@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ import (
 
 var ErrorNoDID = errors.New("no_did_configured")
 var ErrorNoTIR = errors.New("no_tir_configured")
+var ErrorUnsupportedKeyAlgorithm = errors.New("unsupported_key_algorithm")
 var ErrorUnsupportedValidationMode = errors.New("unsupported_validation_mode")
 var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorNoSuchSession = errors.New("no_such_session")
@@ -232,7 +234,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 	trustedParticipantVerificationService := TrustedParticipantValidationService{tirClient: tirClient}
 	trustedIssuerVerificationService := TrustedIssuerValidationService{tirClient: tirClient}
 
-	key, err := initPrivateKey()
+	key, err := initPrivateKey(verifierConfig.KeyAlgorithm)
 
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate a signing key. Err: %v", err)
@@ -700,8 +702,15 @@ func getHostName(urlString string) (host string, err error) {
 }
 
 // Initialize the private key of the verifier. Might need to be persisted in future iterations.
-func initPrivateKey() (key jwk.Key, err error) {
-	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+func initPrivateKey(keyType string) (key jwk.Key, err error) {
+	var newKey interface{}
+	if keyType == "RS256" {
+		newKey, err = rsa.GenerateKey(rand.Reader, 2048)
+	} else if keyType == "ES256" {
+		newKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	} else {
+		return key, ErrorUnsupportedKeyAlgorithm
+	}
 
 	if err != nil {
 		return nil, err
