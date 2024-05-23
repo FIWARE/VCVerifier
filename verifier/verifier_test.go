@@ -586,7 +586,7 @@ func TestGetToken(t *testing.T) {
 			logging.Log().Info("TestGetToken +++++++++++++++++ Running test: ", tc.testName)
 
 			tokenCache := mockTokenCache{tokens: tc.tokenSession}
-			verifier := CredentialVerifier{tokenCache: &tokenCache, signingKey: testKey, clock: mockClock{}, tokenSigner: mockTokenSigner{tc.signingError}}
+			verifier := CredentialVerifier{tokenCache: &tokenCache, signingKey: testKey, clock: mockClock{}, tokenSigner: mockTokenSigner{tc.signingError}, signingAlgorithm: "ES256"}
 			jwtString, expiration, err := verifier.GetToken(tc.testCode, tc.testRedirectUri)
 
 			if err != tc.expectedError {

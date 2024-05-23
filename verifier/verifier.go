@@ -89,6 +89,8 @@ type CredentialVerifier struct {
 	credentialsConfig CredentialsConfig
 	// Validation services to be used on the credentials
 	validationServices []ValidationService
+	// Algorithm to be used for signing the jwt
+	signingAlgorithm string
 }
 
 // allow singleton access to the verifier
@@ -258,6 +260,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 			&trustedParticipantVerificationService,
 			&trustedIssuerVerificationService,
 		},
+		verifierConfig.KeyAlgorithm,
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
@@ -333,7 +336,7 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 
 	var signatureAlgorithm jwa.SignatureAlgorithm
 
-	switch v.signingKey.Algorithm() {
+	switch v.signingAlgorithm {
 	case "RS256":
 		signatureAlgorithm = jwa.RS256
 	case "ES256":
