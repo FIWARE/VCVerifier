@@ -330,7 +330,17 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 		logging.Log().Infof("Redirect uri does not match for authorization %s. Was %s but is expected %s.", authorizationCode, redirectUri, tokenSession.redirect_uri)
 		return jwtString, expiration, ErrorRedirectUriMismatch
 	}
-	jwtBytes, err := v.tokenSigner.Sign(tokenSession.token, jwa.ES256, v.signingKey)
+
+	var signatureAlgorithm jwa.SignatureAlgorithm
+
+	switch v.signingKey.Algorithm() {
+	case "RS256":
+		signatureAlgorithm = jwa.RS256
+	case "ES256":
+		signatureAlgorithm = jwa.ES256
+	}
+
+	jwtBytes, err := v.tokenSigner.Sign(tokenSession.token, signatureAlgorithm, v.signingKey)
 	if err != nil {
 		logging.Log().Warnf("Was not able to sign the token. Err: %v", err)
 		return jwtString, expiration, err
