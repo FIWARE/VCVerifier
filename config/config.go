@@ -71,6 +71,8 @@ type Verifier struct {
 	// * `baseContext`: validates that only the fields and values (when applicable)are present in the document. No extra fields are allowed (outside of credentialSubject).
 	// Default is set to `none` to ensure backwards compatibility
 	ValidationMode string `mapstructure:"validationMode" default:"none"`
+	// algorithm to be used for the jwt signatures - currently supported: RS256 and ES256
+	KeyAlgorithm string `mapstructure:"keyAlgorithm" default:"RS256"`
 }
 
 type Policies struct {
