@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -787,7 +788,10 @@ func TestGetOpenIDConfiguration(t *testing.T) {
 			actualOpenID, _ := verifier.GetOpenIDConfiguration(tc.serviceIdentifier)
 
 			assert.Equal(t, tc.expectedOpenID.Issuer, actualOpenID.Issuer)
-			assert.Equal(t, tc.expectedOpenID.ScopesSupported, actualOpenID.ScopesSupported)
+			assert.Equal(t, len(tc.expectedOpenID.ScopesSupported), len(actualOpenID.ScopesSupported))
+			for _, scope := range tc.expectedOpenID.ScopesSupported {
+				assert.True(t, slices.Contains(actualOpenID.ScopesSupported, scope))
+			}
 		})
 	}
 }
