@@ -97,7 +97,7 @@ var routes = Routes{
 	{
 		"VerifierAPIOpenIDConfiguration",
 		http.MethodGet,
-		"/services/:serviceIdentifier/.well-known/openid-configuration",
+		"/services/:service_id/.well-known/openid-configuration",
 		VerifierAPIOpenIDConfiguration,
 	},
 
@@ -113,5 +113,12 @@ var routes = Routes{
 		http.MethodGet,
 		"/api/v1/loginQR",
 		VerifierPageDisplayQRSIOP,
+	},
+
+	{
+		"GetTokenForService",
+		http.MethodPost,
+		"/services/:service_id/token",
+		GetTokenForService,
 	},
 }
