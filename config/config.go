@@ -59,6 +59,10 @@ type Verifier struct {
 	Did string `mapstructure:"did"`
 	// address of the (ebsi-compatible) trusted-issuers-registry for verifying the issuer
 	TirAddress string `mapstructure:"tirAddress"`
+	// expiry of the tir-cache entries
+	TirCacheExpiry int `mapstructure:"tirCacheExpiry" default:"30"`
+	// expiry of the til-cache entries
+	TilCacheExpiry int `mapstructure:"tilCacheExpiry" default:"30"`
 	// expiry of auth sessions
 	SessionExpiry int `mapstructure:"sessionExpiry" default:"30"`
 	// policies that shall be checked
