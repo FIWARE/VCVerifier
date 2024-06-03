@@ -3,7 +3,6 @@ package tir
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"time"
 
@@ -130,9 +129,8 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 		}
 		trustedIssuer, err := parseTirResponse(*resp)
 		if err != nil {
-			logging.Log().Warnf("Was not able to parse the response from tir %s for %s. Err: %v", tirEndpoint, did, err)
-			body, _ := io.ReadAll(resp.Body)
-			logging.Log().Debugf("Response was %s ", string(body))
+			logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
+			logging.Log().Debugf("Response was %v ", resp)
 			continue
 		}
 		logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
