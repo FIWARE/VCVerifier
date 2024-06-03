@@ -3,12 +3,14 @@ package tir
 import (
 	"errors"
 	"fmt"
-	"github.com/fiware/VCVerifier/common"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/fiware/VCVerifier/common"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -31,6 +33,12 @@ type mockClient struct {
 func (mc mockClient) Get(tirAddress string, tirPath string) (resp *http.Response, err error) {
 	return mc.responses[tirAddress+"/"+tirPath], mc.errors[tirAddress+"/"+tirPath]
 }
+
+type mockCache struct{}
+
+func (mc mockCache) Add(k string, x interface{}, d time.Duration) error { return nil }
+func (mc mockCache) Get(k string) (interface{}, bool)                   { return nil, false }
+func (mc mockCache) Delete(k string)                                    {}
 
 func TestIsTrustedParticipant(t *testing.T) {
 	type test struct {
@@ -61,7 +69,7 @@ func TestIsTrustedParticipant(t *testing.T) {
 	for _, tc := range tests {
 		common.ResetGlobalCache()
 		t.Run(tc.testName, func(t *testing.T) {
-			tirClient := TirHttpClient{mockClient{responses: tc.mockResponses, errors: tc.mockErrors}}
+			tirClient := TirHttpClient{client: mockClient{responses: tc.mockResponses, errors: tc.mockErrors}, tilCache: mockCache{}, tirCache: mockCache{}}
 			isTrusted := tirClient.IsTrustedParticipant(tc.testEndpoints, tc.testIssuer)
 
 			if tc.expectedResult != isTrusted {
@@ -103,7 +111,7 @@ func TestGetTrustedIssuer(t *testing.T) {
 	for _, tc := range tests {
 		common.ResetGlobalCache()
 		t.Run(tc.testName, func(t *testing.T) {
-			tirClient := TirHttpClient{mockClient{responses: tc.mockResponses, errors: tc.mockErrors}}
+			tirClient := TirHttpClient{client: mockClient{responses: tc.mockResponses, errors: tc.mockErrors}, tilCache: mockCache{}, tirCache: mockCache{}}
 			exists, issuer, err := tirClient.GetTrustedIssuer(tc.testEndpoints, tc.testIssuer)
 			if tc.expectedError != err {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
@@ -146,7 +154,7 @@ func TestDidRegistry(t *testing.T) {
 	// Close the server when test finishes
 	defer server.Close()
 
-	tirClient := TirHttpClient{getClient{server.Client()}}
+	tirClient := TirHttpClient{client: getClient{server.Client()}, tilCache: mockCache{}, tirCache: mockCache{}}
 	trusted := tirClient.issuerExists(server.URL, "did:elsi:eu.eori.denhaag19902304")
 	assert.Equal(t, true, trusted, "Should return that issuer is trusted")
 

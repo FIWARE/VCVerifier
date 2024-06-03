@@ -3,7 +3,6 @@ module github.com/fiware/VCVerifier
 go 1.21
 
 require (
-	github.com/bxcodec/httpcache v1.0.0-beta.3
 	github.com/deepmap/oapi-codegen v1.12.3
 	github.com/foolin/goview v0.3.0
 	github.com/gin-contrib/cors v1.4.0
@@ -31,7 +30,6 @@ require (
 	github.com/bits-and-blooms/bitset v1.7.0 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.1.3 // indirect
 	github.com/btcsuite/btcutil v1.0.3-0.20201208143702-a53e38424cce // indirect
-	github.com/bxcodec/gotcha v1.0.0-beta.8 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/consensys/bavard v0.1.13 // indirect
 	github.com/consensys/gnark-crypto v0.12.1 // indirect
@@ -119,5 +117,4 @@ require (
 	golang.org/x/text v0.14.0 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	software.sslmate.com/src/go-pkcs12 v0.4.0
 )
