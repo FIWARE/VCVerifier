@@ -136,8 +136,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JWKSet'
-  /services/{serviceIdentifier}/.well-known/openid-configuration:
+  /services/{service_id}/.well-known/openid-configuration:
     get:
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
       tags:
         - api
       operationId: VerifierAPIOpenIDConfiguration
@@ -149,7 +151,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OpenIDProviderMetadata'
-
+  /services/{service_id}/token:
+    post:
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      tags:
+        - api
+      operationId: GetTokenForService
+      summary: Token endpoint to exchange the authorization code with the actual JWT.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: The pre-generated token 
+          content:
+            application/json:
+              schema: 
+                $ref: '#/components/schemas/TokenResponse'
+        '403':
+          description: Whenever something is requested that is not allowed or existent
+          content:
+            application/json:
+              schema: 
+                $ref: '#/components/schemas/ErrorMessage'
   /info:
     get: 
       tags:
@@ -229,6 +257,14 @@ components:
       description: The id of the client/service that intents to start the authentication flow. Will be used to retrieve the scope and trust services to be used for verification.
       in: query
       required: false 
+      schema: 
+        type: string
+        example: packet-delivery-portal
+    ServiceId:
+      name: service_id
+      description: The id of the client/service that intents to start the authentication flow. Will be used to retrieve the scope and trust services to be used for verification.
+      in: path
+      required: true
       schema: 
         type: string
         example: packet-delivery-portal

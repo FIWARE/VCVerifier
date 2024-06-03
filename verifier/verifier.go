@@ -439,7 +439,7 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 	return common.OpenIDProviderMetadata{
 		Issuer:                           v.host,
 		AuthorizationEndpoint:            v.host,
-		TokenEndpoint:                    v.host + "/token",
+		TokenEndpoint:                    v.host + "/services/" + serviceIdentifier + "/token",
 		JwksUri:                          v.host + "/.well-known/jwks",
 		GrantTypesSupported:              []string{"authorization_code", "vp_token"},
 		ResponseTypesSupported:           []string{"token"},
