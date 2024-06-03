@@ -228,7 +228,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 		logging.Log().Infof("Auth disabled.")
 	}
 
-	tirClient, err := tir.NewTirHttpClient(tokenProvider, config.M2M)
+	tirClient, err := tir.NewTirHttpClient(tokenProvider, config.M2M, config.Verifier)
 	if err != nil {
 		logging.Log().Errorf("Was not able to instantiate the trusted-issuers-registry client. Err: %v", err)
 		return err
