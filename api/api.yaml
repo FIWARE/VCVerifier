@@ -178,19 +178,6 @@ paths:
             application/json:
               schema: 
                 $ref: '#/components/schemas/ErrorMessage'
-  /info:
-    get: 
-      tags:
-        - base
-      operationId: GetBackendInfo
-      summary: Returns the issuer and verifier did, generated on startup
-      responses:
-        '200':
-          description: Object containing the info
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BackendInfo'
                 
 components:
   parameters:
