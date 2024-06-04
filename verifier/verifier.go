@@ -228,7 +228,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 		logging.Log().Infof("Auth disabled.")
 	}
 
-	tirClient, err := tir.NewTirHttpClient(tokenProvider, config.M2M, config.Verifier)
+	tirClient, err := tir.NewTirHttpClient(tokenProvider, config.M2M)
 	if err != nil {
 		logging.Log().Errorf("Was not able to instantiate the trusted-issuers-registry client. Err: %v", err)
 		return err
@@ -368,6 +368,11 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	credentialsByType := map[string][]*verifiable.Credential{}
 	credentialTypes := []string{}
 	for _, vc := range verifiablePresentation.Credentials() {
+		// verify the credential
+		verificationError := vc.CheckProof()
+		if verificationError != nil {
+			return 0, "", verificationError
+		}
 		for _, credentialType := range vc.Contents().Types {
 			if _, ok := credentialsByType[credentialType]; !ok {
 				credentialsByType[credentialType] = []*verifiable.Credential{}
@@ -468,6 +473,12 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	trustedChain, _ := verifyChain(verifiablePresentation.Credentials())
 
 	for _, credential := range verifiablePresentation.Credentials() {
+		// verify the credential
+		verificationError := credential.CheckProof()
+		if verificationError != nil {
+			return sameDevice, verificationError
+		}
+
 		verificationContext, err := v.getTrustRegistriesValidationContext(loginSession.clientId, credential.Contents().Types)
 		if err != nil {
 			logging.Log().Warnf("Was not able to create a valid verification context. Credential will be rejected. Err: %v", err)
