@@ -368,11 +368,6 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	credentialsByType := map[string][]*verifiable.Credential{}
 	credentialTypes := []string{}
 	for _, vc := range verifiablePresentation.Credentials() {
-		// verify the credential
-		verificationError := vc.CheckProof()
-		if verificationError != nil {
-			return 0, "", verificationError
-		}
 		for _, credentialType := range vc.Contents().Types {
 			if _, ok := credentialsByType[credentialType]; !ok {
 				credentialsByType[credentialType] = []*verifiable.Credential{}
@@ -473,11 +468,6 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	trustedChain, _ := verifyChain(verifiablePresentation.Credentials())
 
 	for _, credential := range verifiablePresentation.Credentials() {
-		// verify the credential
-		verificationError := credential.CheckProof()
-		if verificationError != nil {
-			return sameDevice, verificationError
-		}
 
 		verificationContext, err := v.getTrustRegistriesValidationContext(loginSession.clientId, credential.Contents().Types)
 		if err != nil {
