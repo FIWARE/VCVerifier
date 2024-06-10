@@ -126,6 +126,10 @@ func (msc *mockSessionCache) Add(k string, x interface{}, d time.Duration) error
 	return nil
 }
 
+func (msc *mockSessionCache) Set(k string, x interface{}, d time.Duration) {
+	msc.sessions[k] = x.(loginSession)
+}
+
 func (msc *mockSessionCache) Get(k string) (interface{}, bool) {
 	v, found := msc.sessions[k]
 	return v, found
@@ -141,6 +145,10 @@ func (mtc *mockTokenCache) Add(k string, x interface{}, d time.Duration) error {
 	}
 	mtc.tokens[k] = x.(tokenStore)
 	return nil
+}
+
+func (msc *mockTokenCache) Set(k string, x interface{}, d time.Duration) {
+	msc.tokens[k] = x.(tokenStore)
 }
 
 func (mtc *mockTokenCache) Get(k string) (interface{}, bool) {
