@@ -3,10 +3,11 @@ package verifier
 import (
 	"context"
 	"fmt"
-	"github.com/fiware/VCVerifier/tir"
-	"github.com/procyon-projects/chrono"
 	"net/url"
 	"time"
+
+	"github.com/fiware/VCVerifier/tir"
+	"github.com/procyon-projects/chrono"
 
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/config"
@@ -62,7 +63,7 @@ func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credenti
 	}
 
 	if repoConfig.ConfigEndpoint != "" {
-		
+
 		_, err := chrono.NewDefaultTaskScheduler().ScheduleAtFixedRate(scb.fillCache, time.Duration(repoConfig.UpdateInterval)*time.Second)
 		if err != nil {
 			logging.Log().Errorf("failed scheduling task: %v", err)
@@ -112,7 +113,7 @@ func (cc ServiceBackedCredentialsConfig) fillCache(context.Context) {
 		}
 		err = common.GlobalCache.TirEndpoints.Add(tir.TirEndpointsCache, tirEndpoints, cache.NoExpiration)
 		if err != nil {
-			logging.Log().Errorf("failed caching issuers lists in fillCache(): %v", err)
+			logging.Log().Errorf("failed caching issuers registry in fillCache(): %v", err)
 		}
 	}
 
