@@ -11,6 +11,7 @@ const CacheExpiry = 60
 type Cache interface {
 	Add(k string, x interface{}, d time.Duration) error
 	Get(k string) (interface{}, bool)
+	Set(k string, x interface{}, d time.Duration)
 	Delete(k string)
 }
 
