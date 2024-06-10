@@ -136,7 +136,7 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 				continue
 			}
 			logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
-			tc.tilCache.Add(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
+			tc.tilCache.Set(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
 		}
 		return true, trustedIssuer.(TrustedIssuer), err
 
@@ -170,7 +170,7 @@ func (tc TirHttpClient) issuerExists(tirEndpoint string, did string) (trusted bo
 		}
 		logging.Log().Debugf("Issuer %s response from %s is %v", did, tirEndpoint, resp.StatusCode)
 		exists = resp.StatusCode == 200
-		tc.tirCache.Add(tirEndpoint, exists, cache.DefaultExpiration)
+		tc.tirCache.Set(tirEndpoint, exists, cache.DefaultExpiration)
 	}
 
 	// if a 200 is returned, the issuer exists. We dont have to parse the whole response
@@ -209,10 +209,7 @@ func (tc TirHttpClient) requestIssuerWithVersion(tirEndpoint string, didPath str
 		return nil, ErrorTirNoResponse
 	}
 
-	err = common.GlobalCache.IssuerCache.Add(cacheKey, resp, cache.DefaultExpiration)
-	if err != nil {
-		logging.Log().Errorf("Was not able to cache the response for issuer %s from %s.", didPath, tirEndpoint)
-	}
+	common.GlobalCache.IssuerCache.Set(cacheKey, resp, cache.DefaultExpiration)
 	return resp, err
 }
 
