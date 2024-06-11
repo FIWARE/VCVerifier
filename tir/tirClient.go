@@ -23,7 +23,6 @@ var ErrorTirNoResponse = errors.New("no_response_from_tir")
 var ErrorTirEmptyResponse = errors.New("empty_response_from_tir")
 
 type HttpClient interface {
-	Get(url string) (resp *http.Response, err error)
 	Do(req *http.Request) (*http.Response, error)
 }
 

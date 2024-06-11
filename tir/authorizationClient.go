@@ -61,12 +61,16 @@ func (ac AuthorizingHttpClient) FillMetadataCache(context.Context) {
 
 func (nac NoAuthHttpClient) Get(tirAddress string, tirPath string) (resp *http.Response, err error) {
 	urlString := common.BuildUrlString(tirAddress, tirPath)
-	return nac.httpClient.Get(urlString)
+	req, _ := http.NewRequest("GET", urlString, nil)
+	req.Close = true
+	return nac.httpClient.Do(req)
 }
 
 func (ac AuthorizingHttpClient) Get(tirAddress string, tirPath string) (resp *http.Response, err error) {
 	urlString := common.BuildUrlString(tirAddress, tirPath)
-	resp, err = ac.httpClient.Get(urlString)
+	req, _ := http.NewRequest("GET", urlString, nil)
+	req.Close = true
+	resp, err = ac.httpClient.Do(req)
 	if err != nil {
 		logging.Log().Infof("Was not able to get a response. Err: %v", err)
 		return resp, err
@@ -131,7 +135,9 @@ func (ac AuthorizingHttpClient) handleAuthorization(tirAddress string) (bearerTo
 
 func (ac AuthorizingHttpClient) getMetaData(tokenHost string) (metadata common.OpenIDProviderMetadata, err error) {
 	logging.Log().Debugf("Retrieve openid-metadata from %s", tokenHost)
-	resp, err := ac.httpClient.Get(common.BuildUrlString(tokenHost, WELL_KNOWN_ENDPOINT))
+	req, _ := http.NewRequest("GET", common.BuildUrlString(tokenHost, WELL_KNOWN_ENDPOINT), nil)
+	req.Close = true
+	resp, err := ac.httpClient.Do(req)
 	if err != nil {
 		logging.Log().Warnf("Was not able to get openid metadata from %s. Err: %v", tokenHost, err)
 		return metadata, err
