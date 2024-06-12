@@ -20,10 +20,8 @@ func NewCachingDocumentLoader(defaultLoader ld.DocumentLoader) ld.DocumentLoader
 }
 
 func (cdl CachingDocumentLoader) LoadDocument(u string) (document *ld.RemoteDocument, err error) {
-	logging.Log().Infof("Get the document %s from the loader.", u)
 	cachedDocument, hit := cdl.contextCache.Get(u)
 	if hit {
-		logging.Log().Infof("Found %s in the cache.", u)
 		return cachedDocument.(*ld.RemoteDocument), err
 	}
 	document, err = cdl.defaultLoader.LoadDocument(u)
@@ -32,6 +30,5 @@ func (cdl CachingDocumentLoader) LoadDocument(u string) (document *ld.RemoteDocu
 		return document, err
 	}
 	cdl.contextCache.Set(u, document, cache.DefaultExpiration)
-	logging.Log().Infof("Added %s to the cache.", u)
 	return document, err
 }
