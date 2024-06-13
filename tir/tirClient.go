@@ -199,7 +199,6 @@ func (tc TirHttpClient) requestIssuerWithVersion(tirEndpoint string, didPath str
 	cacheKey := common.BuildUrlString(tirEndpoint, didPath)
 	responseInterface, hit := common.GlobalCache.IssuerCache.Get(cacheKey)
 	if hit {
-		logging.Log().Debugf("Cache hit for %s", cacheKey)
 		return responseInterface.(*http.Response), nil
 	}
 
