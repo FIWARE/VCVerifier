@@ -80,9 +80,11 @@ type Claim struct {
 
 func NewTirHttpClient(tokenProvider TokenProvider, m2mConfig config.M2M, verifierConfig config.Verifier) (client TirClient, err error) {
 
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.DisableKeepAlives = true
-	httpClient := &http.Client{Transport: t}
+	// disable keep alive, to avoid EOFs due to race conditions
+	// not performance critical, since we serve most responses from the cache
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = true
+	httpClient := &http.Client{Transport: transport}
 
 	tirCache := cache.New(time.Duration(verifierConfig.TirCacheExpiry)*time.Second, time.Duration(2*verifierConfig.TirCacheExpiry)*time.Second)
 	tilCache := cache.New(time.Duration(verifierConfig.TilCacheExpiry)*time.Second, time.Duration(2*verifierConfig.TilCacheExpiry)*time.Second)

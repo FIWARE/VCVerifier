@@ -61,16 +61,19 @@ func (ac AuthorizingHttpClient) FillMetadataCache(context.Context) {
 
 func (nac NoAuthHttpClient) Get(tirAddress string, tirPath string) (resp *http.Response, err error) {
 	urlString := common.BuildUrlString(tirAddress, tirPath)
-	req, _ := http.NewRequest("GET", urlString, nil)
+	return closingGet(nac.httpClient, urlString)
+}
+
+// excutes get requests via "DO" and close the connection afterwards, to avoid EOFs on keep-alive race-conditions
+func closingGet(httpClient HttpClient, url string) (resp *http.Response, err error) {
+	req, _ := http.NewRequest("GET", url, nil)
 	req.Close = true
-	return nac.httpClient.Do(req)
+	return httpClient.Do(req)
 }
 
 func (ac AuthorizingHttpClient) Get(tirAddress string, tirPath string) (resp *http.Response, err error) {
 	urlString := common.BuildUrlString(tirAddress, tirPath)
-	req, _ := http.NewRequest("GET", urlString, nil)
-	req.Close = true
-	resp, err = ac.httpClient.Do(req)
+	resp, err = closingGet(ac.httpClient, urlString)
 	if err != nil {
 		logging.Log().Infof("Was not able to get a response. Err: %v", err)
 		return resp, err
@@ -91,6 +94,7 @@ func (ac AuthorizingHttpClient) Get(tirAddress string, tirPath string) (resp *ht
 		logging.Log().Warnf("Was not able to build the authenticated request. Err: %v", err)
 		return resp, err
 	}
+	authenticatedRequest.Close = true
 	authenticatedRequest.Header.Add("Authorization", "Bearer "+bearerToken)
 	return ac.httpClient.Do(authenticatedRequest)
 }
@@ -135,9 +139,7 @@ func (ac AuthorizingHttpClient) handleAuthorization(tirAddress string) (bearerTo
 
 func (ac AuthorizingHttpClient) getMetaData(tokenHost string) (metadata common.OpenIDProviderMetadata, err error) {
 	logging.Log().Debugf("Retrieve openid-metadata from %s", tokenHost)
-	req, _ := http.NewRequest("GET", common.BuildUrlString(tokenHost, WELL_KNOWN_ENDPOINT), nil)
-	req.Close = true
-	resp, err := ac.httpClient.Do(req)
+	resp, err := closingGet(ac.httpClient, common.BuildUrlString(tokenHost, WELL_KNOWN_ENDPOINT))
 	if err != nil {
 		logging.Log().Warnf("Was not able to get openid metadata from %s. Err: %v", tokenHost, err)
 		return metadata, err
