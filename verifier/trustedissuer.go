@@ -111,8 +111,13 @@ func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, cr
 
 	// validate that the type(s) is allowed
 	for _, credentialType := range verifiableCredential.Contents().Types {
+		config, exists := credentialsConfigMap[credentialType]
+		if !exists {
+			subjectAllowed = false
+			break
+		}
 		// as of now, we only allow single subject credentials
-		subjectAllowed = subjectAllowed && verifyForType(verifiableCredential.Contents().Subject[0], credentialsConfigMap[credentialType])
+		subjectAllowed = subjectAllowed && verifyForType(verifiableCredential.Contents().Subject[0], config)
 	}
 	if !subjectAllowed {
 		logging.Log().Debugf("The subject contains forbidden claims or values: %s.", logging.PrettyPrintObject(verifiableCredential.Contents().Subject[0]))

@@ -23,7 +23,6 @@ var ErrorTirNoResponse = errors.New("no_response_from_tir")
 var ErrorTirEmptyResponse = errors.New("empty_response_from_tir")
 
 type HttpClient interface {
-	Get(url string) (resp *http.Response, err error)
 	Do(req *http.Request) (*http.Response, error)
 }
 
@@ -81,7 +80,11 @@ type Claim struct {
 
 func NewTirHttpClient(tokenProvider TokenProvider, m2mConfig config.M2M, verifierConfig config.Verifier) (client TirClient, err error) {
 
-	httpClient := &http.Client{}
+	// disable keep alive, to avoid EOFs due to race conditions
+	// not performance critical, since we serve most responses from the cache
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = true
+	httpClient := &http.Client{Transport: transport}
 
 	tirCache := cache.New(time.Duration(verifierConfig.TirCacheExpiry)*time.Second, time.Duration(2*verifierConfig.TirCacheExpiry)*time.Second)
 	tilCache := cache.New(time.Duration(verifierConfig.TilCacheExpiry)*time.Second, time.Duration(2*verifierConfig.TilCacheExpiry)*time.Second)
@@ -136,7 +139,7 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 				continue
 			}
 			logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
-			tc.tilCache.Add(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
+			tc.tilCache.Set(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
 		}
 		return true, trustedIssuer.(TrustedIssuer), err
 
@@ -170,7 +173,7 @@ func (tc TirHttpClient) issuerExists(tirEndpoint string, did string) (trusted bo
 		}
 		logging.Log().Debugf("Issuer %s response from %s is %v", did, tirEndpoint, resp.StatusCode)
 		exists = resp.StatusCode == 200
-		tc.tirCache.Add(tirEndpoint, exists, cache.DefaultExpiration)
+		tc.tirCache.Set(tirEndpoint, exists, cache.DefaultExpiration)
 	}
 
 	// if a 200 is returned, the issuer exists. We dont have to parse the whole response
@@ -209,10 +212,8 @@ func (tc TirHttpClient) requestIssuerWithVersion(tirEndpoint string, didPath str
 		return nil, ErrorTirNoResponse
 	}
 
-	err = common.GlobalCache.IssuerCache.Add(cacheKey, resp, cache.DefaultExpiration)
-	if err != nil {
-		logging.Log().Errorf("Was not able to cache the response for issuer %s from %s.", didPath, tirEndpoint)
-	}
+	common.GlobalCache.IssuerCache.Set(cacheKey, resp, cache.DefaultExpiration)
+	logging.Log().Debugf("Added cache entry for %s", cacheKey)
 	return resp, err
 }
 
