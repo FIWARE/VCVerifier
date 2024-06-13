@@ -37,6 +37,7 @@ func (mc mockClient) Get(tirAddress string, tirPath string) (resp *http.Response
 type mockCache struct{}
 
 func (mc mockCache) Add(k string, x interface{}, d time.Duration) error { return nil }
+func (mc mockCache) Set(k string, x interface{}, d time.Duration)       {}
 func (mc mockCache) Get(k string) (interface{}, bool)                   { return nil, false }
 func (mc mockCache) Delete(k string)                                    {}
 

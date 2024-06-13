@@ -3,10 +3,11 @@ package verifier
 import (
 	"context"
 	"fmt"
-	"github.com/fiware/VCVerifier/tir"
-	"github.com/procyon-projects/chrono"
 	"net/url"
 	"time"
+
+	"github.com/fiware/VCVerifier/tir"
+	"github.com/procyon-projects/chrono"
 
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/config"
@@ -62,7 +63,7 @@ func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credenti
 	}
 
 	if repoConfig.ConfigEndpoint != "" {
-		
+
 		_, err := chrono.NewDefaultTaskScheduler().ScheduleAtFixedRate(scb.fillCache, time.Duration(repoConfig.UpdateInterval)*time.Second)
 		if err != nil {
 			logging.Log().Errorf("failed scheduling task: %v", err)
@@ -76,11 +77,7 @@ func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credenti
 func (cc ServiceBackedCredentialsConfig) fillStaticValues() error {
 	for _, configuredService := range cc.initialConfig.Services {
 		logging.Log().Debugf("Add to service cache: %s", configuredService.Id)
-		err := common.GlobalCache.ServiceCache.Add(configuredService.Id, configuredService, cache.DefaultExpiration)
-		if err != nil {
-			logging.Log().Errorf("failed caching configured service %s in fillStaticValues(): %v", configuredService.Id, err)
-			return err
-		}
+		common.GlobalCache.ServiceCache.Set(configuredService.Id, configuredService, cache.DefaultExpiration)
 	}
 	return nil
 }
@@ -93,10 +90,7 @@ func (cc ServiceBackedCredentialsConfig) fillCache(context.Context) {
 		return
 	}
 	for _, configuredService := range services {
-		err := common.GlobalCache.ServiceCache.Add(configuredService.Id, configuredService, cache.DefaultExpiration)
-		if err != nil {
-			logging.Log().Errorf("failed caching configured service in fillCache(): %v", err)
-		}
+		common.GlobalCache.ServiceCache.Set(configuredService.Id, configuredService, cache.DefaultExpiration)
 
 		var tirEndpoints []string
 
@@ -110,10 +104,7 @@ func (cc ServiceBackedCredentialsConfig) fillCache(context.Context) {
 				}
 			}
 		}
-		err = common.GlobalCache.TirEndpoints.Add(tir.TirEndpointsCache, tirEndpoints, cache.NoExpiration)
-		if err != nil {
-			logging.Log().Errorf("failed caching issuers lists in fillCache(): %v", err)
-		}
+		common.GlobalCache.TirEndpoints.Set(tir.TirEndpointsCache, tirEndpoints, cache.NoExpiration)
 	}
 
 }
