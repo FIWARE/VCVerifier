@@ -64,19 +64,6 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *ver
 		}
 
 		exist, trustedIssuer, err := tpvs.tirClient.GetTrustedIssuer(tilAddress, verifiableCredential.Contents().Issuer.ID)
-		var currentTry = 0
-		for currentTry < 3 {
-			if err != nil {
-				logging.Log().Warnf("Error is %v", err)
-			}
-			if err != nil && err.Error() == "EOF" {
-				logging.Log().Warn("Retry")
-				currentTry++
-				exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuer(tilAddress, verifiableCredential.Contents().Issuer.ID)
-				continue
-			}
-			break
-		}
 
 		if err != nil {
 			logging.Log().Warnf("Was not able to validate trusted issuer. Err: %v", err)

@@ -122,19 +122,12 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 	for _, tirEndpoint := range tirEndpoints {
 		trustedIssuer, hit := tc.tilCache.Get(tirEndpoint + did)
 		if !hit {
-			resp, err := tc.requestIssuer(tirEndpoint, did)
-			if err != nil {
-				logging.Log().Warnf("Was not able to get the issuer %s from %s because of err: %v.", did, tirEndpoint, err)
+
+			noSuchIssuer, trustedIssuer, err := getIssuerWithRetry(tc, tirEndpoint, did)
+			if noSuchIssuer {
 				continue
 			}
-			if resp.StatusCode != 200 {
-				logging.Log().Debugf("Issuer %s is not known at %s.", did, tirEndpoint)
-				continue
-			}
-			trustedIssuer, err = parseTirResponse(*resp)
 			if err != nil {
-				logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
-				logging.Log().Debugf("Response was %v ", resp)
 				continue
 			}
 			logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
@@ -144,6 +137,34 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 
 	}
 	return false, trustedIssuer, err
+}
+
+func getIssuerWithRetry(tc TirHttpClient, tirEndpoint string, did string) (noSuchIssuer bool, trustedIssuer TrustedIssuer, err error) {
+
+	currentTry := 0
+	for currentTry < 3 {
+		resp, err := tc.requestIssuer(tirEndpoint, did)
+		if err != nil {
+			logging.Log().Warnf("Was not able to get the issuer %s from %s because of err: %v.", did, tirEndpoint, err)
+			return true, trustedIssuer, err
+		}
+		if resp.StatusCode != 200 {
+			logging.Log().Debugf("Issuer %s is not known at %s.", did, tirEndpoint)
+			return true, trustedIssuer, err
+		}
+		trustedIssuer, err = parseTirResponse(*resp)
+		if err != nil && err.Error() == "EOF" {
+			logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
+			logging.Log().Debugf("Response was %v ", resp)
+			// reset err
+			err = nil
+			currentTry++
+			continue
+		}
+		noSuchIssuer = true
+		break
+	}
+	return noSuchIssuer, trustedIssuer, err
 }
 
 func getIssuerIfFound(tc TirHttpClient, tirEndpoint string, did string) (exists bool, trustedIssuer TrustedIssuer, err error) {
