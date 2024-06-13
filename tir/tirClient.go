@@ -122,21 +122,27 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 	for _, tirEndpoint := range tirEndpoints {
 		trustedIssuer, hit := tc.tilCache.Get(tirEndpoint + did)
 		if !hit {
-			resp, err := tc.requestIssuer(tirEndpoint, did)
-			if err != nil {
-				logging.Log().Warnf("Was not able to get the issuer %s from %s because of err: %v.", did, tirEndpoint, err)
-				continue
+
+			retry := true
+			maxRetries := 3
+			current := 0
+			for retry && current < maxRetries {
+				exists, trustedIssuer, err = getIssuerIfFound(tc, tirEndpoint, did)
+				if !exists {
+					retry = false
+					continue
+				}
+				if err != nil && err.Error() == "EOF" {
+					logging.Log().Debugf("Response was had EOF, retry.")
+					current++
+					continue
+				} else {
+					logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
+					retry = false
+					continue
+				}
 			}
-			if resp.StatusCode != 200 {
-				logging.Log().Debugf("Issuer %s is not known at %s.", did, tirEndpoint)
-				continue
-			}
-			trustedIssuer, err = parseTirResponse(*resp)
-			if err != nil {
-				logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
-				logging.Log().Debugf("Response was %v ", resp)
-				continue
-			}
+
 			logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
 			tc.tilCache.Set(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
 		}
@@ -144,6 +150,20 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 
 	}
 	return false, trustedIssuer, err
+}
+
+func getIssuerIfFound(tc TirHttpClient, tirEndpoint string, did string) (exists bool, trustedIssuer TrustedIssuer, err error) {
+	resp, err := tc.requestIssuer(tirEndpoint, did)
+	if err != nil {
+		logging.Log().Warnf("Was not able to get the issuer %s from %s because of err: %v.", did, tirEndpoint, err)
+		return false, trustedIssuer, err
+	}
+	if resp.StatusCode != 200 {
+		logging.Log().Debugf("Issuer %s is not known at %s.", did, tirEndpoint)
+		return false, trustedIssuer, err
+	}
+	trustedIssuer, err = parseTirResponse(*resp)
+	return true, trustedIssuer, err
 }
 
 func parseTirResponse(resp http.Response) (trustedIssuer TrustedIssuer, err error) {
