@@ -122,30 +122,23 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 	for _, tirEndpoint := range tirEndpoints {
 		trustedIssuer, hit := tc.tilCache.Get(tirEndpoint + did)
 		if !hit {
-
-			retry := true
-			maxRetries := 3
-			current := 0
-			for retry && current < maxRetries {
-				exists, trustedIssuer, err = getIssuerIfFound(tc, tirEndpoint, did)
-				if !exists {
-					retry = false
-					continue
-				}
-				if err != nil && err.Error() == "EOF" {
-					logging.Log().Debugf("Response was had EOF, retry.")
-					current++
-					continue
-				} else if err != nil {
-					logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
-					retry = false
-					continue
-				}
-				logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
-				tc.tilCache.Set(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
-				retry = false
+			resp, err := tc.requestIssuer(tirEndpoint, did)
+			if err != nil {
+				logging.Log().Warnf("Was not able to get the issuer %s from %s because of err: %v.", did, tirEndpoint, err)
+				continue
 			}
-
+			if resp.StatusCode != 200 {
+				logging.Log().Debugf("Issuer %s is not known at %s.", did, tirEndpoint)
+				continue
+			}
+			trustedIssuer, err = parseTirResponse(*resp)
+			if err != nil {
+				logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
+				logging.Log().Debugf("Response was %v ", resp)
+				continue
+			}
+			logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
+			tc.tilCache.Set(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
 		}
 		return true, trustedIssuer.(TrustedIssuer), err
 
@@ -161,7 +154,7 @@ func getIssuerIfFound(tc TirHttpClient, tirEndpoint string, did string) (exists 
 	}
 	if resp.StatusCode != 200 {
 		logging.Log().Debugf("Issuer %s is not known at %s.", did, tirEndpoint)
-		return false, trustedIssuer, err
+		return false, trustedIssuer, nil
 	}
 	trustedIssuer, err = parseTirResponse(*resp)
 	return true, trustedIssuer, err
@@ -201,17 +194,7 @@ func (tc TirHttpClient) issuerExists(tirEndpoint string, did string) (trusted bo
 }
 
 func (tc TirHttpClient) requestIssuer(tirEndpoint string, did string) (response *http.Response, err error) {
-	response, err = tc.requestIssuerWithVersion(tirEndpoint, getIssuerV4Url(did))
-	if err != nil {
-		logging.Log().Debugf("Got error %v", err)
-		return tc.requestIssuerWithVersion(tirEndpoint, getIssuerV3Url(did))
-	}
-
-	if response.StatusCode != 200 {
-		logging.Log().Debugf("Got status %v", response.StatusCode)
-		return tc.requestIssuerWithVersion(tirEndpoint, getIssuerV3Url(did))
-	}
-	return response, err
+	return tc.requestIssuerWithVersion(tirEndpoint, getIssuerV4Url(did))
 }
 
 func (tc TirHttpClient) requestIssuerWithVersion(tirEndpoint string, didPath string) (response *http.Response, err error) {
@@ -239,9 +222,4 @@ func (tc TirHttpClient) requestIssuerWithVersion(tirEndpoint string, didPath str
 
 func getIssuerV4Url(did string) string {
 	return ISSUERS_V4_PATH + "/" + did
-}
-
-func getIssuerV3Url(did string) string {
-	return ISSUERS_V3_PATH + "/" + did
-
 }
