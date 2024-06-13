@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/hashicorp/go-retryablehttp"
 	"github.com/procyon-projects/chrono"
 
 	"github.com/fiware/VCVerifier/common"
@@ -80,11 +81,9 @@ type Claim struct {
 
 func NewTirHttpClient(tokenProvider TokenProvider, m2mConfig config.M2M, verifierConfig config.Verifier) (client TirClient, err error) {
 
-	// disable keep alive, to avoid EOFs due to race conditions
-	// not performance critical, since we serve most responses from the cache
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DisableKeepAlives = true
-	httpClient := &http.Client{Transport: transport}
+	retryClient := retryablehttp.NewClient()
+	retryClient.RetryMax = 3
+	httpClient := retryClient.StandardClient()
 
 	tirCache := cache.New(time.Duration(verifierConfig.TirCacheExpiry)*time.Second, time.Duration(2*verifierConfig.TirCacheExpiry)*time.Second)
 	tilCache := cache.New(time.Duration(verifierConfig.TilCacheExpiry)*time.Second, time.Duration(2*verifierConfig.TilCacheExpiry)*time.Second)
