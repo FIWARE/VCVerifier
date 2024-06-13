@@ -136,15 +136,16 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 					logging.Log().Debugf("Response was had EOF, retry.")
 					current++
 					continue
-				} else {
+				} else if err != nil {
 					logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
 					retry = false
 					continue
 				}
+				logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
+				tc.tilCache.Set(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
+				retry = false
 			}
 
-			logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
-			tc.tilCache.Set(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
 		}
 		return true, trustedIssuer.(TrustedIssuer), err
 
