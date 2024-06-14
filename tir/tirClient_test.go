@@ -104,9 +104,9 @@ func TestGetTrustedIssuer(t *testing.T) {
 		{testName: "The issuer should be returned, even if something unparsable is returned at one endpoint.", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-other-tir.org", "https://my-tir.org"},
 			mockResponses: map[string]*http.Response{"https://my-other-tir.org/v4/issuers/did:web:test.org": getUnparsableResponse(), "https://my-tir.org/v4/issuers/did:web:test.org": getIssuerResponse("did:web:test.org")}, expectExists: true, expectedIssuer: "did:web:test.org"},
 		{testName: "The issuer not should be returned, if an error is thrown at the endpoint.", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-erronous-tir.org"},
-			mockErrors: map[string]error{"https://https://my-erronous-tir.org/v4/issuers/did:web:test.org": errors.New("something_bad")}, expectExists: false},
+			mockErrors: map[string]error{"https://my-erronous-tir.org/v4/issuers/did:web:test.org": errors.New("something_bad")}, expectExists: false},
 		{testName: "The issuer not should be returned, if the response cannot be parsed.", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-erronous-tir.org"},
-			mockResponses: map[string]*http.Response{"https://https://my-erronous-tir.org/v4/issuers/did:web:test.org": getUnparsableResponse()}, expectExists: false},
+			mockResponses: map[string]*http.Response{"https://my-erronous-tir.org/v4/issuers/did:web:test.org": getUnparsableResponse()}, expectExists: false},
 	}
 
 	for _, tc := range tests {
