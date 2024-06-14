@@ -24,7 +24,6 @@ var ErrorTirEmptyResponse = errors.New("empty_response_from_tir")
 
 type HttpClient interface {
 	Do(req *http.Request) (*http.Response, error)
-	CloseIdleConnections()
 }
 
 type TirClient interface {
@@ -156,8 +155,8 @@ func (tc TirHttpClient) getIssuerWithRetry(tirEndpoint string, did string) (exis
 		if err != nil && err.Error() == "EOF" {
 			logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
 			logging.Log().Debugf("Response was %v ", resp)
-			tc.client.Reset()
 			currentTry++
+			time.Sleep(time.Millisecond * 500)
 			continue
 		} else if err != nil {
 			return false, trustedIssuer, err

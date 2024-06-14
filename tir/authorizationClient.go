@@ -27,7 +27,6 @@ var ErrorCachedOpenidMetadataNotFound = errors.New("cached_openid_metadata_not_f
 
 type HttpGetClient interface {
 	Get(tirAddress string, tirPath string) (resp *http.Response, err error)
-	Reset()
 }
 
 type AuthorizingHttpClient struct {
@@ -38,10 +37,6 @@ type AuthorizingHttpClient struct {
 
 type NoAuthHttpClient struct {
 	httpClient HttpClient
-}
-
-func (ac AuthorizingHttpClient) Reset() {
-	ac.httpClient.CloseIdleConnections()
 }
 
 func (ac AuthorizingHttpClient) FillMetadataCache(context.Context) {
@@ -62,10 +57,6 @@ func (ac AuthorizingHttpClient) FillMetadataCache(context.Context) {
 			logging.Log().Errorf("failed caching issuer metadata in FillMetadataCache(): %v", err)
 		}
 	}
-}
-
-func (nac NoAuthHttpClient) Reset() {
-	nac.httpClient.CloseIdleConnections()
 }
 
 func (nac NoAuthHttpClient) Get(tirAddress string, tirPath string) (resp *http.Response, err error) {
