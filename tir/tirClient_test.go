@@ -25,10 +25,14 @@ func (gc getClient) Get(tirAddress string, tirPath string) (resp *http.Response,
 	return gc.client.Get(tirAddress + "/" + tirPath)
 }
 
+func (gc getClient) Reset()
+
 type mockClient struct {
 	responses map[string]*http.Response
 	errors    map[string]error
 }
+
+func (mc mockClient) Reset()
 
 func (mc mockClient) Get(tirAddress string, tirPath string) (resp *http.Response, err error) {
 	return mc.responses[tirAddress+"/"+tirPath], mc.errors[tirAddress+"/"+tirPath]
