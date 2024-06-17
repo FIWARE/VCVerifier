@@ -21,6 +21,8 @@ type getClient struct {
 	client *http.Client
 }
 
+func (gc getClient) Reset()
+
 func (gc getClient) Get(tirAddress string, tirPath string) (resp *http.Response, err error) {
 	return gc.client.Get(tirAddress + "/" + tirPath)
 }
@@ -33,6 +35,8 @@ type mockClient struct {
 func (mc mockClient) Get(tirAddress string, tirPath string) (resp *http.Response, err error) {
 	return mc.responses[tirAddress+"/"+tirPath], mc.errors[tirAddress+"/"+tirPath]
 }
+
+func (mc mockClient) Reset()
 
 type mockCache struct{}
 

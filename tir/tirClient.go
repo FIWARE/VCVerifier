@@ -80,11 +80,7 @@ type Claim struct {
 
 func NewTirHttpClient(tokenProvider TokenProvider, m2mConfig config.M2M, verifierConfig config.Verifier) (client TirClient, err error) {
 
-	// disable keep alive, to avoid EOFs due to race conditions
-	// not performance critical, since we serve most responses from the cache
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DisableKeepAlives = true
-	httpClient := &http.Client{Transport: transport}
+	httpClient := &http.Client{}
 
 	tirCache := cache.New(time.Duration(verifierConfig.TirCacheExpiry)*time.Second, time.Duration(2*verifierConfig.TirCacheExpiry)*time.Second)
 	tilCache := cache.New(time.Duration(verifierConfig.TilCacheExpiry)*time.Second, time.Duration(2*verifierConfig.TilCacheExpiry)*time.Second)
@@ -100,9 +96,9 @@ func NewTirHttpClient(tokenProvider TokenProvider, m2mConfig config.M2M, verifie
 			return nil, err
 		}
 
-		httpGetClient = authorizingHttpClient
+		httpGetClient = &authorizingHttpClient
 	} else {
-		httpGetClient = NoAuthHttpClient{httpClient: httpClient}
+		httpGetClient = &NoAuthHttpClient{httpClient: httpClient}
 	}
 
 	return TirHttpClient{client: httpGetClient, tirCache: tirCache, tilCache: tilCache}, err
@@ -138,6 +134,10 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 	return false, trustedIssuer, err
 }
 
+func (tc TirHttpClient) resetClient() {
+	tc.client.Reset()
+}
+
 func (tc TirHttpClient) getIssuerWithRetry(tirEndpoint string, did string) (exists bool, trustedIssuer TrustedIssuer, err error) {
 
 	currentTry := 0
@@ -155,8 +155,8 @@ func (tc TirHttpClient) getIssuerWithRetry(tirEndpoint string, did string) (exis
 		if err != nil && err.Error() == "EOF" {
 			logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
 			logging.Log().Debugf("Response was %v ", resp)
+			tc.client.Reset()
 			currentTry++
-			time.Sleep(time.Millisecond * 1000)
 			continue
 		} else if err != nil {
 			return false, trustedIssuer, err
