@@ -27,6 +27,7 @@ var ErrorCachedOpenidMetadataNotFound = errors.New("cached_openid_metadata_not_f
 
 type HttpGetClient interface {
 	Get(tirAddress string, tirPath string) (resp *http.Response, err error)
+	Reset()
 }
 
 type AuthorizingHttpClient struct {
@@ -37,6 +38,14 @@ type AuthorizingHttpClient struct {
 
 type NoAuthHttpClient struct {
 	httpClient HttpClient
+}
+
+func (ac *AuthorizingHttpClient) Reset() {
+	ac.httpClient = &http.Client{}
+}
+
+func (nac *NoAuthHttpClient) Reset() {
+	nac.httpClient = &http.Client{}
 }
 
 func (ac AuthorizingHttpClient) FillMetadataCache(context.Context) {
