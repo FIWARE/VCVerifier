@@ -156,6 +156,7 @@ func (tc TirHttpClient) getIssuerWithRetry(tirEndpoint string, did string) (exis
 			logging.Log().Warnf("Was not able to parse the response from til %s for %s. Err: %v", tirEndpoint, did, err)
 			logging.Log().Debugf("Response was %v ", resp)
 			tc.client.Reset()
+			time.Sleep(time.Duration(time.Millisecond * 500))
 			currentTry++
 			continue
 		} else if err != nil {
