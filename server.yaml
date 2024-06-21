@@ -4,7 +4,7 @@ server:
 logging:
     jsonLogging: true
     logRequests: true
-verifier: 
+verifier:
     tirAddress: https://tir.de
     did: did:key:myverifier
     policies:
