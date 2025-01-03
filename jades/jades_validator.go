@@ -77,7 +77,9 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 		return false, err
 	}
 	if validationHttpResponse.StatusCode != 200 {
-		logging.Log().Warnf("Did not receive an OK from the validation endpoint. Was: %v", validationHttpResponse)
+		logging.Log().Warnf("Add %s", v.ValidationAddress)
+		logging.Log().Warnf("Body %s", logging.PrettyPrintObject(validationHttpRequest))
+		logging.Log().Warnf("Did not receive an OK from the validation endpoint. Was: %s", logging.PrettyPrintObject(validationHttpResponse))
 		return false, ErrorBadResponse
 	}
 
