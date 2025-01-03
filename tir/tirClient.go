@@ -22,10 +22,6 @@ const DID_V4_Path = "v4/identifiers"
 var ErrorTirNoResponse = errors.New("no_response_from_tir")
 var ErrorTirEmptyResponse = errors.New("empty_response_from_tir")
 
-type HttpClient interface {
-	Do(req *http.Request) (*http.Response, error)
-}
-
 type TirClient interface {
 	IsTrustedParticipant(tirEndpoints []string, did string) (trusted bool)
 	GetTrustedIssuer(tirEndpoints []string, did string) (exists bool, trustedIssuer TrustedIssuer, err error)

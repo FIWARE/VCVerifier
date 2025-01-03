@@ -9,6 +9,7 @@ type Configuration struct {
 	Logging    Logging    `mapstructure:"logging"`
 	ConfigRepo ConfigRepo `mapstructure:"configRepo"`
 	M2M        M2M        `mapstructure:"m2m"`
+	Elsi       Elsi       `mapstructure:"elsi"`
 }
 
 // general configuration to run the application
@@ -77,6 +78,19 @@ type Verifier struct {
 	ValidationMode string `mapstructure:"validationMode" default:"none"`
 	// algorithm to be used for the jwt signatures - currently supported: RS256 and ES256
 	KeyAlgorithm string `mapstructure:"keyAlgorithm" default:"RS256"`
+}
+
+type Elsi struct {
+	// should the support for did:elsi be enabled
+	Enabled bool `mapstructure:"enabled" default:"false"`
+	// endpoint of the validation service to be used for JAdES signatures
+	ValidationEndpoint *ValidationEndpoint `mapstructure:"validationEndpoint"`
+}
+
+type ValidationEndpoint struct {
+	Host           string `mapstructure:"host"`
+	ValidationPath string `mapstructure:"/validateSignature"`
+	HealthPath     string `mapstructure:"/q/health/ready"`
 }
 
 type Policies struct {

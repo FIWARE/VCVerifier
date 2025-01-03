@@ -195,7 +195,6 @@ func getCredential(vcPath string) (vc *verifiable.Credential, err error) {
 
 // file system interfaces
 
-// Interface to the http-client
 type fileAccessor interface {
 	ReadFile(filename string) ([]byte, error)
 }

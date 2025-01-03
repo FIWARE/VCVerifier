@@ -93,7 +93,8 @@ func TestGetToken(t *testing.T) {
 	for _, tc := range tests {
 
 		t.Run(tc.testName, func(t *testing.T) {
-			presentationOptions = []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}
+			presentationParser = &verifier.ConfigurablePresentationParser{
+				PresentationOpts: []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}}
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
@@ -184,7 +185,8 @@ func TestStartSIOPSameDevice(t *testing.T) {
 	for _, tc := range tests {
 
 		t.Run(tc.testName, func(t *testing.T) {
-			presentationOptions = []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}
+			presentationParser = &verifier.ConfigurablePresentationParser{
+				PresentationOpts: []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}}
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
@@ -248,10 +250,10 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 
 		t.Run(tc.testName, func(t *testing.T) {
 
-			//presentationOptions = []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}
-			presentationOptions = []verifiable.PresentationOpt{
-				verifiable.WithPresProofChecker(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
-				verifiable.WithPresJSONLDDocumentLoader(ld.NewDefaultDocumentLoader(http.DefaultClient))}
+			presentationParser = &verifier.ConfigurablePresentationParser{
+				PresentationOpts: []verifiable.PresentationOpt{
+					verifiable.WithPresProofChecker(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
+					verifiable.WithPresJSONLDDocumentLoader(ld.NewDefaultDocumentLoader(http.DefaultClient))}}
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
@@ -338,7 +340,8 @@ func TestVerifierAPIStartSIOP(t *testing.T) {
 		logging.Log().Info("TestVerifierAPIStartSIOP +++++++++++++++++ Running test: ", tc.testName)
 
 		t.Run(tc.testName, func(t *testing.T) {
-			presentationOptions = []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}
+			presentationParser = &verifier.ConfigurablePresentationParser{
+				PresentationOpts: []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}}
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)

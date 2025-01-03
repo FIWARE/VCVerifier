@@ -18,17 +18,13 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/fiware/VCVerifier/verifier"
-	"github.com/piprate/json-gold/ld"
-	"github.com/trustbloc/vc-go/proof/defaults"
 	"github.com/trustbloc/vc-go/verifiable"
 
 	"github.com/gin-gonic/gin"
 )
 
 var apiVerifier verifier.Verifier
-var presentationOptions = []verifiable.PresentationOpt{
-	verifiable.WithPresProofChecker(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
-	verifiable.WithPresJSONLDDocumentLoader(NewCachingDocumentLoader(ld.NewDefaultDocumentLoader(http.DefaultClient)))}
+var presentationParser verifier.PresentationParser
 
 var ErrorMessagNoGrantType = ErrorMessage{"no_grant_type_provided", "Token requests require a grant_type."}
 var ErrorMessageUnsupportedGrantType = ErrorMessage{"unsupported_grant_type", "Provided grant_type is not supported by the implementation."}
@@ -48,6 +44,13 @@ func getApiVerifier() verifier.Verifier {
 		apiVerifier = verifier.GetVerifier()
 	}
 	return apiVerifier
+}
+
+func getPresentationParser() verifier.PresentationParser {
+	if presentationParser == nil {
+		presentationParser = verifier.GetPresentationParser()
+	}
+	return presentationParser
 }
 
 // GetToken - Token endpoint to exchange the authorization code with the actual JWT.
@@ -255,8 +258,7 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *ver
 		return
 	}
 
-	parsedPresentation, err = verifiable.ParsePresentation(tokenBytes,
-		presentationOptions...)
+	parsedPresentation, err = presentationParser.ParsePresentation(tokenBytes)
 	if err != nil {
 		logging.Log().Infof("Was not able to parse the token %s. Err: %v", vpToken, err)
 		c.AbortWithStatusJSON(400, ErrorMessageUnableToDecodeToken)
