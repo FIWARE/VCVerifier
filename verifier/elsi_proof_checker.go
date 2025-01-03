@@ -61,10 +61,11 @@ func (epc ElsiProofChecker) checkElsiProof(headers jose.Headers, expectedProofIs
 		return err
 	}
 
-	encodedMessage := base64.RawURLEncoding.EncodeToString(msg)
-	encodedSignature := base64.RawURLEncoding.EncodeToString(signature)
+	encodedMessage := base64.RawStdEncoding.EncodeToString(msg)
+	encodedSignature := base64.RawStdEncoding.EncodeToString(signature)
 	originalJwt := encodedMessage + "." + encodedSignature
-	base64Jwt := base64.RawURLEncoding.EncodeToString([]byte(originalJwt))
+	logging.Log().Warnf("Original jwt %s", originalJwt)
+	base64Jwt := base64.RawStdEncoding.EncodeToString([]byte(originalJwt))
 	isValid, err := epc.jAdESValidator.ValidateSignature(base64Jwt)
 	if err != nil {
 		logging.Log().Warnf("Was not able to validate JAdES signature. Err: %v", err)

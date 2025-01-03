@@ -53,6 +53,7 @@ type ValidationResponse struct {
 }
 
 func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bool, err error) {
+	logging.Log().Warnf("Signature %s", signature)
 	validationRequest := ValidationRequest{
 		SignedDocument:          SignedDocument{Bytes: signature, Name: DOCUMENT_NAME},
 		TokenExtractionStrategy: TOKEN_EXTRACTION_STRATEGY,
