@@ -89,8 +89,8 @@ type Elsi struct {
 
 type ValidationEndpoint struct {
 	Host           string `mapstructure:"host"`
-	ValidationPath string `mapstructure:"/validateSignature"`
-	HealthPath     string `mapstructure:"/q/health/ready"`
+	ValidationPath string `mapstructure:"validationPath" default:"/validateSignature"`
+	HealthPath     string `mapstructure:"healthPath" default:"/q/health/ready"`
 }
 
 type Policies struct {
