@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS build
+FROM golang:1.23-alpine AS build
 
 WORKDIR /go/src/app
 COPY ./ ./
@@ -8,7 +8,7 @@ RUN apk add build-base
 RUN go get -d -v ./...
 RUN go build -v .
 
-FROM golang:1.21-alpine
+FROM golang:1.23-alpine
 
 LABEL org.opencontainers.image.source="https://github.com/FIWARE/VCVerifier"
 
