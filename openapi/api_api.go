@@ -258,7 +258,7 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *ver
 		return
 	}
 
-	parsedPresentation, err = presentationParser.ParsePresentation(tokenBytes)
+	parsedPresentation, err = getPresentationParser().ParsePresentation(tokenBytes)
 	if err != nil {
 		logging.Log().Infof("Was not able to parse the token %s. Err: %v", vpToken, err)
 		c.AbortWithStatusJSON(400, ErrorMessageUnableToDecodeToken)
