@@ -24,29 +24,20 @@ var ErrorCertHeaderEmpty = errors.New("cert_header_is_empty")
 var ErrorPemDecodeFailed = errors.New("failed_to_decode_pem_from_header")
 var ErrorIssuerValidationFailed = errors.New("isser_validation_failed")
 
+// ProofChecker implementation supporting the did:elsi method -> https://alastria.github.io/did-method-elsi/
 type ElsiProofChecker struct {
 	defaultChecker *checker.ProofChecker
 	jAdESValidator jades.JAdESValidator
 }
 
-func (epc *ElsiProofChecker) CheckLDProof(proof *proof.Proof, expectedProofIssuer string, msg, signature []byte) error {
-	return epc.defaultChecker.CheckLDProof(proof, expectedProofIssuer, msg, signature)
-}
-
 func (epc ElsiProofChecker) CheckJWTProof(headers jose.Headers, expectedProofIssuer string, msg, signature []byte) error {
+	// handle did elsi
 	if isDidElsiMethod(expectedProofIssuer) {
 		return epc.checkElsiProof(headers, expectedProofIssuer, msg, signature)
+		// or refer to the default proof check
 	} else {
 		return epc.defaultChecker.CheckJWTProof(headers, expectedProofIssuer, msg, signature)
 	}
-}
-
-func (epc ElsiProofChecker) GetLDPCanonicalDocument(proof *proof.Proof, doc map[string]interface{}, opts ...processor.Opts) ([]byte, error) {
-	return epc.defaultChecker.GetLDPCanonicalDocument(proof, doc, opts...)
-}
-
-func (epc ElsiProofChecker) GetLDPDigest(proof *proof.Proof, doc []byte) ([]byte, error) {
-	return epc.defaultChecker.GetLDPDigest(proof, doc)
 }
 
 func isDidElsiMethod(did string) bool {
@@ -54,6 +45,9 @@ func isDidElsiMethod(did string) bool {
 	return len(parts) == 3 && strings.HasPrefix(did, DidElsiPrefix)
 }
 
+// checks the proof for did:elsi
+// 1. check that the issuer is the one mentioned in the certificate
+// 2. check that the signature is a valid JAdES signature
 func (epc ElsiProofChecker) checkElsiProof(headers jose.Headers, expectedProofIssuer string, msg, signature []byte) (err error) {
 
 	// start with issuer validation, no external calls required if it fails
@@ -125,10 +119,24 @@ func validateIssuer(certificate *x509.Certificate, issuerDid string) error {
 			break
 		}
 	}
-
+	// checks that the organization identifier in the certificate is equal to the id-part of the did:elsi:<ID>
 	if organizationIdentifier != "" && strings.HasSuffix(issuerDid, DidPartsSeparator+organizationIdentifier) {
 		return nil
 	} else {
 		return ErrorIssuerValidationFailed
 	}
+}
+
+// non-elsi proof check methods - will be handled by the default checkers
+
+func (epc *ElsiProofChecker) CheckLDProof(proof *proof.Proof, expectedProofIssuer string, msg, signature []byte) error {
+	return epc.defaultChecker.CheckLDProof(proof, expectedProofIssuer, msg, signature)
+}
+
+func (epc ElsiProofChecker) GetLDPCanonicalDocument(proof *proof.Proof, doc map[string]interface{}, opts ...processor.Opts) ([]byte, error) {
+	return epc.defaultChecker.GetLDPCanonicalDocument(proof, doc, opts...)
+}
+
+func (epc ElsiProofChecker) GetLDPDigest(proof *proof.Proof, doc []byte) ([]byte, error) {
+	return epc.defaultChecker.GetLDPDigest(proof, doc)
 }

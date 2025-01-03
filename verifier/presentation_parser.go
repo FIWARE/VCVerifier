@@ -45,6 +45,7 @@ func GetPresentationParser() PresentationParser {
 	return presentationParser
 }
 
+// init the presentation parser depending on the config, either with or without did:elsi support
 func InitPresentationParser(config *configModel.Configuration, healthCheck *health.Health) error {
 	elsiConfig := &config.Elsi
 	err := validateConfig(elsiConfig)

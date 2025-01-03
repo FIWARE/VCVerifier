@@ -21,6 +21,7 @@ func BuildUrlString(address string, path string) string {
 	}
 }
 
+// basic interface for a generic http client
 type HttpClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }

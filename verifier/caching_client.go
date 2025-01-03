@@ -9,6 +9,8 @@ import (
 	"github.com/piprate/json-gold/ld"
 )
 
+// loader for json-ld documents, used by the presentation parser. Caches the ld-documents for faster access
+
 type CachingDocumentLoader struct {
 	defaultLoader ld.DocumentLoader
 	contextCache  common.Cache

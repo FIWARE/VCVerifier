@@ -17,15 +17,19 @@ var ErrorBadResponse = errors.New("bad_response_from_validation_endpoint")
 var ErrorEmptyBodyResponse = errors.New("empty_body_response_from_validation_endpoint")
 var ErrorValidationServiceNotReady = errors.New("validation_service_not_ready")
 
+// Validator for JAdES(https://www.etsi.org/deliver/etsi_ts/119100_119199/11918201/01.01.01_60/ts_11918201v010101p.pdf) signatures
 type JAdESValidator interface {
 	ValidateSignature(signature string) (bool, error)
 }
 
+// Validator implementation, that uses an external validation service(based on https://github.com/esig/dss)
 type ExternalJAdESValidator struct {
 	HttpClient        common.HttpClient
 	ValidationAddress string
 	HealthAddress     string
 }
+
+// structs to be used with the dss-library
 
 type SignedDocument struct {
 	Bytes string `json:"bytes"`
@@ -88,6 +92,7 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 		logging.Log().Warnf("Was not able to decode the validation response. Error: %v", err)
 		return false, err
 	}
+	// if all signatures in the report are valid, the the validation was successful
 	if validationResponse.SimpleReport.SignaturesCount == 0 ||
 		(validationResponse.SimpleReport.SignaturesCount != validationResponse.SimpleReport.ValidSignaturesCount) {
 		logging.Log().Infof("Signature was invalid.")
@@ -97,6 +102,7 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 	return true, err
 }
 
+// health check function, to signal the external service beeing ready
 func (v *ExternalJAdESValidator) IsReady() error {
 	healthRequest, err := http.NewRequest("GET", v.HealthAddress, nil)
 	if err != nil {
