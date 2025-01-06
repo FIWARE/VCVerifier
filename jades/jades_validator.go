@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/fiware/VCVerifier/common"
@@ -76,6 +77,14 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 		logging.Log().Warnf("Did not receive a valid validation response. Err: %v", err)
 		return false, err
 	}
+
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			logging.Log().Warnf("Was not able to close the response body. Err: %v", err)
+		}
+	}(validationHttpResponse.Body)
+
 	if validationHttpResponse.StatusCode != 200 {
 		logging.Log().Warnf("Did not receive an OK from the validation endpoint. Was: %s", logging.PrettyPrintObject(validationHttpResponse))
 		return false, ErrorBadResponse
@@ -85,7 +94,6 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 		logging.Log().Warnf("Received an empty body from the validation endpoint.")
 		return false, ErrorEmptyBodyResponse
 	}
-	logging.Log().Warnf("Response %s", validationHttpResponse.Body)
 	validationResponse := &ValidationResponse{}
 	err = json.NewDecoder(validationHttpResponse.Body).Decode(validationResponse)
 	if err != nil {
