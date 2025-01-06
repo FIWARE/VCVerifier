@@ -53,6 +53,7 @@ type ValidationResponse struct {
 }
 
 func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bool, err error) {
+	logging.Log().Warnf("Signature %s", signature)
 	validationRequest := ValidationRequest{
 		SignedDocument:          SignedDocument{Bytes: signature, Name: DOCUMENT_NAME},
 		TokenExtractionStrategy: TOKEN_EXTRACTION_STRATEGY,
@@ -63,6 +64,7 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 		logging.Log().Warnf("Was not able to marshal the validation request. Error: %v", err)
 		return success, err
 	}
+	logging.Log().Warnf("The body %s", requestBody)
 
 	validationHttpRequest, err := http.NewRequest("POST", v.ValidationAddress, bytes.NewBuffer(requestBody))
 	if err != nil {
@@ -86,7 +88,6 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 		return false, ErrorEmptyBodyResponse
 	}
 
-	logging.Log().Warnf("Res %v", validationHttpResponse.Body)
 	validationResponse := &ValidationResponse{}
 	err = json.NewDecoder(validationHttpResponse.Body).Decode(validationResponse)
 	if err != nil {
