@@ -61,12 +61,12 @@ func (epc ElsiProofChecker) checkElsiProof(headers jose.Headers, expectedProofIs
 		return err
 	}
 
-	encodedMessage := string(msg[:])
+	encodedMessage, _ := decodeBase64BytesToString(msg)
 	encodedSignature := base64.RawURLEncoding.EncodeToString(signature)
 	originalJwt := encodedMessage + "." + encodedSignature
 	logging.Log().Warnf("encodedMessage jwt %s", encodedMessage)
 	logging.Log().Warnf("Original jwt %s", originalJwt)
-	base64Jwt := base64.RawStdEncoding.EncodeToString([]byte(originalJwt))
+	base64Jwt := base64.RawURLEncoding.EncodeToString([]byte(originalJwt))
 	isValid, err := epc.jAdESValidator.ValidateSignature(base64Jwt)
 	if err != nil {
 		logging.Log().Warnf("Was not able to validate JAdES signature. Err: %v", err)
@@ -78,6 +78,16 @@ func (epc ElsiProofChecker) checkElsiProof(headers jose.Headers, expectedProofIs
 	}
 	logging.Log().Debugf("Valid did:elsi credential.")
 	return err
+}
+
+func decodeBase64BytesToString(base64Bytes []byte) (string, error) {
+	base64Str := base64.RawURLEncoding.EncodeToString(base64Bytes)
+	decodedBytes, err := base64.StdEncoding.DecodeString(base64Str)
+	if err != nil {
+		return "", err
+	}
+
+	return string(decodedBytes[:]), nil
 }
 
 func retrieveClientCertificate(headers jose.Headers) (*x509.Certificate, error) {
