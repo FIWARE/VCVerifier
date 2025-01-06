@@ -64,6 +64,7 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 		logging.Log().Warnf("Was not able to marshal the validation request. Error: %v", err)
 		return success, err
 	}
+	logging.Log().Warnf("The body %s", requestBody)
 
 	validationHttpRequest, err := http.NewRequest("POST", v.ValidationAddress, bytes.NewBuffer(requestBody))
 	if err != nil {
