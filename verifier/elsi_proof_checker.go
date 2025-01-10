@@ -82,8 +82,10 @@ func (epc ElsiProofChecker) checkElsiProof(headers jose.Headers, expectedProofIs
 
 func decodeBase64BytesToString(base64Bytes []byte) (string, error) {
 	base64Str := base64.RawURLEncoding.EncodeToString(base64Bytes)
+	logging.Log().Warnf("Encoded %s", base64Str)
 	decodedBytes, err := base64.StdEncoding.DecodeString(base64Str)
 	if err != nil {
+		logging.Log().Warnf("String decoding failed. Error: %v", err)
 		return "", err
 	}
 
