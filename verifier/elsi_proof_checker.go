@@ -62,7 +62,7 @@ func (epc ElsiProofChecker) checkElsiProof(headers jose.Headers, expectedProofIs
 	}
 
 	logging.Log().Warnf("Decoded message %s", string(msg))
-	encodedMessage, _ := decodeBase64BytesToString(msg)
+	encodedMessage := string(msg[:])
 	logging.Log().Warnf("Encoded message %s", encodedMessage)
 	encodedSignature := base64.RawURLEncoding.EncodeToString(signature)
 	originalJwt := encodedMessage + "." + encodedSignature
