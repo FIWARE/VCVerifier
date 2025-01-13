@@ -1,6 +1,9 @@
 package common
 
-import "strings"
+import (
+	"net/http"
+	"strings"
+)
 
 func BuildUrlString(address string, path string) string {
 	if strings.HasSuffix(address, "/") {
@@ -16,4 +19,9 @@ func BuildUrlString(address string, path string) string {
 			return address + "/" + path
 		}
 	}
+}
+
+// basic interface for a generic http client
+type HttpClient interface {
+	Do(req *http.Request) (*http.Response, error)
 }

@@ -41,6 +41,7 @@ func main() {
 	logger.Infof("Configuration is: %s", logging.PrettyPrintObject(configuration))
 
 	verifier.InitVerifier(&configuration)
+	verifier.InitPresentationParser(&configuration, Health())
 
 	router := getRouter()
 
