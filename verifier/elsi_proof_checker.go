@@ -62,7 +62,6 @@ func (epc ElsiProofChecker) checkElsiProof(headers jose.Headers, expectedProofIs
 	}
 
 	encodedMessage := string(msg[:])
-	logging.Log().Warnf("Encoded message %s", encodedMessage)
 	encodedSignature := base64.RawURLEncoding.EncodeToString(signature)
 	originalJwt := encodedMessage + "." + encodedSignature
 	base64Jwt := base64.StdEncoding.EncodeToString([]byte(originalJwt))
@@ -77,18 +76,6 @@ func (epc ElsiProofChecker) checkElsiProof(headers jose.Headers, expectedProofIs
 	}
 	logging.Log().Debugf("Valid did:elsi credential.")
 	return err
-}
-
-func decodeBase64BytesToString(base64Bytes []byte) (string, error) {
-	base64Str := base64.RawURLEncoding.EncodeToString(base64Bytes)
-	logging.Log().Warnf("Encoded %s", base64Str)
-	decodedBytes, err := base64.StdEncoding.DecodeString(base64Str)
-	if err != nil {
-		logging.Log().Warnf("String decoding failed. Error: %v", err)
-		return "", err
-	}
-
-	return string(decodedBytes[:]), nil
 }
 
 func retrieveClientCertificate(headers jose.Headers) (*x509.Certificate, error) {

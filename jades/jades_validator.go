@@ -58,14 +58,12 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 		SignedDocument:          SignedDocument{Bytes: signature, Name: DOCUMENT_NAME},
 		TokenExtractionStrategy: TOKEN_EXTRACTION_STRATEGY,
 	}
-	logging.Log().Warnf("The signature %s", signature)
 	requestBody, err := json.Marshal(validationRequest)
 	if err != nil {
 		logging.Log().Warnf("Was not able to marshal the validation request. Error: %v", err)
 		return success, err
 	}
 
-	logging.Log().Warnf("The body %s", string(requestBody))
 	validationHttpRequest, err := http.NewRequest("POST", v.ValidationAddress, bytes.NewBuffer(requestBody))
 	if err != nil {
 		logging.Log().Warnf("Was not able to create validation request. Err: %v", err)
@@ -105,7 +103,6 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 	if validationResponse.SimpleReport.SignaturesCount == 0 ||
 		(validationResponse.SimpleReport.SignaturesCount != validationResponse.SimpleReport.ValidSignaturesCount) {
 		logging.Log().Infof("Signature was invalid.")
-		logging.Log().Debugf("Validation report is %s", logging.PrettyPrintObject(validationResponse.SimpleReport))
 		return false, err
 	}
 	return true, err
