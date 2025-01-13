@@ -30,13 +30,13 @@ type HttpGetClient interface {
 }
 
 type AuthorizingHttpClient struct {
-	httpClient    HttpClient
+	httpClient    common.HttpClient
 	tokenProvider TokenProvider
 	clientId      string
 }
 
 type NoAuthHttpClient struct {
-	httpClient HttpClient
+	httpClient common.HttpClient
 }
 
 func (ac AuthorizingHttpClient) FillMetadataCache(context.Context) {
@@ -65,7 +65,7 @@ func (nac NoAuthHttpClient) Get(tirAddress string, tirPath string) (resp *http.R
 }
 
 // excutes get requests via "DO" and close the connection afterwards, to avoid EOFs on keep-alive race-conditions
-func closingGet(httpClient HttpClient, url string) (resp *http.Response, err error) {
+func closingGet(httpClient common.HttpClient, url string) (resp *http.Response, err error) {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Close = true
 	return httpClient.Do(req)

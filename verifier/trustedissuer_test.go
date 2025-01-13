@@ -115,19 +115,19 @@ func getTrustedIssuer(attributes []tir.IssuerAttribute) tir.TrustedIssuer {
 }
 
 func getVerificationContext() ValidationContext {
-	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": []string{"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": []string{"http://my-til.org"}}}
+	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": {"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"http://my-til.org"}}}
 }
 
 func getWildcardVerificationContext() ValidationContext {
-	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": []string{"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": []string{"*"}}}
+	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": {"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*"}}}
 }
 
 func getInvalidMixedVerificationContext() ValidationContext {
-	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": []string{"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": []string{"*", "http://my-til.org"}}}
+	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": {"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*", "http://my-til.org"}}}
 }
 
 func getWildcardAndNormalVerificationContext() ValidationContext {
-	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": []string{"http://my-trust-registry.org"}, "SecondType": []string{"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": []string{"*"}, "SecondType": []string{"http://my-til.org"}}}
+	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": {"http://my-trust-registry.org"}, "SecondType": {"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*"}, "SecondType": {"http://my-til.org"}}}
 }
 
 func getMultiTypeCredential(types []string, claimName string, value interface{}) verifiable.Credential {
