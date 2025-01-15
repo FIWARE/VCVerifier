@@ -36,15 +36,16 @@ func Test_getServices(t *testing.T) {
 	}
 	assert.NotEmpty(t, services)
 	expectedData := []ConfiguredService{
-		ConfiguredService{
+		{
 			Id:               "service_all",
 			DefaultOidcScope: "did_write",
 			ServiceScopes: map[string][]Credential{
-				"did_write": []Credential{
-					Credential{
+				"did_write": {
+					{
 						Type:                     "VerifiableCredential",
 						TrustedParticipantsLists: []string{"https://tir-pdc.gaia-x.fiware.dev"},
 						TrustedIssuersLists:      []string{"https://til-pdc.gaia-x.fiware.dev"},
+						HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
 					},
 				},
 			},

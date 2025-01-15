@@ -127,6 +127,19 @@ func (trvc TrustRegistriesValidationContext) GetRequiredCredentialTypes() []stri
 	return removeDuplicate(requiredTypes)
 }
 
+type HolderValidationContext struct {
+	claim  string
+	holder string
+}
+
+func (hvc HolderValidationContext) GetClaim() string {
+	return hvc.claim
+}
+
+func (hvc HolderValidationContext) GetHolder() string {
+	return hvc.holder
+}
+
 func removeDuplicate[T string | int](sliceList []T) []T {
 	allKeys := make(map[T]bool)
 	list := []T{}
@@ -367,6 +380,7 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	// collect all submitted credential types
 	credentialsByType := map[string][]*verifiable.Credential{}
 	credentialTypes := []string{}
+	holder := verifiablePresentation.Holder
 	for _, vc := range verifiablePresentation.Credentials() {
 		for _, credentialType := range vc.Contents().Types {
 			if _, ok := credentialsByType[credentialType]; !ok {
@@ -392,6 +406,23 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 			}
 		}
 		for _, credential := range credentialsNeededForScope {
+			holderValidationContexts, err := v.getHolderValidationContext(clientId, scope, credentialTypes, holder)
+			if err != nil {
+				logging.Log().Warnf("Was not able to create the holder validation context. Credential will be rejected. Err: %v", err)
+				return 0, "", ErrorVerficationContextSetup
+			}
+			holderValidationService := HolderValidationService{}
+			for _, holderValidationContext := range holderValidationContexts {
+				result, err := holderValidationService.ValidateVC(credential, holderValidationContext)
+				if err != nil {
+					logging.Log().Warnf("Failed to verify credential %s. Err: %v", logging.PrettyPrintObject(credential), err)
+					return 0, "", err
+				}
+				if !result {
+					logging.Log().Infof("VC %s is not valid.", logging.PrettyPrintObject(credential))
+					return 0, "", ErrorInvalidVC
+				}
+			}
 			for _, verificationService := range v.validationServices {
 				result, err := verificationService.ValidateVC(credential, verificationContext)
 				if err != nil {
@@ -521,6 +552,22 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	} else {
 		return sameDevice, callbackToRequester(loginSession, authorizationCode)
 	}
+}
+
+func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope string, credentialTypes []string, holder string) (validationContext []HolderValidationContext, err error) {
+	validationContexts := []HolderValidationContext{}
+	for _, credentialType := range credentialTypes {
+		isEnabled, claim, err := v.credentialsConfig.GetHolderVerification(clientId, scope, credentialType)
+		if err != nil {
+			logging.Log().Warnf("Was not able to get valid holder verification config for client %s, scope %s and type %s. Err: %v", clientId, scope, credentialType, err)
+			return validationContext, err
+		}
+		if !isEnabled {
+			continue
+		}
+		validationContexts = append(validationContext, HolderValidationContext{claim: claim, holder: holder})
+	}
+	return validationContexts, err
 }
 
 func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string, credentialTypes []string) (verificationContext TrustRegistriesValidationContext, err error) {
