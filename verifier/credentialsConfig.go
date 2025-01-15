@@ -31,6 +31,8 @@ type CredentialsConfig interface {
 	GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error)
 	// The credential types that are required for the given service and scope
 	RequiredCredentialTypes(serviceIdentifier string, scope string) (credentialTypes []string, err error)
+	// Get holder verification
+	GetHolderVerification(serviceIdentifier string, scope string, credentialType string) (isEnabled bool, holderClaim string, err error)
 }
 
 type ServiceBackedCredentialsConfig struct {
@@ -158,4 +160,18 @@ func (cc ServiceBackedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifie
 	}
 	logging.Log().Debugf("No trusted issuers for %s - %s", serviceIdentifier, credentialType)
 	return []string{}, nil
+}
+
+func (cc ServiceBackedCredentialsConfig) GetHolderVerification(serviceIdentifier string, scope string, credentialType string) (isEnabled bool, holderClaim string, err error) {
+	logging.Log().Debugf("Get holder verification for %s - %s - %s.", serviceIdentifier, scope, credentialType)
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
+		if ok {
+			logging.Log().Debugf("Found holder verification %v:%s for %s - %s", credential.HolderVerification.Enabled, credential.HolderVerification.Claim, serviceIdentifier, credentialType)
+			return credential.HolderVerification.Enabled, credential.HolderVerification.Claim, nil
+		}
+	}
+	logging.Log().Debugf("No holder verification for %s - %s", serviceIdentifier, credentialType)
+	return false, "", nil
 }

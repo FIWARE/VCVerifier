@@ -12,7 +12,6 @@ import (
 
 const SERVICES_PATH = "service"
 
-
 const SERVICE_DEFAULT_SCOPE = ""
 
 var ErrorCcsNoResponse = errors.New("no_response_from_ccs")
@@ -53,6 +52,15 @@ type Credential struct {
 	TrustedParticipantsLists []string `json:"trustedParticipantsLists,omitempty" mapstructure:"trustedParticipantsLists,omitempty"`
 	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted issuers from. The attributes need to be formated to comply with the verifiers requirements.
 	TrustedIssuersLists []string `json:"trustedIssuersLists,omitempty" mapstructure:"trustedIssuersLists,omitempty"`
+	// Configuration of Holder Verfification
+	HolderVerification HolderVerification `json:"holderVerification" mapstructure:"holderVerification"`
+}
+
+type HolderVerification struct {
+	// should holder verification be enabled
+	Enabled bool `json:"enabled" mapstructure:"enabled"`
+	// the claim containing the holder
+	Claim string `json:"claim" mapstructure:"claim"`
 }
 
 func (cs ConfiguredService) GetRequiredCredentialTypes(scope string) []string {

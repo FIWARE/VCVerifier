@@ -15,7 +15,11 @@
               ],
               "trustedIssuersLists": [
                 "https://til-pdc.gaia-x.fiware.dev"
-              ]
+              ],
+              "holderVerification": {
+                "enabled": false,
+                "claim": "subject"
+              }
             }
           ]
         }
