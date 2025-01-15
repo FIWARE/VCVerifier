@@ -83,13 +83,15 @@ type mockTokenCache struct {
 	errorToThrow error
 }
 type mockCredentialConfig struct {
+
 	// ServiceId->Scope->CredentialType-> TIR/TIL URLs
-	mockScopes map[string]map[string]map[string][]string
+	mockScopes map[string]map[string]map[string]configModel.Credential
 	mockError  error
 }
 
-func createMockCredentials(serviceId, scope, credentialType, url string) map[string]map[string]map[string][]string {
-	return map[string]map[string]map[string][]string{serviceId: {scope: map[string][]string{credentialType: {url}}}}
+func createMockCredentials(serviceId, scope, credentialType, url, holderClaim string, holderVerfication bool) map[string]map[string]map[string]configModel.Credential {
+	credential := configModel.Credential{TrustedParticipantsLists: []string{url}, TrustedIssuersLists: []string{url}, HolderVerification: configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim}}
+	return map[string]map[string]map[string]configModel.Credential{serviceId: {scope: map[string]configModel.Credential{credentialType: credential}}}
 }
 
 func (mcc mockCredentialConfig) GetScope(serviceIdentifier string) (credentialTypes []string, err error) {
@@ -102,13 +104,13 @@ func (mcc mockCredentialConfig) GetTrustedParticipantLists(serviceIdentifier str
 	if mcc.mockError != nil {
 		return trustedIssuersRegistryUrl, mcc.mockError
 	}
-	return mcc.mockScopes[serviceIdentifier][scope][credentialType], err
+	return mcc.mockScopes[serviceIdentifier][scope][credentialType].TrustedParticipantsLists, err
 }
 func (mcc mockCredentialConfig) GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error) {
 	if mcc.mockError != nil {
 		return trustedIssuersRegistryUrl, mcc.mockError
 	}
-	return mcc.mockScopes[serviceIdentifier][scope][credentialType], err
+	return mcc.mockScopes[serviceIdentifier][scope][credentialType].TrustedIssuersLists, err
 }
 
 func (mcc mockCredentialConfig) RequiredCredentialTypes(serviceIdentifier string, scope string) (credentialTypes []string, err error) {
@@ -116,6 +118,14 @@ func (mcc mockCredentialConfig) RequiredCredentialTypes(serviceIdentifier string
 		return credentialTypes, mcc.mockError
 	}
 	return maps.Keys(mcc.mockScopes[serviceIdentifier][scope]), err
+}
+
+func (mcc mockCredentialConfig) GetHolderVerification(serviceIdentifier string, scope string, credentialType string) (isEnabled bool, holderClaim string, err error) {
+	if mcc.mockError != nil {
+		return isEnabled, holderClaim, mcc.mockError
+	}
+	credential := mcc.mockScopes[serviceIdentifier][scope][credentialType]
+	return credential.HolderVerification.Enabled, credential.HolderVerification.Claim, err
 }
 
 func (msc *mockSessionCache) Add(k string, x interface{}, d time.Duration) error {
@@ -167,7 +177,7 @@ type siopInitTest struct {
 	testAddress        string
 	testSessionId      string
 	testClientId       string
-	credentialScopes   map[string]map[string]map[string][]string
+	credentialScopes   map[string]map[string]map[string]configModel.Credential
 	mockConfigError    error
 	expectedCallback   string
 	expectedConnection string
@@ -238,16 +248,16 @@ func getInitSiopTests() []siopInitTest {
 	cacheFailError := errors.New("cache_fail")
 
 	return []siopInitTest{
-		{testName: "If all parameters are set, a proper connection string should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", ""), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+		{testName: "If all parameters are set, a proper connection string should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
 			expectedConnection: "openid://?response_type=vp_token&response_mode=direct_post&client_id=did:key:verifier&redirect_uri=https://verifier.org/api/v1/authentication_response&state=randomState&nonce=randomNonce", sessionCacheError: nil, expectedError: nil,
 		},
-		{testName: "The scope should be included if configured.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "myService", credentialScopes: createMockCredentials("myService", "someScope", "org.fiware.MySpecialCredential", "some.url"), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+		{testName: "The scope should be included if configured.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "myService", credentialScopes: createMockCredentials("myService", "someScope", "org.fiware.MySpecialCredential", "some.url", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
 			expectedConnection: "openid://?response_type=vp_token&response_mode=direct_post&client_id=did:key:verifier&redirect_uri=https://verifier.org/api/v1/authentication_response&state=randomState&nonce=randomNonce&scope=someScope", sessionCacheError: nil, expectedError: nil,
 		},
-		{testName: "If the login-session could not be cached, an error should be thrown.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", ""), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+		{testName: "If the login-session could not be cached, an error should be thrown.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
 			expectedConnection: "", sessionCacheError: cacheFailError, expectedError: cacheFailError,
 		},
-		{testName: "If config service throws an error, no scope should be included.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "myService", credentialScopes: createMockCredentials("", "", "", ""), mockConfigError: errors.New("config_error"), expectedCallback: "https://client.org/callback",
+		{testName: "If config service throws an error, no scope should be included.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "myService", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: errors.New("config_error"), expectedCallback: "https://client.org/callback",
 			expectedConnection: "openid://?response_type=vp_token&response_mode=direct_post&client_id=did:key:verifier&redirect_uri=https://verifier.org/api/v1/authentication_response&state=randomState&nonce=randomNonce", sessionCacheError: nil, expectedError: nil,
 		},
 	}
@@ -259,13 +269,13 @@ func TestStartSameDeviceFlow(t *testing.T) {
 	logging.Configure(true, "DEBUG", true, []string{})
 
 	tests := []siopInitTest{
-		{testName: "If everything is provided, a samedevice flow should be started.", testHost: "myhost.org", testProtocol: "https", testAddress: "/redirect", testSessionId: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", ""), mockConfigError: nil, expectedCallback: "https://myhost.org/redirect",
+		{testName: "If everything is provided, a samedevice flow should be started.", testHost: "myhost.org", testProtocol: "https", testAddress: "/redirect", testSessionId: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://myhost.org/redirect",
 			expectedConnection: "https://myhost.org/redirect?response_type=vp_token&response_mode=direct_post&client_id=did:key:verifier&redirect_uri=https://myhost.org/api/v1/authentication_response&state=randomState&nonce=randomNonce", sessionCacheError: nil, expectedError: nil,
 		},
-		{testName: "The scope should be included if configured.", testHost: "myhost.org", testProtocol: "https", testAddress: "/redirect", testSessionId: "my-random-session-id", testClientId: "myService", credentialScopes: createMockCredentials("myService", "someScope", "org.fiware.MySpecialCredential", "some.url"), mockConfigError: nil, expectedCallback: "https://myhost.org/redirect",
+		{testName: "The scope should be included if configured.", testHost: "myhost.org", testProtocol: "https", testAddress: "/redirect", testSessionId: "my-random-session-id", testClientId: "myService", credentialScopes: createMockCredentials("myService", "someScope", "org.fiware.MySpecialCredential", "some.url", "", false), mockConfigError: nil, expectedCallback: "https://myhost.org/redirect",
 			expectedConnection: "https://myhost.org/redirect?response_type=vp_token&response_mode=direct_post&client_id=did:key:verifier&redirect_uri=https://myhost.org/api/v1/authentication_response&state=randomState&nonce=randomNonce&scope=someScope", sessionCacheError: nil, expectedError: nil,
 		},
-		{testName: "If the request cannot be cached, an error should be responded.", testHost: "myhost.org", testProtocol: "https", testAddress: "/redirect", testSessionId: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", ""), mockConfigError: nil, expectedCallback: "https://myhost.org/redirect",
+		{testName: "If the request cannot be cached, an error should be responded.", testHost: "myhost.org", testProtocol: "https", testAddress: "/redirect", testSessionId: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://myhost.org/redirect",
 			expectedConnection: "", sessionCacheError: cacheFailError, expectedError: cacheFailError,
 		},
 	}
@@ -670,7 +680,7 @@ type openIdProviderMetadataTest struct {
 	host              string
 	testName          string
 	serviceIdentifier string
-	credentialScopes  map[string]map[string]map[string][]string
+	credentialScopes  map[string]map[string]map[string]configModel.Credential
 	mockConfigError   error
 	expectedOpenID    common.OpenIDProviderMetadata
 }
@@ -680,12 +690,12 @@ func getOpenIdProviderMetadataTests() []openIdProviderMetadataTest {
 
 	return []openIdProviderMetadataTest{
 		{testName: "Test OIDC metadata with existing scopes", serviceIdentifier: "serviceId", host: verifierHost,
-			credentialScopes: map[string]map[string]map[string][]string{"serviceId": {"Scope1": {}, "Scope2": {}}}, mockConfigError: nil,
+			credentialScopes: map[string]map[string]map[string]configModel.Credential{"serviceId": {"Scope1": {}, "Scope2": {}}}, mockConfigError: nil,
 			expectedOpenID: common.OpenIDProviderMetadata{
 				Issuer:          verifierHost,
 				ScopesSupported: []string{"Scope1", "Scope2"}}},
 		{testName: "Test OIDC metadata with non-existing scopes", serviceIdentifier: "serviceId", host: verifierHost,
-			credentialScopes: map[string]map[string]map[string][]string{"serviceId": {}}, mockConfigError: nil,
+			credentialScopes: map[string]map[string]map[string]configModel.Credential{"serviceId": {}}, mockConfigError: nil,
 			expectedOpenID: common.OpenIDProviderMetadata{
 				Issuer:          verifierHost,
 				ScopesSupported: []string{}}},
