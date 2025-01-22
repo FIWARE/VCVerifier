@@ -3,7 +3,6 @@ package tir
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"time"
 
@@ -155,10 +154,6 @@ func parseTirResponse(resp http.Response) (trustedIssuer TrustedIssuer, err erro
 		return trustedIssuer, ErrorTirEmptyResponse
 	}
 
-	body, _ := io.ReadAll(resp.Body)
-
-	logging.Log().Warnf("The body is %s", string(body))
-
 	err = json.NewDecoder(resp.Body).Decode(&trustedIssuer)
 	if err != nil {
 		logging.Log().Warn("Was not able to decode the tir-response.")
@@ -217,7 +212,6 @@ func (tc TirHttpClient) requestIssuerWithVersion(tirEndpoint string, didPath str
 		return nil, ErrorTirNoResponse
 	}
 
-	//common.GlobalCache.IssuerCache.Set(cacheKey, resp, cache.DefaultExpiration)
 	return resp, err
 }
 
