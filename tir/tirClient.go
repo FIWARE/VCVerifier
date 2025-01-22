@@ -117,7 +117,9 @@ func (tc TirHttpClient) IsTrustedParticipant(tirEndpoints []string, did string) 
 
 func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exists bool, trustedIssuer TrustedIssuer, err error) {
 	for _, tirEndpoint := range tirEndpoints {
-		trustedIssuer, hit := tc.tilCache.Get(tirEndpoint + did)
+
+		cacheKey := tirEndpoint + did
+		trustedIssuer, hit := common.GlobalCache.IssuerCache.Get(cacheKey)
 		if !hit {
 			resp, err := tc.requestIssuer(tirEndpoint, did)
 			if err != nil {
@@ -135,7 +137,9 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 				continue
 			}
 			logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
-			tc.tilCache.Set(tirEndpoint+did, trustedIssuer, cache.DefaultExpiration)
+
+			logging.Log().Debugf("Added cache entry for %s", cacheKey)
+			common.GlobalCache.IssuerCache.Set(cacheKey, trustedIssuer, cache.DefaultExpiration)
 		}
 		return true, trustedIssuer.(TrustedIssuer), err
 
@@ -208,8 +212,6 @@ func (tc TirHttpClient) requestIssuerWithVersion(tirEndpoint string, didPath str
 		return nil, ErrorTirNoResponse
 	}
 
-	common.GlobalCache.IssuerCache.Set(cacheKey, resp, cache.DefaultExpiration)
-	logging.Log().Debugf("Added cache entry for %s", cacheKey)
 	return resp, err
 }
 
