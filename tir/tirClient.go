@@ -3,6 +3,7 @@ package tir
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -149,6 +150,10 @@ func parseTirResponse(resp http.Response) (trustedIssuer TrustedIssuer, err erro
 		logging.Log().Info("Received an empty body from the tir.")
 		return trustedIssuer, ErrorTirEmptyResponse
 	}
+
+	body, _ := io.ReadAll(resp.Body)
+
+	logging.Log().Warnf("The body is %s", string(body))
 
 	err = json.NewDecoder(resp.Body).Decode(&trustedIssuer)
 	if err != nil {
