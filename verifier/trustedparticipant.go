@@ -41,14 +41,20 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 		return true, err
 	}
 	// FIXME Can we assume that if we have a VC with multiple types, its enough to check for only one type?
-	return tpvs.tirClient.IsTrustedParticipant(getFirstElementOfMap(trustContext.GetTrustedParticipantLists()), verifiableCredential.Contents().Issuer.ID), err
-}
 
-func getFirstElementOfMap(slices map[string][]string) []string {
-	logging.Log().Infof("Participants are: %v", slices)
-	for _, value := range slices {
-		logging.Log().Infof("First Value is %v", value)
-		return value
+	for _, listEntries := range trustContext.GetTrustedParticipantLists() {
+		for _, participantList := range listEntries {
+			if participantList.Type == "ebsi" {
+				result = tpvs.tirClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
+			}
+			if participantList.Type == "gaia-X" {
+				// gaia-x client
+			}
+			if result {
+				return result, err
+			}
+		}
 	}
-	return []string{}
+
+	return false, err
 }

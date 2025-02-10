@@ -3,6 +3,7 @@ package verifier
 import (
 	"testing"
 
+	"github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/trustbloc/vc-go/verifiable"
@@ -14,7 +15,7 @@ type mockTirClient struct {
 	expectedError  error
 }
 
-func (mtc mockTirClient) IsTrustedParticipant(tirEndpoints []string, did string) (trusted bool) {
+func (mtc mockTirClient) IsTrustedParticipant(tirEndpoint string, did string) (trusted bool) {
 	return mtc.expectedExists
 }
 
@@ -33,10 +34,10 @@ func TestVerifyVC_Participant(t *testing.T) {
 	}
 
 	tests := []test{
-		{testName: "A credential issued by a registerd issuer should be successfully validated.", credentialToVerifiy: getCredential("did:web:trusted-issuer.org"), verificationContext: TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"someType": []string{"http://my-trust-registry.org"}}}, tirResponse: true, expectedResult: true},
-		{testName: "A credential issued by a not-registerd issuer should be rejected.", credentialToVerifiy: getCredential("did:web:trusted-issuer.org"), verificationContext: TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"someType": []string{"http://my-trust-registry.org"}}}, tirResponse: false, expectedResult: false},
-		{testName: "If no registry is configured, the credential should be accepted.", credentialToVerifiy: getCredential("did:web:trusted-issuer.org"), verificationContext: TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{}}, expectedResult: true},
-		{testName: "If no registry is configured, the credential should be accepted.", credentialToVerifiy: getCredential("did:web:trusted-issuer.org"), verificationContext: TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": []string{}}}, expectedResult: true},
+		{testName: "A credential issued by a registerd issuer should be successfully validated.", credentialToVerifiy: getCredential("did:web:trusted-issuer.org"), verificationContext: TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"someType": []config.TrustedParticipantsList{{Type: "ebsi", Url: "http://my-trust-registry.org"}}}}, tirResponse: true, expectedResult: true},
+		{testName: "A credential issued by a not-registerd issuer should be rejected.", credentialToVerifiy: getCredential("did:web:trusted-issuer.org"), verificationContext: TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"someType": []config.TrustedParticipantsList{{Type: "ebsi", Url: "http://my-trust-registry.org"}}}}, tirResponse: false, expectedResult: false},
+		{testName: "If no registry is configured, the credential should be accepted.", credentialToVerifiy: getCredential("did:web:trusted-issuer.org"), verificationContext: TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{}}, expectedResult: true},
+		{testName: "If no registry is configured, the credential should be accepted.", credentialToVerifiy: getCredential("did:web:trusted-issuer.org"), verificationContext: TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"VerifiableCredential": []config.TrustedParticipantsList{}}}, expectedResult: true},
 		{testName: "If an invalid context is received, the credential should be rejected.", credentialToVerifiy: getCredential("did:web:trusted-issuer.org"), verificationContext: "No-Context", tirResponse: false, expectedResult: false},
 	}
 

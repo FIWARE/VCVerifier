@@ -11,7 +11,10 @@
             {
               "type": "VerifiableCredential",
               "trustedParticipantsLists": [
-                "https://tir-pdc.gaia-x.fiware.dev"
+                {
+                  "type": "ebsi",
+                  "url": "https://tir-pdc.gaia-x.fiware.dev"
+                }
               ],
               "trustedIssuersLists": [
                 "https://til-pdc.gaia-x.fiware.dev"

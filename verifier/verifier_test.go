@@ -90,7 +90,7 @@ type mockCredentialConfig struct {
 }
 
 func createMockCredentials(serviceId, scope, credentialType, url, holderClaim string, holderVerfication bool) map[string]map[string]map[string]configModel.Credential {
-	credential := configModel.Credential{TrustedParticipantsLists: []string{url}, TrustedIssuersLists: []string{url}, HolderVerification: configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim}}
+	credential := configModel.Credential{TrustedParticipantsLists: []configModel.TrustedParticipantsList{{"ebsi", url}}, TrustedIssuersLists: []string{url}, HolderVerification: configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim}}
 	return map[string]map[string]map[string]configModel.Credential{serviceId: {scope: map[string]configModel.Credential{credentialType: credential}}}
 }
 
@@ -100,7 +100,7 @@ func (mcc mockCredentialConfig) GetScope(serviceIdentifier string) (credentialTy
 	}
 	return maps.Keys(mcc.mockScopes[serviceIdentifier]), err
 }
-func (mcc mockCredentialConfig) GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error) {
+func (mcc mockCredentialConfig) GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []configModel.TrustedParticipantsList, err error) {
 	if mcc.mockError != nil {
 		return trustedIssuersRegistryUrl, mcc.mockError
 	}
