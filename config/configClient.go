@@ -49,11 +49,18 @@ type Credential struct {
 	// Type of the credential
 	Type string `json:"type" mapstructure:"type"`
 	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted participants from.
-	TrustedParticipantsLists []string `json:"trustedParticipantsLists,omitempty" mapstructure:"trustedParticipantsLists,omitempty"`
+	TrustedParticipantsLists []TrustedParticipantsList `json:"trustedParticipantsLists,omitempty" mapstructure:"trustedParticipantsLists,omitempty"`
 	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted issuers from. The attributes need to be formated to comply with the verifiers requirements.
 	TrustedIssuersLists []string `json:"trustedIssuersLists,omitempty" mapstructure:"trustedIssuersLists,omitempty"`
 	// Configuration of Holder Verfification
 	HolderVerification HolderVerification `json:"holderVerification" mapstructure:"holderVerification"`
+}
+
+type TrustedParticipantsList struct {
+	// Type of praticipants list to be used - either gaia-x or ebsi
+	Type string `json:"type" mapstructure:"type"`
+	// url of the list
+	Url string `json:"url" mapstructure:"url"`
 }
 
 type HolderVerification struct {

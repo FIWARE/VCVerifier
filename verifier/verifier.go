@@ -105,14 +105,14 @@ type ValidationContext interface{}
 
 type TrustRegistriesValidationContext struct {
 	trustedIssuersLists           map[string][]string
-	trustedParticipantsRegistries map[string][]string
+	trustedParticipantsRegistries map[string][]configModel.TrustedParticipantsList
 }
 
 func (trvc TrustRegistriesValidationContext) GetTrustedIssuersLists() map[string][]string {
 	return trvc.trustedIssuersLists
 }
 
-func (trvc TrustRegistriesValidationContext) GetTrustedParticipantLists() map[string][]string {
+func (trvc TrustRegistriesValidationContext) GetTrustedParticipantLists() map[string][]configModel.TrustedParticipantsList {
 	return trvc.trustedParticipantsRegistries
 }
 
@@ -572,7 +572,7 @@ func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope s
 
 func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string, credentialTypes []string) (verificationContext TrustRegistriesValidationContext, err error) {
 	trustedIssuersLists := map[string][]string{}
-	trustedParticipantsRegistries := map[string][]string{}
+	trustedParticipantsRegistries := map[string][]configModel.TrustedParticipantsList{}
 
 	for _, credentialType := range credentialTypes {
 		issuersLists, err := v.credentialsConfig.GetTrustedIssuersLists(clientId, configModel.SERVICE_DEFAULT_SCOPE, credentialType)
@@ -594,7 +594,7 @@ func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string
 
 func (v *CredentialVerifier) getTrustRegistriesValidationContextFromScope(clientId string, scope string, credentialTypes []string) (verificationContext TrustRegistriesValidationContext, err error) {
 	trustedIssuersLists := map[string][]string{}
-	trustedParticipantsRegistries := map[string][]string{}
+	trustedParticipantsRegistries := map[string][]configModel.TrustedParticipantsList{}
 
 	requiredCredentialTypes, err := v.credentialsConfig.RequiredCredentialTypes(clientId, scope)
 	if err != nil {

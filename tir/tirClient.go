@@ -23,7 +23,7 @@ var ErrorTirNoResponse = errors.New("no_response_from_tir")
 var ErrorTirEmptyResponse = errors.New("empty_response_from_tir")
 
 type TirClient interface {
-	IsTrustedParticipant(tirEndpoints []string, did string) (trusted bool)
+	IsTrustedParticipant(tirEndpoints string, did string) (trusted bool)
 	GetTrustedIssuer(tirEndpoints []string, did string) (exists bool, trustedIssuer TrustedIssuer, err error)
 }
 
@@ -104,13 +104,10 @@ func NewTirHttpClient(tokenProvider TokenProvider, m2mConfig config.M2M, verifie
 	return TirHttpClient{client: httpGetClient, tirCache: tirCache, tilCache: tilCache}, err
 }
 
-func (tc TirHttpClient) IsTrustedParticipant(tirEndpoints []string, did string) (trusted bool) {
-	for _, tirEndpoint := range tirEndpoints {
-		logging.Log().Debugf("Check if a participant %s is trusted through %s.", did, tirEndpoint)
-		if tc.issuerExists(tirEndpoint, did) {
-			logging.Log().Debugf("Issuer %s is a trusted participant via %s.", did, tirEndpoint)
-			return true
-		}
+func (tc TirHttpClient) IsTrustedParticipant(tirEndpoint string, did string) (trusted bool) {
+	if tc.issuerExists(tirEndpoint, did) {
+		logging.Log().Debugf("Issuer %s is a trusted participant via %s.", did, tirEndpoint)
+		return true
 	}
 	return false
 }

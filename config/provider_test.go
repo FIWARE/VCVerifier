@@ -64,7 +64,7 @@ func Test_ReadConfig(t *testing.T) {
 								"someScope": {
 									{
 										Type:                     "VerifiableCredential",
-										TrustedParticipantsLists: []string{"https://tir-pdc.gaia-x.fiware.dev"},
+										TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.gaia-x.fiware.dev"}},
 										TrustedIssuersLists:      []string{"https://til-pdc.gaia-x.fiware.dev"},
 									},
 								},

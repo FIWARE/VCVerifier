@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/trustbloc/vc-go/verifiable"
@@ -115,19 +116,19 @@ func getTrustedIssuer(attributes []tir.IssuerAttribute) tir.TrustedIssuer {
 }
 
 func getVerificationContext() ValidationContext {
-	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": {"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"http://my-til.org"}}}
+	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"VerifiableCredential": {{Type: "ebsi", Url: "http://my-trust-registry.org"}}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"http://my-til.org"}}}
 }
 
 func getWildcardVerificationContext() ValidationContext {
-	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": {"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*"}}}
+	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"VerifiableCredential": {{Type: "ebsi", Url: "http://my-trust-registry.org"}}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*"}}}
 }
 
 func getInvalidMixedVerificationContext() ValidationContext {
-	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": {"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*", "http://my-til.org"}}}
+	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"VerifiableCredential": {{Type: "ebsi", Url: "http://my-trust-registry.org"}}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*", "http://my-til.org"}}}
 }
 
 func getWildcardAndNormalVerificationContext() ValidationContext {
-	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]string{"VerifiableCredential": {"http://my-trust-registry.org"}, "SecondType": {"http://my-trust-registry.org"}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*"}, "SecondType": {"http://my-til.org"}}}
+	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"VerifiableCredential": {{Type: "ebsi", Url: "http://my-trust-registry.org"}}, "SecondType": {{Type: "ebsi", Url: "http://my-trust-registry.org"}}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*"}, "SecondType": {"http://my-til.org"}}}
 }
 
 func getMultiTypeCredential(types []string, claimName string, value interface{}) verifiable.Credential {

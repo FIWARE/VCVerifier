@@ -23,6 +23,10 @@ func InitGaiaXRegistryVerificationService(url string) RegistryClient {
 	return &GaiaXRegistryClient{url}
 }
 
+func (rc *GaiaXRegistryClient) CheckTrustAnchor(trustAnchorAddress string) (bool, error) {
+	return true, nil
+}
+
 // TODO Could propably cache the response very generously as new issuers are not added often
 func (rc *GaiaXRegistryClient) GetComplianceIssuers() ([]string, error) {
 	response, err := http.Get(rc.endpoint)
