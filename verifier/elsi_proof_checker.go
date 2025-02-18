@@ -114,6 +114,7 @@ func validateIssuer(certificate *x509.Certificate, issuerDid string) error {
 	organizationIdentifier := ""
 
 	for _, name := range certificate.Subject.Names {
+		logging.Log().Debugf("Check oid %v", name)
 		if name.Type.Equal(oidOrganizationIdentifier) {
 			organizationIdentifier = name.Value.(string)
 			break
