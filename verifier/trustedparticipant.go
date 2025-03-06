@@ -3,6 +3,7 @@ package verifier
 import (
 	"errors"
 
+	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/trustbloc/vc-go/verifiable"
@@ -10,11 +11,17 @@ import (
 
 var ErrorCannotConverContext = errors.New("cannot_convert_context")
 
+const (
+	typeGaiaX = "gaia-x"
+	typeEbsi  = "ebsi"
+)
+
 /**
 *	The trusted participant validation service will validate the entry of a participant within the trusted list.
  */
 type TrustedParticipantValidationService struct {
-	tirClient tir.TirClient
+	tirClient   tir.TirClient
+	gaiaXClient gaiax.GaiaXClient
 }
 
 func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential *verifiable.Credential, validationContext ValidationContext) (result bool, err error) {
@@ -40,15 +47,14 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 		logging.Log().Debug("The validation context does not specify a trusted issuers registry, therefor we consider every participant as trusted.")
 		return true, err
 	}
-	// FIXME Can we assume that if we have a VC with multiple types, its enough to check for only one type?
 
 	for _, listEntries := range trustContext.GetTrustedParticipantLists() {
 		for _, participantList := range listEntries {
-			if participantList.Type == "ebsi" {
+			if participantList.Type == typeEbsi {
 				result = tpvs.tirClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
 			}
-			if participantList.Type == "gaia-X" {
-				// gaia-x client
+			if participantList.Type == typeGaiaX {
+				result = tpvs.gaiaXClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
 			}
 			if result {
 				return result, err

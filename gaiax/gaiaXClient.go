@@ -10,6 +10,7 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/trustbloc/did-go/doc/did"
+	"github.com/trustbloc/did-go/method/web"
 	"github.com/trustbloc/did-go/vdr"
 )
 
@@ -17,14 +18,20 @@ const GAIAX_REGISTRY_TRUSTANCHOR_FILE = "/v2/api/trustAnchor/chain/file"
 
 var ErrorUnresolvableDid = errors.New("unresolvable_did")
 
+type GaiaXClient interface {
+	IsTrustedParticipant(registryEndpoint string, did string) (trusted bool)
+}
+
 /**
 * A client to retrieve infromation from EBSI-compatible TrustedIssuerRegistry APIs.
  */
 type GaiaXHttpClient struct {
-	client common.HttpClient
-	// TODO: check if needed
-	didCache    common.Cache
+	client      common.HttpClient
 	didRegistry *vdr.Registry
+}
+
+func NewGaiaXHttpClient() (client GaiaXClient, err error) {
+	return GaiaXHttpClient{client: &http.Client{}, didRegistry: vdr.New(vdr.WithVDR(web.New()))}, nil
 }
 
 func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, did string) (trusted bool) {

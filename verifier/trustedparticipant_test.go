@@ -9,6 +9,13 @@ import (
 	"github.com/trustbloc/vc-go/verifiable"
 )
 
+type mockGaiaXClient struct {
+}
+
+func (mgc mockGaiaXClient) IsTrustedParticipant(registryEndpoint string, did string) (trusted bool) {
+	return true
+}
+
 type mockTirClient struct {
 	expectedExists bool
 	expectedIssuer tir.TrustedIssuer
@@ -46,7 +53,7 @@ func TestVerifyVC_Participant(t *testing.T) {
 
 			logging.Log().Info("TestVerifyVC +++++++++++++++++ Running test: ", tc.testName)
 
-			trustedParticipantVerificationService := TrustedParticipantValidationService{mockTirClient{tc.tirResponse, tir.TrustedIssuer{}, nil}}
+			trustedParticipantVerificationService := TrustedParticipantValidationService{mockTirClient{tc.tirResponse, tir.TrustedIssuer{}, nil}, mockGaiaXClient{}}
 			result, _ := trustedParticipantVerificationService.ValidateVC(&tc.credentialToVerifiy, tc.verificationContext)
 			if result != tc.expectedResult {
 				t.Errorf("%s - Expected result %v but was %v.", tc.testName, tc.expectedResult, result)
