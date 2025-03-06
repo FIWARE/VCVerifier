@@ -77,9 +77,9 @@ func (ghc GaiaXHttpClient) verifyFileChain(registryEndpoint string, x5u string) 
 		return false
 	}
 
-	logging.Log().Debugf("Url: %s, the body is %s", buildURL(registryEndpoint, GAIAX_REGISTRY_TRUSTANCHOR_FILE), string(encodedRequest[:]))
-
 	request, _ := http.NewRequest("POST", buildURL(registryEndpoint, GAIAX_REGISTRY_TRUSTANCHOR_FILE), bytes.NewBuffer(encodedRequest))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
 
 	response, err := ghc.client.Do(request)
 	if err != nil {
