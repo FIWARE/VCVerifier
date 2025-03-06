@@ -86,7 +86,7 @@ func (ghc GaiaXHttpClient) verifyFileChain(registryEndpoint string, x5u string) 
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		logging.Log().Infof("x5u %s was not verified to be a trust anchor at %s.", x5u, registryEndpoint)
+		logging.Log().Infof("x5u %s was not verified to be a trust anchor at %s. Response: %v", x5u, registryEndpoint, response.StatusCode)
 		return false
 	}
 	// according to the doc, all 200s are valid chains, thus no need to parse the body
