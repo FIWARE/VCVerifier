@@ -36,16 +36,21 @@ func NewGaiaXHttpClient() (client GaiaXClient, err error) {
 
 func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, did string) (trusted bool) {
 
+	logging.Log().Debug("Verify participant at gaia-x registry.")
+
 	// 1. get jwk from did
 	didDocument, err := ghc.resolveIssuer(did)
 
 	if err != nil {
+		logging.Log().Warnf("Was not able to resolve the issuer. E: %v", err)
 		return false
 	}
+	logging.Log().Debug("Got did document.")
 
 	// 2. verify at the registry
 	for _, verficationMethod := range didDocument.DIDDocument.VerificationMethod {
 		if verficationMethod.ID == did {
+			logging.Log().Debug("Verify the issuer.")
 			return ghc.verifiyIssuer(registryEndpoint, verficationMethod)
 		}
 	}
