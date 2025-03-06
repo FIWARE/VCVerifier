@@ -51,9 +51,11 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 	for _, listEntries := range trustContext.GetTrustedParticipantLists() {
 		for _, participantList := range listEntries {
 			if participantList.Type == typeEbsi {
+				logging.Log().Debug("Check at ebsi.")
 				result = tpvs.tirClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
 			}
 			if participantList.Type == typeGaiaX {
+				logging.Log().Debug("Check at gaia-x.")
 				result = tpvs.gaiaXClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
 			}
 			if result {

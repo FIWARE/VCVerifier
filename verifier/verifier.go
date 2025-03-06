@@ -18,6 +18,7 @@ import (
 
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
+	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/trustbloc/vc-go/verifiable"
 
@@ -246,7 +247,8 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 		logging.Log().Errorf("Was not able to instantiate the trusted-issuers-registry client. Err: %v", err)
 		return err
 	}
-	trustedParticipantVerificationService := TrustedParticipantValidationService{tirClient: tirClient}
+	gaiaXClient, _ := gaiax.NewGaiaXHttpClient()
+	trustedParticipantVerificationService := TrustedParticipantValidationService{tirClient: tirClient, gaiaXClient: gaiaXClient}
 	trustedIssuerVerificationService := TrustedIssuerValidationService{tirClient: tirClient}
 
 	key, err := initPrivateKey(verifierConfig.KeyAlgorithm)
