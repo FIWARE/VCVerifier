@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/go-jose/go-jose/v3"
-	"github.com/trustbloc/did-go/doc/did"
 	diddoc "github.com/trustbloc/did-go/doc/did"
 	vdrapi "github.com/trustbloc/did-go/vdr/api"
 	"github.com/trustbloc/kms-go/doc/jose/jwk"
@@ -26,7 +25,7 @@ func (mhc mockHttpClient) Do(req *http.Request) (*http.Response, error) {
 }
 
 type mockVDR struct {
-	didDocs map[string]*did.DocResolution
+	didDocs map[string]*diddoc.DocResolution
 	errors  map[string]error
 }
 
@@ -55,7 +54,7 @@ func TestGaiaXClient_IsTrustedParticipant(t *testing.T) {
 		testIssuer     string
 		responses      map[string]*http.Response
 		httpErrors     map[string]error
-		didDocs        map[string]*did.DocResolution
+		didDocs        map[string]*diddoc.DocResolution
 		didErrors      map[string]error
 		expectedResult bool
 	}
@@ -66,7 +65,7 @@ func TestGaiaXClient_IsTrustedParticipant(t *testing.T) {
 			testEndpoint:   "https://gaia-x.registry",
 			testIssuer:     "did:web:test.org",
 			responses:      map[string]*http.Response{"https://gaia-x.registry/v2/api/trustAnchor/chain/file": getOKResponse()},
-			didDocs:        map[string]*did.DocResolution{"did:web:test.org": getDidDoc("did:web:test.org")},
+			didDocs:        map[string]*diddoc.DocResolution{"did:web:test.org": getDidDoc("did:web:test.org")},
 			expectedResult: true,
 		},
 		{
@@ -74,7 +73,7 @@ func TestGaiaXClient_IsTrustedParticipant(t *testing.T) {
 			testEndpoint:   "https://gaia-x.registry",
 			testIssuer:     "did:web:test.org",
 			responses:      map[string]*http.Response{"https://gaia-x.registry/v2/api/trustAnchor/chain/file": getNotOKResponse()},
-			didDocs:        map[string]*did.DocResolution{"did:web:test.org": getDidDoc("did:web:test.org")},
+			didDocs:        map[string]*diddoc.DocResolution{"did:web:test.org": getDidDoc("did:web:test.org")},
 			expectedResult: false,
 		},
 		{
@@ -89,7 +88,7 @@ func TestGaiaXClient_IsTrustedParticipant(t *testing.T) {
 			testEndpoint:   "https://gaia-x.registry",
 			testIssuer:     "did:web:test.org",
 			responses:      map[string]*http.Response{"https://gaia-x.registry/v2/api/trustAnchor/chain/file": getNotOKResponse()},
-			didDocs:        map[string]*did.DocResolution{"did:web:test.org": getDidDocWithoutX5U("did:web:test.org")},
+			didDocs:        map[string]*diddoc.DocResolution{"did:web:test.org": getDidDocWithoutX5U("did:web:test.org")},
 			expectedResult: false,
 		},
 		{
@@ -97,7 +96,7 @@ func TestGaiaXClient_IsTrustedParticipant(t *testing.T) {
 			testEndpoint:   "https://gaia-x.registry",
 			testIssuer:     "did:web:test.org",
 			responses:      map[string]*http.Response{"https://gaia-x.registry/v2/api/trustAnchor/chain/file": getNotOKResponse()},
-			didDocs:        map[string]*did.DocResolution{"did:web:test.org": getDidDoc("did:web:another-controller.org")},
+			didDocs:        map[string]*diddoc.DocResolution{"did:web:test.org": getDidDoc("did:web:another-controller.org")},
 			expectedResult: false,
 		},
 	}
@@ -135,7 +134,7 @@ func getNotOKResponse() *http.Response {
 	return &response
 }
 
-func getDidDoc(did string) *did.DocResolution {
+func getDidDoc(did string) *diddoc.DocResolution {
 	jwkJson := "{\"kty\": \"RSA\",\"e\": \"AQAB\",\"n\": \"ozaiCEhCBjv31zDVii1Btmt4tjTQvUTIqo-3221OM89gQtVxyIB8z73U2hecFK1FyXa0fWwoy2PYcV6hSuEPnwilNsheP09TJPTptKFwM5fZoOzuZNd95RZFclOLtD8BWzpr3pQwRr5y6F69SNYCQTKejfSKo2eWCjdNUndBmZ8bHAHME9jWZUG-BDO3ag8ykYA-aMzq4RSW_UNqFnkita30F95AzVZ4mF_7-0uc0CGE_u66f4T8mFIqMbEPiiNBEG9Yt4giLdi1xgyLGu6-8xifQekTyr_owIKGmPtu__UBAFmB-y2P6vnLsGRxvB2uatoYceZD6WBfGzj2QZpftQCgJ6QR6d-1Ag-8-1NJRUYVIQjZm45fc2WRi58QLg2urOhIbVYeCALdQIb_S9FP82VzLVWk6aOVL8TU_9QK9qwXLWiM5vRa_EKwJfr1bwsT8kTp20R6vfAlbqLD6QnQdmAtzZsR7Zqw3ef1G5TvelQFFTh49DMP7upTGkmZGIZO6qkHbWUq87LhWgFzHqNCe7O6jHTAHO3UIjpZJBCYg3RtEHV8UN07eIkYaYqnzEv9UJRjMqGQP6CeE7woUx2CHPemrxopEEQV1URCVIZ00BcHy-tyxWs56uo59QASVr9Ut0xRQm-L-x9QQKdB1XMpXw5UR-9Oe7ZW3Fokkk3wwMs\",\"x5u\": \"https://my-issuer.org/tls.crt\"}"
 
 	joseKey := jose.JSONWebKey{}
@@ -157,7 +156,7 @@ func getDidDoc(did string) *did.DocResolution {
 	return &docResolution
 }
 
-func getDidDocWithoutX5U(did string) *did.DocResolution {
+func getDidDocWithoutX5U(did string) *diddoc.DocResolution {
 	jwkJson := "{\"kty\": \"RSA\",\"e\": \"AQAB\",\"n\": \"ozaiCEhCBjv31zDVii1Btmt4tjTQvUTIqo-3221OM89gQtVxyIB8z73U2hecFK1FyXa0fWwoy2PYcV6hSuEPnwilNsheP09TJPTptKFwM5fZoOzuZNd95RZFclOLtD8BWzpr3pQwRr5y6F69SNYCQTKejfSKo2eWCjdNUndBmZ8bHAHME9jWZUG-BDO3ag8ykYA-aMzq4RSW_UNqFnkita30F95AzVZ4mF_7-0uc0CGE_u66f4T8mFIqMbEPiiNBEG9Yt4giLdi1xgyLGu6-8xifQekTyr_owIKGmPtu__UBAFmB-y2P6vnLsGRxvB2uatoYceZD6WBfGzj2QZpftQCgJ6QR6d-1Ag-8-1NJRUYVIQjZm45fc2WRi58QLg2urOhIbVYeCALdQIb_S9FP82VzLVWk6aOVL8TU_9QK9qwXLWiM5vRa_EKwJfr1bwsT8kTp20R6vfAlbqLD6QnQdmAtzZsR7Zqw3ef1G5TvelQFFTh49DMP7upTGkmZGIZO6qkHbWUq87LhWgFzHqNCe7O6jHTAHO3UIjpZJBCYg3RtEHV8UN07eIkYaYqnzEv9UJRjMqGQP6CeE7woUx2CHPemrxopEEQV1URCVIZ00BcHy-tyxWs56uo59QASVr9Ut0xRQm-L-x9QQKdB1XMpXw5UR-9Oe7ZW3Fokkk3wwMs\"}"
 
 	joseKey := jose.JSONWebKey{}

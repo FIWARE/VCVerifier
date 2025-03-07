@@ -50,7 +50,7 @@ func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, did str
 	// 2. verify at the registry
 	for _, verficationMethod := range didDocument.DIDDocument.VerificationMethod {
 		if verficationMethod.ID == did {
-			logging.Log().Debug("Verify the issuer %s.", did)
+			logging.Log().Debugf("Verify the issuer %s.", did)
 			return ghc.verifiyIssuer(registryEndpoint, verficationMethod)
 		}
 	}
