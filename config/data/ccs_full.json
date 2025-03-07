@@ -13,11 +13,11 @@
               "trustedParticipantsLists": [
                 {
                   "type": "ebsi",
-                  "url": "https://tir-pdc.gaia-x.fiware.dev"
+                  "url": "https://tir-pdc.ebsi.fiware.dev"
                 }
               ],
               "trustedIssuersLists": [
-                "https://til-pdc.gaia-x.fiware.dev"
+                "https://til-pdc.ebsi.fiware.dev"
               ],
               "holderVerification": {
                 "enabled": false,
