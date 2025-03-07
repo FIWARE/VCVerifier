@@ -12,6 +12,7 @@ import (
 	"github.com/trustbloc/did-go/doc/did"
 	"github.com/trustbloc/did-go/method/web"
 	"github.com/trustbloc/did-go/vdr"
+	vdrapi "github.com/trustbloc/did-go/vdr/api"
 )
 
 const GAIAX_REGISTRY_TRUSTANCHOR_FILE = "/v2/api/trustAnchor/chain/file"
@@ -27,7 +28,7 @@ type GaiaXClient interface {
  */
 type GaiaXHttpClient struct {
 	client      common.HttpClient
-	didRegistry *vdr.Registry
+	didRegistry vdrapi.Registry
 }
 
 func NewGaiaXHttpClient() (client GaiaXClient, err error) {
@@ -91,7 +92,7 @@ func (ghc GaiaXHttpClient) verifyFileChain(registryEndpoint string, x5u string) 
 		logging.Log().Infof("x5u %s was not verified to be a trust anchor at %s. Response: %v", x5u, registryEndpoint, response.StatusCode)
 		return false
 	}
-	// according to the doc, all 200s are valid chains, thus no need to parse the body
+	// according to the spec, all 200s are valid chains, thus no need to parse the body
 	return true
 }
 
