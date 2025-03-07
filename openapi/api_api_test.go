@@ -65,6 +65,7 @@ func TestGetToken(t *testing.T) {
 
 	type test struct {
 		testName           string
+		proofCheck         bool
 		testGrantType      string
 		testCode           string
 		testRedirectUri    string
@@ -78,23 +79,30 @@ func TestGetToken(t *testing.T) {
 		expectedError      ErrorMessage
 	}
 	tests := []test{
-		{testName: "If a valid authorization_code request is received a token should be responded.", testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockJWTString: "theJWT", mockExpiration: 10, mockError: nil, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}, expectedError: ErrorMessage{}},
-		{testName: "If no grant type is provided, the request should fail.", testGrantType: "", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessagNoGrantType},
-		{testName: "If an invalid grant type is provided, the request should fail.", testGrantType: "my_special_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessageUnsupportedGrantType},
-		{testName: "If no auth code is provided, the request should fail.", testGrantType: "authorization_code", testCode: "", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessageNoCode},
-		{testName: "If no redirect uri is provided, the request should fail.", testGrantType: "authorization_code", testCode: "my-auth-code", expectedStatusCode: 400, expectedError: ErrorMessageNoRedircetUri},
-		{testName: "If the verify returns an error, a 403 should be answerd.", testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockError: errors.New("invalid"), expectedStatusCode: 403, expectedError: ErrorMessage{}},
+		{testName: "If a valid authorization_code request is received a token should be responded.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockJWTString: "theJWT", mockExpiration: 10, mockError: nil, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}, expectedError: ErrorMessage{}},
+		{testName: "If no grant type is provided, the request should fail.", proofCheck: false, testGrantType: "", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessagNoGrantType},
+		{testName: "If an invalid grant type is provided, the request should fail.", proofCheck: false, testGrantType: "my_special_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessageUnsupportedGrantType},
+		{testName: "If no auth code is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessageNoCode},
+		{testName: "If no redirect uri is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", expectedStatusCode: 400, expectedError: ErrorMessageNoRedircetUri},
+		{testName: "If the verify returns an error, a 403 should be answerd.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockError: errors.New("invalid"), expectedStatusCode: 403, expectedError: ErrorMessage{}},
 
-		{testName: "If a valid vp_token request is received a token should be responded.", testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}},
-		{testName: "If no valid vp_token is provided, the request should fail.", testGrantType: "vp_token", testScope: "tir_read", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
-		{testName: "If no valid scope is provided, the request should fail.", testVPToken: getValidVPToken(), testGrantType: "vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoScope},
+		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}},
+		{testName: "If a valid signed vp_token request is received a token should be responded.", proofCheck: true, testGrantType: "vp_token", testVPToken: getValidSignedDidKeyVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}},
+		{testName: "If no valid vp_token is provided, the request should fail.", proofCheck: false, testGrantType: "vp_token", testScope: "tir_read", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
+		{testName: "If no valid scope is provided, the request should fail.", proofCheck: false, testVPToken: getValidVPToken(), testGrantType: "vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoScope},
 	}
 
 	for _, tc := range tests {
-
 		t.Run(tc.testName, func(t *testing.T) {
-			presentationParser = &verifier.ConfigurablePresentationParser{
-				PresentationOpts: []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}}
+			if tc.proofCheck {
+				presentationParser = &verifier.ConfigurablePresentationParser{
+					PresentationOpts: []verifiable.PresentationOpt{
+						verifiable.WithPresProofChecker(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
+						verifiable.WithPresJSONLDDocumentLoader(verifier.NewCachingDocumentLoader(ld.NewDefaultDocumentLoader(http.DefaultClient)))}}
+			} else {
+				presentationParser = &verifier.ConfigurablePresentationParser{
+					PresentationOpts: []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}}
+			}
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
@@ -388,6 +396,10 @@ func TestVerifierAPIStartSIOP(t *testing.T) {
 
 func getValidVPToken() string {
 	return "eyJ0eXBlIjpbIlZlcmlmaWFibGVQcmVzZW50YXRpb24iXSwidmVyaWZpYWJsZUNyZWRlbnRpYWwiOlsiZXlKaGJHY2lPaUpGVXpJMU5pSXNJblI1Y0NJZ09pQWlTbGRVSWl3aWEybGtJaUE2SUNKa2FXUTZhMlY1T25wRWJtRmxWbGhVVGxGNVpEbFFaSE5oVmpOaGIySkdhMDFaYmxSMlNsSmplVFJCVVZKSWRVVTJaMUZ0T1ZOdFYwUWlmUS5leUp1WW1ZaU9qRTNNRGM1T0RRek1UQXNJbXAwYVNJNkluVnlhVHAxZFdsa09tTmlOV1k1WmpGakxUQXhOMkl0TkdRME5DMDRORFl4TFRjeVpETXlNMlJoT0RSalppSXNJbWx6Y3lJNkltUnBaRHByWlhrNmVrUnVZV1ZXV0ZST1VYbGtPVkJrYzJGV00yRnZZa1pyVFZsdVZIWktVbU41TkVGUlVraDFSVFpuVVcwNVUyMVhSQ0lzSW5OMVlpSTZJblZ5YmpwMWRXbGtPbVF5TUdZd09URmhMVGt4Wm1RdE5EZGhNaTA0WVRnM0xUUTFZamcyTURJMFltVTVaU0lzSW5aaklqcDdJblI1Y0dVaU9sc2lWbVZ5YVdacFlXSnNaVU55WldSbGJuUnBZV3dpWFN3aWFYTnpkV1Z5SWpvaVpHbGtPbXRsZVRwNlJHNWhaVlpZVkU1UmVXUTVVR1J6WVZZellXOWlSbXROV1c1VWRrcFNZM2swUVZGU1NIVkZObWRSYlRsVGJWZEVJaXdpYVhOemRXRnVZMlZFWVhSbElqb3hOekEzT1RnME16RXdPREV5TENKcFpDSTZJblZ5YVRwMWRXbGtPbU5pTldZNVpqRmpMVEF4TjJJdE5HUTBOQzA0TkRZeExUY3laRE15TTJSaE9EUmpaaUlzSW1OeVpXUmxiblJwWVd4VGRXSnFaV04wSWpwN0ltWnBjbk4wVG1GdFpTSTZJa2hoY0hCNVVHVjBjeUlzSW5KdmJHVnpJanBiZXlKdVlXMWxjeUk2V3lKSFQweEVYME5WVTFSUFRVVlNJaXdpVTFSQlRrUkJVa1JmUTFWVFZFOU5SVklpWFN3aWRHRnlaMlYwSWpvaVpHbGtPbXRsZVRwNk5rMXJjMVUyZEUxbVltRkVlblpoVW1VMWIwWkZOR1ZhVkZaVVZqUklTazAwWm0xUlYxZEhjMFJIVVZaelJYSWlmVjBzSW1aaGJXbHNlVTVoYldVaU9pSlFjbWx0WlNJc0ltbGtJam9pZFhKdU9uVjFhV1E2WkRJd1pqQTVNV0V0T1RGbVpDMDBOMkV5TFRoaE9EY3RORFZpT0RZd01qUmlaVGxsSWl3aWMzVmlhbVZqZEVScFpDSTZJbVJwWkRwM1pXSTZaRzl0WlMxdFlYSnJaWFJ3YkdGalpTNXZjbWNpTENKbmVEcHNaV2RoYkU1aGJXVWlPaUprYjIxbExXMWhjbXRsZEhCc1lXTmxMbTl5WnlJc0ltVnRZV2xzSWpvaWNISnBiV1V0ZFhObGNrQm9ZWEJ3ZVhCbGRITXViM0puSW4wc0lrQmpiMjUwWlhoMElqcGJJbWgwZEhCek9pOHZkM2QzTG5jekxtOXlaeTh5TURFNEwyTnlaV1JsYm5ScFlXeHpMM1l4SWwxOWZRLlBqSVEtdEh5Zy1UZEdGTFVld1BreWc0cTJVODFkUGhpNG4wV3dXZ05KRGx3VW5mbk5OV1BIUkpDWlJnckQxMmFVYmRhakgtRlRkYTE3N21VRUd5RGZnIl0sImhvbGRlciI6ImRpZDp1c2VyOmdvbGQiLCJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvMjAxOC9jcmVkZW50aWFscy92MSJdfQ"
+}
+
+func getValidSignedDidKeyVPToken() string {
+	return "eyJhbGciOiJFUzI1NiIsICJ0eXAiOiJKV1QiLCAia2lkIjoiZGlkOmtleTp6RG5hZXdtRXRKTVpIVVhweHo3OGFyNFFSV2JyVjdCVG1BaGlUOVlNRHAyU0ZlR1VvIn0.eyJpc3MiOiAiZGlkOmtleTp6RG5hZXdtRXRKTVpIVVhweHo3OGFyNFFSV2JyVjdCVG1BaGlUOVlNRHAyU0ZlR1VvIiwgInN1YiI6ICJkaWQ6a2V5OnpEbmFld21FdEpNWkhVWHB4ejc4YXI0UVJXYnJWN0JUbUFoaVQ5WU1EcDJTRmVHVW8iLCAidnAiOiB7CiAgICAiQGNvbnRleHQiOiBbImh0dHBzOi8vd3d3LnczLm9yZy8yMDE4L2NyZWRlbnRpYWxzL3YxIl0sCiAgICAidHlwZSI6IFsiVmVyaWZpYWJsZVByZXNlbnRhdGlvbiJdLAogICAgInZlcmlmaWFibGVDcmVkZW50aWFsIjogWwogICAgICAgICJleUpoYkdjaU9pSkZVekkxTmlJc0luUjVjQ0lnT2lBaVNsZFVJaXdpYTJsa0lpQTZJQ0prYVdRNmEyVjVPbnBFYm1GbGFYTlpkV2RqYm1kM1YycEdSMUJGY21Oa1RscHBjSEpLUzBadlZURjZlbVk0VFV4a00wZENSalpEZEc4aWZRLmV5SnVZbVlpT2pFM05ERXpORGMxT1RNc0ltcDBhU0k2SW5WeWJqcDFkV2xrT21RNE0ySTNaRGd6TFdGbE1XRXROR0kxT0MxaU5ESTNMVFF4WldZMFlXWTNZVGd6T1NJc0ltbHpjeUk2SW1ScFpEcHJaWGs2ZWtSdVlXVnBjMWwxWjJOdVozZFhha1pIVUVWeVkyUk9XbWx3Y2twTFJtOVZNWHA2WmpoTlRHUXpSMEpHTmtOMGJ5SXNJblpqSWpwN0luUjVjR1VpT2xzaVZYTmxja055WldSbGJuUnBZV3dpWFN3aWFYTnpkV1Z5SWpvaVpHbGtPbXRsZVRwNlJHNWhaV2x6V1hWblkyNW5kMWRxUmtkUVJYSmpaRTVhYVhCeVNrdEdiMVV4ZW5wbU9FMU1aRE5IUWtZMlEzUnZJaXdpYVhOemRXRnVZMlZFWVhSbElqb3hOelF4TXpRM05Ua3pMamM1TmpBd01EQXdNQ3dpWTNKbFpHVnVkR2xoYkZOMVltcGxZM1FpT25zaVptbHljM1JPWVcxbElqb2lWR1Z6ZENJc0lteGhjM1JPWVcxbElqb2lVbVZoWkdWeUlpd2laVzFoYVd3aU9pSjBaWE4wUUhWelpYSXViM0puSW4wc0lrQmpiMjUwWlhoMElqcGJJbWgwZEhCek9pOHZkM2QzTG5jekxtOXlaeTh5TURFNEwyTnlaV1JsYm5ScFlXeHpMM1l4SWl3aWFIUjBjSE02THk5M2QzY3Vkek11YjNKbkwyNXpMMk55WldSbGJuUnBZV3h6TDNZeElsMTlmUS5qbDlDeUVVM0YwUnc2bUhMaS1MLTNHRi1pWlhjLUp6OG1ONjhFcm9zWmlFaXpGZDRTRHd5WVFtU05iR2ROMXA2Q2V4SlV0Ym91M0xKRHFFckZiMGNfZyIKICAgIF0sCiAgICAiaG9sZGVyIjogImRpZDprZXk6ekRuYWV3bUV0Sk1aSFVYcHh6NzhhcjRRUldiclY3QlRtQWhpVDlZTURwMlNGZUdVbyIKICB9fQ.MEQCIDfyueLikfY19XexQ8h95jvdElQy1IUS50jaIoAWQHeNAiAB6nOqwDv5xnHUr-_fbCAkhb4WFOegbw3sKEorHAdbbQ"
 }
 
 func getNoVCVPToken() string {
