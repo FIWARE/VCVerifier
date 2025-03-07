@@ -122,7 +122,7 @@ func handleTokenTypeVPToken(c *gin.Context, clientId string) {
 
 	presentation, err := extractVpFromToken(c, vpToken)
 	if err != nil {
-		logging.Log().Warnf("Was not able to extract the credentials from the vp_token.")
+		logging.Log().Warnf("Was not able to extract the credentials from the vp_token. E: %v", err)
 		return
 	}
 
