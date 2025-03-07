@@ -251,12 +251,7 @@ func GetVerifierAPIAuthenticationResponse(c *gin.Context) {
 
 func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
 
-	tokenBytes, err := base64.RawURLEncoding.DecodeString(vpToken)
-	if err != nil {
-		logging.Log().Infof("Was not able to decode the form string %s. Err: %v", vpToken, err)
-		c.AbortWithStatusJSON(400, ErrorMessageUnableToDecodeToken)
-		return
-	}
+	tokenBytes := decodeVpString(vpToken)
 
 	parsedPresentation, err = getPresentationParser().ParsePresentation(tokenBytes)
 	if err != nil {
@@ -265,6 +260,15 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *ver
 		return
 	}
 	return
+}
+
+// decodeVpString - In newer versions of OID4VP the token is not encoded as a whole but only its segments separately. This function covers the older and newer versions
+func decodeVpString(vpToken string) (tokenBytes []byte) {
+	tokenBytes, err := base64.RawURLEncoding.DecodeString(vpToken)
+	if err != nil {
+		return []byte(vpToken)
+	}
+	return tokenBytes
 }
 
 func handleAuthenticationResponse(c *gin.Context, state string, presentation *verifiable.Presentation) {
