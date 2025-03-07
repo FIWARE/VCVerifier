@@ -19,13 +19,13 @@ const GAIAX_REGISTRY_TRUSTANCHOR_FILE = "/v2/api/trustAnchor/chain/file"
 
 var ErrorUnresolvableDid = errors.New("unresolvable_did")
 
+/**
+* A client to retrieve infromation from EBSI-compatible TrustedIssuerRegistry APIs.
+ */
 type GaiaXClient interface {
 	IsTrustedParticipant(registryEndpoint string, did string) (trusted bool)
 }
 
-/**
-* A client to retrieve infromation from EBSI-compatible TrustedIssuerRegistry APIs.
- */
 type GaiaXHttpClient struct {
 	client      common.HttpClient
 	didRegistry vdrapi.Registry
@@ -37,21 +37,20 @@ func NewGaiaXHttpClient() (client GaiaXClient, err error) {
 
 func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, did string) (trusted bool) {
 
-	logging.Log().Debug("Verify participant at gaia-x registry.")
+	logging.Log().Debugf("Verify participant %s at gaia-x registry %s.", did, registryEndpoint)
 
 	// 1. get jwk from did
 	didDocument, err := ghc.resolveIssuer(did)
 
 	if err != nil {
-		logging.Log().Warnf("Was not able to resolve the issuer. E: %v", err)
+		logging.Log().Warnf("Was not able to resolve the issuer %s. E: %v", did, err)
 		return false
 	}
-	logging.Log().Debug("Got did document.")
 
 	// 2. verify at the registry
 	for _, verficationMethod := range didDocument.DIDDocument.VerificationMethod {
 		if verficationMethod.ID == did {
-			logging.Log().Debug("Verify the issuer.")
+			logging.Log().Debug("Verify the issuer %s.", did)
 			return ghc.verifiyIssuer(registryEndpoint, verficationMethod)
 		}
 	}
@@ -65,7 +64,7 @@ func (ghc GaiaXHttpClient) verifiyIssuer(registryEndpoint string, verificationMe
 	if jwk.CertificatesURL != nil {
 		return ghc.verifyFileChain(registryEndpoint, jwk.CertificatesURL.String())
 	}
-	// gaia-x did-json need to provide an x5u, thus x5c checks should not be required.
+	// gaia-x did-json need to provide an x5u, thus x5c checks are not required.
 	return false
 }
 
