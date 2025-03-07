@@ -45,25 +45,19 @@ func TestIsTrustedParticipant(t *testing.T) {
 	type test struct {
 		testName       string
 		testIssuer     string
-		testEndpoints  []string
+		testEndpoint   string
 		mockResponses  map[string]*http.Response
 		mockErrors     map[string]error
 		expectedResult bool
 	}
 	tests := []test{
-		{testName: "The issuer should have been returned.", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-tir.org"},
+		{testName: "The issuer should have been returned.", testIssuer: "did:web:test.org", testEndpoint: "https://my-tir.org",
 			mockResponses: map[string]*http.Response{"https://my-tir.org/v4/issuers/did:web:test.org": getIssuerResponse("did:web:test.org")}, expectedResult: true},
-		{testName: "The issuer should be returned, if its found at one of the endpoints", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-other-tir.org", "https://my-tir.org"},
-			mockResponses: map[string]*http.Response{"https://my-other-tir.org/v4/issuers/did:web:test.org": getNotFoundResponse(), "https://my-tir.org/v4/issuers/did:web:test.org": getIssuerResponse("did:web:test.org")}, expectedResult: true},
-		{testName: "The issuer should not be returned, if its nowhere found.", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-other-tir.org", "https://my-tir.org"},
+		{testName: "The issuer should not be returned, if its nowhere found.", testIssuer: "did:web:test.org", testEndpoint: "https://my-other-tir.org",
 			mockResponses: map[string]*http.Response{"https://my-other-tir.org/v4/issuers/did:web:test.org": getNotFoundResponse(), "https://my-tir.org/v4/issuers/did:web:test.org": getNotFoundResponse()}, expectedResult: false},
-		{testName: "The issuer should be returned, even if an error is thrown at one endpoint.", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-other-tir.org", "https://my-tir.org"},
-			mockResponses: map[string]*http.Response{"https://my-tir.org/v4/issuers/did:web:test.org": getIssuerResponse("did:web:test.org")}, mockErrors: map[string]error{"https://my-other-tir.org/v4/issuers/did:web:test.org": errors.New("something_bad")}, expectedResult: true},
-		{testName: "The issuer should be returned, even if something unparsable is returned at one endpoint.", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-other-tir.org", "https://my-tir.org"},
-			mockResponses: map[string]*http.Response{"https://my-other-tir.org/v4/issuers/did:web:test.org": getUnparsableResponse(), "https://my-tir.org/v4/issuers/did:web:test.org": getIssuerResponse("did:web:test.org")}, expectedResult: true},
-		{testName: "The issuer not should be returned, if an error is thrown at the endpoint.", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-erronous-tir.org"},
+		{testName: "The issuer not should be returned, if an error is thrown at the endpoint.", testIssuer: "did:web:test.org", testEndpoint: "https://my-erronous-tir.org",
 			mockErrors: map[string]error{"https://https://my-erronous-tir.org/v4/issuers/did:web:test.org": errors.New("something_bad")}, expectedResult: false},
-		{testName: "The issuer not should be returned, if the response cannot be parsed.", testIssuer: "did:web:test.org", testEndpoints: []string{"https://my-erronous-tir.org"},
+		{testName: "The issuer not should be returned, if the response cannot be parsed.", testIssuer: "did:web:test.org", testEndpoint: "https://my-erronous-tir.org",
 			mockResponses: map[string]*http.Response{"https://https://my-erronous-tir.org/v4/issuers/did:web:test.org": getUnparsableResponse()}, expectedResult: false},
 	}
 
@@ -71,7 +65,7 @@ func TestIsTrustedParticipant(t *testing.T) {
 		common.ResetGlobalCache()
 		t.Run(tc.testName, func(t *testing.T) {
 			tirClient := TirHttpClient{client: mockClient{responses: tc.mockResponses, errors: tc.mockErrors}, tilCache: mockCache{}, tirCache: mockCache{}}
-			isTrusted := tirClient.IsTrustedParticipant(tc.testEndpoints, tc.testIssuer)
+			isTrusted := tirClient.IsTrustedParticipant(tc.testEndpoint, tc.testIssuer)
 
 			if tc.expectedResult != isTrusted {
 				t.Errorf("%s - Expected the issuer to be trusted %v but was %v.", tc.testName, tc.expectedResult, isTrusted)

@@ -18,6 +18,7 @@ import (
 
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
+	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/trustbloc/vc-go/verifiable"
 
@@ -105,14 +106,14 @@ type ValidationContext interface{}
 
 type TrustRegistriesValidationContext struct {
 	trustedIssuersLists           map[string][]string
-	trustedParticipantsRegistries map[string][]string
+	trustedParticipantsRegistries map[string][]configModel.TrustedParticipantsList
 }
 
 func (trvc TrustRegistriesValidationContext) GetTrustedIssuersLists() map[string][]string {
 	return trvc.trustedIssuersLists
 }
 
-func (trvc TrustRegistriesValidationContext) GetTrustedParticipantLists() map[string][]string {
+func (trvc TrustRegistriesValidationContext) GetTrustedParticipantLists() map[string][]configModel.TrustedParticipantsList {
 	return trvc.trustedParticipantsRegistries
 }
 
@@ -246,7 +247,8 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 		logging.Log().Errorf("Was not able to instantiate the trusted-issuers-registry client. Err: %v", err)
 		return err
 	}
-	trustedParticipantVerificationService := TrustedParticipantValidationService{tirClient: tirClient}
+	gaiaXClient, _ := gaiax.NewGaiaXHttpClient()
+	trustedParticipantVerificationService := TrustedParticipantValidationService{tirClient: tirClient, gaiaXClient: gaiaXClient}
 	trustedIssuerVerificationService := TrustedIssuerValidationService{tirClient: tirClient}
 
 	key, err := initPrivateKey(verifierConfig.KeyAlgorithm)
@@ -572,7 +574,7 @@ func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope s
 
 func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string, credentialTypes []string) (verificationContext TrustRegistriesValidationContext, err error) {
 	trustedIssuersLists := map[string][]string{}
-	trustedParticipantsRegistries := map[string][]string{}
+	trustedParticipantsRegistries := map[string][]configModel.TrustedParticipantsList{}
 
 	for _, credentialType := range credentialTypes {
 		issuersLists, err := v.credentialsConfig.GetTrustedIssuersLists(clientId, configModel.SERVICE_DEFAULT_SCOPE, credentialType)
@@ -594,7 +596,7 @@ func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string
 
 func (v *CredentialVerifier) getTrustRegistriesValidationContextFromScope(clientId string, scope string, credentialTypes []string) (verificationContext TrustRegistriesValidationContext, err error) {
 	trustedIssuersLists := map[string][]string{}
-	trustedParticipantsRegistries := map[string][]string{}
+	trustedParticipantsRegistries := map[string][]configModel.TrustedParticipantsList{}
 
 	requiredCredentialTypes, err := v.credentialsConfig.RequiredCredentialTypes(clientId, scope)
 	if err != nil {

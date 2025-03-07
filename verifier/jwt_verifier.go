@@ -33,7 +33,7 @@ func (jwtVMR JWTVerfificationMethodResolver) ResolveVerificationMethod(verificat
 	registry := vdr.New(vdr.WithVDR(web.New()), vdr.WithVDR(key.New()), vdr.WithVDR(jwk.New()))
 	didDocument, err := registry.Resolve(expectedProofIssuer)
 	if err != nil {
-		logging.Log().Warnf("Was not able to resolve the issuer %s.", expectedProofIssuer)
+		logging.Log().Warnf("Was not able to resolve the issuer %s. E: %v", expectedProofIssuer, err)
 		return nil, ErrorUnresolvableDid
 	}
 	for _, vm := range didDocument.DIDDocument.VerificationMethod {
