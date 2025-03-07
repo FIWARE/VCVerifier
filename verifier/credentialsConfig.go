@@ -25,7 +25,7 @@ type CredentialsConfig interface {
 	// should return the list of credentialtypes to be requested via the scope parameter
 	GetScope(serviceIdentifier string) (credentialTypes []string, err error)
 	// get (EBSI TrustedIssuersRegistry compliant) endpoints for the given service/credential combination, to check its issued by a trusted participant.
-	GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error)
+	GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []config.TrustedParticipantsList, err error)
 	// get (EBSI TrustedIssuersRegistry compliant) endpoints for the given service/credential combination, to check that credentials are issued by trusted issuers
 	// and that the issuer has permission to issue such claims.
 	GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error)
@@ -134,7 +134,7 @@ func (cc ServiceBackedCredentialsConfig) GetScope(serviceIdentifier string) (cre
 	return []string{}, nil
 }
 
-func (cc ServiceBackedCredentialsConfig) GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error) {
+func (cc ServiceBackedCredentialsConfig) GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []config.TrustedParticipantsList, err error) {
 	logging.Log().Debugf("Get participants list for %s - %s - %s.", serviceIdentifier, scope, credentialType)
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
 	if hit {
@@ -145,7 +145,7 @@ func (cc ServiceBackedCredentialsConfig) GetTrustedParticipantLists(serviceIdent
 		}
 	}
 	logging.Log().Debugf("No trusted participants for %s - %s", serviceIdentifier, credentialType)
-	return []string{}, nil
+	return []config.TrustedParticipantsList{}, nil
 }
 
 func (cc ServiceBackedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error) {
