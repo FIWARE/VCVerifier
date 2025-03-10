@@ -135,18 +135,18 @@ configRepo:
             trustedParticipants:
                 # the credentials type to configure the endpoint(s) for
                 VerifiableCredential: 
-                - https://tir-pdc.gaia-x.fiware.dev
+                - https://tir-pdc.ebsi.fiware.dev
                 # the credentials type to configure the endpoint(s) for
                 CustomerCredential: 
-                - https://tir-pdc.gaia-x.fiware.dev
+                - https://tir-pdc.ebsi.fiware.dev
             # trusted issuers endpoint configuration
             trustedIssuers:
                 # the credentials type to configure the endpoint(s) for
                 VerifiableCredential: 
-                - https://tir-pdc.gaia-x.fiware.dev
+                - https://tir-pdc.ebsi.fiware.dev
                 # the credentials type to configure the endpoint(s) for
                 CustomerCredential: 
-                - https://tir-pdc.gaia-x.fiware.dev
+                - https://tir-pdc.ebsi.fiware.dev
 
 ```
 #### Templating
@@ -208,6 +208,96 @@ which will be answered with(demo jwt, will be signed in reality):
     }
 ```
 
+## Trust Anchor Integration
+
+The Verifier currently supports 2 types of Participant Lists:
+
+* [EBSI Trusted Issuers Registry API](https://hub.ebsi.eu/apis/conformance/trusted-issuers-registry)
+* [GAIA-X Registry](https://gitlab.com/gaia-x/lab/compliance/gx-registry)
+
+> :bulb: The following example configurations are provided through the static yaml file. Its recommended to use the [Credentials-Config-Service](https://github.com/FIWARE/credentials-config-service) instead, to have the ability for dynamic changes. All described configurations are supported by the service in version >=2.0.0
+
+### EBSI TIR
+
+In order to check an issuer against an EBSI Trusted Issuers Registry, it needs to be configured for the supported credentials. When using the file config, it would look like: 
+
+```yaml
+configRepo:
+    # static configuration for services
+    services: 
+        # name of the service to be configured
+        testService: 
+            # scope to be requested from the wallet
+            scope: 
+                - VerifiableCredential
+            # trusted participants endpoint configuration 
+            trustedParticipants:
+                # the credentials type to configure the endpoint(s) for
+                VerifiableCredential: 
+                - type: ebsi 
+                  url: https://tir-pdc.ebsi.fiware.dev
+```
+
+For backward compatibility, the EBSI List is the default at the moment, thus the following (simplified) configuration is also valid:
+
+```yaml
+configRepo:
+    # static configuration for services
+    services: 
+        # name of the service to be configured
+        testService: 
+            # scope to be requested from the wallet
+            scope: 
+                - VerifiableCredential
+            # trusted participants endpoint configuration 
+            trustedParticipants:
+                # the credentials type to configure the endpoint(s) for
+                VerifiableCredential: 
+                - https://tir-pdc.ebsi.fiware.dev
+```
+
+### Gaia-X Registry
+
+When using the [Gaia-X Digital Clearing House's](https://gaia-x.eu/services-deliverables/digital-clearing-house/) Registry Services, the issuer to be checked needs to fullfill the requirements of a Gaia-X participant. Thus, only did:web is supported for such and they need to provide a valid ```x5u``` location as part of their ```publicKeyJwk```. Usage of such registries can than be configured as following:
+```yaml
+configRepo:
+    # static configuration for services
+    services: 
+        # name of the service to be configured
+        testService: 
+            # scope to be requested from the wallet
+            scope: 
+                - VerifiableCredential
+            # trusted participants endpoint configuration 
+            trustedParticipants:
+                # the credentials type to configure the endpoint(s) for
+                VerifiableCredential: 
+                - type: gaia-x 
+                  url: https://registry.lab.gaia-x.eu
+```
+
+### Mixed usage
+
+Its also possible to trust multiple list with different types. In this case, the issuer is trusted if its found in at least one of the lists. Configuration would be as following:
+```yaml
+configRepo:
+    # static configuration for services
+    services: 
+        # name of the service to be configured
+        testService: 
+            # scope to be requested from the wallet
+            scope: 
+                - VerifiableCredential
+            # trusted participants endpoint configuration 
+            trustedParticipants:
+                # the credentials type to configure the endpoint(s) for
+                VerifiableCredential: 
+                - type: ebsi
+                  url: https://tir-pdc.ebsi.fiware.dev
+                - type: gaia-x 
+                  url: https://registry.lab.gaia-x.eu
+```
+
 ## API
 
 The API implements enpoints defined in [OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-terminology) and [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html). The OpenAPI Specification of the implemented endpoints can be found at: [api/api.yaml](api/api.yaml).
@@ -216,7 +306,6 @@ The API implements enpoints defined in [OIDC4VP](https://openid.net/specs/openid
 
 The VCVerifier does currently not support all functionalities defined in the connected standards(e.g. [OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-terminology) and [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html)). Users should be aware of the following points:
 
-* the verifier does not yet verify the holder of a credential
 * the verifier does not offer any endpoint to proof its own identity
 * requests to the authentication-response endpoint do accept "presentation_submissions", but do not evaluate them
 * even thought the vp_token can contain multiple credentials and all of them will be verified, just the first one will be included in the JWT

@@ -43,8 +43,8 @@ func Test_getServices(t *testing.T) {
 				"did_write": {
 					{
 						Type:                     "VerifiableCredential",
-						TrustedParticipantsLists: []string{"https://tir-pdc.gaia-x.fiware.dev"},
-						TrustedIssuersLists:      []string{"https://til-pdc.gaia-x.fiware.dev"},
+						TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
+						TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
 						HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
 					},
 				},
