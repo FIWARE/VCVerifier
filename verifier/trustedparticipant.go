@@ -49,7 +49,9 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 	}
 
 	for _, listEntries := range trustContext.GetTrustedParticipantLists() {
+		logging.Log().Debugf("List entries %v", listEntries)
 		for _, participantList := range listEntries {
+			logging.Log().Debugf("The list %s", participantList.Type)
 			if participantList.Type == typeEbsi {
 				logging.Log().Debug("Check at ebsi.")
 				result = tpvs.tirClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
