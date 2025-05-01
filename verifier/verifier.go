@@ -305,7 +305,7 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 * Starts a siop-flow and returns the required connection information
 **/
 func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string) (connectionString string, err error) {
-	logging.Log().Debugf("Start a plain siop-flow fro %s.", callback)
+	logging.Log().Debugf("Start a plain siop-flow for %s. clientId %s", callback, clientId)
 
 	return v.initSiopFlow(host, protocol, callback, sessionId, clientId)
 }

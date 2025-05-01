@@ -8,6 +8,7 @@ import (
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/trustbloc/vc-go/verifiable"
+	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 )
 
@@ -113,6 +114,7 @@ func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, cr
 	for _, credentialType := range verifiableCredential.Contents().Types {
 		config, exists := credentialsConfigMap[credentialType]
 		if !exists {
+			logging.Log().Debugf("The verifiable credential contains a type that is not part of the configured types in the Trusted Issuers List: %s. Configured: %s", credentialType, maps.Keys(credentialsConfigMap))
 			subjectAllowed = false
 			break
 		}
