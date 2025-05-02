@@ -58,6 +58,10 @@ type Logging struct {
 type Verifier struct {
 	// did to be used by the verifier
 	Did string `mapstructure:"did"`
+	// Identification to be used for the verifier
+	ClientIdentification ClientIdentification `mapstructure:"clientIdentification"`
+	// supported request modes - currently 'urlEncoded', 'byValue' an 'byReference' are available. In case of byValue, the keyPath has to be set.
+	SupportedModes []string `mapstructure:"supportedModes" default:"urlEncoded"`
 	// address of the (ebsi-compatible) trusted-issuers-registry for verifying the issuer
 	TirAddress string `mapstructure:"tirAddress"`
 	// expiry of the tir-cache entries
@@ -78,6 +82,17 @@ type Verifier struct {
 	ValidationMode string `mapstructure:"validationMode" default:"none"`
 	// algorithm to be used for the jwt signatures - currently supported: RS256 and ES256
 	KeyAlgorithm string `mapstructure:"keyAlgorithm" default:"RS256"`
+}
+
+type ClientIdentification struct {
+	// path to the did signing key(in pem format) for request object mode
+	KeyPath string `mapstructure:"keyPath"`
+	// algorithm used for the request signing key
+	KeyAlgorithm string `mapstructure:"requestKeyAlgorithm"`
+	// identification used by the verifier when requesting authorization. Can be a did, but also methods like x509_san_dns
+	Id string `mapstructure:"id"`
+	// optional path to the certifcate to embed in the jwt header
+	CertificatePath string `mapstructure:"certificatePath"`
 }
 
 type Elsi struct {
