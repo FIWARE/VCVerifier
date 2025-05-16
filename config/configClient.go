@@ -54,6 +54,14 @@ type Credential struct {
 	TrustedIssuersLists []string `json:"trustedIssuersLists,omitempty" mapstructure:"trustedIssuersLists,omitempty"`
 	// Configuration of Holder Verfification
 	HolderVerification HolderVerification `json:"holderVerification" mapstructure:"holderVerification"`
+	RequireCompliance  bool               `json:"requireCompliance" mapstructure:"requireCompliance"`
+	JwtInclusion       JwtInclusion       `json:"jwtInclusion" mapstructure:"jwtInclusion"`
+}
+
+type JwtInclusion struct {
+	Enabled         bool     `json:"enabled"`
+	FullInclusion   bool     `json:"fullInclusion"`
+	ClaimsToInclude []string `json:"claimsToInclude"`
 }
 
 type TrustedParticipantsList struct {

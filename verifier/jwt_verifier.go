@@ -4,10 +4,10 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/trustbloc/did-go/method/jwk"
 	"github.com/trustbloc/did-go/method/key"
-	"github.com/trustbloc/did-go/method/web"
 	"github.com/trustbloc/did-go/vdr"
 	"github.com/trustbloc/vc-go/verifiable"
 	"github.com/trustbloc/vc-go/vermethod"
@@ -30,7 +30,7 @@ type TrustBlocValidator struct {
 type JWTVerfificationMethodResolver struct{}
 
 func (jwtVMR JWTVerfificationMethodResolver) ResolveVerificationMethod(verificationMethod string, expectedProofIssuer string) (*vermethod.VerificationMethod, error) {
-	registry := vdr.New(vdr.WithVDR(web.New()), vdr.WithVDR(key.New()), vdr.WithVDR(jwk.New()))
+	registry := vdr.New(vdr.WithVDR(gaiax.NewGaiaxVDR()), vdr.WithVDR(key.New()), vdr.WithVDR(jwk.New()))
 	didDocument, err := registry.Resolve(expectedProofIssuer)
 	if err != nil {
 		logging.Log().Warnf("Was not able to resolve the issuer %s. E: %v", expectedProofIssuer, err)

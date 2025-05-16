@@ -10,7 +10,6 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/trustbloc/did-go/doc/did"
-	"github.com/trustbloc/did-go/method/web"
 	"github.com/trustbloc/did-go/vdr"
 	vdrapi "github.com/trustbloc/did-go/vdr/api"
 )
@@ -32,7 +31,7 @@ type GaiaXHttpClient struct {
 }
 
 func NewGaiaXHttpClient() (client GaiaXClient, err error) {
-	return GaiaXHttpClient{client: &http.Client{}, didRegistry: vdr.New(vdr.WithVDR(web.New()))}, nil
+	return GaiaXHttpClient{client: &http.Client{}, didRegistry: vdr.New(vdr.WithVDR(NewGaiaxVDR()))}, nil
 }
 
 func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, did string) (trusted bool) {
@@ -42,14 +41,21 @@ func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, did str
 	// 1. get jwk from did
 	didDocument, err := ghc.resolveIssuer(did)
 
+	logging.Log().Debugf("Got document %s", logging.PrettyPrintObject(didDocument))
 	if err != nil {
 		logging.Log().Warnf("Was not able to resolve the issuer %s. E: %v", did, err)
 		return false
 	}
 
 	// 2. verify at the registry
+	if len(didDocument.DIDDocument.VerificationMethod) == 1 {
+		logging.Log().Debug("Validate with vm 0")
+		return ghc.verifiyIssuer(registryEndpoint, didDocument.DIDDocument.VerificationMethod[0])
+	}
+
 	for _, verficationMethod := range didDocument.DIDDocument.VerificationMethod {
-		if verficationMethod.ID == did {
+		logging.Log().Debugf("Verification method %s", logging.PrettyPrintObject(didDocument.DIDDocument.VerificationMethod))
+		if verficationMethod.ID == did || verficationMethod.Controller == did {
 			logging.Log().Debugf("Verify the issuer %s.", did)
 			return ghc.verifiyIssuer(registryEndpoint, verficationMethod)
 		}
@@ -59,7 +65,9 @@ func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, did str
 }
 
 func (ghc GaiaXHttpClient) verifiyIssuer(registryEndpoint string, verificationMethod did.VerificationMethod) (trusted bool) {
+	logging.Log().Debugf("Use the method %v", logging.PrettyPrintObject(verificationMethod))
 	jwk := verificationMethod.JSONWebKey()
+	logging.Log().Debugf("JWK %v", logging.PrettyPrintObject(jwk))
 
 	if jwk.CertificatesURL != nil {
 		return ghc.verifyFileChain(registryEndpoint, jwk.CertificatesURL.String())
@@ -98,7 +106,7 @@ func (ghc GaiaXHttpClient) verifyFileChain(registryEndpoint string, x5u string) 
 func (ghc GaiaXHttpClient) resolveIssuer(did string) (didDocument *did.DocResolution, err error) {
 	didDocument, err = ghc.didRegistry.Resolve(did)
 	if err != nil {
-		logging.Log().Warnf("Was not able to resolve the issuer %s.", did)
+		logging.Log().Warnf("GX: Was not able to resolve the issuer %s. Err: %v", did, err)
 		return nil, ErrorUnresolvableDid
 	}
 	return didDocument, err
