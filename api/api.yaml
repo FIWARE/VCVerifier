@@ -21,7 +21,7 @@ paths:
         - $ref: '#/components/parameters/RequestMode'
       operationId: VerifierPageDisplayQRSIOP
       summary: Presents a qr as starting point for the auth process
-      description: Returns a rendered html with a QR encoding the login-starting point for the siop flow - e.g. 'openid://?scope=somethign&response_type=rt&response_mode=rm&client_id=ci&redirect_uri=uri&state=state&nonce=nonce'
+      description: Returns a rendered html with a QR encoding the login-starting point for the siop flow - e.g. 'openid://?scope=somethign&response_type=rt&response_mode=rm&client_id=ci&redirect_uri=uri&state=state&nonce=nonce&request_mode=urlEncoded'
       responses:
         '200':
           description: A rendered page, containing the qr
