@@ -142,7 +142,7 @@ func (cc ServiceBackedCredentialsConfig) GetPresentationDefinition(serviceIdenti
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
 	if hit {
 
-		logging.Log().Warnf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
+		logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
 
 		return cacheEntry.(config.ConfiguredService).GetPresentationDefinition(scope), nil
 
