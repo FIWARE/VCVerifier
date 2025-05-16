@@ -887,7 +887,7 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(redirect_uri stri
 		logging.Log().Errorf("Was not able to get the presentationDefintion for %s. Err: %v", clientId, err)
 		return requestObject, err
 	}
-	logging.Log().Warnf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
+	logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
 	jwtBuilder.Claim("presentation_definition", presentationDefinition)
 
 	requestToken, err := jwtBuilder.Build()
