@@ -401,7 +401,7 @@ Example:
 ```
     openid4vp://?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/randomState&request_uri_method=get"
 ```
-The object than can be retrived via:
+The object than can be retrieved via:
 ```shell
     curl https://verifier.org/api/v1/request/randomState
 ```

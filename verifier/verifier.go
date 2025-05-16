@@ -780,7 +780,7 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 		requestObject, err := v.createAuthenticationRequestObject(redirectUri, state, clientId)
 		loginSession.requestObject = string(requestObject[:])
 
-		logging.Log().Infof("Store session with id %s", state)
+		logging.Log().Debugf("Store session with id %s", state)
 		v.sessionCache.Set(state, loginSession, cache.DefaultExpiration)
 
 		authenticationRequest = v.createAuthenticationRequestByReference(base, state)
@@ -886,7 +886,7 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(redirect_uri stri
 		logging.Log().Errorf("Was not able to get the presentationDefintion for %s. Err: %v", clientId, err)
 		return requestObject, err
 	}
-	logging.Log().Warnf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
+	logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
 	jwtBuilder.Claim("presentation_definition", presentationDefinition)
 
 	requestToken, err := jwtBuilder.Build()
