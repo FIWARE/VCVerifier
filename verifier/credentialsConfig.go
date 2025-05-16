@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -18,12 +19,16 @@ import (
 
 const CACHE_EXPIRY = 60
 
+var ErrorNoPresentationDefinition = errors.New("no_presentation_definition_configured")
+
 /**
 * Provides information about credentialTypes associated with services and there trust anchors.
  */
 type CredentialsConfig interface {
-	// should return the list of credentialtypes to be requested via the scope parameter
-	GetScope(serviceIdentifier string) (credentialTypes []string, err error)
+	// should return the list of scopes to be requested via the scope parameter
+	GetScope(serviceIdentifier string) (scopes []string, err error)
+	// should return the presentationDefinition be requested via the scope parameter
+	GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition config.PresentationDefinition, err error)
 	// get (EBSI TrustedIssuersRegistry compliant) endpoints for the given service/credential combination, to check its issued by a trusted participant.
 	GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []config.TrustedParticipantsList, err error)
 	// get (EBSI TrustedIssuersRegistry compliant) endpoints for the given service/credential combination, to check that credentials are issued by trusted issuers
@@ -96,8 +101,8 @@ func (cc ServiceBackedCredentialsConfig) fillCache(context.Context) {
 
 		var tirEndpoints []string
 
-		for serviceScope, credentials := range configuredService.ServiceScopes {
-			for _, credential := range credentials {
+		for serviceScope, scopeEntry := range configuredService.ServiceScopes {
+			for _, credential := range scopeEntry.Credentials {
 				serviceIssuersLists, err := cc.GetTrustedIssuersLists(configuredService.Id, serviceScope, credential.Type)
 				if err != nil {
 					logging.Log().Errorf("failed caching issuers lists in fillCache(): %v", err)
@@ -122,8 +127,7 @@ func (cc ServiceBackedCredentialsConfig) RequiredCredentialTypes(serviceIdentifi
 	return []string{}, fmt.Errorf("no service %s configured", serviceIdentifier)
 }
 
-// FIXME shall we return all scopes or just the default one?
-func (cc ServiceBackedCredentialsConfig) GetScope(serviceIdentifier string) (credentialTypes []string, err error) {
+func (cc ServiceBackedCredentialsConfig) GetScope(serviceIdentifier string) (scopes []string, err error) {
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
 	if hit {
 		logging.Log().Debugf("Found scope for %s", serviceIdentifier)
@@ -132,6 +136,19 @@ func (cc ServiceBackedCredentialsConfig) GetScope(serviceIdentifier string) (cre
 	}
 	logging.Log().Debugf("No scope entry for %s", serviceIdentifier)
 	return []string{}, nil
+}
+
+func (cc ServiceBackedCredentialsConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition config.PresentationDefinition, err error) {
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+
+		logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
+
+		return cacheEntry.(config.ConfiguredService).GetPresentationDefinition(scope), nil
+
+	}
+	logging.Log().Debugf("No presentation definition for %s - %s", serviceIdentifier, scope)
+	return presentationDefinition, ErrorNoPresentationDefinition
 }
 
 func (cc ServiceBackedCredentialsConfig) GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []config.TrustedParticipantsList, err error) {

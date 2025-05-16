@@ -5,7 +5,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -26,18 +28,27 @@ import (
 
 	client "github.com/fiware/dsba-pdp/http"
 
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwk"
-	"github.com/lestrrat-go/jwx/jwt"
+	"github.com/lestrrat-go/jwx/v3/cert"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jws"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 	"github.com/patrickmn/go-cache"
 	qrcode "github.com/skip2/go-qrcode"
 	"github.com/valyala/fasttemplate"
 )
 
+const REQUEST_MODE_URL_ENCODE = "urlEncoded"
+const REQUEST_MODE_BY_VALUE = "byValue"
+const REQUEST_MODE_BY_REFERENCE = "byReference"
+const REQUEST_OBJECT_TYP = "oauth-authz-req+jwt"
+
 var ErrorNoDID = errors.New("no_did_configured")
 var ErrorNoTIR = errors.New("no_tir_configured")
 var ErrorUnsupportedKeyAlgorithm = errors.New("unsupported_key_algorithm")
 var ErrorUnsupportedValidationMode = errors.New("unsupported_validation_mode")
+var ErrorSupportedModesNotSet = errors.New("no_supported_request_mode_set")
+var ErrorNoSigningKey = errors.New("no_signing_key_available")
 var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorWrongGrantType = errors.New("wrong_grant_type")
@@ -46,19 +57,24 @@ var ErrorRedirectUriMismatch = errors.New("redirect_uri_does_not_match")
 var ErrorVerficationContextSetup = errors.New("no_valid_verification_context")
 var ErrorTokenUnparsable = errors.New("unable_to_parse_token")
 var ErrorRequiredCredentialNotProvided = errors.New("required_credential_not_provided")
+var ErrorUnsupportedRequestMode = errors.New("unsupported_request_mode")
+var ErrorNoExpiration = errors.New("no_jwt_expiration_set")
+var ErrorNoKeyId = errors.New("no_key_id_available")
+var ErrorNoRequestObject = errors.New("no_request_object_available")
 
 // Actual implementation of the verfifier functionality
 
 // verifier interface
 type Verifier interface {
-	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string) (qr string, err error)
-	StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string) (connectionString string, err error)
-	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string) (authenticationRequest string, err error)
+	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (qr string, err error)
+	StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (connectionString string, err error)
+	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string) (authenticationRequest string, err error)
 	GetToken(authorizationCode string, redirectUri string) (jwtString string, expiration int64, err error)
 	GetJWKS() jwk.Set
 	AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice SameDeviceResponse, err error)
 	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *verifiable.Presentation) (int64, string, error)
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
+	GetRequestObject(state string) (jwt string, err error)
 }
 
 type ValidationService interface {
@@ -92,6 +108,12 @@ type CredentialVerifier struct {
 	validationServices []ValidationService
 	// Algorithm to be used for signing the jwt
 	signingAlgorithm string
+	// request modes supported by this instance of the verifier
+	supportedRequestModes []string
+	// Key for signing the request objects
+	requestSigningKey *jwk.Key
+	// Client identification for signing the request objects
+	clientIdentification configModel.ClientIdentification
 }
 
 // allow singleton access to the verifier
@@ -99,6 +121,9 @@ var verifier Verifier
 
 // http client to be used
 var httpClient = client.HttpClient()
+
+// file accessor to be used
+var localFileAccessor common.FileAccessor = common.DiskFileAccessor{}
 
 // interfaces and default implementations
 
@@ -177,6 +202,8 @@ type loginSession struct {
 	sessionId string
 	// clientId provided for the session
 	clientId string
+	// requestObject created for the session
+	requestObject string
 }
 
 // struct to represent a token, accessible through the token endpoint
@@ -257,7 +284,15 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 		logging.Log().Errorf("Was not able to initiate a signing key. Err: %v", err)
 		return err
 	}
-	logging.Log().Warnf("Initiated key %s.", logging.PrettyPrintObject(key))
+
+	didSigningKey, err := getRequestSigningKey(verifierConfig.ClientIdentification.KeyPath, verifierConfig.ClientIdentification.Id)
+	if (slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_VALUE) || slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_REFERENCE)) && err != nil {
+		logging.Log().Errorf("Was not able to get a signing key, despite mode %s supported. Err: %v", REQUEST_MODE_BY_VALUE, err)
+		return err
+	} else {
+		err = nil
+	}
+
 	verifier = &CredentialVerifier{
 		(&config.Server).Host,
 		verifierConfig.Did,
@@ -276,6 +311,9 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 			&trustedIssuerVerificationService,
 		},
 		verifierConfig.KeyAlgorithm,
+		verifierConfig.SupportedModes,
+		&didSigningKey,
+		verifierConfig.ClientIdentification,
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
@@ -285,10 +323,19 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 /**
 *   Initializes the cross-device login flow and returns all neccessary information as a qr-code
 **/
-func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string) (qr string, err error) {
+func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (qr string, err error) {
+
+	for _, v := range v.supportedRequestModes {
+		logging.Log().Warnf("Supported: %s", v)
+	}
+
+	if !slices.Contains(v.supportedRequestModes, requestMode) {
+		logging.Log().Infof("QR with mode %s was requested, but only %v is supported.", requestMode, v.supportedRequestModes)
+		return qr, ErrorUnsupportedRequestMode
+	}
 
 	logging.Log().Debugf("Generate a login qr for %s.", callback)
-	authenticationRequest, err := v.initSiopFlow(host, protocol, callback, sessionId, clientId)
+	authenticationRequest, err := v.initSiopFlow(host, protocol, callback, sessionId, clientId, requestMode)
 
 	if err != nil {
 		return qr, err
@@ -304,20 +351,20 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 /**
 * Starts a siop-flow and returns the required connection information
 **/
-func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string) (connectionString string, err error) {
-	logging.Log().Debugf("Start a plain siop-flow fro %s.", callback)
+func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (connectionString string, err error) {
+	logging.Log().Debugf("Start a plain siop-flow for %s.", callback)
 
-	return v.initSiopFlow(host, protocol, callback, sessionId, clientId)
+	return v.initSiopFlow(host, protocol, callback, sessionId, clientId, requestMode)
 }
 
 /**
 * Starts a same-device siop-flow and returns the required redirection information
 **/
-func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string) (authenticationRequest string, err error) {
 	logging.Log().Debugf("Initiate samedevice flow for %s.", host)
 	state := v.nonceGenerator.GenerateNonce()
 
-	loginSession := loginSession{true, fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId, clientId}
+	loginSession := loginSession{true, fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId, clientId, ""}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the login session %s in cache. Err: %v", logging.PrettyPrintObject(loginSession), err)
@@ -326,8 +373,7 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 
 	redirectUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
 
-	walletUri := protocol + "://" + host + redirectPath
-	return v.createAuthenticationRequest(walletUri, redirectUri, state, clientId), err
+	return v.generateAuthenticationRequest(protocol+"://"+host+redirectPath, clientId, redirectUri, state, loginSession, requestMode)
 }
 
 /**
@@ -353,17 +399,24 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 
 	switch v.signingAlgorithm {
 	case "RS256":
-		signatureAlgorithm = jwa.RS256
+		signatureAlgorithm = jwa.RS256()
 	case "ES256":
-		signatureAlgorithm = jwa.ES256
+		signatureAlgorithm = jwa.ES256()
 	}
 
-	jwtBytes, err := v.tokenSigner.Sign(tokenSession.token, signatureAlgorithm, v.signingKey)
+	jwtBytes, err := v.tokenSigner.Sign(tokenSession.token, jwt.WithKey(signatureAlgorithm, v.signingKey))
 	if err != nil {
 		logging.Log().Warnf("Was not able to sign the token. Err: %v", err)
 		return jwtString, expiration, err
 	}
-	expiration = tokenSession.token.Expiration().Unix() - v.clock.Now().Unix()
+
+	tokenExpiry, exists := tokenSession.token.Expiration()
+	if !exists {
+		logging.Log().Warn("Token does not have an expiration.")
+		return jwtString, expiration, ErrorNoExpiration
+	}
+
+	expiration = tokenExpiry.Unix() - v.clock.Now().Unix()
 
 	return string(jwtBytes), expiration, err
 }
@@ -374,7 +427,7 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 func (v *CredentialVerifier) GetJWKS() jwk.Set {
 	jwks := jwk.NewSet()
 	publicKey, _ := v.signingKey.PublicKey()
-	jwks.Add(publicKey)
+	jwks.AddKey(publicKey)
 	return jwks
 }
 
@@ -444,17 +497,24 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 		logging.Log().Warnf("Was not able to create the token. Err: %v", err)
 		return 0, "", err
 	}
-	expiration := token.Expiration().Unix() - v.clock.Now().Unix()
+
+	tokenExpiry, exists := token.Expiration()
+	if !exists {
+		logging.Log().Warn("Token does not have an expiration.")
+		return 0, "", ErrorNoExpiration
+	}
+
+	expiration := tokenExpiry.Unix() - v.clock.Now().Unix()
 
 	var signatureAlgorithm jwa.SignatureAlgorithm
 	switch v.signingAlgorithm {
 	case "RS256":
-		signatureAlgorithm = jwa.RS256
+		signatureAlgorithm = jwa.RS256()
 	case "ES256":
-		signatureAlgorithm = jwa.ES256
+		signatureAlgorithm = jwa.ES256()
 	}
 
-	tokenBytes, err := v.tokenSigner.Sign(token, signatureAlgorithm, v.signingKey)
+	tokenBytes, err := v.tokenSigner.Sign(token, jwt.WithKey(signatureAlgorithm, v.signingKey))
 	if err != nil {
 		logging.Log().Warnf("Was not able to sign the token. Err: %v", err)
 		return 0, "", err
@@ -554,6 +614,25 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	} else {
 		return sameDevice, callbackToRequester(loginSession, authorizationCode)
 	}
+}
+
+func (v *CredentialVerifier) GetRequestObject(state string) (jwt string, err error) {
+
+	logging.Log().Infof("Get session with id %s", state)
+	loginSessionInterface, hit := v.sessionCache.Get(state)
+	if !hit {
+		logging.Log().Debugf("No cache entry for session with id %s", state)
+		return jwt, ErrorNoRequestObject
+	}
+
+	loginSession := loginSessionInterface.(loginSession)
+
+	if loginSession.requestObject == "" {
+		logging.Log().Debugf("No request object for session with id %s", state)
+		return jwt, ErrorNoRequestObject
+	}
+
+	return loginSession.requestObject, err
 }
 
 func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope string, credentialTypes []string, holder string) (validationContext []HolderValidationContext, err error) {
@@ -668,10 +747,11 @@ func verifyChain(vcs []*verifiable.Credential) (bool, error) {
 }
 
 // initializes the cross-device siop flow
-func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, sessionId string, clientId string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (authenticationRequest string, err error) {
+
 	state := v.nonceGenerator.GenerateNonce()
 
-	loginSession := loginSession{false, callback, sessionId, clientId}
+	loginSession := loginSession{false, callback, sessionId, clientId, ""}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
@@ -679,16 +759,47 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 		return authenticationRequest, err
 	}
 	redirectUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
-	authenticationRequest = v.createAuthenticationRequest("openid://", redirectUri, state, clientId)
 
-	logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
-	return authenticationRequest, err
+	return v.generateAuthenticationRequest("openid4vp://", clientId, redirectUri, state, loginSession, requestMode)
+}
+
+func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId string, redirectUri string, state string, loginSession loginSession, requestMode string) (authenticationRequest string, err error) {
+	if requestMode == REQUEST_MODE_URL_ENCODE {
+		authenticationRequest = v.createAuthenticationRequestUrlEncoded(base, redirectUri, state, clientId)
+		logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
+		return authenticationRequest, err
+	} else if requestMode == REQUEST_MODE_BY_VALUE {
+		authenticationRequest, err = v.createAuthenticationRequestByValue(base, redirectUri, state, clientId)
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the authentication request by value. Error: %v", err)
+		} else {
+			logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
+		}
+		return authenticationRequest, err
+	} else if requestMode == REQUEST_MODE_BY_REFERENCE {
+		requestObject, err := v.createAuthenticationRequestObject(redirectUri, state, clientId)
+		loginSession.requestObject = string(requestObject[:])
+
+		logging.Log().Debugf("Store session with id %s", state)
+		v.sessionCache.Set(state, loginSession, cache.DefaultExpiration)
+
+		authenticationRequest = v.createAuthenticationRequestByReference(base, state)
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the authentication request by reference. Error: %v", err)
+		} else {
+			logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
+		}
+
+		return authenticationRequest, err
+	} else {
+		return authenticationRequest, ErrorUnsupportedRequestMode
+	}
 }
 
 // generate a jwt, containing the credential and mandatory information as defined by the dsba-convergence
 func (v *CredentialVerifier) generateJWT(presentation *verifiable.Presentation, holder string, audience string) (generatedJwt jwt.Token, err error) {
 
-	jwtBuilder := jwt.NewBuilder().Issuer(v.did).Claim("client_id", v.did).Subject(holder).Audience([]string{audience}).Claim("kid", v.signingKey.KeyID()).Expiration(v.clock.Now().Add(time.Minute * 30))
+	jwtBuilder := jwt.NewBuilder().Issuer(v.did).Claim("client_id", v.did).Subject(holder).Audience([]string{audience}).Expiration(v.clock.Now().Add(time.Minute * 30))
 
 	if len(presentation.Credentials()) > 1 {
 		jwtBuilder.Claim("verifiablePresentation", presentation)
@@ -706,7 +817,7 @@ func (v *CredentialVerifier) generateJWT(presentation *verifiable.Presentation, 
 }
 
 // creates an authenticationRequest string from the given parameters
-func (v *CredentialVerifier) createAuthenticationRequest(base string, redirect_uri string, state string, clientId string) string {
+func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, redirect_uri string, state string, clientId string) string {
 
 	// We use a template to generate the final string
 	template := "{{base}}?response_type=vp_token" +
@@ -731,14 +842,121 @@ func (v *CredentialVerifier) createAuthenticationRequest(base string, redirect_u
 	authRequest := t.ExecuteString(map[string]interface{}{
 		"base":         base,
 		"scope":        scope,
-		"client_id":    v.did,
+		"client_id":    v.clientIdentification.Id,
 		"redirect_uri": redirect_uri,
 		"state":        state,
 		"nonce":        v.nonceGenerator.GenerateNonce(),
 	})
 
 	return authRequest
+}
 
+// creates an authenticationRequest string from the given parameters
+func (v *CredentialVerifier) createAuthenticationRequestByReference(base string, state string) string {
+
+	// We use a template to generate the final string
+	template := "{{base}}?client_id={{client_id}}" +
+		"&request_uri={{host}}/api/v1/request/{{state}}" +
+		"&request_uri_method=get"
+
+	t := fasttemplate.New(template, "{{", "}}")
+	authRequest := t.ExecuteString(map[string]interface{}{
+		"base":      base,
+		"client_id": v.clientIdentification.Id,
+		"host":      v.host,
+		"state":     state,
+	})
+
+	return authRequest
+}
+
+func (v *CredentialVerifier) createAuthenticationRequestObject(redirect_uri string, state string, clientId string) (requestObject []byte, err error) {
+	jwtBuilder := jwt.NewBuilder().Issuer(v.did)
+	jwtBuilder.Claim("response_type", "vp_token")
+	jwtBuilder.Claim("client_id", v.clientIdentification.Id)
+	jwtBuilder.Claim("redirect_uri", redirect_uri)
+	jwtBuilder.Claim("state", state)
+	jwtBuilder.Claim("scope", "openid")
+	jwtBuilder.Claim("nonce", v.nonceGenerator.GenerateNonce())
+	jwtBuilder.Expiration(v.clock.Now().Add(time.Second * 30))
+
+	// TODO: decide if more than the default scope should be supported.
+	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, "")
+	if err != nil {
+		logging.Log().Errorf("Was not able to get the presentationDefintion for %s. Err: %v", clientId, err)
+		return requestObject, err
+	}
+	logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
+	jwtBuilder.Claim("presentation_definition", presentationDefinition)
+
+	requestToken, err := jwtBuilder.Build()
+	if err != nil {
+		logging.Log().Errorf("Was not able to build a token. Err: %v", err)
+		return requestObject, err
+	}
+
+	signingKeyAlgorithm := v.clientIdentification.KeyAlgorithm
+	keyAlgorithm, err := jwa.KeyAlgorithmFrom(signingKeyAlgorithm)
+	if err != nil {
+		logging.Log().Errorf("Request signing key does not have a valid algorithm. Error: %v", err)
+		return requestObject, ErrorNoSigningKey
+	}
+
+	headers := jws.NewHeaders()
+	headers.Set("typ", REQUEST_OBJECT_TYP)
+	if v.clientIdentification.CertificatePath != "" {
+		certs, err := loadCertChainFromPEM(v.clientIdentification.CertificatePath)
+		if err != nil {
+			logging.Log().Errorf("Was not able to read the client certificate chain. Error: %v", err)
+			return requestObject, err
+		}
+
+		x5cChain := cert.Chain{}
+		for _, cert := range certs {
+			x5cChain.AddString(base64.StdEncoding.EncodeToString(cert.Raw))
+		}
+
+		err = headers.Set("x5c", &x5cChain)
+		if err != nil {
+			logging.Log().Errorf("Was not able to set x5c. Error: %v", err)
+			return requestObject, err
+		}
+	} else {
+		logging.Log().Debug("No certificate chain for client identity")
+	}
+	var opts jwt.SignEncryptParseOption
+
+	if signingKeyAlgorithm == "ES256" || signingKeyAlgorithm == "ES256K" || signingKeyAlgorithm == "ES384" || signingKeyAlgorithm == "ES512" {
+		convertedKey, _ := (*v.requestSigningKey).(jwk.ECDSAPrivateKey)
+		opts = jwt.WithKey(keyAlgorithm, convertedKey, jws.WithProtectedHeaders(headers))
+	} else {
+		convertedKey, _ := (*v.requestSigningKey).(jwk.RSAPrivateKey)
+		opts = jwt.WithKey(keyAlgorithm, convertedKey, jws.WithProtectedHeaders(headers))
+	}
+
+	t, err := v.tokenSigner.Sign(requestToken, opts)
+	logging.Log().Debugf("The token object: %s", t)
+	return t, err
+
+}
+
+// creates an authenticationRequest string from the given parameters
+func (v *CredentialVerifier) createAuthenticationRequestByValue(base string, redirect_uri string, state string, clientId string) (request string, err error) {
+
+	// We use a template to generate the final string
+	template := "{{base}}?client_id={{client_id}}" +
+		"&request={{request}}"
+
+	signedRequest, err := v.createAuthenticationRequestObject(redirect_uri, state, clientId)
+
+	t := fasttemplate.New(template, "{{", "}}")
+	authRequest := t.ExecuteString(map[string]interface{}{
+		"base":      base,
+		"client_id": v.clientIdentification.Id,
+		"request":   signedRequest,
+	})
+
+	return authRequest, err
 }
 
 // call back to the original initiator of the login-session, providing an authorization_code for token retrieval
@@ -772,6 +990,25 @@ func getHostName(urlString string) (host string, err error) {
 	return url.Host, err
 }
 
+func getRequestSigningKey(keyPath string, clientId string) (key jwk.Key, err error) {
+	// read key file
+	rawKey, err := localFileAccessor.ReadFile(keyPath)
+	if err != nil {
+		logging.Log().Warnf("Was not able to read the key file from %s. err: %v", keyPath, err)
+		return key, err
+	} // parse key file
+
+	key, err = jwk.ParseKey(rawKey, jwk.WithPEM(true))
+	if err != nil {
+		logging.Log().Warnf("Was not able to parse the key %s. err: %v", rawKey, err)
+		return key, err
+	}
+
+	key.Set("kid", clientId)
+
+	return
+}
+
 // Initialize the private key of the verifier. Might need to be persisted in future iterations.
 func initPrivateKey(keyType string) (key jwk.Key, err error) {
 	var newKey interface{}
@@ -786,7 +1023,8 @@ func initPrivateKey(keyType string) (key jwk.Key, err error) {
 	if err != nil {
 		return nil, err
 	}
-	key, err = jwk.New(newKey)
+
+	key, err = jwk.Import(newKey)
 	if err != nil {
 		return nil, err
 	}
@@ -807,5 +1045,53 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	if !slices.Contains(SupportedModes, verifierConfig.ValidationMode) {
 		return ErrorUnsupportedValidationMode
 	}
+	if len(verifierConfig.SupportedModes) == 0 {
+		return ErrorSupportedModesNotSet
+	}
+
 	return nil
+}
+
+func loadCertChainFromPEM(path string) ([]*x509.Certificate, error) {
+	data, err := localFileAccessor.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var certs []*x509.Certificate
+	for {
+		var block *pem.Block
+		block, data = pem.Decode(data)
+		if block == nil {
+			break
+		}
+
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse certificate: %w", err)
+		}
+
+		certs = append(certs, cert)
+	}
+
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("no certificates found in PEM file")
+	}
+
+	return certs, nil
+}
+
+type RequestObject struct {
+	Issuer       string `json:"iss"`
+	ResponseType string `json:"response_type"`
+	ClientId     string `json:"client_id"`
+	RedirectUri  string `json:"redirect_uri"`
+	Scope        string `json:"scope"`
+	Nonce        string `json:"nonce"`
+	State        string `json:"state"`
+	//dcql_query to be supported in the future
 }

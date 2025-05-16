@@ -1,16 +1,15 @@
 package common
 
 import (
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/lestrrat-go/jwx/jwt"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 )
 
 type TokenSigner interface {
-	Sign(t jwt.Token, alg jwa.SignatureAlgorithm, key interface{}, options ...jwt.SignOption) ([]byte, error)
+	Sign(t jwt.Token, options ...jwt.SignOption) ([]byte, error)
 }
 
 type JwtTokenSigner struct{}
 
-func (JwtTokenSigner) Sign(t jwt.Token, alg jwa.SignatureAlgorithm, key interface{}, options ...jwt.SignOption) ([]byte, error) {
-	return jwt.Sign(t, alg, key, options...)
+func (JwtTokenSigner) Sign(t jwt.Token, options ...jwt.SignOption) ([]byte, error) {
+	return jwt.Sign(t, options...)
 }

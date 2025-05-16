@@ -33,10 +33,20 @@ configRepo:
       defaultOidcScope: someScope
       oidcScopes:
         someScope:
-          - type: VerifiableCredential
-            trustedParticipantsLists:
-              - type: ebsi
-                url: https://tir-pdc.ebsi.fiware.dev
-            trustedIssuersLists:
-              - https://til-pdc.ebsi.fiware.dev
+          credentials:
+            - type: VerifiableCredential
+              trustedParticipantsLists:
+                - type: ebsi
+                  url: https://tir-pdc.ebsi.fiware.dev
+              trustedIssuersLists:
+                - https://til-pdc.ebsi.fiware.dev
+          presentationDefinition:
+            id: my-pd
+            input_descriptors:
+              - id: my-descriptor
+                constraints: 
+                  fields: 
+                    - id: my-field
+                      path:
+                        - $.vc.my.claim
         

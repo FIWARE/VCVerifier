@@ -18,7 +18,7 @@ import (
 	"github.com/trustbloc/vc-go/verifiable"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lestrrat-go/jwx/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
 type mockVerifier struct {
@@ -33,13 +33,13 @@ type mockVerifier struct {
 	mockError            error
 }
 
-func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string) (qr string, err error) {
+func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, requestType string) (qr string, err error) {
 	return mV.mockQR, mV.mockError
 }
-func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string) (connectionString string, err error) {
+func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestType string) (connectionString string, err error) {
 	return mV.mockConnectionString, mV.mockError
 }
-func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string) (authenticationRequest string, err error) {
+func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestType string) (authenticationRequest string, err error) {
 	return mV.mockAuthRequest, mV.mockError
 }
 func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string) (jwtString string, expiration int64, err error) {
@@ -53,6 +53,11 @@ func (mV *mockVerifier) AuthenticationResponse(state string, presentation *verif
 }
 func (mV *mockVerifier) GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error) {
 	return mV.mockOpenIDConfig, err
+}
+
+// TODO
+func (mV *mockVerifier) GetRequestObject(state string) (jwt string, err error) {
+	return jwt, err
 }
 
 func (mV *mockVerifier) GenerateToken(clientId, subject, audience string, scope []string, presentation *verifiable.Presentation) (int64, string, error) {

@@ -7,24 +7,44 @@
         "id": "service_all",
         "defaultOidcScope": "did_write",
         "oidcScopes": {
-          "did_write": [
-            {
-              "type": "VerifiableCredential",
-              "trustedParticipantsLists": [
-                {
-                  "type": "ebsi",
-                  "url": "https://tir-pdc.ebsi.fiware.dev"
+          "did_write": {
+            "credentials": [
+              {
+                "type": "VerifiableCredential",
+                "trustedParticipantsLists": [
+                  {
+                    "type": "ebsi",
+                    "url": "https://tir-pdc.ebsi.fiware.dev"
+                  }
+                ],
+                "trustedIssuersLists": [
+                  "https://til-pdc.ebsi.fiware.dev"
+                ],
+                "holderVerification": {
+                  "enabled": false,
+                  "claim": "subject"
                 }
-              ],
-              "trustedIssuersLists": [
-                "https://til-pdc.ebsi.fiware.dev"
-              ],
-              "holderVerification": {
-                "enabled": false,
-                "claim": "subject"
               }
+            ],
+            "presentationDefinition": {
+              "id": "my-pd",
+              "input_descriptors": [
+                {
+                  "id": "my-descriptor",
+                  "constraints": {
+                    "fields": [
+                      {
+                        "id": "my-field",
+                        "path": [ 
+                          "$.vc.my.claim"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
             }
-          ]
+          }
         }
       }
     ]
