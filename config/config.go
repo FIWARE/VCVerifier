@@ -60,7 +60,7 @@ type Verifier struct {
 	Did string `mapstructure:"did"`
 	// Identification to be used for the verifier
 	ClientIdentification ClientIdentification `mapstructure:"clientIdentification"`
-	// supported request modes - currently 'urlEncoded', 'byValue' an 'byReference' are available. In case of byValue, the keyPath has to be set.
+	// supported request modes - currently 'urlEncoded', 'byValue' and 'byReference' are available. In case of byValue, the keyPath has to be set.
 	SupportedModes []string `mapstructure:"supportedModes" default:"urlEncoded"`
 	// address of the (ebsi-compatible) trusted-issuers-registry for verifying the issuer
 	TirAddress string `mapstructure:"tirAddress"`
