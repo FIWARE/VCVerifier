@@ -781,7 +781,7 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 		requestObject, err := v.createAuthenticationRequestObject(redirectUri, state, clientId)
 		loginSession.requestObject = string(requestObject[:])
 
-		logging.Log().Infof("Store session with id %s", state)
+		logging.Log().Debugf("Store session with id %s", state)
 		v.sessionCache.Set(state, loginSession, cache.DefaultExpiration)
 
 		authenticationRequest = v.createAuthenticationRequestByReference(base, state)
