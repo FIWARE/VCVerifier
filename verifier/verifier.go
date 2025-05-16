@@ -293,7 +293,6 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 		err = nil
 	}
 
-	logging.Log().Warnf("Initiated key %s.", logging.PrettyPrintObject(key))
 	verifier = &CredentialVerifier{
 		(&config.Server).Host,
 		verifierConfig.Did,

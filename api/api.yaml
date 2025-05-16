@@ -282,6 +282,7 @@ components:
         enum: 
           - urlEncoded
           - byValue
+          - byReference
     ServiceId:
       name: service_id
       description: The id of the client/service that intents to start the authentication flow. Will be used to retrieve the scope and trust services to be used for verification.

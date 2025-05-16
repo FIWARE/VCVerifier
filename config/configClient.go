@@ -136,8 +136,6 @@ func (cs ConfiguredService) GetCredentials(scope string) []Credential {
 }
 
 func (cs ConfiguredService) GetPresentationDefinition(scope string) PresentationDefinition {
-	logging.Log().Warnf("The ScopeEntry %s", logging.PrettyPrintObject(cs.GetScope(scope)))
-
 	return cs.GetScope(scope).PresentationDefinition
 }
 

@@ -207,12 +207,8 @@ In order to ease the integration into frontends, VCVerifier offers a login-page 
 ### REST-Example
 
 In order to start a ```same-device```-flow(e.g. the credential is hold by the requestor, instead of an additional device like a mobile wallet) call:
-```shell
-            # scope to be requested from the wallet
-            scope: 
-                - VerifiableCredential
-                - CustomerCredential
-            
+
+```shell            
 curl -X 'GET' \
   'http://localhost:8080/api/v1/samedevice?state=274e7465-cc9d-4cad-b75f-190db927e56a'
 ```
@@ -311,12 +307,8 @@ configRepo:
 
 ### Gaia-X Registry
 
-When using the [Gaia-X Digital Clearing House's](https://gaia-x.eu/services-deliverables/digital-clearing-house/) Registry Services, the issuer to be checked needs to fullfill the requirements of 
-            # scope to be requested from the wallet
-            scope: 
-                - VerifiableCredential
-                - CustomerCredential
-            a Gaia-X participant. Thus, only did:web is supported for such and they need to provide a valid ```x5u``` location as part of their ```publicKeyJwk```. Usage of such registries can than be configured as following:
+When using the [Gaia-X Digital Clearing House's](https://gaia-x.eu/services-deliverables/digital-clearing-house/) Registry Services, the issuer to be checked needs to fullfill the requirements of a Gaia-X participant. Thus, only did:web is supported for such and they need to provide a valid ```x5u``` location as part of their ```publicKeyJwk```. Usage of such registries can than be configured as following:
+
 ```yaml
 configRepo:
     # static configuration for services
@@ -395,7 +387,7 @@ Decoded:
     "input_descriptors": null,
     "format": null
   },
-  "redirect_uri": "https://verifier.org/api/v1/authentication_response",
+  "redirect_uri": "https://verifier.org/api/v1/authbyValentication_response",
   "response_type": "vp_token",
   "scope": "openid",
   "state": "randomState"
@@ -413,6 +405,7 @@ The object than can be retrived via:
 ```shell
     curl https://verifier.org/api/v1/request/randomState
 ```
+The response will contain an object like already shown in [byValue](#byvalue).
 
 ## API
 
