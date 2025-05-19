@@ -39,13 +39,31 @@ func Test_getServices(t *testing.T) {
 		{
 			Id:               "service_all",
 			DefaultOidcScope: "did_write",
-			ServiceScopes: map[string][]Credential{
+			ServiceScopes: map[string]ScopeEntry{
 				"did_write": {
-					{
-						Type:                     "VerifiableCredential",
-						TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
-						TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
-						HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
+					Credentials: []Credential{
+						{
+							Type:                     "VerifiableCredential",
+							TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
+							TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
+							HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
+						},
+					},
+					PresentationDefinition: PresentationDefinition{
+						Id: "my-pd",
+						InputDescriptors: []InputDescriptor{
+							{
+								Id: "my-descriptor",
+								Constraints: Constraints{
+									Fields: []Fields{
+										{
+											Id:   "my-field",
+											Path: []string{"$.vc.my.claim"},
+										},
+									},
+								},
+							},
+						},
 					},
 				},
 			},

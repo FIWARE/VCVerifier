@@ -38,6 +38,7 @@ var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback addr
 var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could not be decoded."}
 var ErrorMessageUnableToDecodeCredential = ErrorMessage{"invalid_token", "Could not read the credential(s) inside the token."}
 var ErrorMessageUnableToDecodeHolder = ErrorMessage{"invalid_token", "Could not read the holder inside the token."}
+var ErrorMessageNoSuchSession = ErrorMessage{"no_session", "Session with the requested id is not available."}
 
 func getApiVerifier() verifier.Verifier {
 	if apiVerifier == nil {
@@ -188,7 +189,13 @@ func StartSIOPSameDevice(c *gin.Context) {
 		logging.Log().Infof("Start a login flow for a not specified client.")
 	}
 
-	redirect, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId)
+	requestMode, requestModeExists := c.GetQuery("request_mode")
+	if !requestModeExists {
+		logging.Log().Infof("Using default request mode %s.", DEFAULT_REQUEST_MODE)
+		requestMode = DEFAULT_REQUEST_MODE
+	}
+
+	redirect, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, requestMode)
 	if err != nil {
 		logging.Log().Warnf("Error starting the same-device flow. Err: %v", err)
 		c.AbortWithStatusJSON(500, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
@@ -247,6 +254,20 @@ func GetVerifierAPIAuthenticationResponse(c *gin.Context) {
 		return
 	}
 	handleAuthenticationResponse(c, state, presentation)
+}
+
+// GetRequestByReference - Get the request object by reference
+func GetRequestByReference(c *gin.Context) {
+	sessionId := c.Param("id")
+
+	jwt, err := verifier.GetVerifier().GetRequestObject(sessionId)
+	if err != nil {
+		logging.Log().Debugf("No request for  %s. Err: %v", sessionId, err)
+		c.AbortWithStatusJSON(404, ErrorMessageNoSuchSession)
+		return
+	}
+
+	c.String(http.StatusOK, jwt)
 }
 
 func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
@@ -327,7 +348,13 @@ func VerifierAPIStartSIOP(c *gin.Context) {
 		logging.Log().Infof("Start a login flow for a not specified client.")
 	}
 
-	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId)
+	requestMode, requestModeExists := c.GetQuery("request_mode")
+	if !requestModeExists {
+		logging.Log().Infof("Using default request mode %s.", DEFAULT_REQUEST_MODE)
+		requestMode = DEFAULT_REQUEST_MODE
+	}
+
+	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, requestMode)
 	if err != nil {
 		c.AbortWithStatusJSON(500, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
 		return

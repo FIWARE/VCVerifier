@@ -102,6 +102,13 @@ var routes = Routes{
 	},
 
 	{
+		"GetRequestByReference",
+		http.MethodGet,
+		"/api/v1/request/:id",
+		GetRequestByReference,
+	},
+
+	{
 		"VerifierAPIStartSIOP",
 		http.MethodGet,
 		"/api/v1/startsiop",

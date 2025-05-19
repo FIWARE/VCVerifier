@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
-	"os"
 
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
@@ -27,7 +26,7 @@ import (
 /**
  * Global file accessor
  */
-var localFileAccessor fileAccessor = diskFileAccessor{}
+var localFileAccessor common.FileAccessor = common.DiskFileAccessor{}
 
 var ErrorTokenProviderNoKey = errors.New("no_key_configured")
 var ErrorTokenProviderNoVC = errors.New("no_vc_configured")
@@ -191,17 +190,6 @@ func getCredential(vcPath string) (vc *verifiable.Credential, err error) {
 	logging.Log().Warnf("The cred %s", string(c))
 
 	return vc, err
-}
-
-// file system interfaces
-
-type fileAccessor interface {
-	ReadFile(filename string) ([]byte, error)
-}
-type diskFileAccessor struct{}
-
-func (diskFileAccessor) ReadFile(filename string) ([]byte, error) {
-	return os.ReadFile(filename)
 }
 
 // NewRS256Signer creates RS256Signer.

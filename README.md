@@ -104,6 +104,18 @@ logging:
 verifier: 
     # did to be used by the verifier.
     did:
+    # identification of the verifier in communication with wallets 
+    clientIdentification:
+        # identification used by the verifier when requesting authorization. Can be a did, but also methods like x509_san_dns
+        id: 
+        # path to the signing key(in pem format) for request object. Needs to correspond with the id
+        keyPath:
+        # algorithm to be used for signing the request. Needs to match the signing key
+        requestKeyAlgorithm: 
+        # depending on the id type, the certificate chain needs to be included in the object(f.e. in case of x509_san_dns)
+        certificatePath: 
+    # supported modes for requesting authentication. in case of byReference and byValue, the clientIdentification needs to be properly configured
+    supportedModes: ["urlEncoded", "byReference","byValue"]
     # address of the (ebsi-compliant) trusted-issuers-registry to be used for verifying the issuer of a received credential
     tirAddress:
     # Expiry(in seconds) of an authentication session. After that, a new flow needs to be initiated.
@@ -118,6 +130,8 @@ verifier:
 	# * `baseContext`: validates that only the fields and values (when applicable)are present in the document. No extra fields are allowed (outside of credentialSubject).
 	# Default is set to `none` to ensure backwards compatibility
     validationMode: 
+    # algorithm to be used for the jwt signatures - currently supported: RS256 and ES256, default is RS256
+    keyAlgorithm: 
 
 # configuration of the service to retrieve configuration for
 configRepo:
@@ -126,28 +140,57 @@ configRepo:
     # static configuration for services
     services: 
         # name of the service to be configured
-        testService: 
-            # scope to be requested from the wallet
-            scope: 
-                - VerifiableCredential
-                - CustomerCredential
-            # trusted participants endpoint configuration 
-            trustedParticipants:
-                # the credentials type to configure the endpoint(s) for
-                VerifiableCredential: 
-                - https://tir-pdc.ebsi.fiware.dev
-                # the credentials type to configure the endpoint(s) for
-                CustomerCredential: 
-                - https://tir-pdc.ebsi.fiware.dev
-            # trusted issuers endpoint configuration
-            trustedIssuers:
-                # the credentials type to configure the endpoint(s) for
-                VerifiableCredential: 
-                - https://tir-pdc.ebsi.fiware.dev
-                # the credentials type to configure the endpoint(s) for
-                CustomerCredential: 
-                - https://tir-pdc.ebsi.fiware.dev
-
+        -   id: testService 
+            # default scope for the service
+            defaultOidcScope: "default"
+            # the concrete scopes for the service, defining the trust for credentials and the presentation definition to be requested
+            oidcScopes:
+                # the concrete scope configuration
+                default:
+                    # credentials and their trust configuration
+                    credentials: 
+                        -   type: CustomerCredential
+                            # trusted participants endpoint configuration 
+                            trustedParticipantsLists:
+                                # the credentials type to configure the endpoint(s) for
+                                VerifiableCredential: 
+                                - https://tir-pdc.ebsi.fiware.dev
+                                # the credentials type to configure the endpoint(s) for
+                                CustomerCredential: 
+                                - https://tir-pdc.ebsi.fiware.dev
+                            # trusted issuers endpoint configuration
+                            trustedIssuersLists:
+                                # the credentials type to configure the endpoint(s) for
+                                VerifiableCredential: 
+                                - https://tir-pdc.ebsi.fiware.dev
+                                # the credentials type to configure the endpoint(s) for
+                                CustomerCredential: 
+                                - https://tir-pdc.ebsi.fiware.dev
+                            # configuration for verifying the holder of a credential
+                            holderVerification:
+                                # should it be checked?
+                                enabled: true
+                                # claim to retrieve the holder from
+                                claim: subject
+                    # credentials and claims to be requested
+                    presentationDefinition:
+                        id: my-presentation
+                        # List of requested inputs
+                        input_descriptors:
+                            id: my-descriptor
+	                        # defines the infromation to be requested
+                            constraints:
+                                # array of objects to describe the information to be included
+                                fields: 
+                                    - id: my-field
+                                      path:
+                                        - $.vct
+                                      filter:
+                                        const: "CustomerCredential" 
+                            # format of the credential to be requested
+                            format:
+                                'sd+jwt-vc': 
+                                    alg: ES256
 ```
 #### Templating
 
@@ -164,7 +207,8 @@ In order to ease the integration into frontends, VCVerifier offers a login-page 
 ### REST-Example
 
 In order to start a ```same-device```-flow(e.g. the credential is hold by the requestor, instead of an additional device like a mobile wallet) call:
-```shell
+
+```shell            
 curl -X 'GET' \
   'http://localhost:8080/api/v1/samedevice?state=274e7465-cc9d-4cad-b75f-190db927e56a'
 ```
@@ -235,6 +279,11 @@ configRepo:
                 # the credentials type to configure the endpoint(s) for
                 VerifiableCredential: 
                 - type: ebsi 
+            # scope to be requested from the wallet
+            scope: 
+                - VerifiableCredential
+                - CustomerCredential
+            
                   url: https://tir-pdc.ebsi.fiware.dev
 ```
 
@@ -259,6 +308,7 @@ configRepo:
 ### Gaia-X Registry
 
 When using the [Gaia-X Digital Clearing House's](https://gaia-x.eu/services-deliverables/digital-clearing-house/) Registry Services, the issuer to be checked needs to fullfill the requirements of a Gaia-X participant. Thus, only did:web is supported for such and they need to provide a valid ```x5u``` location as part of their ```publicKeyJwk```. Usage of such registries can than be configured as following:
+
 ```yaml
 configRepo:
     # static configuration for services
@@ -297,6 +347,65 @@ configRepo:
                 - type: gaia-x 
                   url: https://registry.lab.gaia-x.eu
 ```
+
+### Request modes
+
+In order to support various wallets, the verifier supports 3 modes of requesting authentication:
+- Passing as URL with encoded parameters: "urlEncoded"
+- Passing a request object as value: "byValue"
+- Passing a request object by reference: "byReference"
+
+Following the [RFC9101](https://www.rfc-editor.org/rfc/rfc9101.html), in the second and third case the request is encoded as a signed JWT. Therefor ```clientIdentification``` for the verifier needs to be properly configured.
+
+The mode can be set during the intial requests, by sending the parameter "requestMode"(see [API Spec](./api/api.yaml)).Since requestObjects can become large and therefor also the QR-Codes generated out of them, the 3rd mode is recommended.
+
+#### urlEncoded
+
+Example:
+```
+    openid4vp://?response_type=vp_token&response_mode=direct_post&client_id=did:key:verifier&redirect_uri=https://verifier.org/api/v1/authentication_response&state=randomState&nonce=randomNonce
+```
+
+#### byValue
+Example:
+```			
+    openid4vp://?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJwcmVzZW50YXRpb25fZGVmaW5pdGlvbiI6eyJpZCI6IiIsImlucHV0X2Rlc2NyaXB0b3JzIjpudWxsLCJmb3JtYXQiOm51bGx9LCJyZWRpcmVjdF91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJzY29wZSI6Im9wZW5pZCIsInN0YXRlIjoicmFuZG9tU3RhdGUifQ.Z0xv_E9vvhRN2nBeKQ49LgH8lkjkX-weR7R5eCmX9ebGr1aE8_6usa2PO9nJ4LRv8oWMg0q9fsQ2x5DTYbvLdA
+```
+Decoded:
+```json
+{
+  "alg": "ES256",
+  "typ": "oauth-authz-req+jwt"
+}.
+{
+  "client_id": "did:key:verifier",
+  "exp": 30,
+  "iss": "did:key:verifier",
+  "nonce": "randomNonce",
+  "presentation_definition": {
+    "id": "",
+    "input_descriptors": null,
+    "format": null
+  },
+  "redirect_uri": "https://verifier.org/api/v1/authbyValentication_response",
+  "response_type": "vp_token",
+  "scope": "openid",
+  "state": "randomState"
+}.
+signature
+```
+
+#### byReference
+
+Example:
+```
+    openid4vp://?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/randomState&request_uri_method=get"
+```
+The object than can be retrieved via:
+```shell
+    curl https://verifier.org/api/v1/request/randomState
+```
+The response will contain an object like already shown in [byValue](#byvalue).
 
 ## API
 

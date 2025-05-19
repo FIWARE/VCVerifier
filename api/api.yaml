@@ -18,9 +18,10 @@ paths:
         - $ref: '#/components/parameters/QueryState'
         - $ref: '#/components/parameters/ClientCallback'
         - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/RequestMode'
       operationId: VerifierPageDisplayQRSIOP
       summary: Presents a qr as starting point for the auth process
-      description: Returns a rendered html with a QR encoding the login-starting point for the siop flow - e.g. 'openid://?scope=somethign&response_type=rt&response_mode=rm&client_id=ci&redirect_uri=uri&state=state&nonce=nonce'
+      description: Returns a rendered html with a QR encoding the login-starting point for the siop flow - e.g. 'openid://?scope=somethign&response_type=rt&response_mode=rm&client_id=ci&redirect_uri=uri&state=state&nonce=nonce&request_mode=urlEncoded'
       responses:
         '200':
           description: A rendered page, containing the qr
@@ -34,7 +35,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorMessage'
-
+                
+  /api/v1/request/{id}: 
+    get:
+      tags:
+        - api
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      operationId: GetRequestByReference
+      summary: Get the request object by reference
+      description: Returns the request object by reference as defined in https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-5
+      responses:
+        '200':
+          description: The jwt encoded request object
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: In case of broken requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorMessage'      
+  
   /api/v1/samedevice:
     get:
       tags:
@@ -248,6 +272,17 @@ components:
       schema: 
         type: string
         example: packet-delivery-portal
+    RequestMode:
+      name: request_mode
+      description: Mode to be used for the authorization request.
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: 
+          - urlEncoded
+          - byValue
+          - byReference
     ServiceId:
       name: service_id
       description: The id of the client/service that intents to start the authentication flow. Will be used to retrieve the scope and trust services to be used for verification.

@@ -47,6 +47,7 @@ func Test_ReadConfig(t *testing.T) {
 					},
 					ValidationMode: "none",
 					KeyAlgorithm:   "RS256",
+					SupportedModes: []string{"urlEncoded"},
 				},
 				Logging: Logging{
 					Level:       "DEBUG",
@@ -60,12 +61,31 @@ func Test_ReadConfig(t *testing.T) {
 						{
 							Id:               "testService",
 							DefaultOidcScope: "someScope",
-							ServiceScopes: map[string][]Credential{
+							ServiceScopes: map[string]ScopeEntry{
 								"someScope": {
-									{
-										Type:                     "VerifiableCredential",
-										TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
-										TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
+									Credentials: []Credential{
+
+										{
+											Type:                     "VerifiableCredential",
+											TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
+											TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
+										},
+									},
+									PresentationDefinition: PresentationDefinition{
+										Id: "my-pd",
+										InputDescriptors: []InputDescriptor{
+											{
+												Id: "my-descriptor",
+												Constraints: Constraints{
+													Fields: []Fields{
+														{
+															Id:   "my-field",
+															Path: []string{"$.vc.my.claim"},
+														},
+													},
+												},
+											},
+										},
 									},
 								},
 							},
@@ -91,6 +111,7 @@ func Test_ReadConfig(t *testing.T) {
 					SessionExpiry:  30,
 					ValidationMode: "none",
 					KeyAlgorithm:   "RS256",
+					SupportedModes: []string{"urlEncoded"},
 				},
 				Logging: Logging{
 					Level:       "INFO",

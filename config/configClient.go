@@ -40,9 +40,16 @@ type ServicesResponse struct {
 
 type ConfiguredService struct {
 	// Default OIDC scope to be used if none is specified
-	DefaultOidcScope string                  `json:"defaultOidcScope" mapstructure:"defaultOidcScope"`
-	ServiceScopes    map[string][]Credential `json:"oidcScopes" mapstructure:"oidcScopes"`
-	Id               string                  `json:"id" mapstructure:"id"`
+	DefaultOidcScope string                `json:"defaultOidcScope" mapstructure:"defaultOidcScope"`
+	ServiceScopes    map[string]ScopeEntry `json:"oidcScopes" mapstructure:"oidcScopes"`
+	Id               string                `json:"id" mapstructure:"id"`
+}
+
+type ScopeEntry struct {
+	// credential types with their trust configuration
+	Credentials []Credential `json:"credentials" mapstructure:"credentials"`
+	// 	Proofs to be requested - see https://identity.foundation/presentation-exchange/#presentation-definition
+	PresentationDefinition PresentationDefinition `json:"presentationDefinition" mapstructure:"presentationDefinition"`
 }
 
 type Credential struct {
@@ -70,6 +77,45 @@ type HolderVerification struct {
 	Claim string `json:"claim" mapstructure:"claim"`
 }
 
+type PresentationDefinition struct {
+	// Id of the definition
+	Id string `json:"id" mapstructure:"id"`
+	// List of requested inputs
+	InputDescriptors []InputDescriptor `json:"input_descriptors" mapstructure:"input_descriptors"`
+	// Format of the credential to be requested
+	Format map[string]FormatObject `json:"format" mapstructure:"format"`
+}
+
+type FormatObject struct {
+	// list of algorithms to be requested for credential - f.e. ES256
+	Alg []string `json:"alg" mapstructure:"alg"`
+}
+
+type InputDescriptor struct {
+	// Id of the descriptor
+	Id string `json:"id" mapstructure:"id"`
+	// defines the infromation to be requested
+	Constraints Constraints `json:"constraints" mapstructure:"constraints"`
+	// Format of the credential to be requested
+	Format map[string]FormatObject `json:"format" mapstructure:"format"`
+}
+
+type Constraints struct {
+	// array of objects to describe the information to be included
+	Fields []Fields `json:"fields" mapstructure:"fields"`
+}
+
+type Fields struct {
+	// Id of the field
+	Id string `json:"id" mapstructure:"id"`
+	// A list of JsonPaths for the requested claim
+	Path []string `json:"path" mapstructure:"path"`
+	// Does it need to be included?
+	Optional bool `json:"optional" mapstructure:"optional" default:"true"`
+	// a custom filter to be applied on the fields, f.e. restrict to certain values
+	Filter interface{} `json:"filter" mapstructure:"filter"`
+}
+
 func (cs ConfiguredService) GetRequiredCredentialTypes(scope string) []string {
 	types := []string{}
 	for _, credential := range cs.GetCredentials(scope) {
@@ -78,11 +124,19 @@ func (cs ConfiguredService) GetRequiredCredentialTypes(scope string) []string {
 	return types
 }
 
-func (cs ConfiguredService) GetCredentials(scope string) []Credential {
+func (cs ConfiguredService) GetScope(scope string) ScopeEntry {
 	if scope != SERVICE_DEFAULT_SCOPE {
 		return cs.ServiceScopes[scope]
 	}
 	return cs.ServiceScopes[cs.DefaultOidcScope]
+}
+
+func (cs ConfiguredService) GetCredentials(scope string) []Credential {
+	return cs.GetScope(scope).Credentials
+}
+
+func (cs ConfiguredService) GetPresentationDefinition(scope string) PresentationDefinition {
+	return cs.GetScope(scope).PresentationDefinition
 }
 
 func (cs ConfiguredService) GetCredential(scope, credentialType string) (Credential, bool) {
