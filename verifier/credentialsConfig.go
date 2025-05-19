@@ -38,6 +38,12 @@ type CredentialsConfig interface {
 	RequiredCredentialTypes(serviceIdentifier string, scope string) (credentialTypes []string, err error)
 	// Get holder verification
 	GetHolderVerification(serviceIdentifier string, scope string, credentialType string) (isEnabled bool, holderClaim string, err error)
+	// Get compliance requirement
+	GetComplianceRequired(serviceIdentifier string, scope string, credentialType string) (isRequired bool, err error)
+	// Get include in jwt
+	GetJwtInclusion(serviceIdentifier string, scope string, credentialType string) (jwtInclusion config.JwtInclusion, err error)
+	// If flatClaims should be used
+	GetFlatClaims(serviceIdentifier string, scope string) (flatClaims bool, err error)
 }
 
 type ServiceBackedCredentialsConfig struct {
@@ -177,6 +183,48 @@ func (cc ServiceBackedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifie
 	}
 	logging.Log().Debugf("No trusted issuers for %s - %s", serviceIdentifier, credentialType)
 	return []string{}, nil
+}
+
+func (cc ServiceBackedCredentialsConfig) GetComplianceRequired(serviceIdentifier string, scope string, credentialType string) (isRequired bool, err error) {
+	logging.Log().Debugf("Get compliance requirement for %s - %s - %s.", serviceIdentifier, scope, credentialType)
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
+		if ok {
+			logging.Log().Debugf("Found compliance requirement for %s - %v", credentialType, credential.RequireCompliance)
+			return credential.RequireCompliance, nil
+		}
+	}
+	logging.Log().Debugf("No compliance requirement for %s - %s", serviceIdentifier, credentialType)
+	return false, nil
+}
+
+func (cc ServiceBackedCredentialsConfig) GetFlatClaims(serviceIdentifier string, scope string) (flatClaims bool, err error) {
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		logging.Log().Debugf("Found scope for %s", serviceIdentifier)
+		configuredService := cacheEntry.(config.ConfiguredService)
+		scope, ok := configuredService.ServiceScopes[scope]
+		if ok {
+			return scope.FlatClaims, nil
+		}
+	}
+	logging.Log().Debugf("No scope entry and flatclaims config for %s - %s", serviceIdentifier, scope)
+	return false, nil
+}
+
+func (cc ServiceBackedCredentialsConfig) GetJwtInclusion(serviceIdentifier string, scope string, credentialType string) (jwtInclusion config.JwtInclusion, err error) {
+	logging.Log().Debugf("Get jwt inclusion for %s - %s - %s.", serviceIdentifier, scope, credentialType)
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
+		if ok {
+			logging.Log().Debugf("Found jwt inclusion for %s - %v", credentialType, credential.RequireCompliance)
+			return credential.JwtInclusion, nil
+		}
+	}
+	logging.Log().Debugf("No jwt inclusion for %s - %s", serviceIdentifier, credentialType)
+	return jwtInclusion, nil
 }
 
 func (cc ServiceBackedCredentialsConfig) GetHolderVerification(serviceIdentifier string, scope string, credentialType string) (isEnabled bool, holderClaim string, err error) {
