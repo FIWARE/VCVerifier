@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
+	"flag"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -575,7 +576,7 @@ func getVC(id string) *verifiable.Credential {
 			Issued:  timeWrapper,
 			Expired: timeWrapper,
 			Subject: []verifiable.Subject{
-				verifiable.Subject{
+				{
 					ID: id,
 					CustomFields: map[string]interface{}{
 						"type":   "gx:NaturalParticipent",
@@ -715,6 +716,30 @@ func getECDSAKey() (key jwk.Key) {
 	testKey, _ := jwk.Import(priv)
 
 	return testKey
+}
+
+func TestGenerateToken(t *testing.T) {
+
+	logging.Configure(true, "DEBUG", true, []string{})
+
+	testKey := getECDSAKey()
+
+	type test struct {
+		testName         string
+		testClientId     string
+		testAudience     string
+		testScopes       []string
+		testPresentation *verifiable.Presentation
+		signingKey       jwk.Key
+		credentialScopes map[string]map[string]config.ScopeEntry
+		mockConfigError  error
+		expectedJWT      jwt.Token
+		expectedError    error
+	}
+
+	tests := []test{
+		"", "testClient", "holder?", "testClient", []string{"default"}, nil, testKey, map[string]map[string]config.ScopeEntry{"testClient": map[string]config.ScopeEntry{"default": configModel.ScopeEntry{FlatClaims: false, Credentials: []configModel.Credential{configModel.Credential{Type: "MyCredential", HolderVerification: false, JwtInclusion: configModel.JwtInclusion{Enabled: true, FullInclusion: true }}}}}}
+	}
 }
 
 func TestGetToken(t *testing.T) {

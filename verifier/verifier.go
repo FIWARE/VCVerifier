@@ -538,7 +538,7 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 			flatClaims, _ = v.credentialsConfig.GetFlatClaims(clientId, scope)
 		}
 	}
-	token, err := v.generateJWT(credentialsToBeIncluded, subject, audience, flatClaims)
+	token, err := v.generateJWT(credentialsToBeIncluded, holder, audience, flatClaims)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create the token. Err: %v", err)
 		return 0, "", err
