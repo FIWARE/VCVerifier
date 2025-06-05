@@ -24,7 +24,7 @@ func (cvs *ComplianceValidationService) ValidateVC(verifiableCredential *verifia
 	logging.Log().Debugf("Validate compliance for %s", logging.PrettyPrintObject(verifiableCredential))
 	defer func() {
 		if recErr := recover(); recErr != nil {
-			logging.Log().Warnf("Was not able to convert context. Err: %v", recErr)
+			logging.Log().Warnf("ComplianceValidationService: Was not able to convert context. Err: %v", recErr)
 			err = ErrorCannotConverContext
 		}
 	}()

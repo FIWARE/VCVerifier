@@ -694,6 +694,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 				}
 			}
 
+			logging.Log().Debugf("Validate with context %v", verificationContext)
 			result, err := verificationService.ValidateVC(credential, verificationContext)
 			if err != nil {
 				logging.Log().Warnf("Failed to verify credential %s. Err: %v", logging.PrettyPrintObject(credential), err)
@@ -1055,8 +1056,9 @@ func (v *CredentialVerifier) createAuthenticationRequestByReference(base string,
 func (v *CredentialVerifier) createAuthenticationRequestObject(redirect_uri string, state string, clientId string) (requestObject []byte, err error) {
 	jwtBuilder := jwt.NewBuilder().Issuer(v.did)
 	jwtBuilder.Claim("response_type", "vp_token")
+	jwtBuilder.Claim("response_mode", "direct_post")
 	jwtBuilder.Claim("client_id", v.clientIdentification.Id)
-	jwtBuilder.Claim("redirect_uri", redirect_uri)
+	jwtBuilder.Claim("response_uri", redirect_uri)
 	jwtBuilder.Claim("state", state)
 	jwtBuilder.Claim("scope", "openid")
 	jwtBuilder.Claim("nonce", v.nonceGenerator.GenerateNonce())
@@ -1270,6 +1272,7 @@ func loadCertChainFromPEM(path string) ([]*x509.Certificate, error) {
 type RequestObject struct {
 	Issuer       string `json:"iss"`
 	ResponseType string `json:"response_type"`
+	ResponseMode string `json:"response_mode"`
 	ClientId     string `json:"client_id"`
 	RedirectUri  string `json:"redirect_uri"`
 	Scope        string `json:"scope"`
