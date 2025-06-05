@@ -1000,13 +1000,13 @@ func appendClaims(builder *jwt.Builder, claims []map[string]interface{}) {
 }
 
 // creates an authenticationRequest string from the given parameters
-func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, redirect_uri string, state string, clientId string) string {
+func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, response_uri string, state string, clientId string) string {
 
 	// We use a template to generate the final string
 	template := "{{base}}?response_type=vp_token" +
 		"&response_mode=direct_post" +
 		"&client_id={{client_id}}" +
-		"&redirect_uri={{redirect_uri}}" +
+		"&response_uri={{response_uri}}" +
 		"&state={{state}}" +
 		"&nonce={{nonce}}"
 
@@ -1026,7 +1026,7 @@ func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, 
 		"base":         base,
 		"scope":        scope,
 		"client_id":    v.clientIdentification.Id,
-		"redirect_uri": redirect_uri,
+		"response_uri": response_uri,
 		"state":        state,
 		"nonce":        v.nonceGenerator.GenerateNonce(),
 	})
@@ -1053,12 +1053,12 @@ func (v *CredentialVerifier) createAuthenticationRequestByReference(base string,
 	return authRequest
 }
 
-func (v *CredentialVerifier) createAuthenticationRequestObject(redirect_uri string, state string, clientId string) (requestObject []byte, err error) {
+func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri string, state string, clientId string) (requestObject []byte, err error) {
 	jwtBuilder := jwt.NewBuilder().Issuer(v.did)
 	jwtBuilder.Claim("response_type", "vp_token")
 	jwtBuilder.Claim("response_mode", "direct_post")
 	jwtBuilder.Claim("client_id", v.clientIdentification.Id)
-	jwtBuilder.Claim("response_uri", redirect_uri)
+	jwtBuilder.Claim("response_uri", response_uri)
 	jwtBuilder.Claim("state", state)
 	jwtBuilder.Claim("scope", "openid")
 	jwtBuilder.Claim("nonce", v.nonceGenerator.GenerateNonce())
@@ -1125,13 +1125,13 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(redirect_uri stri
 }
 
 // creates an authenticationRequest string from the given parameters
-func (v *CredentialVerifier) createAuthenticationRequestByValue(base string, redirect_uri string, state string, clientId string) (request string, err error) {
+func (v *CredentialVerifier) createAuthenticationRequestByValue(base string, response_uri string, state string, clientId string) (request string, err error) {
 
 	// We use a template to generate the final string
 	template := "{{base}}?client_id={{client_id}}" +
 		"&request={{request}}"
 
-	signedRequest, err := v.createAuthenticationRequestObject(redirect_uri, state, clientId)
+	signedRequest, err := v.createAuthenticationRequestObject(response_uri, state, clientId)
 
 	t := fasttemplate.New(template, "{{", "}}")
 	authRequest := t.ExecuteString(map[string]interface{}{
@@ -1274,7 +1274,7 @@ type RequestObject struct {
 	ResponseType string `json:"response_type"`
 	ResponseMode string `json:"response_mode"`
 	ClientId     string `json:"client_id"`
-	RedirectUri  string `json:"redirect_uri"`
+	ResponseUri  string `json:"response_uri"`
 	Scope        string `json:"scope"`
 	Nonce        string `json:"nonce"`
 	State        string `json:"state"`
