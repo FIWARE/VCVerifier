@@ -19,6 +19,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	common "github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/config"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
@@ -431,11 +432,10 @@ func (v *CredentialVerifier) GetJWKS() jwk.Set {
 	return jwks
 }
 
-func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, scopes []string, verifiablePresentation *verifiable.Presentation) (int64, string, error) {
-	// collect all submitted credential types
-	credentialsByType := map[string][]*verifiable.Credential{}
-	credentialTypes := []string{}
-	holder := verifiablePresentation.Holder
+func extractCredentialTypes(verifiablePresentation *verifiable.Presentation) (credentialsByType map[string][]*verifiable.Credential, credentialTypes []string) {
+
+	credentialsByType = map[string][]*verifiable.Credential{}
+	credentialTypes = []string{}
 	for _, vc := range verifiablePresentation.Credentials() {
 		for _, credentialType := range vc.Contents().Types {
 			if _, ok := credentialsByType[credentialType]; !ok {
@@ -445,6 +445,35 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 		}
 		credentialTypes = append(credentialTypes, vc.Contents().Types...)
 	}
+	return
+}
+
+func getCredentialsNeededForScope(verificationContext TrustRegistriesValidationContext, credentialsByType map[string][]*verifiable.Credential) []*verifiable.Credential {
+	credentialTypesNeededForScope := verificationContext.GetRequiredCredentialTypes()
+	credentialsNeededForScope := []*verifiable.Credential{}
+	seen := make(map[*verifiable.Credential]bool)
+	// prevent duplicate checks
+	for _, credentialType := range credentialTypesNeededForScope {
+		if cred, ok := credentialsByType[credentialType]; ok {
+			credentialsNeededForScope = append(credentialsNeededForScope, cred...)
+			for _, c := range cred {
+				if !seen[c] {
+					credentialsNeededForScope = append(credentialsNeededForScope, c)
+					seen[c] = true
+				}
+			}
+		}
+	}
+	return credentialsNeededForScope
+}
+
+func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, scopes []string, verifiablePresentation *verifiable.Presentation) (int64, string, error) {
+	// collect all submitted credential types
+	credentialsByType, credentialTypes := extractCredentialTypes(verifiablePresentation)
+
+	holder := verifiablePresentation.Holder
+	var credentialsToBeIncluded []map[string]interface{}
+	flatClaims := false
 
 	// Go through all requested scopes and create a verification context
 	for _, scope := range scopes {
@@ -453,13 +482,8 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 			logging.Log().Warnf("Was not able to create a valid verification context. Credential will be rejected. Err: %v", err)
 			return 0, "", ErrorVerficationContextSetup
 		}
-		credentialTypesNeededForScope := verificationContext.GetRequiredCredentialTypes()
-		credentialsNeededForScope := []*verifiable.Credential{}
-		for _, credentialType := range credentialTypesNeededForScope {
-			if cred, ok := credentialsByType[credentialType]; ok {
-				credentialsNeededForScope = append(credentialsNeededForScope, cred...)
-			}
-		}
+		credentialsNeededForScope := getCredentialsNeededForScope(verificationContext, credentialsByType)
+
 		for _, credential := range credentialsNeededForScope {
 			holderValidationContexts, err := v.getHolderValidationContext(clientId, scope, credentialTypes, holder)
 			if err != nil {
@@ -489,10 +513,32 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 					return 0, "", ErrorInvalidVC
 				}
 			}
+			complianceValidationContexts, err := v.getComplianceValidationContext(clientId, scope, credential, verifiablePresentation)
+			if err != nil {
+				logging.Log().Warnf("Was not able to create the compliance validation context. Credential will be rejected. Err: %v", err)
+				return 0, "", ErrorVerficationContextSetup
+			}
+			complianceValidationService := ComplianceValidationService{}
+			for _, complianceValidationContext := range complianceValidationContexts {
+				logging.Log().Debugf("Validate credential %v with context %v", credential, complianceValidationContext)
+				result, err := complianceValidationService.ValidateVC(credential, complianceValidationContext)
+				if err != nil {
+					logging.Log().Warnf("Failed to verify credential %s. Err: %v", logging.PrettyPrintObject(credential), err)
+					return 0, "", err
+				}
+				if !result {
+					logging.Log().Infof("VC %s is not valid.", logging.PrettyPrintObject(credential))
+					return 0, "", ErrorInvalidVC
+				}
+			}
+			shouldBeIncluded, inclusionConfig := v.shouldBeIncluded(clientId, scope, credential.Contents().Types)
+			if shouldBeIncluded {
+				credentialsToBeIncluded = append(credentialsToBeIncluded, buildInclusion(credential, inclusionConfig))
+			}
+			flatClaims, _ = v.credentialsConfig.GetFlatClaims(clientId, scope)
 		}
 	}
-	// FIXME How shall we handle VCs that are not needed for the give scope? Just ignore them and not include in the token?
-	token, err := v.generateJWT(verifiablePresentation, subject, audience)
+	token, err := v.generateJWT(credentialsToBeIncluded, holder, audience, flatClaims)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create the token. Err: %v", err)
 		return 0, "", err
@@ -520,6 +566,75 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 		return 0, "", err
 	}
 	return expiration, string(tokenBytes), nil
+}
+
+func buildInclusion(credential *verifiable.Credential, inclusionConfig config.JwtInclusion) (inclusion map[string]interface{}) {
+	if inclusionConfig.FullInclusion {
+		return credential.ToRawJSON()
+	}
+
+	inclusion = make(map[string]interface{})
+	for _, claim := range inclusionConfig.ClaimsToInclude {
+		pathParts := strings.Split(claim.OriginalKey, ".")
+		if val, ok := getValueFromPath(credential.ToRawJSON(), pathParts); ok {
+			if claim.NewKey != "" {
+				setValueAtPath(inclusion, strings.Split(claim.NewKey, "."), val)
+			} else {
+				setValueAtPath(inclusion, strings.Split(claim.OriginalKey, "."), val)
+			}
+		}
+	}
+	return inclusion
+}
+
+// retrieve the value from  the given path in the map
+func getValueFromPath(m map[string]interface{}, path []string) (interface{}, bool) {
+	currentPosition := m
+	for i, key := range path {
+		if i == len(path)-1 {
+			// end of the path, get the value
+			val, ok := currentPosition[key]
+			return val, ok
+		}
+		// get the sub-object
+		next, ok := currentPosition[key].(map[string]interface{})
+		if !ok {
+			// nothing available at the given path
+			return nil, false
+		}
+		currentPosition = next
+	}
+	return nil, false
+}
+
+// set the value at the given path in the map
+func setValueAtPath(m map[string]interface{}, path []string, value interface{}) {
+	currentPosition := m
+	for i, key := range path {
+		if i == len(path)-1 {
+			// end of the path, set the value
+			currentPosition[key] = value
+			return
+		}
+		if _, ok := currentPosition[key]; !ok {
+			// no sub-object exists in the given map, create a new one
+			currentPosition[key] = make(map[string]interface{})
+		}
+		// get the sub-object
+		next, _ := currentPosition[key].(map[string]interface{})
+		currentPosition = next
+	}
+}
+
+func (v *CredentialVerifier) shouldBeIncluded(clientId string, scope string, credentialTypes []string) (enabled bool, inclusion config.JwtInclusion) {
+	logging.Log().Debugf("Check inclusion %s", credentialTypes)
+	for _, credentialType := range credentialTypes {
+		inclusion, _ := v.credentialsConfig.GetJwtInclusion(clientId, scope, credentialType)
+		if inclusion.Enabled {
+			return true, inclusion
+		}
+	}
+	return false, inclusion
 }
 
 func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error) {
@@ -579,6 +694,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 				}
 			}
 
+			logging.Log().Debugf("Validate with context %v", verificationContext)
 			result, err := verificationService.ValidateVC(credential, verificationContext)
 			if err != nil {
 				logging.Log().Warnf("Failed to verify credential %s. Err: %v", logging.PrettyPrintObject(credential), err)
@@ -594,7 +710,13 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	// we ignore the error here, since the only consequence is that sub will be empty.
 	hostname, _ := getHostName(loginSession.callback)
 
-	token, err := v.generateJWT(verifiablePresentation, verifiablePresentation.Holder, hostname)
+	var toBeIncluded []map[string]interface{}
+	for _, credential := range verifiablePresentation.Credentials() {
+		toBeIncluded = append(toBeIncluded, map[string]interface{}{"credentialSubject": credential.ToRawJSON()["credentialSubject"]})
+	}
+
+	flatClaims, _ := v.credentialsConfig.GetFlatClaims(loginSession.clientId, config.SERVICE_DEFAULT_SCOPE)
+	token, err := v.generateJWT(toBeIncluded, verifiablePresentation.Holder, hostname, flatClaims)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)
 		return sameDevice, err
@@ -614,6 +736,57 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	} else {
 		return sameDevice, callbackToRequester(loginSession, authorizationCode)
 	}
+}
+
+// returns the subject for all gaia-x compliancy credentials
+func (v *CredentialVerifier) getComplianceSubjects(presentation *verifiable.Presentation) (complianceSubjects []ComplianceSubject) {
+	for _, credential := range presentation.Credentials() {
+		subject := credential.ToRawJSON()["credentialSubject"]
+		switch typedSubject := subject.(type) {
+		case []interface{}:
+			for _, sub := range typedSubject {
+				asMap := sub.(map[string]interface{})
+				if asMap["type"] == GAIA_X_COMPLIANCE_SUBJECT_TYPE {
+					complianceSubjects = append(complianceSubjects, toComplianceSubject(asMap))
+				}
+			}
+		case map[string]interface{}:
+			if typedSubject["type"] == GAIA_X_COMPLIANCE_SUBJECT_TYPE {
+				complianceSubjects = append(complianceSubjects, toComplianceSubject(typedSubject))
+			}
+		}
+	}
+	return complianceSubjects
+}
+
+func toComplianceSubject(theMap map[string]interface{}) ComplianceSubject {
+	return ComplianceSubject{
+		Type:                   theMap["type"].(string),
+		Id:                     theMap["id"].(string),
+		Integrity:              theMap["gx:integrity"].(string),
+		IntegrityNormalization: theMap["gx:integrityNormalization"].(string),
+		GxType:                 theMap["gx:type"].(string),
+	}
+}
+
+func (v *CredentialVerifier) getComplianceValidationContext(clientId string, scope string, credential *verifiable.Credential, presentation *verifiable.Presentation) (complianceContext []ComplianceValidationContext, err error) {
+	credentialTypes := []string{}
+	credentialTypes = append(credentialTypes, credential.Contents().Types...)
+
+	complianceContexts := []ComplianceValidationContext{}
+	complianceSubjects := v.getComplianceSubjects(presentation)
+	for _, credentialType := range credentialTypes {
+		isRequired, err := v.credentialsConfig.GetComplianceRequired(clientId, scope, credentialType)
+		if err != nil {
+			logging.Log().Warnf("Was not able to get valid compliance config for client %s, scope %s and type %s. Err: %v", clientId, scope, credentialType, err)
+			return complianceContexts, err
+		}
+		if !isRequired {
+			continue
+		}
+		complianceContexts = append(complianceContexts, ComplianceValidationContext{complianceSubjects})
+	}
+	return complianceContexts, err
 }
 
 func (v *CredentialVerifier) GetRequestObject(state string) (jwt string, err error) {
@@ -797,14 +970,16 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 }
 
 // generate a jwt, containing the credential and mandatory information as defined by the dsba-convergence
-func (v *CredentialVerifier) generateJWT(presentation *verifiable.Presentation, holder string, audience string) (generatedJwt jwt.Token, err error) {
+func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, holder string, audience string, flatValues bool) (generatedJwt jwt.Token, err error) {
 
 	jwtBuilder := jwt.NewBuilder().Issuer(v.did).Claim("client_id", v.did).Subject(holder).Audience([]string{audience}).Expiration(v.clock.Now().Add(time.Minute * 30))
 
-	if len(presentation.Credentials()) > 1 {
-		jwtBuilder.Claim("verifiablePresentation", presentation)
+	if flatValues {
+		appendClaims(jwtBuilder, credentials)
+	} else if len(credentials) > 1 {
+		jwtBuilder.Claim("verifiablePresentation", credentials)
 	} else {
-		jwtBuilder.Claim("verifiableCredential", presentation.Credentials()[0].ToRawJSON())
+		jwtBuilder.Claim("verifiableCredential", credentials[0])
 	}
 
 	token, err := jwtBuilder.Build()
@@ -814,6 +989,14 @@ func (v *CredentialVerifier) generateJWT(presentation *verifiable.Presentation, 
 	}
 
 	return token, err
+}
+
+func appendClaims(builder *jwt.Builder, claims []map[string]interface{}) {
+	for _, claim := range claims {
+		for key, value := range claim {
+			builder.Claim(key, value)
+		}
+	}
 }
 
 // creates an authenticationRequest string from the given parameters
@@ -873,8 +1056,9 @@ func (v *CredentialVerifier) createAuthenticationRequestByReference(base string,
 func (v *CredentialVerifier) createAuthenticationRequestObject(redirect_uri string, state string, clientId string) (requestObject []byte, err error) {
 	jwtBuilder := jwt.NewBuilder().Issuer(v.did)
 	jwtBuilder.Claim("response_type", "vp_token")
+	jwtBuilder.Claim("response_mode", "direct_post")
 	jwtBuilder.Claim("client_id", v.clientIdentification.Id)
-	jwtBuilder.Claim("redirect_uri", redirect_uri)
+	jwtBuilder.Claim("response_uri", redirect_uri)
 	jwtBuilder.Claim("state", state)
 	jwtBuilder.Claim("scope", "openid")
 	jwtBuilder.Claim("nonce", v.nonceGenerator.GenerateNonce())
@@ -1088,6 +1272,7 @@ func loadCertChainFromPEM(path string) ([]*x509.Certificate, error) {
 type RequestObject struct {
 	Issuer       string `json:"iss"`
 	ResponseType string `json:"response_type"`
+	ResponseMode string `json:"response_mode"`
 	ClientId     string `json:"client_id"`
 	RedirectUri  string `json:"redirect_uri"`
 	Scope        string `json:"scope"`

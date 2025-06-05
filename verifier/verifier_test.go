@@ -170,6 +170,40 @@ func (mcc mockCredentialConfig) GetHolderVerification(serviceIdentifier string, 
 	return isEnabled, holderClaim, err
 }
 
+func (mcc mockCredentialConfig) GetComplianceRequired(serviceIdentifier string, scope string, credentialType string) (isRequired bool, err error) {
+	if mcc.mockError != nil {
+		return isRequired, mcc.mockError
+	}
+
+	for _, credential := range mcc.mockScopes[serviceIdentifier][scope].Credentials {
+		if credential.Type == credentialType {
+			return credential.RequireCompliance, err
+		}
+	}
+	return isRequired, err
+}
+
+func (mcc mockCredentialConfig) GetJwtInclusion(serviceIdentifier string, scope string, credentialType string) (jwtInclusion config.JwtInclusion, err error) {
+	if mcc.mockError != nil {
+		return jwtInclusion, mcc.mockError
+	}
+
+	for _, credential := range mcc.mockScopes[serviceIdentifier][scope].Credentials {
+		if credential.Type == credentialType {
+			return credential.JwtInclusion, err
+		}
+	}
+	return jwtInclusion, err
+}
+
+func (mcc mockCredentialConfig) GetFlatClaims(serviceIdentifier string, scope string) (flatClaims bool, err error) {
+	if mcc.mockError != nil {
+		return flatClaims, mcc.mockError
+	}
+
+	return mcc.mockScopes[serviceIdentifier][scope].FlatClaims, err
+}
+
 func (msc *mockSessionCache) Add(k string, x interface{}, d time.Duration) error {
 	if msc.errorToThrow != nil {
 		return msc.errorToThrow
@@ -541,7 +575,7 @@ func getVC(id string) *verifiable.Credential {
 			Issued:  timeWrapper,
 			Expired: timeWrapper,
 			Subject: []verifiable.Subject{
-				verifiable.Subject{
+				{
 					ID: id,
 					CustomFields: map[string]interface{}{
 						"type":   "gx:NaturalParticipent",
