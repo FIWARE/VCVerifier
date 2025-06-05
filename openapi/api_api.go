@@ -11,6 +11,7 @@ package openapi
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -25,6 +26,7 @@ import (
 
 var apiVerifier verifier.Verifier
 var presentationParser verifier.PresentationParser
+var sdJwtParser verifier.SdJwtParser
 
 var ErrorMessagNoGrantType = ErrorMessage{"no_grant_type_provided", "Token requests require a grant_type."}
 var ErrorMessageUnsupportedGrantType = ErrorMessage{"unsupported_grant_type", "Provided grant_type is not supported by the implementation."}
@@ -39,6 +41,7 @@ var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could
 var ErrorMessageUnableToDecodeCredential = ErrorMessage{"invalid_token", "Could not read the credential(s) inside the token."}
 var ErrorMessageUnableToDecodeHolder = ErrorMessage{"invalid_token", "Could not read the holder inside the token."}
 var ErrorMessageNoSuchSession = ErrorMessage{"no_session", "Session with the requested id is not available."}
+var ErrorMessageInvalidSdJwt = ErrorMessage{"invalid_sdjwt", "SdJwt does not contain all required fields."}
 
 func getApiVerifier() verifier.Verifier {
 	if apiVerifier == nil {
@@ -52,6 +55,12 @@ func getPresentationParser() verifier.PresentationParser {
 		presentationParser = verifier.GetPresentationParser()
 	}
 	return presentationParser
+}
+func getSdJwtParser() verifier.SdJwtParser {
+	if sdJwtParser == nil {
+		sdJwtParser = verifier.GetSdJwtParser()
+	}
+	return sdJwtParser
 }
 
 // GetToken - Token endpoint to exchange the authorization code with the actual JWT.
@@ -266,7 +275,6 @@ func GetRequestByReference(c *gin.Context) {
 		c.AbortWithStatusJSON(404, ErrorMessageNoSuchSession)
 		return
 	}
-
 	c.String(http.StatusOK, jwt)
 }
 
@@ -274,13 +282,63 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *ver
 
 	tokenBytes := decodeVpString(vpToken)
 
+	logging.Log().Debugf("The token %s.", vpToken)
+
+	isSdJWT, parsedPresentation, err := isSdJWT(c, vpToken)
+	if isSdJWT && err != nil {
+		return
+	}
+	if isSdJWT {
+		logging.Log().Debugf("Received an sdJwt: %s", logging.PrettyPrintObject(parsedPresentation))
+		return
+	}
+
 	parsedPresentation, err = getPresentationParser().ParsePresentation(tokenBytes)
+
 	if err != nil {
 		logging.Log().Infof("Was not able to parse the token %s. Err: %v", vpToken, err)
 		c.AbortWithStatusJSON(400, ErrorMessageUnableToDecodeToken)
 		return
 	}
 	return
+}
+
+// checks if the presented token contains a single sd-jwt credential. Will be repackage to a presentation for further validation
+func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *verifiable.Presentation, err error) {
+	claims, err := getSdJwtParser().Parse(vpToken)
+	if err != nil {
+		logging.Log().Debugf("Was not a sdjwt. Err: %v", err)
+		return false, presentation, err
+	}
+	issuer, i_ok := claims["iss"]
+	vct, vct_ok := claims["vct"]
+	if !i_ok || !vct_ok {
+		logging.Log().Infof("Token does not contain issuer(%v) or vct(%v).", i_ok, vct_ok)
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidSdJwt)
+		return true, presentation, errors.New(ErrorMessageInvalidSdJwt.Summary)
+	}
+	customFields := verifiable.CustomFields{}
+	for k, v := range claims {
+		if k != "iss" && k != "vct" {
+			customFields[k] = v
+		}
+	}
+	subject := verifiable.Subject{CustomFields: customFields}
+	contents := verifiable.CredentialContents{Issuer: &verifiable.Issuer{ID: issuer.(string)}, Types: []string{vct.(string)}, Subject: []verifiable.Subject{subject}}
+	credential, err := verifiable.CreateCredential(contents, verifiable.CustomFields{})
+	if err != nil {
+		logging.Log().Infof("Was not able to create credential from sdJwt. E: %v", err)
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidSdJwt)
+		return true, presentation, err
+	}
+	presentation, err = verifiable.NewPresentation()
+	if err != nil {
+		logging.Log().Infof("Was not able to create credpresentation from sdJwt. E: %v", err)
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidSdJwt)
+		return true, presentation, err
+	}
+	presentation.AddCredentials(credential)
+	return true, presentation, nil
 }
 
 // decodeVpString - In newer versions of OID4VP the token is not encoded as a whole but only its segments separately. This function covers the older and newer versions

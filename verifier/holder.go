@@ -13,7 +13,7 @@ func (hvs *HolderValidationService) ValidateVC(verifiableCredential *verifiable.
 	logging.Log().Debugf("Validate holder for %s", logging.PrettyPrintObject(verifiableCredential))
 	defer func() {
 		if recErr := recover(); recErr != nil {
-			logging.Log().Warnf("Was not able to convert context. Err: %v", recErr)
+			logging.Log().Warnf("HolderValidationService: Was not able to convert context. Err: %v", recErr)
 			err = ErrorCannotConverContext
 		}
 	}()

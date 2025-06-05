@@ -29,7 +29,7 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 	logging.Log().Debugf("Verify trusted participant for %s", logging.PrettyPrintObject(verifiableCredential))
 	defer func() {
 		if recErr := recover(); recErr != nil {
-			logging.Log().Warnf("Was not able to convert context. Err: %v", recErr)
+			logging.Log().Warnf("TrustedParticipantValidationService: Was not able to convert context. Err: %v", recErr)
 			err = ErrorCannotConverContext
 		}
 	}()

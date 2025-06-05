@@ -50,6 +50,8 @@ type ScopeEntry struct {
 	Credentials []Credential `json:"credentials" mapstructure:"credentials"`
 	// 	Proofs to be requested - see https://identity.foundation/presentation-exchange/#presentation-definition
 	PresentationDefinition PresentationDefinition `json:"presentationDefinition" mapstructure:"presentationDefinition"`
+	// When set, the claim are flatten to plain JWT-claims before beeing included, instead of keeping the credential/presentation structure, where the claims are under the key vc or vp
+	FlatClaims bool `json:"flatClaims" mapstructure:"flatClaims"`
 }
 
 type Credential struct {
@@ -61,6 +63,26 @@ type Credential struct {
 	TrustedIssuersLists []string `json:"trustedIssuersLists,omitempty" mapstructure:"trustedIssuersLists,omitempty"`
 	// Configuration of Holder Verfification
 	HolderVerification HolderVerification `json:"holderVerification" mapstructure:"holderVerification"`
+	// Does the given credential require a compliancy credential
+	RequireCompliance bool `json:"requireCompliance" mapstructure:"requireCompliance"`
+	// Configuration for the credential its inclusion into the JWT.
+	JwtInclusion JwtInclusion `json:"jwtInclusion" mapstructure:"jwtInclusion"`
+}
+
+type JwtInclusion struct {
+	// Should the given credential be included into the generated JWT
+	Enabled bool `json:"enabled" mapstructure:"enabled"`
+	// Should the complete credential be embedded
+	FullInclusion bool `json:"fullInclusion" mapstructure:"fullInclusion"`
+	// Claims to be included
+	ClaimsToInclude []ClaimInclusion `json:"claimsToInclude" mapstructure:"claimsToInclude"`
+}
+
+type ClaimInclusion struct {
+	// Key of the claim to be included. All objects under this key will be included unchanged.
+	OriginalKey string `json:"originalKey" mapstructure:"originalKey"`
+	// Key of the claim to be used in the jwt. If not provided, the original one will be used.
+	NewKey string `json:"newKey" mapstructure:"newKey"`
 }
 
 type TrustedParticipantsList struct {
