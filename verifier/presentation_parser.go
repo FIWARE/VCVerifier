@@ -13,6 +13,7 @@ import (
 	"github.com/hellofresh/health-go/v5"
 	"github.com/piprate/json-gold/ld"
 	"github.com/trustbloc/vc-go/proof/defaults"
+	sdv "github.com/trustbloc/vc-go/sdjwt/verifier"
 	"github.com/trustbloc/vc-go/verifiable"
 )
 
@@ -23,16 +24,43 @@ var defaultPresentationOptions = []verifiable.PresentationOpt{
 	verifiable.WithPresProofChecker(defaults.NewDefaultProofChecker(JWTVerfificationMethodResolver{})),
 	verifiable.WithPresJSONLDDocumentLoader(NewCachingDocumentLoader(ld.NewDefaultDocumentLoader(http.DefaultClient)))}
 
+var defaultSdJwtParserOptions = []sdv.ParseOpt{
+	sdv.WithSignatureVerifier(defaults.NewDefaultProofChecker(JWTVerfificationMethodResolver{})),
+	sdv.WithHolderVerificationRequired(false),
+	sdv.WithIssuerSigningAlgorithms([]string{"ES256", "PS256"}),
+}
+
 // allow singleton access to the parser
 var presentationParser PresentationParser
+
+// allow singleton access to the parser
+var sdJwtParser SdJwtParser
 
 // parser interface
 type PresentationParser interface {
 	ParsePresentation(tokenBytes []byte) (*verifiable.Presentation, error)
 }
 
+type SdJwtParser interface {
+	Parse(tokenString string) (map[string]interface{}, error)
+}
+
 type ConfigurablePresentationParser struct {
 	PresentationOpts []verifiable.PresentationOpt
+}
+
+type ConfigurableSdJwtParser struct {
+	ParserOpts []sdv.ParseOpt
+}
+
+/**
+* Global singelton access to the parser
+**/
+func GetSdJwtParser() SdJwtParser {
+	if sdJwtParser == nil {
+		logging.Log().Error("SdJwtParser is not initialized.")
+	}
+	return sdJwtParser
 }
 
 /**
@@ -79,6 +107,8 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 	} else {
 		presentationParser = &ConfigurablePresentationParser{PresentationOpts: defaultPresentationOptions}
 	}
+	sdJwtParser = &ConfigurableSdJwtParser{ParserOpts: defaultSdJwtParserOptions}
+
 	return nil
 }
 
@@ -101,4 +131,8 @@ func buildAddress(host, path string) string {
 
 func (cpp *ConfigurablePresentationParser) ParsePresentation(tokenBytes []byte) (*verifiable.Presentation, error) {
 	return verifiable.ParsePresentation(tokenBytes, cpp.PresentationOpts...)
+}
+
+func (sjp *ConfigurableSdJwtParser) Parse(tokenString string) (map[string]interface{}, error) {
+	return sdv.Parse(tokenString, sjp.ParserOpts...)
 }

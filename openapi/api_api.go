@@ -19,8 +19,6 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/fiware/VCVerifier/verifier"
-	"github.com/trustbloc/vc-go/proof/defaults"
-	sdv "github.com/trustbloc/vc-go/sdjwt/verifier"
 	"github.com/trustbloc/vc-go/verifiable"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +26,7 @@ import (
 
 var apiVerifier verifier.Verifier
 var presentationParser verifier.PresentationParser
+var sdJwtParser verifier.SdJwtParser
 
 var ErrorMessagNoGrantType = ErrorMessage{"no_grant_type_provided", "Token requests require a grant_type."}
 var ErrorMessageUnsupportedGrantType = ErrorMessage{"unsupported_grant_type", "Provided grant_type is not supported by the implementation."}
@@ -56,6 +55,12 @@ func getPresentationParser() verifier.PresentationParser {
 		presentationParser = verifier.GetPresentationParser()
 	}
 	return presentationParser
+}
+func getSdJwtParser() verifier.SdJwtParser {
+	if sdJwtParser == nil {
+		sdJwtParser = verifier.GetSdJwtParser()
+	}
+	return sdJwtParser
 }
 
 // GetToken - Token endpoint to exchange the authorization code with the actual JWT.
@@ -280,7 +285,7 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *ver
 	logging.Log().Debugf("The token %s.", vpToken)
 
 	isSdJWT, parsedPresentation, err := isSdJWT(c, vpToken)
-	if err != nil {
+	if isSdJWT && err != nil {
 		return
 	}
 	if isSdJWT {
@@ -300,7 +305,7 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *ver
 
 // checks if the presented token contains a single sd-jwt credential. Will be repackage to a presentation for further validation
 func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *verifiable.Presentation, err error) {
-	claims, err := sdv.Parse(vpToken, sdv.WithSignatureVerifier(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})), sdv.WithHolderVerificationRequired(false), sdv.WithIssuerSigningAlgorithms([]string{"ES256"}))
+	claims, err := getSdJwtParser().Parse(vpToken)
 	if err != nil {
 		logging.Log().Debugf("Was not a sdjwt. Err: %v", err)
 		return false, presentation, err
