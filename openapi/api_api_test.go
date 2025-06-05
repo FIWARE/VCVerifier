@@ -110,6 +110,12 @@ func TestGetToken(t *testing.T) {
 					PresentationOpts: []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}}
 			}
 
+			sdJwtParser = &verifier.ConfigurableSdJwtParser{
+				ParserOpts: []sdv.ParseOpt{
+					sdv.WithSignatureVerifier(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
+					sdv.WithHolderVerificationRequired(false),
+					sdv.WithIssuerSigningAlgorithms([]string{"ES256", "PS256"})}}
+
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
 			apiVerifier = &mockVerifier{mockJWTString: tc.mockJWTString, mockExpiration: tc.mockExpiration, mockError: tc.mockError}
