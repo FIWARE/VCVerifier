@@ -59,7 +59,7 @@ func (roc *RequestObjectClient) GetClientRequestObject(requestUri string) (clien
 	}(response.Body)
 
 	if response.StatusCode != 200 {
-		logging.Log().Warnf("Was not able to get request object for %s. Status: %s, Message: %s", requestUri, response.StatusCode, response.Body)
+		logging.Log().Warnf("Was not able to get request object for %s. Status: %v, Message: %s", requestUri, response.StatusCode, response.Body)
 		return clientRequestObject, ErrorNoRequestObjectReturned
 	}
 

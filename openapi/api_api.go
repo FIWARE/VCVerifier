@@ -312,7 +312,6 @@ func StartSIOPSameDevice(c *gin.Context) {
 
 // VerifierAPIAuthenticationResponse - Stores the credential for the given session
 func VerifierAPIAuthenticationResponse(c *gin.Context) {
-	logging.Log().Debugf("Raw was &v", logging.PrettyPrintObject(c.Request.Form))
 
 	var state string
 	stateForm, stateFormExists := c.GetPostForm("state")
