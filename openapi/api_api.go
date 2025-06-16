@@ -269,8 +269,6 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 		c.AbortWithStatusJSON(403, ErrorMessage{Summary: err.Error()})
 		return
 	}
-	logging.Log().Debugf("Return token %s", jwt)
-	logging.Log().Debugf("Response %s", logging.PrettyPrintObject(TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), AccessToken: jwt}))
 	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), AccessToken: jwt})
 }
 
