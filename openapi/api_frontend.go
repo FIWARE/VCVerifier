@@ -11,6 +11,7 @@ package openapi
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/fiware/VCVerifier/verifier"
@@ -18,15 +19,23 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const DEFAULT_REQUEST_MODE = verifier.REQUEST_MODE_URL_ENCODE
+const DEFAULT_REQUEST_MODE = verifier.REQUEST_MODE_BY_REFERENCE
 
 var frontendVerifier verifier.Verifier
+var requestObjectClient *verifier.RequestObjectClient
 
 func getFrontendVerifier() verifier.Verifier {
 	if frontendVerifier == nil {
 		frontendVerifier = verifier.GetVerifier()
 	}
 	return frontendVerifier
+}
+
+func getRequestObjectClient() *verifier.RequestObjectClient {
+	if requestObjectClient == nil {
+		requestObjectClient = verifier.NewRequestObjectClient()
+	}
+	return requestObjectClient
 }
 
 // VerifierPageDisplayQRSIOP - Presents a qr as starting point for the auth process
@@ -64,6 +73,76 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 	}
 
 	c.HTML(http.StatusOK, "verifier_present_qr", gin.H{"qrcode": qr})
+}
+
+// VerifierLoginQr - Presents a qr as starting point for the auth process
+func VerifierLoginQr(c *gin.Context) {
+
+	state, stateExists := c.GetQuery("state")
+	if !stateExists {
+		c.AbortWithStatusJSON(400, ErrorMessageNoState)
+		// early exit
+		return
+	}
+
+	redirectUri, redirectUriExists := c.GetQuery("redirect_uri")
+	requestUri, requestUriExists := c.GetQuery("request_uri")
+
+	if !redirectUriExists && !requestUriExists {
+		c.AbortWithStatusJSON(400, ErrorMessageNoRedircetUri)
+		// early exit
+		return
+	}
+
+	clientId, clientIdExists := c.GetQuery("client_id")
+	if !clientIdExists {
+		logging.Log().Infof("Start a login flow for a not specified client.")
+	}
+
+	scope, scopeExists := c.GetQuery("scope")
+	if !scopeExists {
+		logging.Log().Infof("Start a login flow with default scope.")
+		scope = ""
+	}
+
+	if requestUriExists {
+		logging.Log().Debug("Requesting the client for its request object.")
+		cro, err := getRequestObjectClient().GetClientRequestObject(requestUri)
+		if err != nil {
+			logging.Log().Warnf("Was not able to get request object. Err: %v", err)
+			c.AbortWithStatusJSON(500, ErrorMessageUnresolvableRequestObject)
+			return
+		}
+		if !slices.Contains(cro.Aud, getFrontendVerifier().GetHost()) {
+			c.AbortWithStatusJSON(500, ErrorMessageInvalidAudience)
+			return
+		}
+
+		clientId = cro.ClientId
+		scope = cro.Scope
+		redirectUri = cro.RedirectUri
+	}
+
+	nonce, nonceExists := c.GetQuery("nonce")
+	if !nonceExists {
+		c.AbortWithStatusJSON(400, ErrorMessageNoNonce)
+		// early exit
+		return
+	}
+
+	requestMode, requestModeExists := c.GetQuery("request_mode")
+	if !requestModeExists {
+		logging.Log().Infof("Using default request mode %s.", DEFAULT_REQUEST_MODE)
+		requestMode = DEFAULT_REQUEST_MODE
+	}
+
+	qr, err := getFrontendVerifier().ReturnLoginQRV2(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode)
+	if err != nil {
+		c.AbortWithStatusJSON(500, ErrorMessage{"qr_generation_error", err.Error()})
+		return
+	}
+
+	c.HTML(http.StatusOK, "verifier_present_qr_v2", gin.H{"qrcode": qr, "wsUrl": getFrontendVerifier().GetHost() + "/ws?state=" + state})
 }
 
 // VerifierPageLoginExpired - Presents a page when the login session is expired

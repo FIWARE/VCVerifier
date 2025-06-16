@@ -10,6 +10,36 @@ tags:
     description: All api-endpoints, e.g. the once that can be reused by other applications
     
 paths:
+  /api/v2/loginQR:
+    get:
+      tags:
+        - frontend
+      parameters:
+        - $ref: '#/components/parameters/QueryState'
+        - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/RedirectUri'
+        - $ref: '#/components/parameters/RequestUri'
+        - $ref: '#/components/parameters/Scope'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/RequestMode'
+      operationId: VerifierLoginQr
+      summary: Presents a qr as starting point for the auth process
+      description: Returns a rendered html with a QR encoding the login-starting point for the siop flow - e.g. 'openid://?scope=somethign&response_type=rt&response_mode=rm&client_id=ci&redirect_uri=uri&state=state&nonce=nonce&request_mode=urlEncoded'
+      responses:
+        '200':
+          description: A rendered page, containing the qr
+          content:
+            text/html:
+              schema:
+                type: object
+        '400':
+          description: In case of broken requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorMessage'
+        
+      
   /api/v1/loginQR:
     get:
       tags:
@@ -220,8 +250,22 @@ components:
       schema: 
         type: string
         example: 274e7465-cc9d-4cad-b75f-190db927e56a
+    Scope:
+      name: scope
+      in: query
+      required: true
+      schema: 
+        type: string
+        example: openid
     QueryState:
       name: state
+      in: query
+      required: true
+      schema: 
+        type: string
+        example: 274e7465-cc9d-4cad-b75f-190db927e56a
+    Nonce:
+      name: nonce
       in: query
       required: true
       schema: 
@@ -246,10 +290,17 @@ components:
     RedirectUri:
       name: redirect_uri
       in: query
-      required: true
+      required: false
       schema:
         type: string
-        example: https://my-verifier.com/verifier/api/v1/authenticationresponse
+        example: https://my-app.com/redirect
+    RequestUri:
+      name: request_uri
+      in: query
+      required: false
+      schema:
+        type: string
+        example: https://my-app.com/request.jwt
     VpToken:
       name: vp_token
       description: base64URLEncoded VerifiablePresentation
@@ -279,6 +330,7 @@ components:
       required: false
       schema:
         type: string
+        default: byReference
         enum: 
           - urlEncoded
           - byValue

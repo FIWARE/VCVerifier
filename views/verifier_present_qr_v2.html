@@ -1,0 +1,79 @@
+{{define "verifier_present_qr_v2"}}
+<!doctype html>
+
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <link href="/static/css/w3pro.css" rel="stylesheet">
+        <link href="/static/css/mystyle.css" rel="stylesheet">
+        <link href="/static/css/prism.css" rel="stylesheet">
+    
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#919597">
+        <title>Credential Verifier</title>
+    
+    </head>
+    
+    <body>
+        <div class="w3-bar w3-card color-primary w3-margin-bottom w3-large">
+            <a class="w3-bar-item w3-right" href="https://www.fiware.org/"><img src="/static/img/logo.png" alt="FIWARE" style="width:222px;height:50px;">
+            </a>
+        </div>
+        <main class="w3-container w3-center">
+
+            <h3>Scan this QR code to authenticate with your Wallet.</h3>
+
+            <img src="data:{{.qrcode}}" alt="the qr.">
+
+        </main>
+        <script>
+            function startWebSocket(wsUrl) {
+                return new Promise((resolve, reject) => {
+                    const socket = new WebSocket(wsUrl)
+            
+                    socket.onopen = () => {
+                        console.log('WebSocket connected')
+                    }
+                
+                    socket.onmessage = (event) => {
+                        try {
+                        const message = JSON.parse(event.data)
+                
+                        switch (message.type) {
+                            case "session": 
+                                console.log("Session initiatied")  
+                            break              
+                            case "authenticated":
+                            console.log("Redirect initiatied " + message.redirectUrl)  
+                                window.location.href = message.redirectUrl;
+                            break
+                
+                            case "error":
+                                console.log("error")  
+                                socket.close()
+                            break
+                        }
+                        } catch (err) {
+                            console.log(err)  
+                        }
+                    }
+                
+                    socket.onerror = (err) => {
+                        console.log(err)  
+                    }
+                
+                    socket.onclose = (e) => {
+                        if (e.code !== 1000) {
+                            console.log(e.code)  
+                        }
+                    }
+                })
+            }
+
+            document.addEventListener('DOMContentLoaded', () => {
+                startWebSocket("{{.wsUrl}}")
+            })
+        </script>
+    </body>
+</html>
+{{end}}

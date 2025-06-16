@@ -11,14 +11,22 @@ package openapi
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/fiware/VCVerifier/verifier"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwt"
+	vdr_jwk "github.com/trustbloc/did-go/method/jwk"
+	vdr_key "github.com/trustbloc/did-go/method/key"
+	vdr_web "github.com/trustbloc/did-go/method/web"
+	"github.com/trustbloc/did-go/vdr/api"
 	"github.com/trustbloc/vc-go/verifiable"
 
 	"github.com/gin-gonic/gin"
@@ -27,13 +35,15 @@ import (
 var apiVerifier verifier.Verifier
 var presentationParser verifier.PresentationParser
 var sdJwtParser verifier.SdJwtParser
+var keyResolver verifier.KeyResolver
 
 var ErrorMessagNoGrantType = ErrorMessage{"no_grant_type_provided", "Token requests require a grant_type."}
 var ErrorMessageUnsupportedGrantType = ErrorMessage{"unsupported_grant_type", "Provided grant_type is not supported by the implementation."}
 var ErrorMessageNoCode = ErrorMessage{"no_code_provided", "Token requests require a code."}
 var ErrorMessageNoRedircetUri = ErrorMessage{"no_redirect_uri_provided", "Token requests require a redirect_uri."}
 var ErrorMessageNoState = ErrorMessage{"no_state_provided", "Authentication requires a state provided as query parameter."}
-var ErrorMessageNoScope = ErrorMessage{"no_scope_provided", "Authentication requires a scope provided as a form parameter."}
+var ErrorMessageNoScope = ErrorMessage{"no_scope_provided", "Authentication requires a scope provided as a parameter."}
+var ErrorMessageNoNonce = ErrorMessage{"no_nonce_provided", "Authentication requires a nonce provided as a query parameter."}
 var ErrorMessageNoToken = ErrorMessage{"no_token_provided", "Authentication requires a token provided as a form parameter."}
 var ErrorMessageNoPresentationSubmission = ErrorMessage{"no_presentation_submission_provided", "Authentication requires a presentation submission provided as a form parameter."}
 var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback address has to be provided as query-parameter."}
@@ -42,6 +52,12 @@ var ErrorMessageUnableToDecodeCredential = ErrorMessage{"invalid_token", "Could 
 var ErrorMessageUnableToDecodeHolder = ErrorMessage{"invalid_token", "Could not read the holder inside the token."}
 var ErrorMessageNoSuchSession = ErrorMessage{"no_session", "Session with the requested id is not available."}
 var ErrorMessageInvalidSdJwt = ErrorMessage{"invalid_sdjwt", "SdJwt does not contain all required fields."}
+var ErrorMessageNoWebsocketConnection = ErrorMessage{"invalid_connection", "No Websocket connection available for the authenticated session."}
+var ErrorMessageUnresolvableRequestObject = ErrorMessage{"unresolvable_request_object", "Was not able to get the request object from the client."}
+var ErrorMessageInvalidAudience = ErrorMessage{"invalid_audience", "Audience of the request object was invalid."}
+var ErrorMessageUnsupportedAssertionType = ErrorMessage{"unsupported_assertion_type", "Assertion type is not supported."}
+var ErrorMessageInvalidClientAssertion = ErrorMessage{"invalid_client_assertion", "Provided client assertion is invalid."}
+var ErrorMessageInvalidTokenRequest = ErrorMessage{"invalid_token_request", "Token request has no redirect_uri and no valid client assertion."}
 
 func getApiVerifier() verifier.Verifier {
 	if apiVerifier == nil {
@@ -56,11 +72,19 @@ func getPresentationParser() verifier.PresentationParser {
 	}
 	return presentationParser
 }
+
 func getSdJwtParser() verifier.SdJwtParser {
 	if sdJwtParser == nil {
 		sdJwtParser = verifier.GetSdJwtParser()
 	}
 	return sdJwtParser
+}
+
+func getKeyResolver() verifier.KeyResolver {
+	if keyResolver == nil {
+		keyResolver = &verifier.VdrKeyResolver{Vdr: []api.VDR{vdr_key.New(), vdr_jwk.New(), vdr_web.New()}}
+	}
+	return keyResolver
 }
 
 // GetToken - Token endpoint to exchange the authorization code with the actual JWT.
@@ -159,19 +183,94 @@ func handleTokenTypeCode(c *gin.Context) {
 		return
 	}
 
+	assertionType, assertionTypeExists := c.GetPostForm("client_assertion_type")
 	redirectUri, redirectUriExists := c.GetPostForm("redirect_uri")
-	if !redirectUriExists {
-		logging.Log().Debug("No redircet_uri present in the request.")
-		c.AbortWithStatusJSON(400, ErrorMessageNoRedircetUri)
+	if redirectUriExists {
+		jwt, expiration, err := getApiVerifier().GetToken(code, redirectUri, false)
+		if err != nil {
+			c.AbortWithStatusJSON(403, ErrorMessage{Summary: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), AccessToken: jwt})
 		return
 	}
-	jwt, expiration, err := getApiVerifier().GetToken(code, redirectUri)
+	if assertionTypeExists {
+		handleWithClientAssertion(c, assertionType, code)
+		return
+	}
+	c.AbortWithStatusJSON(400, ErrorMessageInvalidTokenRequest)
+}
 
+func handleWithClientAssertion(c *gin.Context, assertionType string, code string) {
+	if assertionType != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
+		logging.Log().Warnf("Assertion type %s is not supported.", assertionType)
+		c.AbortWithStatusJSON(400, ErrorMessageUnsupportedAssertionType)
+		return
+	}
+
+	clientAssertion, clientAssertionExists := c.GetPostForm("client_assertion")
+	clientId, clientIdExists := c.GetPostForm("client_id")
+	if !clientAssertionExists || !clientIdExists {
+		logging.Log().Warnf("Client Id (%s) or assertion (%s) not provided.", clientId, clientAssertion)
+		c.AbortWithStatusJSON(400, ErrorMessageUnsupportedAssertionType)
+		return
+	}
+
+	kid, err := getKeyResolver().ExtractKIDFromJWT(clientAssertion)
+	if err != nil {
+		logging.Log().Warnf("Was not able to retrive kid from token %s. Err: %v.", clientAssertion, err)
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		return
+	}
+	pubKey, err := getKeyResolver().ResolvePublicKeyFromDID(kid)
+	if err != nil {
+		logging.Log().Warnf("Was not able to retrive key from kid %s. Err: %v.", kid, err)
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		return
+	}
+
+	alg, algExists := pubKey.Algorithm()
+	if !algExists {
+		// fallback to default
+		alg = jwa.ES256()
+	}
+
+	parsed, err := jwt.Parse([]byte(clientAssertion), jwt.WithKey(alg, pubKey))
+	if err != nil {
+		logging.Log().Warnf("Was not able to parse and verify the token %s. Err: %v", clientAssertion, err)
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		return
+	}
+
+	// Serialize token to JSON
+	jsonBytes, err := json.Marshal(parsed)
+	if err != nil {
+		logging.Log().Warnf("Was not able to marshal the token %s. Err: %v", clientAssertion, err)
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		return
+	}
+
+	// Unmarshal to your struct
+	var clientAssertionObject ClientAssertion
+	if err := json.Unmarshal(jsonBytes, &clientAssertionObject); err != nil {
+		logging.Log().Warnf("Was not able to unmarshal the token: %s, Err: %v", string(jsonBytes), err)
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		return
+	}
+
+	if clientAssertionObject.Sub != clientId || clientAssertionObject.Iss != clientId || !slices.Contains(clientAssertionObject.Aud, getFrontendVerifier().GetHost()) {
+		logging.Log().Warnf("Invalid assertion: %s. Client Id: %s, Host: %s", logging.PrettyPrintObject(clientAssertionObject), clientId, getApiVerifier().GetHost())
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		return
+	}
+
+	jwt, expiration, err := getApiVerifier().GetToken(code, "", true)
 	if err != nil {
 		c.AbortWithStatusJSON(403, ErrorMessage{Summary: err.Error()})
 		return
 	}
-
+	logging.Log().Debugf("Return token %s", jwt)
+	logging.Log().Debugf("Response %s", logging.PrettyPrintObject(TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), AccessToken: jwt}))
 	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), AccessToken: jwt})
 }
 
@@ -215,6 +314,8 @@ func StartSIOPSameDevice(c *gin.Context) {
 
 // VerifierAPIAuthenticationResponse - Stores the credential for the given session
 func VerifierAPIAuthenticationResponse(c *gin.Context) {
+	logging.Log().Debugf("Raw was &v", logging.PrettyPrintObject(c.Request.Form))
+
 	var state string
 	stateForm, stateFormExists := c.GetPostForm("state")
 	stateQuery, stateQueryExists := c.GetQuery("state")
@@ -251,6 +352,7 @@ func GetVerifierAPIAuthenticationResponse(c *gin.Context) {
 		c.AbortWithStatusJSON(400, ErrorMessageNoState)
 		return
 	}
+
 	vpToken, tokenExists := c.GetQuery("vp_token")
 	if !tokenExists {
 		logging.Log().Info("No token was provided.")
@@ -338,6 +440,7 @@ func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *verifi
 		return true, presentation, err
 	}
 	presentation.AddCredentials(credential)
+	presentation.Holder = issuer.(string)
 	return true, presentation, nil
 }
 
@@ -352,15 +455,21 @@ func decodeVpString(vpToken string) (tokenBytes []byte) {
 
 func handleAuthenticationResponse(c *gin.Context, state string, presentation *verifiable.Presentation) {
 
-	sameDeviceResponse, err := getApiVerifier().AuthenticationResponse(state, presentation)
+	response, err := getApiVerifier().AuthenticationResponse(state, presentation)
 	if err != nil {
 		logging.Log().Warnf("Was not able to fullfil the authentication response. Err: %v", err)
 		c.AbortWithStatusJSON(400, ErrorMessage{Summary: err.Error()})
 		return
 	}
-	if sameDeviceResponse != (verifier.SameDeviceResponse{}) {
-		c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s", sameDeviceResponse.RedirectTarget, sameDeviceResponse.SessionId, sameDeviceResponse.Code))
+	if response != (verifier.Response{}) && response.FlowVersion == verifier.SAME_DEVICE {
+		if response.Nonce != "" {
+			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s&nonce=%s", response.RedirectTarget, response.SessionId, response.Code, response.Nonce))
+		} else {
+			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s", response.RedirectTarget, response.SessionId, response.Code))
+		}
 		return
+	} else if response != (verifier.Response{}) && response.FlowVersion == verifier.CROSS_DEVICE_V2 {
+		sendRedirect(c, response.SessionId, response.Code, response.RedirectTarget)
 	}
 	logging.Log().Debugf("Successfully authenticated %s.", state)
 	c.JSON(http.StatusOK, gin.H{})
@@ -418,4 +527,12 @@ func VerifierAPIStartSIOP(c *gin.Context) {
 		return
 	}
 	c.String(http.StatusOK, connectionString)
+}
+
+type ClientAssertion struct {
+	Iss string   `json:"iss"`
+	Aud []string `json:"aud"`
+	Sub string   `json:"sub"`
+	Exp int      `json:"exp"`
+	Iat int      `json:"iat"`
 }

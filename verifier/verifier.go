@@ -39,10 +39,14 @@ import (
 	"github.com/valyala/fasttemplate"
 )
 
-const REQUEST_MODE_URL_ENCODE = "urlEncoded"
 const REQUEST_MODE_BY_VALUE = "byValue"
 const REQUEST_MODE_BY_REFERENCE = "byReference"
 const REQUEST_OBJECT_TYP = "oauth-authz-req+jwt"
+const (
+	CROSS_DEVICE_V1 = iota
+	CROSS_DEVICE_V2
+	SAME_DEVICE
+)
 
 var ErrorNoDID = errors.New("no_did_configured")
 var ErrorNoTIR = errors.New("no_tir_configured")
@@ -62,20 +66,23 @@ var ErrorUnsupportedRequestMode = errors.New("unsupported_request_mode")
 var ErrorNoExpiration = errors.New("no_jwt_expiration_set")
 var ErrorNoKeyId = errors.New("no_key_id_available")
 var ErrorNoRequestObject = errors.New("no_request_object_available")
+var ErrorInvalidNonce = errors.New("invalid_nonce")
 
 // Actual implementation of the verfifier functionality
 
 // verifier interface
 type Verifier interface {
 	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (qr string, err error)
+	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error)
 	StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (connectionString string, err error)
 	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string) (authenticationRequest string, err error)
-	GetToken(authorizationCode string, redirectUri string) (jwtString string, expiration int64, err error)
+	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error)
 	GetJWKS() jwk.Set
-	AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice SameDeviceResponse, err error)
+	AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice Response, err error)
 	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *verifiable.Presentation) (int64, string, error)
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
 	GetRequestObject(state string) (jwt string, err error)
+	GetHost() string
 }
 
 type ValidationService interface {
@@ -195,16 +202,18 @@ func (r *randomGenerator) GenerateNonce() string {
 
 // struct to represent a running login session
 type loginSession struct {
-	// is it using the same-device flow?
-	sameDevice bool
 	// callback to be notified after success
 	callback string
 	// sessionId to be included in the notification
 	sessionId string
+	// nonce used for the session
+	nonce string
 	// clientId provided for the session
 	clientId string
 	// requestObject created for the session
 	requestObject string
+	// inidicates if the cross device session is v1 or v2
+	version int
 }
 
 // struct to represent a token, accessible through the token endpoint
@@ -214,13 +223,17 @@ type tokenStore struct {
 }
 
 // Response structure for successful same-device authentications
-type SameDeviceResponse struct {
+type Response struct {
+	// version of the flow
+	FlowVersion int
 	// the redirect target to be informed
 	RedirectTarget string
 	// code of the siop flow
 	Code string
 	// session id provided by the client
 	SessionId string
+	// nonce provided by the client
+	Nonce string
 }
 
 /**
@@ -350,6 +363,34 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 }
 
 /**
+*   Initializes the cross-device login flow and returns all neccessary information as a qr-code
+**/
+func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redircetUri string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error) {
+
+	for _, v := range v.supportedRequestModes {
+		logging.Log().Warnf("Supported: %s", v)
+	}
+
+	if !slices.Contains(v.supportedRequestModes, requestMode) {
+		logging.Log().Infof("QR with mode %s was requested, but only %v is supported.", requestMode, v.supportedRequestModes)
+		return qr, ErrorUnsupportedRequestMode
+	}
+
+	logging.Log().Debugf("Generate a login qr for %s.", redircetUri)
+	authenticationRequest, err := v.initOid4VPCrossDevice(host, protocol, redircetUri, sessionId, clientId, scope, nonce, requestMode)
+
+	if err != nil {
+		return qr, err
+	}
+
+	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, 256)
+	base64Img := base64.StdEncoding.EncodeToString(png)
+	base64Img = "data:image/png;base64," + base64Img
+
+	return base64Img, err
+}
+
+/**
 * Starts a siop-flow and returns the required connection information
 **/
 func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (connectionString string, err error) {
@@ -365,7 +406,7 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 	logging.Log().Debugf("Initiate samedevice flow for %s.", host)
 	state := v.nonceGenerator.GenerateNonce()
 
-	loginSession := loginSession{true, fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId, clientId, ""}
+	loginSession := loginSession{fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId, "", clientId, "", SAME_DEVICE}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the login session %s in cache. Err: %v", logging.PrettyPrintObject(loginSession), err)
@@ -374,13 +415,13 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 
 	redirectUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
 
-	return v.generateAuthenticationRequest(protocol+"://"+host+redirectPath, clientId, redirectUri, state, loginSession, requestMode)
+	return v.generateAuthenticationRequest(protocol+"://"+host+redirectPath, clientId, "", redirectUri, state, "", loginSession, requestMode)
 }
 
 /**
 *   Returns an already generated jwt from the cache to properly authorized requests. Every token will only be returend once.
 **/
-func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string) (jwtString string, expiration int64, err error) {
+func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error) {
 
 	tokenSessionInterface, hit := v.tokenCache.Get(authorizationCode)
 	if !hit {
@@ -391,7 +432,7 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 	v.tokenCache.Delete(authorizationCode)
 
 	tokenSession := tokenSessionInterface.(tokenStore)
-	if tokenSession.redirect_uri != redirectUri {
+	if !validated && tokenSession.redirect_uri != redirectUri {
 		logging.Log().Infof("Redirect uri does not match for authorization %s. Was %s but is expected %s.", authorizationCode, redirectUri, tokenSession.redirect_uri)
 		return jwtString, expiration, ErrorRedirectUriMismatch
 	}
@@ -570,8 +611,10 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 
 func buildInclusion(credential *verifiable.Credential, inclusionConfig config.JwtInclusion) (inclusion map[string]interface{}) {
 	if inclusionConfig.FullInclusion {
+		logging.Log().Debugf("Include the full credential: %s", logging.PrettyPrintObject(credential))
 		return credential.ToRawJSON()
 	}
+	logging.Log().Debug("Include only some claims")
 
 	inclusion = make(map[string]interface{})
 	for _, claim := range inclusionConfig.ClaimsToInclude {
@@ -661,9 +704,9 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 * Receive credentials and verify them in the context of an already present login-session. Will return either an error if failed, a sameDevice response to be used for
 * redirection or notify the original initiator(in case of a cross-device flow)
 **/
-func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice SameDeviceResponse, err error) {
+func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice Response, err error) {
 
-	logging.Log().Debugf("Authenticate credential for session %s", state)
+	logging.Log().Debugf("Authenticate presentation %v for session %s", logging.PrettyPrintObject(verifiablePresentation), state)
 
 	loginSessionInterface, hit := v.sessionCache.Get(state)
 	if !hit {
@@ -710,9 +753,11 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	// we ignore the error here, since the only consequence is that sub will be empty.
 	hostname, _ := getHostName(loginSession.callback)
 
+	//TODO: properly handle inclusion config
+
 	var toBeIncluded []map[string]interface{}
 	for _, credential := range verifiablePresentation.Credentials() {
-		toBeIncluded = append(toBeIncluded, map[string]interface{}{"credentialSubject": credential.ToRawJSON()["credentialSubject"]})
+		toBeIncluded = append(toBeIncluded, credential.ToRawJSON())
 	}
 
 	flatClaims, _ := v.credentialsConfig.GetFlatClaims(loginSession.clientId, config.SERVICE_DEFAULT_SCOPE)
@@ -731,10 +776,12 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		logging.Log().Warnf("Was not able to store the token %s in cache.", logging.PrettyPrintObject(tokenStore))
 		return sameDevice, err
 	}
-	if loginSession.sameDevice {
-		return SameDeviceResponse{loginSession.callback, authorizationCode, loginSession.sessionId}, err
-	} else {
+	if loginSession.version == SAME_DEVICE {
+		return Response{SAME_DEVICE, loginSession.callback, authorizationCode, loginSession.sessionId, loginSession.nonce}, err
+	} else if loginSession.version == CROSS_DEVICE_V1 {
 		return sameDevice, callbackToRequester(loginSession, authorizationCode)
+	} else {
+		return Response{CROSS_DEVICE_V2, loginSession.callback, authorizationCode, loginSession.sessionId, loginSession.nonce}, err
 	}
 }
 
@@ -919,12 +966,26 @@ func verifyChain(vcs []*verifiable.Credential) (bool, error) {
 	return true, nil
 }
 
+// intialize the OID4VP cross device flow
+func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string, redirectUri string, state string, clientId string, scope string, nonce string, requestMode string) (authenticationRequest string, err error) {
+
+	loginSession := loginSession{redirectUri, state, nonce, clientId, "", CROSS_DEVICE_V2}
+	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
+
+	if err != nil {
+		logging.Log().Warnf("Was not able to store the login session %s in cache.", logging.PrettyPrintObject(loginSession))
+		return authenticationRequest, err
+	}
+	authResponseUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
+
+	return v.generateAuthenticationRequest("openid4vp://", clientId, scope, authResponseUri, state, nonce, loginSession, requestMode)
+}
+
 // initializes the cross-device siop flow
 func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (authenticationRequest string, err error) {
 
 	state := v.nonceGenerator.GenerateNonce()
-
-	loginSession := loginSession{false, callback, sessionId, clientId, ""}
+	loginSession := loginSession{callback, sessionId, "", clientId, "", CROSS_DEVICE_V1}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
@@ -933,16 +994,12 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 	}
 	redirectUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
 
-	return v.generateAuthenticationRequest("openid4vp://", clientId, redirectUri, state, loginSession, requestMode)
+	return v.generateAuthenticationRequest("openid4vp://", clientId, "", redirectUri, state, "", loginSession, requestMode)
 }
 
-func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId string, redirectUri string, state string, loginSession loginSession, requestMode string) (authenticationRequest string, err error) {
-	if requestMode == REQUEST_MODE_URL_ENCODE {
-		authenticationRequest = v.createAuthenticationRequestUrlEncoded(base, redirectUri, state, clientId)
-		logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
-		return authenticationRequest, err
-	} else if requestMode == REQUEST_MODE_BY_VALUE {
-		authenticationRequest, err = v.createAuthenticationRequestByValue(base, redirectUri, state, clientId)
+func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId string, scope string, redirectUri string, state string, nonce string, loginSession loginSession, requestMode string) (authenticationRequest string, err error) {
+	if requestMode == REQUEST_MODE_BY_VALUE {
+		authenticationRequest, err = v.createAuthenticationRequestByValue(base, redirectUri, state, clientId, scope, nonce)
 		if err != nil {
 			logging.Log().Warnf("Was not able to create the authentication request by value. Error: %v", err)
 		} else {
@@ -950,7 +1007,7 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 		}
 		return authenticationRequest, err
 	} else if requestMode == REQUEST_MODE_BY_REFERENCE {
-		requestObject, err := v.createAuthenticationRequestObject(redirectUri, state, clientId)
+		requestObject, err := v.createAuthenticationRequestObject(redirectUri, state, clientId, scope, nonce)
 		loginSession.requestObject = string(requestObject[:])
 
 		logging.Log().Debugf("Store session with id %s", state)
@@ -972,7 +1029,11 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 // generate a jwt, containing the credential and mandatory information as defined by the dsba-convergence
 func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, holder string, audience string, flatValues bool) (generatedJwt jwt.Token, err error) {
 
-	jwtBuilder := jwt.NewBuilder().Issuer(v.did).Claim("client_id", v.did).Subject(holder).Audience([]string{audience}).Expiration(v.clock.Now().Add(time.Minute * 30))
+	jwtBuilder := jwt.NewBuilder().Issuer(v.GetHost()).Audience([]string{audience}).Expiration(v.clock.Now().Add(time.Minute * 30))
+
+	if holder != "" {
+		jwtBuilder.Subject(holder)
+	}
 
 	if flatValues {
 		appendClaims(jwtBuilder, credentials)
@@ -1000,41 +1061,6 @@ func appendClaims(builder *jwt.Builder, claims []map[string]interface{}) {
 }
 
 // creates an authenticationRequest string from the given parameters
-func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, response_uri string, state string, clientId string) string {
-
-	// We use a template to generate the final string
-	template := "{{base}}?response_type=vp_token" +
-		"&response_mode=direct_post" +
-		"&client_id={{client_id}}" +
-		"&response_uri={{response_uri}}" +
-		"&state={{state}}" +
-		"&nonce={{nonce}}"
-
-	var scope string
-	if clientId != "" {
-		typesToBeRequested, err := v.credentialsConfig.GetScope(clientId)
-		if err != nil {
-			logging.Log().Warnf("Was not able to get the scope to be requested for client %s. Err: %v", clientId, err)
-		} else {
-			template = template + "&scope={{scope}}"
-			scope = strings.Join(typesToBeRequested, ",")
-		}
-	}
-
-	t := fasttemplate.New(template, "{{", "}}")
-	authRequest := t.ExecuteString(map[string]interface{}{
-		"base":         base,
-		"scope":        scope,
-		"client_id":    v.clientIdentification.Id,
-		"response_uri": response_uri,
-		"state":        state,
-		"nonce":        v.nonceGenerator.GenerateNonce(),
-	})
-
-	return authRequest
-}
-
-// creates an authenticationRequest string from the given parameters
 func (v *CredentialVerifier) createAuthenticationRequestByReference(base string, state string) string {
 
 	// We use a template to generate the final string
@@ -1053,7 +1079,7 @@ func (v *CredentialVerifier) createAuthenticationRequestByReference(base string,
 	return authRequest
 }
 
-func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri string, state string, clientId string) (requestObject []byte, err error) {
+func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri string, state string, clientId string, scope string, nonce string) (requestObject []byte, err error) {
 	jwtBuilder := jwt.NewBuilder().Issuer(v.did)
 	jwtBuilder.Claim("response_type", "vp_token")
 	jwtBuilder.Claim("response_mode", "direct_post")
@@ -1061,11 +1087,13 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	jwtBuilder.Claim("response_uri", response_uri)
 	jwtBuilder.Claim("state", state)
 	jwtBuilder.Claim("scope", "openid")
-	jwtBuilder.Claim("nonce", v.nonceGenerator.GenerateNonce())
+	if nonce != "" {
+		jwtBuilder.Claim("nonce", nonce)
+	}
 	jwtBuilder.Expiration(v.clock.Now().Add(time.Second * 30))
 
 	// TODO: decide if more than the default scope should be supported.
-	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, "")
+	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
 	if err != nil {
 		logging.Log().Errorf("Was not able to get the presentationDefintion for %s. Err: %v", clientId, err)
 		return requestObject, err
@@ -1125,13 +1153,13 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 }
 
 // creates an authenticationRequest string from the given parameters
-func (v *CredentialVerifier) createAuthenticationRequestByValue(base string, response_uri string, state string, clientId string) (request string, err error) {
+func (v *CredentialVerifier) createAuthenticationRequestByValue(base string, response_uri string, state string, clientId string, scope string, nonce string) (request string, err error) {
 
 	// We use a template to generate the final string
 	template := "{{base}}?client_id={{client_id}}" +
 		"&request={{request}}"
 
-	signedRequest, err := v.createAuthenticationRequestObject(response_uri, state, clientId)
+	signedRequest, err := v.createAuthenticationRequestObject(response_uri, state, clientId, scope, nonce)
 
 	t := fasttemplate.New(template, "{{", "}}")
 	authRequest := t.ExecuteString(map[string]interface{}{
@@ -1267,6 +1295,10 @@ func loadCertChainFromPEM(path string) ([]*x509.Certificate, error) {
 	}
 
 	return certs, nil
+}
+
+func (v *CredentialVerifier) GetHost() string {
+	return v.host
 }
 
 type RequestObject struct {
