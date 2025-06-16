@@ -29,12 +29,15 @@ type mockVerifier struct {
 	mockAuthRequest      string
 	mockJWKS             jwk.Set
 	mockOpenIDConfig     common.OpenIDProviderMetadata
-	mockSameDevice       verifier.SameDeviceResponse
+	mockSameDevice       verifier.Response
 	mockExpiration       int64
 	mockError            error
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, requestType string) (qr string, err error) {
+	return mV.mockQR, mV.mockError
+}
+func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error) {
 	return mV.mockQR, mV.mockError
 }
 func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestType string) (connectionString string, err error) {
@@ -43,17 +46,20 @@ func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback str
 func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestType string) (authenticationRequest string, err error) {
 	return mV.mockAuthRequest, mV.mockError
 }
-func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string) (jwtString string, expiration int64, err error) {
+func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error) {
 	return mV.mockJWTString, mV.mockExpiration, mV.mockError
 }
 func (mV *mockVerifier) GetJWKS() jwk.Set {
 	return mV.mockJWKS
 }
-func (mV *mockVerifier) AuthenticationResponse(state string, presentation *verifiable.Presentation) (sameDevice verifier.SameDeviceResponse, err error) {
+func (mV *mockVerifier) AuthenticationResponse(state string, presentation *verifiable.Presentation) (sameDevice verifier.Response, err error) {
 	return mV.mockSameDevice, mV.mockError
 }
 func (mV *mockVerifier) GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error) {
 	return mV.mockOpenIDConfig, err
+}
+func (mV *mockVerifier) GetHost() string {
+	return ""
 }
 
 // TODO
@@ -250,22 +256,22 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 		testState              string
 		testVPToken            string
 		mockError              error
-		mockSameDeviceResponse verifier.SameDeviceResponse
+		mockSameDeviceResponse verifier.Response
 		expectedStatusCode     int
 		expectedRedirect       string
 		expectedError          ErrorMessage
 	}
 
 	tests := []test{
-		{"If a same-device flow is authenticated, a valid redirect should be returned.", true, "my-state", getValidVPToken(), nil, verifier.SameDeviceResponse{RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
-		{"If a same-device flow is authenticated with an SdJwt, a valid redirect should be returned.", true, "my-state", getValidSDJwtToken(), nil, verifier.SameDeviceResponse{RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
-		{"If a cross-device flow is authenticated, a simple ok should be returned.", false, "my-state", getValidVPToken(), nil, verifier.SameDeviceResponse{}, 200, "", ErrorMessage{}},
-		{"If a cross-device flow is authenticated with an SdJwt, a simple ok should be returned.", false, "my-state", getValidSDJwtToken(), nil, verifier.SameDeviceResponse{}, 200, "", ErrorMessage{}},
-		{"If the same-device flow responds an error, a 400 should be returend", true, "my-state", getValidVPToken(), errors.New("verification_error"), verifier.SameDeviceResponse{}, 400, "", ErrorMessage{Summary: "verification_error"}},
-		{"If no state is provided, a 400 should be returned.", true, "", getValidVPToken(), nil, verifier.SameDeviceResponse{}, 400, "", ErrorMessageNoState},
-		{"If an no token is provided, a 400 should be returned.", true, "my-state", "", nil, verifier.SameDeviceResponse{}, 400, "", ErrorMessageNoToken},
-		{"If a token with invalid credentials is provided, a 400 should be returned.", true, "my-state", getNoVCVPToken(), nil, verifier.SameDeviceResponse{}, 400, "", ErrorMessageUnableToDecodeToken},
-		{"If a token with an invalid holder is provided, a 400 should be returned.", true, "my-state", getNoHolderVPToken(), nil, verifier.SameDeviceResponse{}, 400, "", ErrorMessageUnableToDecodeToken},
+		{"If a same-device flow is authenticated, a valid redirect should be returned.", true, "my-state", getValidVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
+		{"If a same-device flow is authenticated with an SdJwt, a valid redirect should be returned.", true, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
+		{"If a cross-device flow is authenticated, a simple ok should be returned.", false, "my-state", getValidVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 200, "", ErrorMessage{}},
+		{"If a cross-device flow is authenticated with an SdJwt, a simple ok should be returned.", false, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 200, "", ErrorMessage{}},
+		{"If the same-device flow responds an error, a 400 should be returend", true, "my-state", getValidVPToken(), errors.New("verification_error"), verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessage{Summary: "verification_error"}},
+		{"If no state is provided, a 400 should be returned.", true, "", getValidVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageNoState},
+		{"If an no token is provided, a 400 should be returned.", true, "my-state", "", nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageNoToken},
+		{"If a token with invalid credentials is provided, a 400 should be returned.", true, "my-state", getNoVCVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageUnableToDecodeToken},
+		{"If a token with an invalid holder is provided, a 400 should be returned.", true, "my-state", getNoHolderVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageUnableToDecodeToken},
 	}
 
 	for _, tc := range tests {
