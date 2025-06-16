@@ -123,9 +123,22 @@ var routes = Routes{
 	},
 
 	{
+		"VerifierLoginQr",
+		http.MethodGet,
+		"/api/v2/loginQR",
+		VerifierLoginQr,
+	},
+	{
 		"GetTokenForService",
 		http.MethodPost,
 		"/services/:service_id/token",
 		GetTokenForService,
+	},
+
+	{
+		"WebsocketHandler",
+		http.MethodGet,
+		"/ws",
+		WsHandler,
 	},
 }

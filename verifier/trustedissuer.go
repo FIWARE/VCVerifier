@@ -24,10 +24,10 @@ type TrustedIssuerValidationService struct {
 
 func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *verifiable.Credential, validationContext ValidationContext) (result bool, err error) {
 
-	logging.Log().Debugf("Validate trusted issuer for %s", logging.PrettyPrintObject(verifiableCredential))
+	logging.Log().Debugf("Validate trusted issuer for %s with context %v", logging.PrettyPrintObject(verifiableCredential), validationContext)
 	defer func() {
 		if recErr := recover(); recErr != nil {
-			logging.Log().Warnf("Was not able to convert context. Err: %v", recErr)
+			logging.Log().Warnf("TrustedIssuerValidationService: Was not able to convert context. Err: %v", recErr)
 			err = ErrorCannotConverContext
 		}
 	}()
