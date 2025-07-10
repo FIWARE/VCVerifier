@@ -82,6 +82,10 @@ type Verifier struct {
 	ValidationMode string `mapstructure:"validationMode" default:"none"`
 	// algorithm to be used for the jwt signatures - currently supported: RS256 and ES256
 	KeyAlgorithm string `mapstructure:"keyAlgorithm" default:"RS256"`
+	// when set to true, the private key is generated on startup. Its not persisted and just kept in memory.
+	GenerateKey bool `mapstructure:"generateKey" default:"true"`
+	// path to the private key for jwt signatures
+	KeyPath string `mapstructure:"keyPath"`
 }
 
 type ClientIdentification struct {

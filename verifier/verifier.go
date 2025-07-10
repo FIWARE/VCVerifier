@@ -51,6 +51,7 @@ const (
 var ErrorNoDID = errors.New("no_did_configured")
 var ErrorNoTIR = errors.New("no_tir_configured")
 var ErrorUnsupportedKeyAlgorithm = errors.New("unsupported_key_algorithm")
+var ErrorInvalidKeyConfig = errors.New("invalid_key_config")
 var ErrorUnsupportedValidationMode = errors.New("unsupported_validation_mode")
 var ErrorSupportedModesNotSet = errors.New("no_supported_request_mode_set")
 var ErrorNoSigningKey = errors.New("no_signing_key_available")
@@ -292,7 +293,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 	trustedParticipantVerificationService := TrustedParticipantValidationService{tirClient: tirClient, gaiaXClient: gaiaXClient}
 	trustedIssuerVerificationService := TrustedIssuerValidationService{tirClient: tirClient}
 
-	key, err := initPrivateKey(verifierConfig.KeyAlgorithm)
+	key, err := initPrivateKey(verifierConfig.KeyAlgorithm, verifierConfig.GenerateKey, verifierConfig.KeyPath)
 
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate a signing key. Err: %v", err)
@@ -1202,7 +1203,7 @@ func getHostName(urlString string) (host string, err error) {
 	return url.Host, err
 }
 
-func getRequestSigningKey(keyPath string, clientId string) (key jwk.Key, err error) {
+func loadKey(keyPath string) (key jwk.Key, err error) {
 	// read key file
 	rawKey, err := localFileAccessor.ReadFile(keyPath)
 	if err != nil {
@@ -1215,35 +1216,45 @@ func getRequestSigningKey(keyPath string, clientId string) (key jwk.Key, err err
 		logging.Log().Warnf("Was not able to parse the key %s. err: %v", rawKey, err)
 		return key, err
 	}
+	return
+}
 
-	key.Set("kid", clientId)
-
+func getRequestSigningKey(keyPath string, clientId string) (key jwk.Key, err error) {
+	key, err = loadKey(keyPath)
+	if key != nil {
+		key.Set("kid", clientId)
+	}
 	return
 }
 
 // Initialize the private key of the verifier. Might need to be persisted in future iterations.
-func initPrivateKey(keyType string) (key jwk.Key, err error) {
+func initPrivateKey(keyType string, generateKey bool, keyPath string) (key jwk.Key, err error) {
 	var newKey interface{}
-	if keyType == "RS256" {
-		newKey, err = rsa.GenerateKey(rand.Reader, 2048)
-	} else if keyType == "ES256" {
-		newKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if generateKey {
+		switch keyType {
+		case "RS256":
+			newKey, err = rsa.GenerateKey(rand.Reader, 2048)
+		case "ES256":
+			newKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		default:
+			return key, ErrorUnsupportedKeyAlgorithm
+		}
+		if err != nil {
+			return key, err
+		}
+		key, err = jwk.Import(newKey)
+		if err != nil {
+			return nil, err
+		}
+		if err != jwk.AssignKeyID(key) {
+			return nil, err
+		}
+		return key, err
+	} else if keyPath != "" {
+		return loadKey(keyPath)
 	} else {
-		return key, ErrorUnsupportedKeyAlgorithm
+		return key, ErrorInvalidKeyConfig
 	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	key, err = jwk.Import(newKey)
-	if err != nil {
-		return nil, err
-	}
-	if err != jwk.AssignKeyID(key) {
-		return nil, err
-	}
-	return key, err
 }
 
 // verify the configuration

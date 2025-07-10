@@ -132,6 +132,10 @@ verifier:
     validationMode: 
     # algorithm to be used for the jwt signatures - currently supported: RS256 and ES256, default is RS256
     keyAlgorithm: 
+    # when set to true, the private key is generated on startup. Its not persisted and just kept in memory.
+    generateKey: true
+    # path to the private key for jwt signatures
+    keyPath: 
 
 # configuration of the service to retrieve configuration for
 configRepo:

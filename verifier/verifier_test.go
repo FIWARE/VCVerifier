@@ -591,11 +591,11 @@ func TestInitVerifier(t *testing.T) {
 	}
 
 	tests := []test{
-		{"A verifier should be properly intantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, nil},
+		{"A verifier should be properly intantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}}}, nil},
 		{"Without a did, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, ErrorNoDID},
 		{"Without a tir, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", SessionExpiry: 30, ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, ErrorNoTIR},
 		{"Without a validationMode, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "blub", SessionExpiry: 30, KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, ErrorUnsupportedValidationMode},
-		{"Without a valid key algorithm, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "SomethingWeird", SupportedModes: []string{"urlEncoded"}}}, ErrorUnsupportedKeyAlgorithm},
+		{"Without a valid key algorithm, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "SomethingWeird", SupportedModes: []string{"urlEncoded"}}}, ErrorInvalidKeyConfig},
 		{"Without supported modes, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256"}}, ErrorSupportedModesNotSet},
 	}
 
