@@ -134,7 +134,7 @@ verifier:
     keyAlgorithm: 
     # when set to true, the private key is generated on startup. Its not persisted and just kept in memory.
     generateKey: true
-    # path to the private key for jwt signatures
+    # path to the private key(in PEM format) for jwt signatures
     keyPath: 
 
 # configuration of the service to retrieve configuration for
