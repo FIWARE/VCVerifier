@@ -47,6 +47,7 @@ func Test_ReadConfig(t *testing.T) {
 					},
 					ValidationMode: "none",
 					KeyAlgorithm:   "RS256",
+					GenerateKey:    true,
 					SupportedModes: []string{"urlEncoded"},
 				},
 				Logging: Logging{
@@ -111,6 +112,7 @@ func Test_ReadConfig(t *testing.T) {
 					SessionExpiry:  30,
 					ValidationMode: "none",
 					KeyAlgorithm:   "RS256",
+					GenerateKey:    true,
 					SupportedModes: []string{"urlEncoded"},
 				},
 				Logging: Logging{
