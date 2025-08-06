@@ -34,7 +34,7 @@ type mockVerifier struct {
 	mockError            error
 }
 
-func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, requestType string) (qr string, err error) {
+func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
 	return mV.mockQR, mV.mockError
 }
 func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error) {

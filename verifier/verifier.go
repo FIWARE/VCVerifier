@@ -73,7 +73,7 @@ var ErrorInvalidNonce = errors.New("invalid_nonce")
 
 // verifier interface
 type Verifier interface {
-	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (qr string, err error)
+	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (qr string, err error)
 	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error)
 	StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (connectionString string, err error)
 	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string) (authenticationRequest string, err error)
@@ -338,7 +338,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 /**
 *   Initializes the cross-device login flow and returns all neccessary information as a qr-code
 **/
-func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (qr string, err error) {
+func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (qr string, err error) {
 
 	for _, v := range v.supportedRequestModes {
 		logging.Log().Warnf("Supported: %s", v)
@@ -350,7 +350,7 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 	}
 
 	logging.Log().Debugf("Generate a login qr for %s.", callback)
-	authenticationRequest, err := v.initSiopFlow(host, protocol, callback, sessionId, clientId, requestMode)
+	authenticationRequest, err := v.initSiopFlow(host, protocol, callback, sessionId, clientId, nonce, requestMode)
 
 	if err != nil {
 		return qr, err
@@ -397,7 +397,7 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (connectionString string, err error) {
 	logging.Log().Debugf("Start a plain siop-flow for %s.", callback)
 
-	return v.initSiopFlow(host, protocol, callback, sessionId, clientId, requestMode)
+	return v.initSiopFlow(host, protocol, callback, sessionId, clientId, "", requestMode)
 }
 
 /**
@@ -983,10 +983,10 @@ func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string,
 }
 
 // initializes the cross-device siop flow
-func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, requestMode string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (authenticationRequest string, err error) {
 
 	state := v.nonceGenerator.GenerateNonce()
-	loginSession := loginSession{callback, sessionId, "", clientId, "", CROSS_DEVICE_V1}
+	loginSession := loginSession{callback, sessionId, nonce, clientId, "", CROSS_DEVICE_V1}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
@@ -995,7 +995,7 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 	}
 	redirectUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
 
-	return v.generateAuthenticationRequest("openid4vp://", clientId, "", redirectUri, state, "", loginSession, requestMode)
+	return v.generateAuthenticationRequest("openid4vp://", clientId, "", redirectUri, state, nonce, loginSession, requestMode)
 }
 
 func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId string, scope string, redirectUri string, state string, nonce string, loginSession loginSession, requestMode string) (authenticationRequest string, err error) {

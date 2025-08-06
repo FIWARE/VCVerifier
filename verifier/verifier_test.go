@@ -277,7 +277,7 @@ func TestInitSiopFlow(t *testing.T) {
 			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomState", "randomNonce"}}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, credentialsConfig: credentialsConfig, requestSigningKey: &testKey, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testSessionId, tc.testClientId, tc.requestMode)
+			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testSessionId, tc.testClientId, "", tc.requestMode)
 			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1)
 		})
 	}
