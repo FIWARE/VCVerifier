@@ -497,7 +497,6 @@ func getCredentialsNeededForScope(verificationContext TrustRegistriesValidationC
 	// prevent duplicate checks
 	for _, credentialType := range credentialTypesNeededForScope {
 		if cred, ok := credentialsByType[credentialType]; ok {
-			credentialsNeededForScope = append(credentialsNeededForScope, cred...)
 			for _, c := range cred {
 				if !seen[c] {
 					credentialsNeededForScope = append(credentialsNeededForScope, c)
@@ -777,11 +776,12 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		logging.Log().Warnf("Was not able to store the token %s in cache.", logging.PrettyPrintObject(tokenStore))
 		return sameDevice, err
 	}
-	if loginSession.version == SAME_DEVICE {
+	switch loginSession.version {
+	case SAME_DEVICE:
 		return Response{SAME_DEVICE, loginSession.callback, authorizationCode, loginSession.sessionId, loginSession.nonce}, err
-	} else if loginSession.version == CROSS_DEVICE_V1 {
+	case CROSS_DEVICE_V1:
 		return sameDevice, callbackToRequester(loginSession, authorizationCode)
-	} else {
+	default:
 		return Response{CROSS_DEVICE_V2, loginSession.callback, authorizationCode, loginSession.sessionId, loginSession.nonce}, err
 	}
 }
@@ -999,7 +999,8 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 }
 
 func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId string, scope string, redirectUri string, state string, nonce string, loginSession loginSession, requestMode string) (authenticationRequest string, err error) {
-	if requestMode == REQUEST_MODE_BY_VALUE {
+	switch requestMode {
+	case REQUEST_MODE_BY_VALUE:
 		authenticationRequest, err = v.createAuthenticationRequestByValue(base, redirectUri, state, clientId, scope, nonce)
 		if err != nil {
 			logging.Log().Warnf("Was not able to create the authentication request by value. Error: %v", err)
@@ -1007,7 +1008,7 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 			logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
 		}
 		return authenticationRequest, err
-	} else if requestMode == REQUEST_MODE_BY_REFERENCE {
+	case REQUEST_MODE_BY_REFERENCE:
 		requestObject, err := v.createAuthenticationRequestObject(redirectUri, state, clientId, scope, nonce)
 		loginSession.requestObject = string(requestObject[:])
 
@@ -1022,7 +1023,7 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 		}
 
 		return authenticationRequest, err
-	} else {
+	default:
 		return authenticationRequest, ErrorUnsupportedRequestMode
 	}
 }
