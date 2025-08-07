@@ -48,6 +48,7 @@ paths:
         - $ref: '#/components/parameters/QueryState'
         - $ref: '#/components/parameters/ClientCallback'
         - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/Nonce'
         - $ref: '#/components/parameters/RequestMode'
       operationId: VerifierPageDisplayQRSIOP
       summary: Presents a qr as starting point for the auth process
