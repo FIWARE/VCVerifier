@@ -518,7 +518,7 @@ func VerifierAPIStartSIOP(c *gin.Context) {
 		requestMode = DEFAULT_REQUEST_MODE
 	}
 
-	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, requestMode)
+	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, "", requestMode)
 	if err != nil {
 		c.AbortWithStatusJSON(500, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
 		return

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/PaesslerAG/jsonpath"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
+	"github.com/google/go-cmp/cmp"
 	"github.com/trustbloc/vc-go/verifiable"
 	"golang.org/x/exp/slices"
 )
@@ -129,18 +131,94 @@ func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, cr
 
 func verifyForType(subjectToVerfiy verifiable.Subject, credentialConfig tir.Credential) (result bool) {
 	for _, claim := range credentialConfig.Claims {
-		claimValue, exists := subjectToVerfiy.CustomFields[claim.Name]
-		if !exists {
-			logging.Log().Debugf("Restricted claim %s is not part of the subject %s.", claim.Name, logging.PrettyPrintObject(subjectToVerfiy))
-			continue
+
+		if claim.Path != "" {
+			validClaim := verifyWithJsonPath(subjectToVerfiy, claim)
+			if validClaim {
+				logging.Log().Debugf("Claim with path %s is valid.", claim.Path)
+				continue
+			} else {
+				return false
+			}
+		} else {
+			// old name base logic
+			claimValue, exists := subjectToVerfiy.CustomFields[claim.Name]
+			if !exists {
+				logging.Log().Debugf("Restricted claim %s is not part of the subject %s.", claim.Name, logging.PrettyPrintObject(subjectToVerfiy))
+				continue
+			}
+			isAllowed := contains(claim.AllowedValues, claimValue)
+			if !isAllowed {
+				logging.Log().Debugf("The claim value %s is not allowed by the config %s.", logging.PrettyPrintObject(claimValue), logging.PrettyPrintObject(credentialConfig))
+				return false
+			}
 		}
-		isAllowed := contains(claim.AllowedValues, claimValue)
-		if !isAllowed {
-			logging.Log().Debugf("The claim value %s is not allowed by the config %s.", logging.PrettyPrintObject(claimValue), logging.PrettyPrintObject(credentialConfig))
+
+	}
+	logging.Log().Debugf("No forbidden claim found for subject %s. Checked config was %s.", logging.PrettyPrintObject(subjectToVerfiy), logging.PrettyPrintObject(credentialConfig))
+	return true
+}
+
+func verifyWithJsonPath(subjectToVerfiy verifiable.Subject, claim tir.Claim) (result bool) {
+	jsonSubject, _ := json.Marshal(subjectToVerfiy.CustomFields)
+	var subjectAsMap map[string]interface{}
+	if err := json.Unmarshal(jsonSubject, &subjectAsMap); err != nil {
+		logging.Log().Warnf("Was not able to unmarshal the subject, set to invalid. Err: %v", err)
+		return false
+	}
+	claimValues, err := jsonpath.Get(claim.Path, subjectAsMap)
+	if err != nil {
+		logging.Log().Warnf("Path %s does not exist in the subject, thus cannot contain invalid values. Set to valid. Err: %v", claim.Path, err)
+		return true
+	}
+	switch claimValues := claimValues.(type) {
+	case []interface{}:
+		return isSubset(claimValues, claim.AllowedValues)
+	case map[string]interface{}:
+		return containsMap(toSliceOfMaps(claim.AllowedValues), claimValues)
+	default:
+		return slices.Contains(claim.AllowedValues, claimValues)
+	}
+
+}
+
+func toSliceOfMaps(raw []interface{}) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(raw))
+
+	for _, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			logging.Log().Warnf("Was not able to convert the allowed values, dont allow anything. V: %v", item)
+			return []map[string]interface{}{}
+		}
+		result = append(result, m)
+	}
+
+	return result
+}
+
+func containsMap(slice []map[string]interface{}, target map[string]interface{}) bool {
+	for _, item := range slice {
+		if cmp.Equal(item, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSubset(subSet, superSet []interface{}) bool {
+	for _, subVal := range subSet {
+		found := false
+		for _, superVal := range superSet {
+			if cmp.Equal(subVal, superVal) {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return false
 		}
 	}
-	logging.Log().Debugf("No forbidden claim found for subject %s. Checked config was %s.", logging.PrettyPrintObject(subjectToVerfiy), logging.PrettyPrintObject(credentialConfig))
 	return true
 }
 
