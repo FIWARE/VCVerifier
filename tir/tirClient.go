@@ -71,6 +71,7 @@ type TimeRange struct {
 
 type Claim struct {
 	Name          string        `json:"name"`
+	Path          string        `json:"path"`
 	AllowedValues []interface{} `json:"allowedValues"`
 }
 
