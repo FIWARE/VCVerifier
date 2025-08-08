@@ -60,13 +60,18 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 		logging.Log().Infof("Start a login flow for a not specified client.")
 	}
 
+	nonce, nonceExists := c.GetQuery("nonce")
+	if !nonceExists {
+		nonce = ""
+	}
+
 	requestMode, requestModeExists := c.GetQuery("request_mode")
 	if !requestModeExists {
 		logging.Log().Infof("Using default request mode %s.", DEFAULT_REQUEST_MODE)
 		requestMode = DEFAULT_REQUEST_MODE
 	}
 
-	qr, err := getFrontendVerifier().ReturnLoginQR(c.Request.Host, "https", callback, state, clientId, requestMode)
+	qr, err := getFrontendVerifier().ReturnLoginQR(c.Request.Host, "https", callback, state, clientId, nonce, requestMode)
 	if err != nil {
 		c.AbortWithStatusJSON(500, ErrorMessage{"qr_generation_error", err.Error()})
 		return

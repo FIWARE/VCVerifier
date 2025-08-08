@@ -19,7 +19,6 @@ import (
 	"github.com/trustbloc/vc-go/verifiable"
 
 	common "github.com/fiware/VCVerifier/common"
-	"github.com/fiware/VCVerifier/config"
 	configModel "github.com/fiware/VCVerifier/config"
 	logging "github.com/fiware/VCVerifier/logging"
 	"github.com/google/go-cmp/cmp"
@@ -95,16 +94,16 @@ type mockTokenCache struct {
 type mockCredentialConfig struct {
 
 	// ServiceId->Scope->CredentialType-> TIR/TIL URLs
-	mockScopes map[string]map[string]config.ScopeEntry
+	mockScopes map[string]map[string]configModel.ScopeEntry
 	mockError  error
 }
 
-func createMockCredentials(serviceId, scope, credentialType, url, holderClaim string, holderVerfication bool) map[string]map[string]config.ScopeEntry {
+func createMockCredentials(serviceId, scope, credentialType, url, holderClaim string, holderVerfication bool) map[string]map[string]configModel.ScopeEntry {
 	credential := configModel.Credential{Type: credentialType, TrustedParticipantsLists: []configModel.TrustedParticipantsList{{"ebsi", url}}, TrustedIssuersLists: []string{url}, HolderVerification: configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim}}
 
-	entry := config.ScopeEntry{Credentials: []configModel.Credential{credential}}
+	entry := configModel.ScopeEntry{Credentials: []configModel.Credential{credential}}
 
-	return map[string]map[string]config.ScopeEntry{serviceId: {scope: entry}}
+	return map[string]map[string]configModel.ScopeEntry{serviceId: {scope: entry}}
 }
 
 func (mcc mockCredentialConfig) GetScope(serviceIdentifier string) (scopes []string, err error) {
@@ -114,7 +113,7 @@ func (mcc mockCredentialConfig) GetScope(serviceIdentifier string) (scopes []str
 	return maps.Keys(mcc.mockScopes[serviceIdentifier]), err
 }
 
-func (mcc mockCredentialConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition config.PresentationDefinition, err error) {
+func (mcc mockCredentialConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition configModel.PresentationDefinition, err error) {
 	if mcc.mockError != nil {
 		return presentationDefinition, mcc.mockError
 	}
@@ -183,7 +182,7 @@ func (mcc mockCredentialConfig) GetComplianceRequired(serviceIdentifier string, 
 	return isRequired, err
 }
 
-func (mcc mockCredentialConfig) GetJwtInclusion(serviceIdentifier string, scope string, credentialType string) (jwtInclusion config.JwtInclusion, err error) {
+func (mcc mockCredentialConfig) GetJwtInclusion(serviceIdentifier string, scope string, credentialType string) (jwtInclusion configModel.JwtInclusion, err error) {
 	if mcc.mockError != nil {
 		return jwtInclusion, mcc.mockError
 	}
@@ -254,8 +253,9 @@ type siopInitTest struct {
 	testSessionId        string
 	testClientId         string
 	testRequestObjectJwt string
+	testNonce            string
 	requestMode          string
-	credentialScopes     map[string]map[string]config.ScopeEntry
+	credentialScopes     map[string]map[string]configModel.ScopeEntry
 	mockConfigError      error
 	expectedCallback     string
 	expectedConnection   string
@@ -277,7 +277,7 @@ func TestInitSiopFlow(t *testing.T) {
 			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomState", "randomNonce"}}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, credentialsConfig: credentialsConfig, requestSigningKey: &testKey, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testSessionId, tc.testClientId, tc.requestMode)
+			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testSessionId, tc.testClientId, tc.testNonce, tc.requestMode)
 			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1)
 		})
 	}
@@ -298,7 +298,7 @@ func TestStartSiopFlow(t *testing.T) {
 			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomState", "randomNonce"}}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.StartSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testSessionId, tc.testClientId, tc.requestMode)
+			authReq, err := verifier.StartSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testSessionId, tc.testClientId, tc.testNonce, tc.requestMode)
 			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1)
 		})
 	}
@@ -331,10 +331,10 @@ func verifyInitTest(t *testing.T, tc siopInitTest, authRequest string, err error
 	}
 	var expectedSession loginSession
 	if tc.requestMode == REQUEST_MODE_BY_REFERENCE {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, sessionId: tc.testSessionId, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: tc.testNonce, sessionId: tc.testSessionId, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
 		cachedSession.requestObject = removeSignature(cachedSession.requestObject)
 	} else {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, sessionId: tc.testSessionId, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: tc.testNonce, sessionId: tc.testSessionId, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
 	}
 	if cachedSession != expectedSession {
 		t.Errorf("%s - The login session was expected to be %v but was %v.", tc.testName, expectedSession, cachedSession)
@@ -360,6 +360,12 @@ func getInitSiopTests() []siopInitTest {
 		},
 		{testName: "If all parameters are set, a proper connection string byReference should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", requestMode: REQUEST_MODE_BY_REFERENCE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
 			expectedConnection: "openid4vp://?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/randomState&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsInByZXNlbnRhdGlvbl9kZWZpbml0aW9uIjp7ImlkIjoiIiwiaW5wdXRfZGVzY3JpcHRvcnMiOm51bGwsImZvcm1hdCI6bnVsbH0sInJlc3BvbnNlX21vZGUiOiJkaXJlY3RfcG9zdCIsInJlc3BvbnNlX3R5cGUiOiJ2cF90b2tlbiIsInJlc3BvbnNlX3VyaSI6Imh0dHBzOi8vdmVyaWZpZXIub3JnL2FwaS92MS9hdXRoZW50aWNhdGlvbl9yZXNwb25zZSIsInNjb3BlIjoib3BlbmlkIiwic3RhdGUiOiJyYW5kb21TdGF0ZSJ9",
+		},
+		{testName: "If all parameters, including the nonce, are set, a proper connection string byValue should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", testNonce: "my-nonce", requestMode: REQUEST_MODE_BY_VALUE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+			expectedConnection: "openid4vp://?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoibXktbm9uY2UiLCJwcmVzZW50YXRpb25fZGVmaW5pdGlvbiI6eyJpZCI6IiIsImlucHV0X2Rlc2NyaXB0b3JzIjpudWxsLCJmb3JtYXQiOm51bGx9LCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzY29wZSI6Im9wZW5pZCIsInN0YXRlIjoicmFuZG9tU3RhdGUifQ", sessionCacheError: nil, expectedError: nil,
+		},
+		{testName: "If all parameters are set, including the nonce, a proper connection string byReference should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", testNonce: "my-nonce", requestMode: REQUEST_MODE_BY_REFERENCE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+			expectedConnection: "openid4vp://?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/randomState&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoibXktbm9uY2UiLCJwcmVzZW50YXRpb25fZGVmaW5pdGlvbiI6eyJpZCI6IiIsImlucHV0X2Rlc2NyaXB0b3JzIjpudWxsLCJmb3JtYXQiOm51bGx9LCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzY29wZSI6Im9wZW5pZCIsInN0YXRlIjoicmFuZG9tU3RhdGUifQ",
 		},
 	}
 }
@@ -802,7 +808,7 @@ type openIdProviderMetadataTest struct {
 	host              string
 	testName          string
 	serviceIdentifier string
-	credentialScopes  map[string]map[string]config.ScopeEntry
+	credentialScopes  map[string]map[string]configModel.ScopeEntry
 	mockConfigError   error
 	expectedOpenID    common.OpenIDProviderMetadata
 }
@@ -812,12 +818,12 @@ func getOpenIdProviderMetadataTests() []openIdProviderMetadataTest {
 
 	return []openIdProviderMetadataTest{
 		{testName: "Test OIDC metadata with existing scopes", serviceIdentifier: "serviceId", host: verifierHost,
-			credentialScopes: map[string]map[string]config.ScopeEntry{"serviceId": {"Scope1": {}, "Scope2": {}}}, mockConfigError: nil,
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {"Scope1": {}, "Scope2": {}}}, mockConfigError: nil,
 			expectedOpenID: common.OpenIDProviderMetadata{
 				Issuer:          verifierHost,
 				ScopesSupported: []string{"Scope1", "Scope2"}}},
 		{testName: "Test OIDC metadata with non-existing scopes", serviceIdentifier: "serviceId", host: verifierHost,
-			credentialScopes: map[string]map[string]config.ScopeEntry{"serviceId": {}}, mockConfigError: nil,
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {}}, mockConfigError: nil,
 			expectedOpenID: common.OpenIDProviderMetadata{
 				Issuer:          verifierHost,
 				ScopesSupported: []string{}}},
