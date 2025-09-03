@@ -78,9 +78,11 @@ func (v *ExternalJAdESValidator) ValidateSignature(signature string) (success bo
 	}
 
 	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			logging.Log().Warnf("Was not able to close the response body. Err: %v", err)
+		if Body != nil {
+			err := Body.Close()
+			if err != nil {
+				logging.Log().Warnf("Was not able to close the response body. Err: %v", err)
+			}
 		}
 	}(validationHttpResponse.Body)
 

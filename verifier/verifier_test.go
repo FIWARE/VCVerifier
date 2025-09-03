@@ -501,8 +501,8 @@ func TestAuthenticationResponse(t *testing.T) {
 			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}, errorToThrow: tc.tokenCacheError}
 
 			httpClient = mockHttpClient{tc.callbackError, nil}
-			ecdsKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			testKey, _ := jwk.Import(ecdsKey)
+			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			testKey, _ := jwk.Import(ecdsaKey)
 			jwk.AssignKeyID(testKey)
 			nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
 			credentialsConfig := mockCredentialConfig{}
@@ -843,6 +843,304 @@ func TestGetOpenIDConfiguration(t *testing.T) {
 			assert.Equal(t, len(tc.expectedOpenID.ScopesSupported), len(actualOpenID.ScopesSupported))
 			for _, scope := range tc.expectedOpenID.ScopesSupported {
 				assert.True(t, slices.Contains(actualOpenID.ScopesSupported, scope))
+			}
+		})
+	}
+}
+
+func TestRemoveDuplicate(t *testing.T) {
+	type test struct {
+		testName      string
+		inputSlice    interface{}
+		expectedSlice interface{}
+	}
+
+	tests := []test{
+		{
+			testName:      "String slice with duplicates",
+			inputSlice:    []string{"a", "b", "a", "c", "b"},
+			expectedSlice: []string{"a", "b", "c"},
+		},
+		{
+			testName:      "String slice without duplicates",
+			inputSlice:    []string{"a", "b", "c"},
+			expectedSlice: []string{"a", "b", "c"},
+		},
+		{
+			testName:      "Empty string slice",
+			inputSlice:    []string{},
+			expectedSlice: []string{},
+		},
+		{
+			testName:      "Int slice with duplicates",
+			inputSlice:    []int{1, 2, 1, 3, 2},
+			expectedSlice: []int{1, 2, 3},
+		},
+		{
+			testName:      "Int slice without duplicates",
+			inputSlice:    []int{1, 2, 3},
+			expectedSlice: []int{1, 2, 3},
+		},
+		{
+			testName:      "Empty int slice",
+			inputSlice:    []int{},
+			expectedSlice: []int{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			var result interface{}
+			switch s := tc.inputSlice.(type) {
+			case []string:
+				result = removeDuplicate(s)
+			case []int:
+				result = removeDuplicate(s)
+			}
+
+			if !cmp.Equal(result, tc.expectedSlice) {
+				t.Errorf("Expected %v, but got %v", tc.expectedSlice, result)
+			}
+		})
+	}
+}
+func TestGetValueFromPath(t *testing.T) {
+	t.Log("Running TestGetValueFromPath")
+	type test struct {
+		testName      string
+		inputMap      map[string]interface{}
+		path          []string
+		expectedValue interface{}
+		expectedOk    bool
+	}
+
+	tests := []test{
+		{
+			testName: "Valid path",
+			inputMap: map[string]interface{}{
+				"a": map[string]interface{}{
+					"b": "c",
+				},
+			},
+			path:          []string{"a", "b"},
+			expectedValue: "c",
+			expectedOk:    true,
+		},
+		{
+			testName: "Path does not exist",
+			inputMap: map[string]interface{}{
+				"a": map[string]interface{}{
+					"b": "c",
+				},
+			},
+			path:          []string{"a", "d"},
+			expectedValue: nil,
+			expectedOk:    false,
+		},
+		{
+			testName: "Path through non-map element",
+			inputMap: map[string]interface{}{
+				"a": "not a map",
+			},
+			path:          []string{"a", "b"},
+			expectedValue: nil,
+			expectedOk:    false,
+		},
+		{
+			testName: "Empty path",
+			inputMap: map[string]interface{}{
+				"a": "value",
+			},
+			path:          []string{},
+			expectedValue: nil,
+			expectedOk:    false,
+		},
+		{
+			testName: "Path to a map",
+			inputMap: map[string]interface{}{
+				"a": map[string]interface{}{
+					"b": "c",
+				},
+			},
+			path:          []string{"a"},
+			expectedValue: map[string]interface{}{"b": "c"},
+			expectedOk:    true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			value, ok := getValueFromPath(tc.inputMap, tc.path)
+
+			if ok != tc.expectedOk {
+				t.Errorf("Expected ok to be %v, but got %v", tc.expectedOk, ok)
+			}
+
+			if !cmp.Equal(value, tc.expectedValue) {
+				t.Errorf("Expected value %v, but got %v", tc.expectedValue, value)
+			}
+		})
+	}
+}
+func TestSetValueAtPath(t *testing.T) {
+	type test struct {
+		testName      string
+		inputMap      map[string]interface{}
+		path          []string
+		value         interface{}
+		expectedMap   map[string]interface{}
+	}
+
+	tests := []test{
+		{
+			testName: "Set value at new path",
+			inputMap: map[string]interface{}{},
+			path:     []string{"a", "b"},
+			value:    "c",
+			expectedMap: map[string]interface{}{
+				"a": map[string]interface{}{
+					"b": "c",
+				},
+			},
+		},
+		{
+			testName: "Overwrite existing value",
+			inputMap: map[string]interface{}{
+				"a": map[string]interface{}{
+					"b": "old_value",
+				},
+			},
+			path:  []string{"a", "b"},
+			value: "new_value",
+			expectedMap: map[string]interface{}{
+				"a": map[string]interface{}{
+					"b": "new_value",
+				},
+			},
+		},
+		{
+			testName: "Set value at path that goes through non-map element",
+			inputMap: map[string]interface{}{
+				"a": "not a map",
+			},
+			path:  []string{"a", "b"},
+			value: "c",
+			expectedMap: map[string]interface{}{
+				"a": map[string]interface{}{
+					"b": "c",
+				},
+			},
+		},
+		{
+			testName: "Set value with empty path",
+			inputMap: map[string]interface{}{
+				"a": "value",
+			},
+			path:  []string{},
+			value: "new_value",
+			expectedMap: map[string]interface{}{
+				"a": "value",
+			},
+		},
+		{
+			testName: "Set map as value",
+			inputMap: map[string]interface{}{},
+			path:     []string{"a"},
+			value: map[string]interface{}{
+				"b": "c",
+			},
+			expectedMap: map[string]interface{}{
+				"a": map[string]interface{}{
+					"b": "c",
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			setValueAtPath(tc.inputMap, tc.path, tc.value)
+
+			if !cmp.Equal(tc.inputMap, tc.expectedMap) {
+				t.Errorf("Expected map %v, but got %v", tc.expectedMap, tc.inputMap)
+			}
+		})
+	}
+}
+func TestExtractCredentialTypes(t *testing.T) {
+	type test struct {
+		testName                string
+		presentation            *verifiable.Presentation
+		expectedCredentialsByType map[string][]*verifiable.Credential
+		expectedCredentialTypes []string
+	}
+
+	vc1, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+		ID:    "vc1",
+		Types: []string{"type1", "typeA"},
+	}, verifiable.CustomFields{})
+	vc2, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+		ID:    "vc2",
+		Types: []string{"type2", "typeB"},
+	}, verifiable.CustomFields{})
+	vp1, _ := verifiable.NewPresentation(verifiable.WithCredentials(vc1))
+	vp2, _ := verifiable.NewPresentation(verifiable.WithCredentials(vc1, vc2))
+	vp3, _ := verifiable.NewPresentation()
+
+	tests := []test{
+		{
+			testName:     "Presentation with one credential",
+			presentation: vp1,
+			expectedCredentialsByType: map[string][]*verifiable.Credential{
+				"type1": {vc1},
+				"typeA": {vc1},
+			},
+			expectedCredentialTypes: []string{"type1", "typeA"},
+		},
+		{
+			testName:     "Presentation with multiple credentials",
+			presentation: vp2,
+			expectedCredentialsByType: map[string][]*verifiable.Credential{
+				"type1": {vc1},
+				"typeA": {vc1},
+				"type2": {vc2},
+				"typeB": {vc2},
+			},
+			expectedCredentialTypes: []string{"type1", "typeA", "type2", "typeB"},
+		},
+		{
+			testName:                "Empty presentation",
+			presentation:            vp3,
+			expectedCredentialsByType: map[string][]*verifiable.Credential{},
+			expectedCredentialTypes: []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			credentialsByType, credentialTypes := extractCredentialTypes(tc.presentation)
+
+			if len(credentialsByType) != len(tc.expectedCredentialsByType) {
+				t.Errorf("Expected credentialsByType to have length %d, but got %d", len(tc.expectedCredentialsByType), len(credentialsByType))
+			}
+
+			for key, expectedVCs := range tc.expectedCredentialsByType {
+				vcs, ok := credentialsByType[key]
+				if !ok {
+					t.Errorf("Expected key %s to be in credentialsByType", key)
+				}
+				if len(vcs) != len(expectedVCs) {
+					t.Errorf("Expected %d credentials for type %s, but got %d", len(expectedVCs), key, len(vcs))
+				}
+				for i, vc := range vcs {
+					if vc.Contents().ID != expectedVCs[i].Contents().ID {
+						t.Errorf("Expected credential ID %s, but got %s", expectedVCs[i].Contents().ID, vc.Contents().ID)
+					}
+				}
+			}
+
+			if !cmp.Equal(credentialTypes, tc.expectedCredentialTypes) {
+				t.Errorf("Expected credentialTypes %v, but got %v", tc.expectedCredentialTypes, credentialTypes)
 			}
 		})
 	}

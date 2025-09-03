@@ -63,6 +63,10 @@ func compareVerificationMethod(presentedMethod string, didDocumentMethod string)
 }
 
 func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsolutePath string, err error) {
+	if verificationMethod == "" {
+		logging.Log().Warnf("The verification method %s is invalid.", verificationMethod)
+		return "", "", "", ErrorNotAValidVerficationMethod
+	}
 	keyArray := strings.Split(verificationMethod, "#")
 	if len(keyArray) == 2 {
 		// full-absolute path - format 3
