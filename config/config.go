@@ -72,6 +72,8 @@ type Verifier struct {
 	SessionExpiry int `mapstructure:"sessionExpiry" default:"30"`
 	// policies that shall be checked
 	PolicyConfig Policies `mapstructure:"policies"`
+	// path of the authorizationEndpoint to be provided in the .well-known/openid-configuration
+	AuthorizationEndpoint string `mapstructure:"authorizationEndpoint" default:"/api/v2/loginQR"`
 	// Validation mode for validating the vcs. Does not touch verification, just content validation.
 	// applicable modes:
 	// * `none`: No validation, just swallow everything
