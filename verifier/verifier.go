@@ -123,6 +123,8 @@ type CredentialVerifier struct {
 	requestSigningKey *jwk.Key
 	// Client identification for signing the request objects
 	clientIdentification configModel.ClientIdentification
+	// config of the verifier
+	verifierConfig config.Verifier
 }
 
 // allow singleton access to the verifier
@@ -329,6 +331,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 		verifierConfig.SupportedModes,
 		&didSigningKey,
 		verifierConfig.ClientIdentification,
+		*verifierConfig,
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
@@ -694,7 +697,7 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 
 	return common.OpenIDProviderMetadata{
 		Issuer:                           v.host,
-		AuthorizationEndpoint:            v.host,
+		AuthorizationEndpoint:            v.host + v.verifierConfig.AuthorizationEndpoint,
 		TokenEndpoint:                    v.host + "/services/" + serviceIdentifier + "/token",
 		JwksUri:                          v.host + "/.well-known/jwks",
 		GrantTypesSupported:              []string{"authorization_code", "vp_token"},
