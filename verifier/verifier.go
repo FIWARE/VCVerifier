@@ -667,7 +667,12 @@ func setValueAtPath(m map[string]interface{}, path []string, value interface{}) 
 			currentPosition[key] = make(map[string]interface{})
 		}
 		// get the sub-object
-		next, _ := currentPosition[key].(map[string]interface{})
+		next, ok := currentPosition[key].(map[string]interface{})
+		if !ok {
+			// the existing element is not a map, overwrite it
+			next = make(map[string]interface{})
+			currentPosition[key] = next
+		}
 		currentPosition = next
 	}
 }
