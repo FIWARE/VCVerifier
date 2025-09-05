@@ -27,6 +27,7 @@ var defaultPresentationOptions = []verifiable.PresentationOpt{
 var defaultSdJwtParserOptions = []sdv.ParseOpt{
 	sdv.WithSignatureVerifier(defaults.NewDefaultProofChecker(JWTVerfificationMethodResolver{})),
 	sdv.WithHolderVerificationRequired(false),
+	sdv.WithHolderSigningAlgorithms([]string{"ES256", "PS256"}),
 	sdv.WithIssuerSigningAlgorithms([]string{"ES256", "PS256"}),
 }
 
