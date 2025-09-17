@@ -407,7 +407,7 @@ func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callbac
 * Starts a same-device siop-flow and returns the required redirection information
 **/
 func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string) (authenticationRequest string, err error) {
-	logging.Log().Debugf("Initiate samedevice flow for %s.", host)
+	logging.Log().Debugf("Initiate samedevice flow for %s - %s.", host, clientId)
 	state := v.nonceGenerator.GenerateNonce()
 
 	loginSession := loginSession{fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId, "", clientId, "", SAME_DEVICE}
@@ -1102,14 +1102,17 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	}
 	jwtBuilder.Expiration(v.clock.Now().Add(time.Second * 30))
 
-	// TODO: decide if more than the default scope should be supported.
-	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
-	if err != nil {
-		logging.Log().Errorf("Was not able to get the presentationDefintion for %s. Err: %v", clientId, err)
-		return requestObject, err
+	presentationDefinition := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
+	if presentationDefinition != nil {
+		logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
+		jwtBuilder.Claim("presentation_definition", &presentationDefinition)
 	}
-	logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
-	jwtBuilder.Claim("presentation_definition", presentationDefinition)
+
+	dcql := v.credentialsConfig.GetDcqlQuery(clientId, scope)
+	if dcql != nil {
+		logging.Log().Debugf("The dcql %s", logging.PrettyPrintObject(dcql))
+		jwtBuilder.Claim("dcql_query", &dcql)
+	}
 
 	requestToken, err := jwtBuilder.Build()
 	if err != nil {
@@ -1319,16 +1322,4 @@ func loadCertChainFromPEM(path string) ([]*x509.Certificate, error) {
 
 func (v *CredentialVerifier) GetHost() string {
 	return v.host
-}
-
-type RequestObject struct {
-	Issuer       string `json:"iss"`
-	ResponseType string `json:"response_type"`
-	ResponseMode string `json:"response_mode"`
-	ClientId     string `json:"client_id"`
-	ResponseUri  string `json:"response_uri"`
-	Scope        string `json:"scope"`
-	Nonce        string `json:"nonce"`
-	State        string `json:"state"`
-	//dcql_query to be supported in the future
 }

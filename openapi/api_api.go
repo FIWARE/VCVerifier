@@ -291,6 +291,7 @@ func StartSIOPSameDevice(c *gin.Context) {
 	}
 
 	clientId, clientIdExists := c.GetQuery("client_id")
+	logging.Log().Debugf("The client id %s", clientId)
 	if !clientIdExists {
 		logging.Log().Infof("Start a login flow for a not specified client.")
 	}
@@ -379,9 +380,23 @@ func GetRequestByReference(c *gin.Context) {
 
 func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
 
-	tokenBytes := decodeVpString(vpToken)
-
 	logging.Log().Debugf("The token %s.", vpToken)
+
+	parsedPresentation, err = getPresentationFromQuery(c, vpToken)
+
+	if err != nil {
+		logging.Log().Debugf("Received a vpToken with a query, but was not able to extract the presentation. Token: %s", vpToken)
+		return parsedPresentation, err
+	}
+	if parsedPresentation != nil {
+		return parsedPresentation, err
+	}
+	return tokenToPresentation(c, vpToken)
+
+}
+
+func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
+	tokenBytes := decodeVpString(vpToken)
 
 	isSdJWT, parsedPresentation, err := isSdJWT(c, vpToken)
 	if isSdJWT && err != nil {
@@ -400,6 +415,31 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *ver
 		return
 	}
 	return
+}
+
+func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
+	tokenBytes := decodeVpString(vpToken)
+
+	var queryMap map[string]string
+	//unmarshal
+	err = json.Unmarshal(tokenBytes, &queryMap)
+	if err != nil {
+		logging.Log().Debug("VP Token does not contain query map. Checking the other options.", err)
+		return nil, nil
+	}
+
+	for _, v := range queryMap {
+		p, err := tokenToPresentation(c, v)
+		if err != nil {
+			return nil, err
+		}
+		if parsedPresentation == nil {
+			parsedPresentation = p
+		} else {
+			parsedPresentation.AddCredentials(p.Credentials()...)
+		}
+	}
+	return parsedPresentation, err
 }
 
 // checks if the presented token contains a single sd-jwt credential. Will be repackage to a presentation for further validation
