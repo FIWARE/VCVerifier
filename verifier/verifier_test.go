@@ -113,13 +113,19 @@ func (mcc mockCredentialConfig) GetScope(serviceIdentifier string) (scopes []str
 	return maps.Keys(mcc.mockScopes[serviceIdentifier]), err
 }
 
-func (mcc mockCredentialConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition configModel.PresentationDefinition, err error) {
+func (mcc mockCredentialConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *configModel.PresentationDefinition) {
 	if mcc.mockError != nil {
-		return presentationDefinition, mcc.mockError
+		return presentationDefinition
 	}
-	return mcc.mockScopes[serviceIdentifier][scope].PresentationDefinition, err
+	return mcc.mockScopes[serviceIdentifier][scope].PresentationDefinition
 }
 
+func (mcc mockCredentialConfig) GetDcqlQuery(serviceIdentifier string, scope string) (dcql *configModel.DCQL) {
+	if mcc.mockError != nil {
+		return dcql
+	}
+	return mcc.mockScopes[serviceIdentifier][scope].DCQL
+}
 func (mcc mockCredentialConfig) GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []configModel.TrustedParticipantsList, err error) {
 	if mcc.mockError != nil {
 		return trustedIssuersRegistryUrl, mcc.mockError
@@ -984,11 +990,11 @@ func TestGetValueFromPath(t *testing.T) {
 }
 func TestSetValueAtPath(t *testing.T) {
 	type test struct {
-		testName      string
-		inputMap      map[string]interface{}
-		path          []string
-		value         interface{}
-		expectedMap   map[string]interface{}
+		testName    string
+		inputMap    map[string]interface{}
+		path        []string
+		value       interface{}
+		expectedMap map[string]interface{}
 	}
 
 	tests := []test{
@@ -1069,10 +1075,10 @@ func TestSetValueAtPath(t *testing.T) {
 }
 func TestExtractCredentialTypes(t *testing.T) {
 	type test struct {
-		testName                string
-		presentation            *verifiable.Presentation
+		testName                  string
+		presentation              *verifiable.Presentation
 		expectedCredentialsByType map[string][]*verifiable.Credential
-		expectedCredentialTypes []string
+		expectedCredentialTypes   []string
 	}
 
 	vc1, _ := verifiable.CreateCredential(verifiable.CredentialContents{
@@ -1109,10 +1115,10 @@ func TestExtractCredentialTypes(t *testing.T) {
 			expectedCredentialTypes: []string{"type1", "typeA", "type2", "typeB"},
 		},
 		{
-			testName:                "Empty presentation",
-			presentation:            vp3,
+			testName:                  "Empty presentation",
+			presentation:              vp3,
 			expectedCredentialsByType: map[string][]*verifiable.Credential{},
-			expectedCredentialTypes: []string{},
+			expectedCredentialTypes:   []string{},
 		},
 	}
 
