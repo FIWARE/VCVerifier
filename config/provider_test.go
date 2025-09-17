@@ -73,7 +73,7 @@ func Test_ReadConfig(t *testing.T) {
 											TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
 										},
 									},
-									PresentationDefinition: PresentationDefinition{
+									PresentationDefinition: &PresentationDefinition{
 										Id: "my-pd",
 										InputDescriptors: []InputDescriptor{
 											{

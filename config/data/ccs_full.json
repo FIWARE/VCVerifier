@@ -1,51 +1,71 @@
 {
     "total": 1,
     "pageNumber": 0,
-    "pageSize": 10,
+    "pageSize": 100,
     "services": [
-      {
-        "id": "service_all",
-        "defaultOidcScope": "did_write",
-        "oidcScopes": {
-          "did_write": {
-            "credentials": [
-              {
-                "type": "VerifiableCredential",
-                "trustedParticipantsLists": [
-                  {
-                    "type": "ebsi",
-                    "url": "https://tir-pdc.ebsi.fiware.dev"
-                  }
-                ],
-                "trustedIssuersLists": [
-                  "https://til-pdc.ebsi.fiware.dev"
-                ],
-                "holderVerification": {
-                  "enabled": false,
-                  "claim": "subject"
-                }
-              }
-            ],
-            "presentationDefinition": {
-              "id": "my-pd",
-              "input_descriptors": [
-                {
-                  "id": "my-descriptor",
-                  "constraints": {
-                    "fields": [
-                      {
-                        "id": "my-field",
-                        "path": [ 
-                          "$.vc.my.claim"
+        {
+            "id": "service_all",
+            "defaultOidcScope": "did_write",
+            "oidcScopes": {
+                "did_write": {
+                    "credentials": [
+                        {
+                            "type": "VerifiableCredential",
+                            "trustedParticipantsLists": [
+                                {
+                                    "type": "ebsi",
+                                    "url": "https://tir-pdc.ebsi.fiware.dev"
+                                }
+                            ],
+                            "trustedIssuersLists": [
+                                "https://til-pdc.ebsi.fiware.dev"
+                            ],
+                            "holderVerification": {
+                                "enabled": false,
+                                "claim": "subject"
+                            }
+                        }
+                    ],
+                    "presentationDefinition": {
+                        "id": "my-pd",
+                        "input_descriptors": [
+                            {
+                                "id": "my-descriptor",
+                                "constraints": {
+                                    "fields": [
+                                        {
+                                            "id": "my-field",
+                                            "path": [
+                                                "$.vc.my.claim"
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
                         ]
-                      }
-                    ]
-                  }
+                    },
+                    "dcql": {
+                        "credentials": [
+                            {
+                                "id": "my-credential-query-id",
+                                "format": "jwt_vc_json",
+                                "claims": [
+                                    {
+                                        "path": ["$.vc.credentialSubject.familyName"],
+                                        "intent_to_retain": true
+                                    }
+                                ]
+                            }
+                        ],
+                        "credential_sets": [
+                            {
+                                "options": [["my-credential-query-id"]],
+                                "purpose": "Please provide your family name."
+                            }
+                        ]
+                    }
                 }
-              ]
             }
-          }
         }
-      }
     ]
-  }
+}

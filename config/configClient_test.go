@@ -49,7 +49,7 @@ func Test_getServices(t *testing.T) {
 							HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
 						},
 					},
-					PresentationDefinition: PresentationDefinition{
+					PresentationDefinition: &PresentationDefinition{
 						Id: "my-pd",
 						InputDescriptors: []InputDescriptor{
 							{
@@ -62,6 +62,26 @@ func Test_getServices(t *testing.T) {
 										},
 									},
 								},
+							},
+						},
+					},
+					DCQL: &DCQL{
+						Credentials: []CredentialQuery{
+							{
+								Id:     "my-credential-query-id",
+								Format: "jwt_vc_json",
+								Claims: []ClaimsQuery{
+									{
+										Path:           []interface{}{"$.vc.credentialSubject.familyName"},
+										IntentToRetain: true,
+									},
+								},
+							},
+						},
+						CredentialSets: []CredentialSetQuery{
+							{
+								Options: [][]string{{"my-credential-query-id"}},
+								Purpose: "Please provide your family name.",
 							},
 						},
 					},

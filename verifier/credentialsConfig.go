@@ -2,7 +2,6 @@ package verifier
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -19,8 +18,6 @@ import (
 
 const CACHE_EXPIRY = 60
 
-var ErrorNoPresentationDefinition = errors.New("no_presentation_definition_configured")
-
 /**
 * Provides information about credentialTypes associated with services and there trust anchors.
  */
@@ -28,7 +25,9 @@ type CredentialsConfig interface {
 	// should return the list of scopes to be requested via the scope parameter
 	GetScope(serviceIdentifier string) (scopes []string, err error)
 	// should return the presentationDefinition be requested via the scope parameter
-	GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition config.PresentationDefinition, err error)
+	GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *config.PresentationDefinition)
+	// should return the presentatiodcql to be requested via the scope parameter
+	GetDcqlQuery(serviceIdentifier string, scope string) (dcql *config.DCQL)
 	// get (EBSI TrustedIssuersRegistry compliant) endpoints for the given service/credential combination, to check its issued by a trusted participant.
 	GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []config.TrustedParticipantsList, err error)
 	// get (EBSI TrustedIssuersRegistry compliant) endpoints for the given service/credential combination, to check that credentials are issued by trusted issuers
@@ -144,17 +143,27 @@ func (cc ServiceBackedCredentialsConfig) GetScope(serviceIdentifier string) (sco
 	return []string{}, nil
 }
 
-func (cc ServiceBackedCredentialsConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition config.PresentationDefinition, err error) {
+func (cc ServiceBackedCredentialsConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *config.PresentationDefinition) {
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
 	if hit {
 
 		logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
 
-		return cacheEntry.(config.ConfiguredService).GetPresentationDefinition(scope), nil
+		return cacheEntry.(config.ConfiguredService).GetPresentationDefinition(scope)
 
 	}
 	logging.Log().Debugf("No presentation definition for %s - %s", serviceIdentifier, scope)
-	return presentationDefinition, ErrorNoPresentationDefinition
+	return presentationDefinition
+}
+
+func (cc ServiceBackedCredentialsConfig) GetDcqlQuery(serviceIdentifier string, scope string) (dcql *config.DCQL) {
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		return cacheEntry.(config.ConfiguredService).GetDcqlQuery(scope)
+
+	}
+	logging.Log().Debugf("No dcql for %s - %s", serviceIdentifier, scope)
+	return dcql
 }
 
 func (cc ServiceBackedCredentialsConfig) GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []config.TrustedParticipantsList, err error) {
