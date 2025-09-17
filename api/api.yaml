@@ -611,7 +611,8 @@ components:
         resource:
           type: string
           format: uri
-          description: A URI that indicates the target service or resource where the client intends to use the requested security token.
+          description: A URI that indicates the target service or resource where the client intends to use the requested security token. Resource 
+            is ignored if the target client is provided as path parameter
         audience:
           type: string
           description: The logical name of the target service where the client intends to use the requested security token.
