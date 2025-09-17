@@ -186,6 +186,9 @@ func handleTokenTypeVPToken(c *gin.Context, clientId string) {
 	logging.Log().Warnf("Got token %s", vpToken)
 
 	scopes := getScopesFromRequest(c)
+	if len(scopes) == 0 {
+		return
+	}
 
 	verifiyVPToken(c, vpToken, clientId, scopes, clientId)
 }

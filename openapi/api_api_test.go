@@ -76,19 +76,22 @@ func TestGetToken(t *testing.T) {
 	logging.Configure(true, "DEBUG", true, []string{})
 
 	type test struct {
-		testName           string
-		proofCheck         bool
-		testGrantType      string
-		testCode           string
-		testRedirectUri    string
-		testVPToken        string
-		testScope          string
-		mockJWTString      string
-		mockExpiration     int64
-		mockError          error
-		expectedStatusCode int
-		expectedResponse   TokenResponse
-		expectedError      ErrorMessage
+		testName               string
+		proofCheck             bool
+		testGrantType          string
+		testCode               string
+		testRedirectUri        string
+		testVPToken            string
+		testScope              string
+		testResource           string
+		testSubjectTokenType   string
+		testRequestedTokenType string
+		mockJWTString          string
+		mockExpiration         int64
+		mockError              error
+		expectedStatusCode     int
+		expectedResponse       TokenResponse
+		expectedError          ErrorMessage
 	}
 	tests := []test{
 		{testName: "If a valid authorization_code request is received a token should be responded.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockJWTString: "theJWT", mockExpiration: 10, mockError: nil, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}, expectedError: ErrorMessage{}},
@@ -98,10 +101,17 @@ func TestGetToken(t *testing.T) {
 		{testName: "If no redirect uri is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", expectedStatusCode: 400, expectedError: ErrorMessageInvalidTokenRequest},
 		{testName: "If the verify returns an error, a 403 should be answerd.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockError: errors.New("invalid"), expectedStatusCode: 403, expectedError: ErrorMessage{}},
 
-		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}},
-		{testName: "If a valid signed vp_token request is received a token should be responded.", proofCheck: true, testGrantType: "vp_token", testVPToken: getValidSignedDidKeyVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}},
+		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
+		{testName: "If a valid signed vp_token request is received a token should be responded.", proofCheck: true, testGrantType: "vp_token", testVPToken: getValidSignedDidKeyVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
 		{testName: "If no valid vp_token is provided, the request should fail.", proofCheck: false, testGrantType: "vp_token", testScope: "tir_read", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
 		{testName: "If no valid scope is provided, the request should fail.", proofCheck: false, testVPToken: getValidVPToken(), testGrantType: "vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoScope},
+		// token-exchange
+		{testName: "If a valid token-exchange request is received a token should be responded.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
+		{testName: "If a token-exchange request is received without resource, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoResource},
+		{testName: "If a token-exchange request is received with invalid subject_token_type, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "invalid_type", expectedStatusCode: 400, expectedError: ErrorMessageInvalidSubjectTokenType},
+		{testName: "If a token-exchange request is received with invalid requested_token_type, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", testRequestedTokenType: "invalid_type", expectedStatusCode: 400, expectedError: ErrorMessageInvalidRequestedTokenType},
+		{testName: "If a token-exchange request is received without subject_token, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
+		{testName: "If a token-exchange request is received without scope, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoScope},
 	}
 
 	for _, tc := range tests {
@@ -143,7 +153,21 @@ func TestGetToken(t *testing.T) {
 			}
 
 			if tc.testVPToken != "" {
-				formArray = append(formArray, "vp_token="+tc.testVPToken)
+				if tc.testGrantType == "vp_token" {
+					formArray = append(formArray, "vp_token="+tc.testVPToken)
+				} else if tc.testGrantType == "urn:ietf:params:oauth:grant-type:token-exchange" {
+					formArray = append(formArray, "subject_token="+tc.testVPToken)
+				}
+			}
+
+			if tc.testResource != "" {
+				formArray = append(formArray, "resource="+tc.testResource)
+			}
+			if tc.testSubjectTokenType != "" {
+				formArray = append(formArray, "subject_token_type="+tc.testSubjectTokenType)
+			}
+			if tc.testRequestedTokenType != "" {
+				formArray = append(formArray, "requested_token_type="+tc.testRequestedTokenType)
 			}
 
 			body := bytes.NewBufferString(strings.Join(formArray, "&"))
