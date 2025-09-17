@@ -153,7 +153,6 @@ paths:
       responses:
         '204':  
           description: Ok when it worked
-        
   /token:
     post:
       tags:
@@ -600,7 +599,7 @@ components:
       properties:
         grant_type: 
           type: string
-          enum: ["authorization_code"]
+          enum: ["authorization_code", "urn:ietf:params:oauth:grant-type:token-exchange"]
         code:
           type: string
           example: myRandomString
@@ -609,12 +608,40 @@ components:
           format: uri
           description: Same uri as provided as callback in the original request.
           example: https://my-portal.com/auth_callback
+        resource:
+          type: string
+          format: uri
+          description: A URI that indicates the target service or resource where the client intends to use the requested security token.
+        audience:
+          type: string
+          description: The logical name of the target service where the client intends to use the requested security token.
+        scope:
+          type: array
+          items:
+            type: string
+          description:  A list of space-delimited, case-sensitive strings, that allow the client to specify the desired scope of the requested security token in the context of the service or resource where the token will be used.
+        requested_token_type:
+          type: string
+          description:  An identifier, for the type of the requested security token.
+          enum: ["urn:ietf:params:oauth:token-type:access_token"]
+        subject_token:
+          type: string
+          description: A security token that represents the identity of the party on behalf of whom the request is being made.
+        subject_token_type:
+          type: string
+          description: An identifier that indicates the type of the security token in the subject_token parameter.
+          enum: ["urn:eu:oidf:vp_token"]
+      required:
+        - grant_type
     TokenResponse:
       type: object
       properties:
         token_type:
           type: string
           enum: ["Bearer"]
+        issued_token_type:
+          type: string
+          enum: ["urn:ietf:params:oauth:token-type:access_token"]
         expires_in: 
           type: number
           example: 3600

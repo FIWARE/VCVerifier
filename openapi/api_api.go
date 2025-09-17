@@ -41,6 +41,7 @@ var ErrorMessagNoGrantType = ErrorMessage{"no_grant_type_provided", "Token reque
 var ErrorMessageUnsupportedGrantType = ErrorMessage{"unsupported_grant_type", "Provided grant_type is not supported by the implementation."}
 var ErrorMessageNoCode = ErrorMessage{"no_code_provided", "Token requests require a code."}
 var ErrorMessageNoRedircetUri = ErrorMessage{"no_redirect_uri_provided", "Token requests require a redirect_uri."}
+var ErrorMessageNoResource = ErrorMessage{"no_resource_provided", "When using token-exchange, resource is required to provide the client_id."}
 var ErrorMessageNoState = ErrorMessage{"no_state_provided", "Authentication requires a state provided as query parameter."}
 var ErrorMessageNoScope = ErrorMessage{"no_scope_provided", "Authentication requires a scope provided as a parameter."}
 var ErrorMessageNoNonce = ErrorMessage{"no_nonce_provided", "Authentication requires a nonce provided as a query parameter."}
@@ -58,6 +59,8 @@ var ErrorMessageInvalidAudience = ErrorMessage{"invalid_audience", "Audience of 
 var ErrorMessageUnsupportedAssertionType = ErrorMessage{"unsupported_assertion_type", "Assertion type is not supported."}
 var ErrorMessageInvalidClientAssertion = ErrorMessage{"invalid_client_assertion", "Provided client assertion is invalid."}
 var ErrorMessageInvalidTokenRequest = ErrorMessage{"invalid_token_request", "Token request has no redirect_uri and no valid client assertion."}
+var ErrorMessageInvalidSubjectTokenType = ErrorMessage{"invalid_subject_token_type", "Token exchange is only supported for token type urn:eu:oidf:vp_token."}
+var ErrorMessageInvalidRequestedTokenType = ErrorMessage{"invalid_requested_token_type", "Token exchange is only supported for requesting tokens of type urn:ietf:params:oauth:token-type:access_token."}
 
 func getApiVerifier() verifier.Verifier {
 	if apiVerifier == nil {
@@ -98,11 +101,19 @@ func GetToken(c *gin.Context) {
 		return
 	}
 
-	if grantType == common.TYPE_CODE {
+	switch grantType {
+	case common.TYPE_CODE:
 		handleTokenTypeCode(c)
-	} else if grantType == common.TYPE_VP_TOKEN {
+	case common.TYPE_VP_TOKEN:
 		handleTokenTypeVPToken(c, c.GetHeader("client_id"))
-	} else {
+	case common.TYPE_TOKEN_EXCHANGE:
+		resource, resourceExists := c.GetPostForm("resource")
+		if !resourceExists {
+			c.AbortWithStatusJSON(400, ErrorMessageNoResource)
+			return
+		}
+		handleTokenTypeTokenExchange(c, resource)
+	default:
 		c.AbortWithStatusJSON(400, ErrorMessageUnsupportedGrantType)
 	}
 }
@@ -118,17 +129,52 @@ func GetTokenForService(c *gin.Context) {
 		return
 	}
 
-	if grantType == common.TYPE_CODE {
+	switch grantType {
+	case common.TYPE_CODE:
 		handleTokenTypeCode(c)
-	} else if grantType == common.TYPE_VP_TOKEN {
+	case common.TYPE_VP_TOKEN:
 		handleTokenTypeVPToken(c, c.Param("service_id"))
-	} else {
+	case common.TYPE_TOKEN_EXCHANGE:
+		handleTokenTypeTokenExchange(c, c.Param("service_id"))
+	default:
 		c.AbortWithStatusJSON(400, ErrorMessageUnsupportedGrantType)
 	}
 }
 
+func handleTokenTypeTokenExchange(c *gin.Context, clientId string) {
+	subjectTokenType, subjectTokenTypeExists := c.GetPostForm("subject_token_type")
+	if !subjectTokenTypeExists || subjectTokenType != common.TYPE_VP_TOKEN_SUBJECT {
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidSubjectTokenType)
+		return
+	}
+	requestedTokenType, requestedTokenTypeExists := c.GetPostForm("requested_token_type")
+	if requestedTokenTypeExists && requestedTokenType != common.TYPE_ACCESS_TOKEN {
+		c.AbortWithStatusJSON(400, ErrorMessageInvalidRequestedTokenType)
+		return
+	}
+
+	scopes := getScopesFromRequest(c)
+	if len(scopes) == 0 {
+		return
+	}
+
+	audience, audienceExists := c.GetPostForm("audience")
+	if !audienceExists {
+		audience = clientId
+	}
+
+	subjectToken, subjectTokenExists := c.GetPostForm("subject_token")
+	if !subjectTokenExists {
+		c.AbortWithStatusJSON(400, ErrorMessageNoToken)
+		return
+	}
+
+	logging.Log().Debugf("Got token %s", subjectToken)
+
+	verifiyVPToken(c, subjectToken, clientId, scopes, audience)
+}
+
 func handleTokenTypeVPToken(c *gin.Context, clientId string) {
-	var requestBody TokenRequestBody
 
 	vpToken, vpTokenExists := c.GetPostForm("vp_token")
 	if !vpTokenExists {
@@ -139,28 +185,18 @@ func handleTokenTypeVPToken(c *gin.Context, clientId string) {
 
 	logging.Log().Warnf("Got token %s", vpToken)
 
-	// not used at the moment
-	// presentationSubmission, presentationSubmissionExists := c.GetPostForm("presentation_submission")
-	// if !presentationSubmissionExists {
-	//	logging.Log().Debug("No presentation submission present in the request.")
-	//	c.AbortWithStatusJSON(400, ErrorMessageNoPresentationSubmission)
-	//	return
-	//}
+	scopes := getScopesFromRequest(c)
 
-	scope, scopeExists := c.GetPostForm("scope")
-	if !scopeExists {
-		logging.Log().Debug("No scope present in the request.")
-		c.AbortWithStatusJSON(400, ErrorMessageNoScope)
-		return
-	}
+	verifiyVPToken(c, vpToken, clientId, scopes, clientId)
+}
+
+func verifiyVPToken(c *gin.Context, vpToken string, clientId string, scopes []string, audience string) {
 
 	presentation, err := extractVpFromToken(c, vpToken)
 	if err != nil {
 		logging.Log().Warnf("Was not able to extract the credentials from the vp_token. E: %v", err)
 		return
 	}
-
-	scopes := strings.Split(scope, ",")
 
 	// Subject is empty since multiple VCs with different subjects can be provided
 	expiration, signedToken, err := getApiVerifier().GenerateToken(clientId, "", clientId, scopes, presentation)
@@ -169,7 +205,7 @@ func handleTokenTypeVPToken(c *gin.Context, clientId string) {
 		c.AbortWithStatusJSON(400, err)
 		return
 	}
-	response := TokenResponse{"Bearer", float32(expiration), signedToken, requestBody.Scope, ""}
+	response := TokenResponse{TokenType: "Bearer", IssuedTokenType: common.TYPE_ACCESS_TOKEN, ExpiresIn: float32(expiration), AccessToken: signedToken, Scope: strings.Join(scopes, ",")}
 	logging.Log().Infof("Generated and signed token: %v", response)
 	c.JSON(http.StatusOK, response)
 }
@@ -199,6 +235,19 @@ func handleTokenTypeCode(c *gin.Context) {
 		return
 	}
 	c.AbortWithStatusJSON(400, ErrorMessageInvalidTokenRequest)
+}
+
+func getScopesFromRequest(c *gin.Context) (scopes []string) {
+
+	scope, scopeExists := c.GetPostForm("scope")
+	if !scopeExists {
+		logging.Log().Debug("No scope present in the request.")
+		c.AbortWithStatusJSON(400, ErrorMessageNoScope)
+		return scopes
+	}
+
+	return strings.Split(scope, ",")
+
 }
 
 func handleWithClientAssertion(c *gin.Context, assertionType string, code string) {

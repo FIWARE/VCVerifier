@@ -10,7 +10,8 @@
 package openapi
 
 type TokenResponse struct {
-	TokenType string `json:"token_type,omitempty"`
+	TokenType       string `json:"token_type,omitempty"`
+	IssuedTokenType string `json:"issued_token_type,omitempty"`
 
 	// The lifetime in seconds of the access token
 	ExpiresIn float32 `json:"expires_in,omitempty"`
