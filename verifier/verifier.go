@@ -1118,7 +1118,7 @@ func (v *CredentialVerifier) createAuthenticationRequestByReference(base string,
 }
 
 func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri string, state string, clientId string, scope string, nonce string) (requestObject []byte, err error) {
-	jwtBuilder := jwt.NewBuilder().Issuer(v.did)
+	jwtBuilder := jwt.NewBuilder().Issuer(v.clientIdentification.Id)
 	jwtBuilder.Claim("response_type", "vp_token")
 	jwtBuilder.Claim("response_mode", "direct_post")
 	jwtBuilder.Claim("client_id", v.clientIdentification.Id)
