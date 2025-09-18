@@ -24,6 +24,8 @@ const CACHE_EXPIRY = 60
 type CredentialsConfig interface {
 	// should return the list of scopes to be requested via the scope parameter
 	GetScope(serviceIdentifier string) (scopes []string, err error)
+	// should return the authorization path to be provided as part of the oid-metadata
+	GetAuthorizationPath(serviceIdentifier string) (path string, err error)
 	// should return the presentationDefinition be requested via the scope parameter
 	GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *config.PresentationDefinition)
 	// should return the presentatiodcql to be requested via the scope parameter
@@ -141,6 +143,17 @@ func (cc ServiceBackedCredentialsConfig) GetScope(serviceIdentifier string) (sco
 	}
 	logging.Log().Debugf("No scope entry for %s", serviceIdentifier)
 	return []string{}, nil
+}
+
+func (cc ServiceBackedCredentialsConfig) GetAuthorizationPath(serviceIdentifier string) (path string, err error) {
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		logging.Log().Debugf("Found authorization-path for %s", serviceIdentifier)
+		configuredService := cacheEntry.(config.ConfiguredService)
+		return configuredService.AuthorizationPath, nil
+	}
+	logging.Log().Debugf("No authorization-path entry for %s", serviceIdentifier)
+	return "", nil
 }
 
 func (cc ServiceBackedCredentialsConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *config.PresentationDefinition) {

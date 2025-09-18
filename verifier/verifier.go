@@ -51,6 +51,8 @@ const (
 const OPENID4VP_PROTOCOL = "openid4vp"
 const REDIRECT_PROTOCOL = "redirect"
 
+const DEFAULT_AUTHORIZATION_PATH = "/api/v2/loginQR"
+
 var ErrorNoDID = errors.New("no_did_configured")
 var ErrorNoTIR = errors.New("no_tir_configured")
 var ErrorUnsupportedKeyAlgorithm = errors.New("unsupported_key_algorithm")
@@ -701,17 +703,35 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 		return metadata, err
 	}
 
+	authorizationPath, err := v.credentialsConfig.GetAuthorizationPath(serviceIdentifier)
+	if err != nil {
+		return metadata, err
+	}
+	if authorizationPath == "" && v.verifierConfig.AuthorizationEndpoint == "" {
+		// static default in case nothing is provided
+		authorizationPath = DEFAULT_AUTHORIZATION_PATH
+	} else if authorizationPath == "" {
+		// configured default
+		authorizationPath = v.verifierConfig.AuthorizationEndpoint
+	}
+
 	return common.OpenIDProviderMetadata{
 		Issuer:                           v.host,
-		AuthorizationEndpoint:            v.host + v.verifierConfig.AuthorizationEndpoint,
+		AuthorizationEndpoint:            appendPath(v.host, authorizationPath),
 		TokenEndpoint:                    v.host + "/services/" + serviceIdentifier + "/token",
 		JwksUri:                          v.host + "/.well-known/jwks",
-		GrantTypesSupported:              []string{"authorization_code", "vp_token"},
+		GrantTypesSupported:              []string{"authorization_code", "vp_token", "urn:ietf:params:oauth:grant-type:token-exchange"},
 		ResponseTypesSupported:           []string{"token"},
 		ResponseModeSupported:            []string{"direct_post"},
 		SubjectTypesSupported:            []string{"public"},
 		IdTokenSigningAlgValuesSupported: []string{"EdDSA", "ES256"},
 		ScopesSupported:                  scopes}, err
+}
+
+func appendPath(host string, path string) string {
+	host = strings.TrimSuffix(host, "/")
+	path = strings.TrimPrefix(path, "/")
+	return host + "/" + path
 }
 
 /**

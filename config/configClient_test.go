@@ -2,7 +2,7 @@ package config
 
 import (
 	"io"
-	"io/ioutil"
+	"os"
 	"strings"
 	"testing"
 
@@ -20,7 +20,7 @@ func (mhc MockHttpClient) Get(url string) (resp *http.Response, err error) {
 }
 
 func readFile(filename string, t *testing.T) string {
-	data, err := ioutil.ReadFile("data/" + filename)
+	data, err := os.ReadFile("data/" + filename)
 	if err != nil {
 		t.Error("could not read file", err)
 	}

@@ -113,6 +113,12 @@ func (mcc mockCredentialConfig) GetScope(serviceIdentifier string) (scopes []str
 	return maps.Keys(mcc.mockScopes[serviceIdentifier]), err
 }
 
+func (mcc mockCredentialConfig) GetAuthorizationPath(serviceIdentifier string) (path string, err error) {
+	if mcc.mockError != nil {
+		return path, mcc.mockError
+	}
+	return DEFAULT_AUTHORIZATION_PATH, err
+}
 func (mcc mockCredentialConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *configModel.PresentationDefinition) {
 	if mcc.mockError != nil {
 		return presentationDefinition
