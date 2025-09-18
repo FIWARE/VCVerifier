@@ -109,12 +109,12 @@ func GetToken(c *gin.Context) {
 	case common.TYPE_TOKEN_EXCHANGE:
 		resource, resourceExists := c.GetPostForm("resource")
 		if !resourceExists {
-			c.AbortWithStatusJSON(400, ErrorMessageNoResource)
+			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoResource)
 			return
 		}
 		handleTokenTypeTokenExchange(c, resource)
 	default:
-		c.AbortWithStatusJSON(400, ErrorMessageUnsupportedGrantType)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnsupportedGrantType)
 	}
 }
 
@@ -125,7 +125,7 @@ func GetTokenForService(c *gin.Context) {
 	grantType, grantTypeExists := c.GetPostForm("grant_type")
 	if !grantTypeExists {
 		logging.Log().Debug("No grant_type present in the request.")
-		c.AbortWithStatusJSON(400, ErrorMessagNoGrantType)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessagNoGrantType)
 		return
 	}
 
@@ -137,19 +137,19 @@ func GetTokenForService(c *gin.Context) {
 	case common.TYPE_TOKEN_EXCHANGE:
 		handleTokenTypeTokenExchange(c, c.Param("service_id"))
 	default:
-		c.AbortWithStatusJSON(400, ErrorMessageUnsupportedGrantType)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnsupportedGrantType)
 	}
 }
 
 func handleTokenTypeTokenExchange(c *gin.Context, clientId string) {
 	subjectTokenType, subjectTokenTypeExists := c.GetPostForm("subject_token_type")
 	if !subjectTokenTypeExists || subjectTokenType != common.TYPE_VP_TOKEN_SUBJECT {
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidSubjectTokenType)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSubjectTokenType)
 		return
 	}
 	requestedTokenType, requestedTokenTypeExists := c.GetPostForm("requested_token_type")
 	if requestedTokenTypeExists && requestedTokenType != common.TYPE_ACCESS_TOKEN {
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidRequestedTokenType)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidRequestedTokenType)
 		return
 	}
 
@@ -165,7 +165,7 @@ func handleTokenTypeTokenExchange(c *gin.Context, clientId string) {
 
 	subjectToken, subjectTokenExists := c.GetPostForm("subject_token")
 	if !subjectTokenExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoToken)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoToken)
 		return
 	}
 
@@ -179,7 +179,7 @@ func handleTokenTypeVPToken(c *gin.Context, clientId string) {
 	vpToken, vpTokenExists := c.GetPostForm("vp_token")
 	if !vpTokenExists {
 		logging.Log().Debug("No vp token present in the request.")
-		c.AbortWithStatusJSON(400, ErrorMessageNoToken)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoToken)
 		return
 	}
 
@@ -205,7 +205,7 @@ func verifiyVPToken(c *gin.Context, vpToken string, clientId string, scopes []st
 	expiration, signedToken, err := getApiVerifier().GenerateToken(clientId, "", clientId, scopes, presentation)
 	if err != nil {
 		logging.Log().Error("Failure during generating M2M token: ", err)
-		c.AbortWithStatusJSON(400, err)
+		c.AbortWithStatusJSON(http.StatusBadRequest, err)
 		return
 	}
 	response := TokenResponse{TokenType: "Bearer", IssuedTokenType: common.TYPE_ACCESS_TOKEN, ExpiresIn: float32(expiration), AccessToken: signedToken, Scope: strings.Join(scopes, ",")}
@@ -218,7 +218,7 @@ func handleTokenTypeCode(c *gin.Context) {
 	code, codeExists := c.GetPostForm("code")
 	if !codeExists {
 		logging.Log().Debug("No code present in the request.")
-		c.AbortWithStatusJSON(400, ErrorMessageNoCode)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoCode)
 		return
 	}
 
@@ -227,7 +227,7 @@ func handleTokenTypeCode(c *gin.Context) {
 	if redirectUriExists {
 		jwt, expiration, err := getApiVerifier().GetToken(code, redirectUri, false)
 		if err != nil {
-			c.AbortWithStatusJSON(403, ErrorMessage{Summary: err.Error()})
+			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), AccessToken: jwt})
@@ -237,7 +237,7 @@ func handleTokenTypeCode(c *gin.Context) {
 		handleWithClientAssertion(c, assertionType, code)
 		return
 	}
-	c.AbortWithStatusJSON(400, ErrorMessageInvalidTokenRequest)
+	c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidTokenRequest)
 }
 
 func getScopesFromRequest(c *gin.Context) (scopes []string) {
@@ -245,7 +245,7 @@ func getScopesFromRequest(c *gin.Context) (scopes []string) {
 	scope, scopeExists := c.GetPostForm("scope")
 	if !scopeExists {
 		logging.Log().Debug("No scope present in the request.")
-		c.AbortWithStatusJSON(400, ErrorMessageNoScope)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoScope)
 		return scopes
 	}
 
@@ -256,7 +256,7 @@ func getScopesFromRequest(c *gin.Context) (scopes []string) {
 func handleWithClientAssertion(c *gin.Context, assertionType string, code string) {
 	if assertionType != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
 		logging.Log().Warnf("Assertion type %s is not supported.", assertionType)
-		c.AbortWithStatusJSON(400, ErrorMessageUnsupportedAssertionType)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnsupportedAssertionType)
 		return
 	}
 
@@ -264,20 +264,20 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 	clientId, clientIdExists := c.GetPostForm("client_id")
 	if !clientAssertionExists || !clientIdExists {
 		logging.Log().Warnf("Client Id (%s) or assertion (%s) not provided.", clientId, clientAssertion)
-		c.AbortWithStatusJSON(400, ErrorMessageUnsupportedAssertionType)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnsupportedAssertionType)
 		return
 	}
 
 	kid, err := getKeyResolver().ExtractKIDFromJWT(clientAssertion)
 	if err != nil {
 		logging.Log().Warnf("Was not able to retrive kid from token %s. Err: %v.", clientAssertion, err)
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidClientAssertion)
 		return
 	}
 	pubKey, err := getKeyResolver().ResolvePublicKeyFromDID(kid)
 	if err != nil {
 		logging.Log().Warnf("Was not able to retrive key from kid %s. Err: %v.", kid, err)
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidClientAssertion)
 		return
 	}
 
@@ -290,7 +290,7 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 	parsed, err := jwt.Parse([]byte(clientAssertion), jwt.WithKey(alg, pubKey))
 	if err != nil {
 		logging.Log().Warnf("Was not able to parse and verify the token %s. Err: %v", clientAssertion, err)
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidClientAssertion)
 		return
 	}
 
@@ -298,7 +298,7 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 	jsonBytes, err := json.Marshal(parsed)
 	if err != nil {
 		logging.Log().Warnf("Was not able to marshal the token %s. Err: %v", clientAssertion, err)
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidClientAssertion)
 		return
 	}
 
@@ -306,19 +306,19 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 	var clientAssertionObject ClientAssertion
 	if err := json.Unmarshal(jsonBytes, &clientAssertionObject); err != nil {
 		logging.Log().Warnf("Was not able to unmarshal the token: %s, Err: %v", string(jsonBytes), err)
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidClientAssertion)
 		return
 	}
 
 	if clientAssertionObject.Sub != clientId || clientAssertionObject.Iss != clientId || !slices.Contains(clientAssertionObject.Aud, getFrontendVerifier().GetHost()) {
 		logging.Log().Warnf("Invalid assertion: %s. Client Id: %s, Host: %s", logging.PrettyPrintObject(clientAssertionObject), clientId, getApiVerifier().GetHost())
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidClientAssertion)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidClientAssertion)
 		return
 	}
 
 	jwt, expiration, err := getApiVerifier().GetToken(code, "", true)
 	if err != nil {
-		c.AbortWithStatusJSON(403, ErrorMessage{Summary: err.Error()})
+		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), AccessToken: jwt})
@@ -329,12 +329,13 @@ func StartSIOPSameDevice(c *gin.Context) {
 	state, stateExists := c.GetQuery("state")
 	if !stateExists {
 		logging.Log().Debugf("No state was provided.")
-		c.AbortWithStatusJSON(400, ErrorMessage{"no_state_provided", "Authentication requires a state provided as query parameter."})
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessage{"no_state_provided", "Authentication requires a state provided as query parameter."})
 		return
 	}
 	redirectPath, redirectPathExists := c.GetQuery("redirect_path")
+	requestProtocol := verifier.REDIRECT_PROTOCOL
 	if !redirectPathExists {
-		redirectPath = "/"
+		requestProtocol = verifier.OPENID4VP_PROTOCOL
 	}
 
 	protocol := "https"
@@ -354,13 +355,24 @@ func StartSIOPSameDevice(c *gin.Context) {
 		requestMode = DEFAULT_REQUEST_MODE
 	}
 
-	redirect, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, requestMode)
+	scope, scopeExists := c.GetQuery("scope")
+	if !scopeExists {
+		logging.Log().Infof("Start a login flow with default scope.")
+		scope = ""
+	}
+
+	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, requestMode, scope, requestProtocol)
 	if err != nil {
 		logging.Log().Warnf("Error starting the same-device flow. Err: %v", err)
-		c.AbortWithStatusJSON(500, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
+		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
 		return
 	}
-	c.Redirect(302, redirect)
+	if requestProtocol == verifier.OPENID4VP_PROTOCOL {
+		c.String(http.StatusOK, authenticationRequest)
+	} else {
+		c.Redirect(http.StatusFound, authenticationRequest)
+
+	}
 }
 
 // VerifierAPIAuthenticationResponse - Stores the credential for the given session
@@ -370,7 +382,7 @@ func VerifierAPIAuthenticationResponse(c *gin.Context) {
 	stateForm, stateFormExists := c.GetPostForm("state")
 	stateQuery, stateQueryExists := c.GetQuery("state")
 	if !stateFormExists && !stateQueryExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoState)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoState)
 		return
 	}
 	if stateFormExists {
@@ -383,7 +395,7 @@ func VerifierAPIAuthenticationResponse(c *gin.Context) {
 	vptoken, tokenExists := c.GetPostForm("vp_token")
 	if !tokenExists {
 		logging.Log().Info("No token was provided.")
-		c.AbortWithStatusJSON(400, ErrorMessageNoToken)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoToken)
 		return
 	}
 
@@ -399,14 +411,14 @@ func VerifierAPIAuthenticationResponse(c *gin.Context) {
 func GetVerifierAPIAuthenticationResponse(c *gin.Context) {
 	state, stateExists := c.GetQuery("state")
 	if !stateExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoState)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoState)
 		return
 	}
 
 	vpToken, tokenExists := c.GetQuery("vp_token")
 	if !tokenExists {
 		logging.Log().Info("No token was provided.")
-		c.AbortWithStatusJSON(400, ErrorMessageNoToken)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoToken)
 		return
 	}
 	presentation, err := extractVpFromToken(c, vpToken)
@@ -424,7 +436,7 @@ func GetRequestByReference(c *gin.Context) {
 	jwt, err := verifier.GetVerifier().GetRequestObject(sessionId)
 	if err != nil {
 		logging.Log().Debugf("No request for  %s. Err: %v", sessionId, err)
-		c.AbortWithStatusJSON(404, ErrorMessageNoSuchSession)
+		c.AbortWithStatusJSON(http.StatusNotFound, ErrorMessageNoSuchSession)
 		return
 	}
 	c.String(http.StatusOK, jwt)
@@ -463,7 +475,7 @@ func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *ve
 
 	if err != nil {
 		logging.Log().Infof("Was not able to parse the token %s. Err: %v", vpToken, err)
-		c.AbortWithStatusJSON(400, ErrorMessageUnableToDecodeToken)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnableToDecodeToken)
 		return
 	}
 	return
@@ -505,7 +517,7 @@ func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *verifi
 	vct, vct_ok := claims["vct"]
 	if !i_ok || !vct_ok {
 		logging.Log().Infof("Token does not contain issuer(%v) or vct(%v).", i_ok, vct_ok)
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidSdJwt)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
 		return true, presentation, errors.New(ErrorMessageInvalidSdJwt.Summary)
 	}
 	customFields := verifiable.CustomFields{}
@@ -519,13 +531,13 @@ func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *verifi
 	credential, err := verifiable.CreateCredential(contents, verifiable.CustomFields{})
 	if err != nil {
 		logging.Log().Infof("Was not able to create credential from sdJwt. E: %v", err)
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidSdJwt)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
 		return true, presentation, err
 	}
 	presentation, err = verifiable.NewPresentation()
 	if err != nil {
 		logging.Log().Infof("Was not able to create credpresentation from sdJwt. E: %v", err)
-		c.AbortWithStatusJSON(400, ErrorMessageInvalidSdJwt)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
 		return true, presentation, err
 	}
 	presentation.AddCredentials(credential)
@@ -547,7 +559,7 @@ func handleAuthenticationResponse(c *gin.Context, state string, presentation *ve
 	response, err := getApiVerifier().AuthenticationResponse(state, presentation)
 	if err != nil {
 		logging.Log().Warnf("Was not able to fullfil the authentication response. Err: %v", err)
-		c.AbortWithStatusJSON(400, ErrorMessage{Summary: err.Error()})
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessage{Summary: err.Error()})
 		return
 	}
 	if response != (verifier.Response{}) && response.FlowVersion == verifier.SAME_DEVICE {
@@ -574,7 +586,7 @@ func VerifierAPIOpenIDConfiguration(c *gin.Context) {
 
 	metadata, err := getApiVerifier().GetOpenIDConfiguration(c.Param("service_id"))
 	if err != nil {
-		c.AbortWithStatusJSON(500, ErrorMessage{err.Error(), "Was not able to generate the OpenID metadata."})
+		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to generate the OpenID metadata."})
 		return
 	}
 	c.JSON(http.StatusOK, metadata)
@@ -584,14 +596,14 @@ func VerifierAPIOpenIDConfiguration(c *gin.Context) {
 func VerifierAPIStartSIOP(c *gin.Context) {
 	state, stateExists := c.GetQuery("state")
 	if !stateExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoState)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoState)
 		// early exit
 		return
 	}
 
 	callback, callbackExists := c.GetQuery("client_callback")
 	if !callbackExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoCallback)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoCallback)
 		// early exit
 		return
 	}
@@ -612,7 +624,7 @@ func VerifierAPIStartSIOP(c *gin.Context) {
 
 	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, "", requestMode)
 	if err != nil {
-		c.AbortWithStatusJSON(500, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
+		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
 		return
 	}
 	c.String(http.StatusOK, connectionString)

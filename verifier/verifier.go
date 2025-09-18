@@ -48,6 +48,9 @@ const (
 	SAME_DEVICE
 )
 
+const OPENID4VP_PROTOCOL = "openid4vp"
+const REDIRECT_PROTOCOL = "redirect"
+
 var ErrorNoDID = errors.New("no_did_configured")
 var ErrorNoTIR = errors.New("no_tir_configured")
 var ErrorUnsupportedKeyAlgorithm = errors.New("unsupported_key_algorithm")
@@ -75,8 +78,8 @@ var ErrorInvalidNonce = errors.New("invalid_nonce")
 type Verifier interface {
 	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (qr string, err error)
 	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error)
-	StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (connectionString string, err error)
-	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string) (authenticationRequest string, err error)
+	StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error)
+	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
 	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error)
 	GetJWKS() jwk.Set
 	AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice Response, err error)
@@ -397,29 +400,32 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 /**
 * Starts a siop-flow and returns the required connection information
 **/
-func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (connectionString string, err error) {
+func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error) {
 	logging.Log().Debugf("Start a plain siop-flow for %s.", callback)
 
-	return v.initSiopFlow(host, protocol, callback, sessionId, clientId, nonce, requestMode)
+	return v.initSiopFlow(host, protocol, callback, state, clientId, nonce, requestMode)
 }
 
 /**
 * Starts a same-device siop-flow and returns the required redirection information
 **/
-func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, state string, redirectPath string, clientId string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error) {
 	logging.Log().Debugf("Initiate samedevice flow for %s - %s.", host, clientId)
-	state := v.nonceGenerator.GenerateNonce()
+	nonce := v.nonceGenerator.GenerateNonce()
 
-	loginSession := loginSession{fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId, "", clientId, "", SAME_DEVICE}
+	loginSession := loginSession{callback: fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId: state, nonce: nonce, clientId: clientId, version: SAME_DEVICE}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the login session %s in cache. Err: %v", logging.PrettyPrintObject(loginSession), err)
 		return authenticationRequest, err
 	}
 
-	redirectUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
-
-	return v.generateAuthenticationRequest(protocol+"://"+host+redirectPath, clientId, "", redirectUri, state, "", loginSession, requestMode)
+	authResponseUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
+	if requestProtocol == OPENID4VP_PROTOCOL {
+		return v.generateAuthenticationRequest(requestProtocol+"://", clientId, scope, authResponseUri, state, nonce, loginSession, requestMode)
+	} else {
+		return v.generateAuthenticationRequest(protocol+"://"+host+redirectPath, clientId, scope, authResponseUri, state, nonce, loginSession, requestMode)
+	}
 }
 
 /**
@@ -991,10 +997,12 @@ func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string,
 }
 
 // initializes the cross-device siop flow
-func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (authenticationRequest string, err error) {
 
-	state := v.nonceGenerator.GenerateNonce()
-	loginSession := loginSession{callback, sessionId, nonce, clientId, "", CROSS_DEVICE_V1}
+	if nonce == "" {
+		nonce = v.nonceGenerator.GenerateNonce()
+	}
+	loginSession := loginSession{callback, state, nonce, clientId, "", CROSS_DEVICE_V1}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
@@ -1096,7 +1104,6 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	jwtBuilder.Claim("client_id", v.clientIdentification.Id)
 	jwtBuilder.Claim("response_uri", response_uri)
 	jwtBuilder.Claim("state", state)
-	jwtBuilder.Claim("scope", "openid")
 	if nonce != "" {
 		jwtBuilder.Claim("nonce", nonce)
 	}

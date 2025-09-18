@@ -97,6 +97,9 @@ paths:
       parameters:
         - $ref: '#/components/parameters/QueryState'
         - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/Scope'
+        - $ref: '#/components/parameters/RequestMode'
+        - $ref: '#/components/parameters/RedirectPath'
       operationId: StartSIOPSameDevice
       summary: Starts the siop flow for credentials hold by the same device
       description: When the credential is already present in the requesting browser, the same-device flow can be used. It creates the login information and then redirects to the /authenticationresponse path.
@@ -301,6 +304,14 @@ components:
       schema:
         type: string
         example: https://my-app.com/request.jwt
+    RedirectPath:
+      name: redirect_path
+      description: If no redirect path is provided, an 'oid4vp' deeplink will be returned
+      in: query
+      required: false
+      schema:
+        type: string
+        example: /
     VpToken:
       name: vp_token
       description: base64URLEncoded VerifiablePresentation
@@ -648,4 +659,3 @@ components:
           example: 3600
         access_token:
           type: string
-    

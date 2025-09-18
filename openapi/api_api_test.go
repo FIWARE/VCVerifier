@@ -43,7 +43,7 @@ func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback s
 func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (connectionString string, err error) {
 	return mV.mockConnectionString, mV.mockError
 }
-func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestType string) (authenticationRequest string, err error) {
+func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestType string, scope string, requestProtocol string) (authenticationRequest string, err error) {
 	return mV.mockAuthRequest, mV.mockError
 }
 func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error) {
@@ -223,13 +223,14 @@ func TestStartSIOPSameDevice(t *testing.T) {
 		mockError          error
 		expectedStatusCode int
 		expectedLocation   string
+		expectedResponse   string
 	}
 
 	tests := []test{
-		{"If all neccessary parameters provided, a valid redirect should be returned.", "my-state", "/my-redirect", "http://host.org", "http://host.org/api/v1/authentication_response", nil, 302, "http://host.org/api/v1/authentication_response"},
-		{"If no path is provided, the default redirect should be returned.", "my-state", "", "http://host.org", "http://host.org/api/v1/authentication_response", nil, 302, "http://host.org/api/v1/authentication_response"},
-		{"If no state is provided, a 400 should be returned.", "", "", "http://host.org", "http://host.org/api/v1/authentication_response", nil, 400, ""},
-		{"If the verifier returns an error, a 500 should be returned.", "my-state", "/", "http://host.org", "http://host.org/api/v1/authentication_response", errors.New("verifier_failure"), 500, ""},
+		{testName: "If all neccessary parameters provided, a valid redirect should be returned.", testState: "my-state", testRedirectPath: "/my-redirect", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
+		{testName: "If no state is provided, a 400 should be returned.", testState: "", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 400, expectedLocation: ""},
+		{testName: "If the verifier returns an error, a 500 should be returned.", testState: "my-state", testRedirectPath: "/", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: errors.New("verifier_failure"), expectedStatusCode: 500, expectedLocation: ""},
+		{testName: "If no path is provided, a deeplink should be returned.", testState: "my-state", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 200, expectedLocation: "", expectedResponse: "http://host.org/api/v1/authentication_response"},
 	}
 
 	for _, tc := range tests {
@@ -257,6 +258,13 @@ func TestStartSIOPSameDevice(t *testing.T) {
 				t.Errorf("%s - Expected status %v but was %v.", tc.testName, tc.expectedStatusCode, recorder.Code)
 				return
 			}
+			if tc.expectedStatusCode == 200 {
+				responseString := recorder.Body.String()
+				if tc.expectedResponse != responseString {
+					t.Errorf("%s - Expected response %v but was %v.", tc.testName, tc.expectedResponse, responseString)
+				}
+			}
+
 			if tc.expectedStatusCode != 302 {
 				// everything other is an error, we dont care about the details
 				return

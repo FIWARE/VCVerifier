@@ -256,10 +256,12 @@ type siopInitTest struct {
 	testHost             string
 	testProtocol         string
 	testAddress          string
-	testSessionId        string
+	testState            string
 	testClientId         string
 	testRequestObjectJwt string
 	testNonce            string
+	testScope            string
+	testRequestProtocol  string
 	requestMode          string
 	credentialScopes     map[string]map[string]configModel.ScopeEntry
 	mockConfigError      error
@@ -267,6 +269,29 @@ type siopInitTest struct {
 	expectedConnection   string
 	sessionCacheError    error
 	expectedError        error
+}
+
+func getInitSiopTests() []siopInitTest {
+
+	cacheFailError := errors.New("cache_fail")
+
+	return []siopInitTest{
+		{testName: "If the login-session could not be cached, an error should be thrown.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testState: "my-super-random-id", testClientId: "", requestMode: REQUEST_MODE_BY_VALUE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+			expectedConnection: "", sessionCacheError: cacheFailError, expectedError: cacheFailError,
+		},
+		{testName: "If all parameters are set, a proper connection string byValue should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testState: "my-super-random-id", testClientId: "", requestMode: REQUEST_MODE_BY_VALUE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+			expectedConnection: "openid4vp://?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzdGF0ZSI6Im15LXN1cGVyLXJhbmRvbS1pZCJ9", sessionCacheError: nil, expectedError: nil,
+		},
+		{testName: "If all parameters are set, a proper connection string byReference should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testState: "my-super-random-id", testClientId: "", requestMode: REQUEST_MODE_BY_REFERENCE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+			expectedConnection: "openid4vp://?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/my-super-random-id&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzdGF0ZSI6Im15LXN1cGVyLXJhbmRvbS1pZCJ9",
+		},
+		{testName: "If all parameters, including the nonce, are set, a proper connection string byValue should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testState: "my-super-random-id", testClientId: "", testNonce: "my-nonce", requestMode: REQUEST_MODE_BY_VALUE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+			expectedConnection: "openid4vp://?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoibXktbm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzdGF0ZSI6Im15LXN1cGVyLXJhbmRvbS1pZCJ9", sessionCacheError: nil, expectedError: nil,
+		},
+		{testName: "If all parameters are set, including the nonce, a proper connection string byReference should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testState: "my-super-random-id", testClientId: "", testNonce: "my-nonce", requestMode: REQUEST_MODE_BY_REFERENCE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
+			expectedConnection: "openid4vp://?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/my-super-random-id&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoibXktbm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzdGF0ZSI6Im15LXN1cGVyLXJhbmRvbS1pZCJ9",
+		},
+	}
 }
 
 func TestInitSiopFlow(t *testing.T) {
@@ -280,10 +305,10 @@ func TestInitSiopFlow(t *testing.T) {
 		t.Run(tc.testName, func(t *testing.T) {
 			logging.Log().Info("TestInitSiopFlow +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}, errorToThrow: tc.sessionCacheError}
-			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomState", "randomNonce"}}
+			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, credentialsConfig: credentialsConfig, requestSigningKey: &testKey, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testSessionId, tc.testClientId, tc.testNonce, tc.requestMode)
+			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode)
 			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1)
 		})
 	}
@@ -301,10 +326,10 @@ func TestStartSiopFlow(t *testing.T) {
 		t.Run(tc.testName, func(t *testing.T) {
 			logging.Log().Info("TestStartSiopFlow +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}, errorToThrow: tc.sessionCacheError}
-			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomState", "randomNonce"}}
+			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.StartSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testSessionId, tc.testClientId, tc.testNonce, tc.requestMode)
+			authReq, err := verifier.StartSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode)
 			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1)
 		})
 	}
@@ -331,16 +356,21 @@ func verifyInitTest(t *testing.T, tc siopInitTest, authRequest string, err error
 	if authRequest != tc.expectedConnection && tc.requestMode != REQUEST_MODE_BY_VALUE {
 		t.Errorf("%s - Expected %s but was %s", tc.testName, tc.expectedConnection, authRequest)
 	}
-	cachedSession, found := sessionCache.sessions["randomState"]
+	cachedSession, found := sessionCache.sessions[tc.testState]
 	if !found {
 		t.Errorf("%s - A login session should have been stored.", tc.testName)
 	}
 	var expectedSession loginSession
+
+	expectedNonce := tc.testNonce
+	if expectedNonce == "" {
+		expectedNonce = "randomNonce"
+	}
 	if tc.requestMode == REQUEST_MODE_BY_REFERENCE {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: tc.testNonce, sessionId: tc.testSessionId, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
 		cachedSession.requestObject = removeSignature(cachedSession.requestObject)
 	} else {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: tc.testNonce, sessionId: tc.testSessionId, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
 	}
 	if cachedSession != expectedSession {
 		t.Errorf("%s - The login session was expected to be %v but was %v.", tc.testName, expectedSession, cachedSession)
@@ -353,29 +383,6 @@ func removeSignature(jwt string) string {
 	return strings.Join(splitted, ".")
 }
 
-func getInitSiopTests() []siopInitTest {
-
-	cacheFailError := errors.New("cache_fail")
-
-	return []siopInitTest{
-		{testName: "If the login-session could not be cached, an error should be thrown.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", requestMode: REQUEST_MODE_BY_VALUE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
-			expectedConnection: "", sessionCacheError: cacheFailError, expectedError: cacheFailError,
-		},
-		{testName: "If all parameters are set, a proper connection string byValue should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", requestMode: REQUEST_MODE_BY_VALUE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
-			expectedConnection: "openid4vp://?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsInJlc3BvbnNlX21vZGUiOiJkaXJlY3RfcG9zdCIsInJlc3BvbnNlX3R5cGUiOiJ2cF90b2tlbiIsInJlc3BvbnNlX3VyaSI6Imh0dHBzOi8vdmVyaWZpZXIub3JnL2FwaS92MS9hdXRoZW50aWNhdGlvbl9yZXNwb25zZSIsInNjb3BlIjoib3BlbmlkIiwic3RhdGUiOiJyYW5kb21TdGF0ZSJ9", sessionCacheError: nil, expectedError: nil,
-		},
-		{testName: "If all parameters are set, a proper connection string byReference should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", requestMode: REQUEST_MODE_BY_REFERENCE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
-			expectedConnection: "openid4vp://?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/randomState&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsInJlc3BvbnNlX21vZGUiOiJkaXJlY3RfcG9zdCIsInJlc3BvbnNlX3R5cGUiOiJ2cF90b2tlbiIsInJlc3BvbnNlX3VyaSI6Imh0dHBzOi8vdmVyaWZpZXIub3JnL2FwaS92MS9hdXRoZW50aWNhdGlvbl9yZXNwb25zZSIsInNjb3BlIjoib3BlbmlkIiwic3RhdGUiOiJyYW5kb21TdGF0ZSJ9",
-		},
-		{testName: "If all parameters, including the nonce, are set, a proper connection string byValue should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", testNonce: "my-nonce", requestMode: REQUEST_MODE_BY_VALUE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
-			expectedConnection: "openid4vp://?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoibXktbm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzY29wZSI6Im9wZW5pZCIsInN0YXRlIjoicmFuZG9tU3RhdGUifQ", sessionCacheError: nil, expectedError: nil,
-		},
-		{testName: "If all parameters are set, including the nonce, a proper connection string byReference should be returned.", testHost: "verifier.org", testProtocol: "https", testAddress: "https://client.org/callback", testSessionId: "my-super-random-id", testClientId: "", testNonce: "my-nonce", requestMode: REQUEST_MODE_BY_REFERENCE, credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://client.org/callback",
-			expectedConnection: "openid4vp://?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/randomState&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoibXktbm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzY29wZSI6Im9wZW5pZCIsInN0YXRlIjoicmFuZG9tU3RhdGUifQ",
-		},
-	}
-}
-
 func TestStartSameDeviceFlow(t *testing.T) {
 
 	cacheFailError := errors.New("cache_fail")
@@ -384,14 +391,18 @@ func TestStartSameDeviceFlow(t *testing.T) {
 	testKey := getECDSAKey()
 
 	tests := []siopInitTest{
-		{testName: "If the request cannot be cached, an error should be responded.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testSessionId: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
+		{testName: "If the request cannot be cached, an error should be responded.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testState: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
 			requestMode: REQUEST_MODE_BY_VALUE, expectedConnection: "", sessionCacheError: cacheFailError, expectedError: cacheFailError,
 		},
-		{testName: "If everything is provided, a samedevice flow should be started.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testSessionId: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
-			requestMode: REQUEST_MODE_BY_VALUE, expectedConnection: "https://verifier.org/redirect?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsInJlc3BvbnNlX21vZGUiOiJkaXJlY3RfcG9zdCIsInJlc3BvbnNlX3R5cGUiOiJ2cF90b2tlbiIsInJlc3BvbnNlX3VyaSI6Imh0dHBzOi8vdmVyaWZpZXIub3JnL2FwaS92MS9hdXRoZW50aWNhdGlvbl9yZXNwb25zZSIsInNjb3BlIjoib3BlbmlkIiwic3RhdGUiOiJyYW5kb21TdGF0ZSJ9", sessionCacheError: nil, expectedError: nil,
+		{testName: "If everything is provided, a samedevice flow should be started in by_value mode.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testState: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
+			requestMode: REQUEST_MODE_BY_VALUE, expectedConnection: "https://verifier.org/redirect?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzdGF0ZSI6Im15LXJhbmRvbS1zZXNzaW9uLWlkIn0", sessionCacheError: nil, expectedError: nil,
 		},
-		{testName: "If everything is provided, a samedevice flow should be started.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testSessionId: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
-			requestMode: REQUEST_MODE_BY_REFERENCE, expectedConnection: "https://verifier.org/redirect?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/randomState&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsInJlc3BvbnNlX21vZGUiOiJkaXJlY3RfcG9zdCIsInJlc3BvbnNlX3R5cGUiOiJ2cF90b2tlbiIsInJlc3BvbnNlX3VyaSI6Imh0dHBzOi8vdmVyaWZpZXIub3JnL2FwaS92MS9hdXRoZW50aWNhdGlvbl9yZXNwb25zZSIsInNjb3BlIjoib3BlbmlkIiwic3RhdGUiOiJyYW5kb21TdGF0ZSJ9",
+		{testName: "If everything is provided, a samedevice flow should be started in by_reference mode.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testState: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
+			requestMode: REQUEST_MODE_BY_REFERENCE, expectedConnection: "https://verifier.org/redirect?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/my-random-session-id&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzdGF0ZSI6Im15LXJhbmRvbS1zZXNzaW9uLWlkIn0",
+		},
+		{testName: "If everything is provided, a samedevice flow should be started.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testState: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
+			requestMode: REQUEST_MODE_BY_REFERENCE, expectedConnection: "https://verifier.org/redirect?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/my-random-session-id&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzdGF0ZSI6Im15LXJhbmRvbS1zZXNzaW9uLWlkIn0",
+			testScope: "test",
 		},
 	}
 
@@ -399,10 +410,10 @@ func TestStartSameDeviceFlow(t *testing.T) {
 		t.Run(tc.testName, func(t *testing.T) {
 			logging.Log().Info("TestSameDeviceFlow +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}, errorToThrow: tc.sessionCacheError}
-			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomState", "randomNonce"}}
+			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.StartSameDeviceFlow(tc.testHost, tc.testProtocol, tc.testSessionId, tc.testAddress, tc.testClientId, tc.requestMode)
+			authReq, err := verifier.StartSameDeviceFlow(tc.testHost, tc.testProtocol, tc.testState, tc.testAddress, tc.testClientId, tc.requestMode, tc.testScope, tc.testRequestProtocol)
 			verifyInitTest(t, tc, authReq, err, sessionCache, SAME_DEVICE)
 		})
 	}
@@ -788,26 +799,6 @@ func (br badRandom) Read(p []byte) (n int, err error) {
 		p[i] = 1
 	}
 	return len(p), nil
-}
-
-// compare the payload of two JWTs while ignoring the kid field
-func tokenEquals(receivedToken, expectedToken string) bool {
-	if receivedToken == "" && expectedToken == "" {
-		return true
-	}
-	parsedReceivedToken, err := jwt.ParseString(receivedToken)
-	if err != nil {
-		return false
-	}
-	parsedReceivedToken.Remove("kid")
-
-	parsedExpectedToken, err := jwt.ParseString(expectedToken)
-	if err != nil {
-		return false
-	}
-	parsedExpectedToken.Remove("kid")
-
-	return cmp.Equal(parsedReceivedToken, parsedExpectedToken)
 }
 
 type openIdProviderMetadataTest struct {
