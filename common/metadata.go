@@ -2,6 +2,9 @@ package common
 
 const TYPE_CODE = "authorization_code"
 const TYPE_VP_TOKEN = "vp_token"
+const TYPE_TOKEN_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
+const TYPE_VP_TOKEN_SUBJECT = "urn:eu:oidf:vp_token"
+const TYPE_ACCESS_TOKEN = "urn:ietf:params:oauth:token-type:access_token"
 
 type OpenIDProviderMetadata struct {
 	Issuer                                 string   `json:"issuer"`

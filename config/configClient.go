@@ -40,9 +40,10 @@ type ServicesResponse struct {
 
 type ConfiguredService struct {
 	// Default OIDC scope to be used if none is specified
-	DefaultOidcScope string                `json:"defaultOidcScope" mapstructure:"defaultOidcScope"`
-	ServiceScopes    map[string]ScopeEntry `json:"oidcScopes" mapstructure:"oidcScopes"`
-	Id               string                `json:"id" mapstructure:"id"`
+	DefaultOidcScope  string                `json:"defaultOidcScope" mapstructure:"defaultOidcScope"`
+	ServiceScopes     map[string]ScopeEntry `json:"oidcScopes" mapstructure:"oidcScopes"`
+	Id                string                `json:"id" mapstructure:"id"`
+	AuthorizationPath string                `json:"authorizationPath,omitempty" mapstructure:"authorizationPath,omitempty"`
 }
 
 type ScopeEntry struct {

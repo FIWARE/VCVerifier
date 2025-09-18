@@ -43,14 +43,14 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 
 	state, stateExists := c.GetQuery("state")
 	if !stateExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoState)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoState)
 		// early exit
 		return
 	}
 
 	callback, callbackExists := c.GetQuery("client_callback")
 	if !callbackExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoCallback)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoCallback)
 		// early exit
 		return
 	}
@@ -73,7 +73,7 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 
 	qr, err := getFrontendVerifier().ReturnLoginQR(c.Request.Host, "https", callback, state, clientId, nonce, requestMode)
 	if err != nil {
-		c.AbortWithStatusJSON(500, ErrorMessage{"qr_generation_error", err.Error()})
+		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{"qr_generation_error", err.Error()})
 		return
 	}
 
@@ -85,7 +85,7 @@ func VerifierLoginQr(c *gin.Context) {
 
 	state, stateExists := c.GetQuery("state")
 	if !stateExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoState)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoState)
 		// early exit
 		return
 	}
@@ -94,7 +94,7 @@ func VerifierLoginQr(c *gin.Context) {
 	requestUri, requestUriExists := c.GetQuery("request_uri")
 
 	if !redirectUriExists && !requestUriExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoRedircetUri)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoRedircetUri)
 		// early exit
 		return
 	}
@@ -115,11 +115,11 @@ func VerifierLoginQr(c *gin.Context) {
 		cro, err := getRequestObjectClient().GetClientRequestObject(requestUri)
 		if err != nil {
 			logging.Log().Warnf("Was not able to get request object. Err: %v", err)
-			c.AbortWithStatusJSON(500, ErrorMessageUnresolvableRequestObject)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageUnresolvableRequestObject)
 			return
 		}
 		if !slices.Contains(cro.Aud, getFrontendVerifier().GetHost()) {
-			c.AbortWithStatusJSON(500, ErrorMessageInvalidAudience)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageInvalidAudience)
 			return
 		}
 
@@ -130,7 +130,7 @@ func VerifierLoginQr(c *gin.Context) {
 
 	nonce, nonceExists := c.GetQuery("nonce")
 	if !nonceExists {
-		c.AbortWithStatusJSON(400, ErrorMessageNoNonce)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoNonce)
 		// early exit
 		return
 	}
