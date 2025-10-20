@@ -23,15 +23,16 @@ import (
 )
 
 type mockVerifier struct {
-	mockJWTString        string
-	mockQR               string
-	mockConnectionString string
-	mockAuthRequest      string
-	mockJWKS             jwk.Set
-	mockOpenIDConfig     common.OpenIDProviderMetadata
-	mockSameDevice       verifier.Response
-	mockExpiration       int64
-	mockError            error
+	mockJWTString         string
+	mockQR                string
+	mockConnectionString  string
+	mockAuthRequest       string
+	mockJWKS              jwk.Set
+	mockOpenIDConfig      common.OpenIDProviderMetadata
+	mockSameDevice        verifier.Response
+	mockExpiration        int64
+	mockError             error
+	mockAuthorizationType string
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
@@ -52,6 +53,11 @@ func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, v
 func (mV *mockVerifier) GetJWKS() jwk.Set {
 	return mV.mockJWKS
 }
+
+func (mV *mockVerifier) GetAuthorizationType(clientId string) string {
+	return mV.mockAuthorizationType
+}
+
 func (mV *mockVerifier) AuthenticationResponse(state string, presentation *verifiable.Presentation) (sameDevice verifier.Response, err error) {
 	return mV.mockSameDevice, mV.mockError
 }

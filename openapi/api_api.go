@@ -32,6 +32,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const DEEPLINK = "DEEPLINK"
+const FRONTEND_V1 = "FRONTEND_V1"
+const FRONTEND_V2 = "FRONTEND_V2"
+
 var apiVerifier verifier.Verifier
 var presentationParser verifier.PresentationParser
 var sdJwtParser verifier.SdJwtParser
@@ -44,6 +48,9 @@ var ErrorMessageNoRedircetUri = ErrorMessage{"no_redirect_uri_provided", "Token 
 var ErrorMessageNoResource = ErrorMessage{"no_resource_provided", "When using token-exchange, resource is required to provide the client_id."}
 var ErrorMessageNoState = ErrorMessage{"no_state_provided", "Authentication requires a state provided as query parameter."}
 var ErrorMessageNoScope = ErrorMessage{"no_scope_provided", "Authentication requires a scope provided as a parameter."}
+var ErrorMessageInvalidResponseType = ErrorMessage{"invalid_response_type", "Authentication requires the response_type to be `code`."}
+var ErrorMessageFailedSameDevice = ErrorMessage{"failed_same_device", "Was not able to start a same-device flow."}
+var ErrorMessageNoClientId = ErrorMessage{"no_client_id_provided", "Authentication requires a client-id provided as a parameter."}
 var ErrorMessageNoNonce = ErrorMessage{"no_nonce_provided", "Authentication requires a nonce provided as a query parameter."}
 var ErrorMessageNoToken = ErrorMessage{"no_token_provided", "Authentication requires a token provided as a form parameter."}
 var ErrorMessageNoPresentationSubmission = ErrorMessage{"no_presentation_submission_provided", "Authentication requires a presentation submission provided as a form parameter."}
@@ -116,6 +123,119 @@ func GetToken(c *gin.Context) {
 	default:
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnsupportedGrantType)
 	}
+}
+
+func AuthorizationEndpoint(c *gin.Context) {
+	logging.Log().Debug("Receive authorization request.")
+	clientId, clientIdExists := c.GetQuery("client_id")
+	responseType, responseTypeExists := c.GetQuery("response_type")
+	scope, scopeExists := c.GetQuery("scope")
+	redirectUri, redirectUriExists := c.GetQuery("redirect_uri")
+	nonce, nonceExists := c.GetQuery("nonce")
+	state, stateExists := c.GetQuery("state")
+
+	requestUri, requestUriExists := c.GetQuery("request_uri")
+	if requestUriExists {
+		logging.Log().Debug("Requesting the client for its request object.")
+		cro, err := getRequestObjectClient().GetClientRequestObject(requestUri)
+		if err != nil {
+			logging.Log().Warnf("Was not able to get request object. Err: %v", err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageUnresolvableRequestObject)
+			return
+		}
+		if !slices.Contains(cro.Aud, getFrontendVerifier().GetHost()) {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageInvalidAudience)
+			return
+		}
+
+		if cro.ClientId != "" {
+			clientId = cro.ClientId
+			clientIdExists = true
+		}
+
+		if cro.Scope != "" {
+			scope = cro.Scope
+			scopeExists = true
+		}
+
+		if cro.RedirectUri != "" {
+			redirectUri = cro.RedirectUri
+			redirectUriExists = true
+		}
+
+		if cro.Nonce != "" {
+			nonce = cro.Nonce
+			nonceExists = true
+		}
+
+		if cro.State != "" {
+			state = cro.State
+			stateExists = true
+		}
+
+		if cro.ResponseType != "" {
+			responseType = cro.ResponseType
+			responseTypeExists = true
+		}
+	}
+
+	if !clientIdExists {
+		logging.Log().Info("Received an authorization request without a client_id.")
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoClientId)
+		return
+	}
+	if !scopeExists {
+		logging.Log().Info("Received an authorization request without a scope.")
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoScope)
+		return
+	}
+	if !redirectUriExists {
+		logging.Log().Info("Received an authorization request without a redirect_uri.")
+		//c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoRedircetUri)
+		//return
+	}
+	if !nonceExists {
+		logging.Log().Info("Received an authorization request without a nonce.")
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoNonce)
+		return
+	}
+	if !stateExists {
+		logging.Log().Info("Received an authorization request without a state.")
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoState)
+		return
+	}
+	if !responseTypeExists && responseType != "code" {
+		logging.Log().Infof("Received an authorization request with an invalid response type. Was %s.", responseType)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidResponseType)
+		return
+	}
+
+	logging.Log().Debugf("Received request: clientID - %s, scope - %s, redirect_uri - %s, nonce - %s, state - %s.", clientId, scope, redirectUri, nonce, state)
+
+	protocol := "https"
+	if c.Request.TLS == nil {
+		protocol = "http"
+	}
+
+	authorizationType := getApiVerifier().GetAuthorizationType(clientId)
+	var redirect string
+	var err error
+	switch authorizationType {
+	case DEEPLINK:
+		redirect, err = getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, "", clientId, verifier.REQUEST_MODE_BY_REFERENCE, scope, verifier.OPENID4VP_PROTOCOL)
+		if err != nil {
+			logging.Log().Warnf("Was not able start a same device flow. Err: %v", err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageFailedSameDevice)
+			return
+		}
+	case FRONTEND_V2:
+		redirect = buildFrontendV2Address(protocol, c.Request.Host, state, clientId, redirectUri, scope, nonce)
+	}
+	c.Redirect(http.StatusFound, redirect)
+}
+
+func buildFrontendV2Address(protocol, host, state, clientId, redirectUri, scope, nonce string) string {
+	return fmt.Sprintf("%s://%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, state, clientId, redirectUri, scope, nonce)
 }
 
 // GetToken - Token endpoint to exchange the authorization code with the actual JWT.
@@ -201,6 +321,7 @@ func verifiyVPToken(c *gin.Context, vpToken string, clientId string, scopes []st
 		return
 	}
 
+	logging.Log().Debug("Was able to extract presentation")
 	// Subject is empty since multiple VCs with different subjects can be provided
 	expiration, signedToken, err := getApiVerifier().GenerateToken(clientId, "", clientId, scopes, presentation)
 	if err != nil {
@@ -367,12 +488,8 @@ func StartSIOPSameDevice(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
 		return
 	}
-	if requestProtocol == verifier.OPENID4VP_PROTOCOL {
-		c.String(http.StatusOK, authenticationRequest)
-	} else {
-		c.Redirect(http.StatusFound, authenticationRequest)
 
-	}
+	c.Redirect(http.StatusFound, authenticationRequest)
 }
 
 // VerifierAPIAuthenticationResponse - Stores the credential for the given session
@@ -471,6 +588,20 @@ func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *ve
 		return
 	}
 
+	parsedPresentation, err = getSdJwtParser().ParseWithSdJwt(tokenBytes)
+	if err == nil {
+		logging.Log().Debug("Parsed presentation containing sd-jwt's.")
+		return parsedPresentation, err
+	}
+	if err == verifier.ErrorInvalidProof {
+		logging.Log().Infof("Was not able to parse the token %s. Err: %v", vpToken, err)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnableToDecodeToken)
+		return
+	}
+	logging.Log().Debugf("Parse without SD-Jwt %v", err)
+
+	logging.Log().Debug("Parse presentation.")
+
 	parsedPresentation, err = getPresentationParser().ParsePresentation(tokenBytes)
 
 	if err != nil {
@@ -478,6 +609,7 @@ func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *ve
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnableToDecodeToken)
 		return
 	}
+
 	return
 }
 

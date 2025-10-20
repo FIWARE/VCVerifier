@@ -51,7 +51,8 @@ const (
 const OPENID4VP_PROTOCOL = "openid4vp"
 const REDIRECT_PROTOCOL = "redirect"
 
-const DEFAULT_AUTHORIZATION_PATH = "/api/v2/loginQR"
+const DEFAULT_AUTHORIZATION_PATH = "/api/v1/authorization"
+const DEFAULT_SERIVCE_AUTHORIZATION_TYPE = "FRONTEND_V2"
 
 var ErrorNoDID = errors.New("no_did_configured")
 var ErrorNoTIR = errors.New("no_tir_configured")
@@ -89,6 +90,7 @@ type Verifier interface {
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
 	GetRequestObject(state string) (jwt string, err error)
 	GetHost() string
+	GetAuthorizationType(clientId string) string
 }
 
 type ValidationService interface {
@@ -487,9 +489,13 @@ func (v *CredentialVerifier) GetJWKS() jwk.Set {
 
 func extractCredentialTypes(verifiablePresentation *verifiable.Presentation) (credentialsByType map[string][]*verifiable.Credential, credentialTypes []string) {
 
+	js, _ := verifiablePresentation.MarshalJSON()
+	logging.Log().Debugf("Presentation %s", js)
 	credentialsByType = map[string][]*verifiable.Credential{}
 	credentialTypes = []string{}
 	for _, vc := range verifiablePresentation.Credentials() {
+		logging.Log().Debugf("Contained credential %s", logging.PrettyPrintObject(vc))
+		logging.Log().Debugf("Contained credential contents %s", logging.PrettyPrintObject(vc.Contents()))
 		for _, credentialType := range vc.Contents().Types {
 			if _, ok := credentialsByType[credentialType]; !ok {
 				credentialsByType[credentialType] = []*verifiable.Credential{}
@@ -702,17 +708,10 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 	if err != nil {
 		return metadata, err
 	}
-
-	authorizationPath, err := v.credentialsConfig.GetAuthorizationPath(serviceIdentifier)
-	if err != nil {
-		return metadata, err
-	}
-	if authorizationPath == "" && v.verifierConfig.AuthorizationEndpoint == "" {
+	authorizationPath := v.verifierConfig.AuthorizationEndpoint
+	if authorizationPath == "" {
 		// static default in case nothing is provided
 		authorizationPath = DEFAULT_AUTHORIZATION_PATH
-	} else if authorizationPath == "" {
-		// configured default
-		authorizationPath = v.verifierConfig.AuthorizationEndpoint
 	}
 
 	return common.OpenIDProviderMetadata{
@@ -721,11 +720,19 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 		TokenEndpoint:                    v.host + "/services/" + serviceIdentifier + "/token",
 		JwksUri:                          v.host + "/.well-known/jwks",
 		GrantTypesSupported:              []string{"authorization_code", "vp_token", "urn:ietf:params:oauth:grant-type:token-exchange"},
-		ResponseTypesSupported:           []string{"token"},
+		ResponseTypesSupported:           []string{"code"},
 		ResponseModeSupported:            []string{"direct_post"},
 		SubjectTypesSupported:            []string{"public"},
 		IdTokenSigningAlgValuesSupported: []string{"EdDSA", "ES256"},
 		ScopesSupported:                  scopes}, err
+}
+
+func (v *CredentialVerifier) GetAuthorizationType(serviceIdentifier string) string {
+	authorizationType, err := v.credentialsConfig.GetAuthorizationType(serviceIdentifier)
+	if err != nil {
+		return DEFAULT_SERIVCE_AUTHORIZATION_TYPE
+	}
+	return authorizationType
 }
 
 func appendPath(host string, path string) string {
@@ -941,7 +948,7 @@ func (v *CredentialVerifier) getTrustRegistriesValidationContextFromScope(client
 	// Check if all required credentials were presented
 	for _, credentialType := range requiredCredentialTypes {
 		if !slices.Contains(credentialTypes, credentialType) {
-			logging.Log().Warnf("Required Credential of Type %s was not provided", credentialType)
+			logging.Log().Warnf("Required Credential of Type %s was not provided. Type was: %s", credentialType, credentialTypes)
 			return verificationContext, ErrorRequiredCredentialNotProvided
 		}
 	}
@@ -1139,6 +1146,8 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	if dcql != nil {
 		logging.Log().Debugf("The dcql %s", logging.PrettyPrintObject(dcql))
 		jwtBuilder.Claim("dcql_query", &dcql)
+	} else {
+		logging.Log().Debugf("No dcql configured for %s - %s.", clientId, scope)
 	}
 
 	requestToken, err := jwtBuilder.Build()

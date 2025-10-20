@@ -10,6 +10,26 @@ tags:
     description: All api-endpoints, e.g. the once that can be reused by other applications
     
 paths:
+  /api/v1/authorization:
+    get:
+      tags: 
+        - api
+      parameters:
+        - $ref: '#/components/parameters/QueryState'
+        - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/RedirectUri'
+        - $ref: '#/components/parameters/RequestUri'
+        - $ref: '#/components/parameters/Scope'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/ResponseType'
+      operationId: AuthorizationEndpoint
+      summary: OAuth-2 compliant authorization endpoint, to provide the correct redirect
+      description: Endpoint to be used as entry for the authorization process, providing the redirect to the concrete authorization method.
+        In case a request_uri provides access to an request object, all mandatory parameters can also be provided as part of that object.
+      responses:
+        '302': 
+          description: A redirect to the authorization entrypoint.
+        
   /api/v2/loginQR:
     get:
       tags:
@@ -354,6 +374,14 @@ components:
       schema: 
         type: string
         example: packet-delivery-portal
+    ResponseType:
+      name: response_type
+      in: query
+      required: false
+      description: Type of the expected response. Currently, only "code" is supported
+      schema:
+        type: string
+        enum: ["code"]
   schemas:
     CredentialsType:
       type: array

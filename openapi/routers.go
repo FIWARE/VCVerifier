@@ -67,6 +67,13 @@ var routes = Routes{
 	},
 
 	{
+		"AuthorizationEndpoint",
+		http.MethodGet,
+		"/api/v1/authorization",
+		AuthorizationEndpoint,
+	},
+
+	{
 		"StartSIOPSameDevice",
 		http.MethodGet,
 		"/api/v1/samedevice",
