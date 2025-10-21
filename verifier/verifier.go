@@ -82,7 +82,7 @@ type Verifier interface {
 	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (qr string, err error)
 	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error)
 	StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error)
-	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
+	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
 	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error)
 	GetJWKS() jwk.Set
 	AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice Response, err error)
@@ -416,9 +416,11 @@ func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callbac
 /**
 * Starts a same-device siop-flow and returns the required redirection information
 **/
-func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, state string, redirectPath string, clientId string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, state string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error) {
 	logging.Log().Debugf("Initiate samedevice flow for %s - %s.", host, clientId)
-	nonce := v.nonceGenerator.GenerateNonce()
+	if nonce == "" {
+		nonce = v.nonceGenerator.GenerateNonce()
+	}
 
 	loginSession := loginSession{callback: fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId: state, nonce: nonce, clientId: clientId, version: SAME_DEVICE}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
@@ -720,6 +722,8 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 		// static default in case nothing is provided
 		authorizationPath = DEFAULT_AUTHORIZATION_PATH
 	}
+
+	logging.Log().Debugf("Scopes %s for %s", scopes, serviceIdentifier)
 
 	return common.OpenIDProviderMetadata{
 		Issuer:                           v.host,
@@ -1034,6 +1038,7 @@ func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string,
 func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (authenticationRequest string, err error) {
 
 	if nonce == "" {
+		logging.Log().Debugf("No nonce provided, generate one.")
 		nonce = v.nonceGenerator.GenerateNonce()
 	}
 	loginSession := loginSession{callback, state, nonce, clientId, "", CROSS_DEVICE_V1}
@@ -1060,17 +1065,19 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 		return authenticationRequest, err
 	case REQUEST_MODE_BY_REFERENCE:
 		requestObject, err := v.createAuthenticationRequestObject(redirectUri, state, clientId, scope, nonce)
+
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the authentication request by reference. Error: %v", err)
+		} else {
+			logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
+		}
+
 		loginSession.requestObject = string(requestObject[:])
 
 		logging.Log().Debugf("Store session with id %s", state)
 		v.sessionCache.Set(state, loginSession, cache.DefaultExpiration)
 
 		authenticationRequest = v.createAuthenticationRequestByReference(base, state)
-		if err != nil {
-			logging.Log().Warnf("Was not able to create the authentication request by reference. Error: %v", err)
-		} else {
-			logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
-		}
 
 		return authenticationRequest, err
 	default:
@@ -1194,11 +1201,15 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	}
 	var opts jwt.SignEncryptParseOption
 
+	logging.Log().Debugf("Signing key algo: %s - key: %v", signingKeyAlgorithm, *v.requestSigningKey)
+
 	if signingKeyAlgorithm == "ES256" || signingKeyAlgorithm == "ES256K" || signingKeyAlgorithm == "ES384" || signingKeyAlgorithm == "ES512" {
 		convertedKey, _ := (*v.requestSigningKey).(jwk.ECDSAPrivateKey)
+		logging.Log().Debug("Init with ECDSA key")
 		opts = jwt.WithKey(keyAlgorithm, convertedKey, jws.WithProtectedHeaders(headers))
 	} else {
 		convertedKey, _ := (*v.requestSigningKey).(jwk.RSAPrivateKey)
+		logging.Log().Debug("Init with RSA key")
 		opts = jwt.WithKey(keyAlgorithm, convertedKey, jws.WithProtectedHeaders(headers))
 	}
 

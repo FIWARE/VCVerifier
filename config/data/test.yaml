@@ -1,0 +1,34 @@
+server: 
+  host: http://localhost:8080
+  port: 3000
+  staticDir: views/static
+  templateDir: views/
+m2m:
+  authEnabled: false
+logging:
+  level: DEBUG
+  logRequests: true
+  pathsToSkip:
+  - /metrics
+  - /health
+verifier:
+  did: did:key:somekey
+  tirAddress: https://test.dev/trusted_issuer/v3/issuers/
+  supportedModes:
+    - byValue
+    - byReference
+configRepo:
+  services:
+    - id: test-service-sd
+      defaultOidcScope: sd-test
+      authorizationType: "DEEPLINK"
+      authorizationPath: "/test-service-sd/authorization"
+      oidcScopes:     
+        "sd-test":
+          credentials:
+            - type: LegalPersonCredential
+              trustedParticipantsLists: 
+                - type: ebsi
+                  url: tir.org
+              trustedIssuersLists: 
+                - til.org

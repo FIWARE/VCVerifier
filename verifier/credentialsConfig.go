@@ -98,7 +98,7 @@ func (cc ServiceBackedCredentialsConfig) fillStaticValues(static bool) error {
 		exipiration = cache.NoExpiration
 	}
 	for _, configuredService := range cc.initialConfig.Services {
-		logging.Log().Debugf("Add to service cache: %s", configuredService.Id)
+		logging.Log().Debugf("Add service %s to cache.", logging.PrettyPrintObject(configuredService))
 		common.GlobalCache.ServiceCache.Set(configuredService.Id, configuredService, exipiration)
 	}
 	return nil
@@ -145,8 +145,8 @@ func (cc ServiceBackedCredentialsConfig) RequiredCredentialTypes(serviceIdentifi
 func (cc ServiceBackedCredentialsConfig) GetScope(serviceIdentifier string) (scopes []string, err error) {
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
 	if hit {
-		logging.Log().Debugf("Found scope for %s", serviceIdentifier)
 		configuredService := cacheEntry.(config.ConfiguredService)
+		logging.Log().Debugf("Found scope %s for %s", logging.PrettyPrintObject(configuredService.ServiceScopes), serviceIdentifier)
 		return maps.Keys(configuredService.ServiceScopes), nil
 	}
 	logging.Log().Debugf("No scope entry for %s", serviceIdentifier)

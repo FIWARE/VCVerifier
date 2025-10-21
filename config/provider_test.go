@@ -127,6 +127,61 @@ func Test_ReadConfig(t *testing.T) {
 			},
 			false,
 		},
+		{
+			"Read config test",
+			args{"data/test.yaml"},
+			Configuration{
+				Server: Server{
+					Port:        3000,
+					Host:        "http://localhost:8080",
+					TemplateDir: "views/",
+					StaticDir:   "views/static",
+				},
+				Verifier: Verifier{
+					Did:            "did:key:somekey",
+					TirAddress:     "https://test.dev/trusted_issuer/v3/issuers/",
+					TirCacheExpiry: 30,
+					TilCacheExpiry: 30,
+					SessionExpiry:  30,
+					ValidationMode: "none",
+					KeyAlgorithm:   "RS256",
+					GenerateKey:    true,
+					SupportedModes: []string{"byValue", "byReference"},
+				},
+				Logging: Logging{
+					Level:       "DEBUG",
+					JsonLogging: true,
+					LogRequests: true,
+					PathsToSkip: []string{"/metrics", "/health"},
+				},
+				ConfigRepo: ConfigRepo{
+					ConfigEndpoint: "",
+					Services: []ConfiguredService{
+						{
+							Id:                "test-service-sd",
+							DefaultOidcScope:  "sd-test",
+							AuthorizationType: "DEEPLINK",
+							AuthorizationPath: "/test-service-sd/authorization",
+							ServiceScopes: map[string]ScopeEntry{
+								"sd-test": {
+									Credentials: []Credential{
+
+										{
+											Type:                     "LegalPersonCredential",
+											TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "tir.org"}},
+											TrustedIssuersLists:      []string{"til.org"},
+										},
+									},
+								},
+							},
+						},
+					},
+					UpdateInterval: 30,
+				},
+				M2M: M2M{AuthEnabled: false, VerificationMethod: "JsonWebKey2020", SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
+			},
+			false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

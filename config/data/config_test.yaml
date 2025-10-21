@@ -5,8 +5,8 @@ server:
 
 logging:
   level: "DEBUG"
-  jsonLogging: "true"
-  logRequests: "true"
+  jsonLogging: true
+  logRequests: true
   pathsToSkip: [/health]
 
 verifier:

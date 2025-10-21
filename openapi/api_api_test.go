@@ -44,7 +44,7 @@ func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback s
 func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (connectionString string, err error) {
 	return mV.mockConnectionString, mV.mockError
 }
-func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestType string, scope string, requestProtocol string) (authenticationRequest string, err error) {
+func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestType string, scope string, requestProtocol string) (authenticationRequest string, err error) {
 	return mV.mockAuthRequest, mV.mockError
 }
 func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error) {

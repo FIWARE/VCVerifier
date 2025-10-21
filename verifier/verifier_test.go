@@ -423,7 +423,7 @@ func TestStartSameDeviceFlow(t *testing.T) {
 			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.StartSameDeviceFlow(tc.testHost, tc.testProtocol, tc.testState, tc.testAddress, tc.testClientId, tc.requestMode, tc.testScope, tc.testRequestProtocol)
+			authReq, err := verifier.StartSameDeviceFlow(tc.testHost, tc.testProtocol, tc.testState, tc.testAddress, tc.testClientId, "", tc.requestMode, tc.testScope, tc.testRequestProtocol)
 			verifyInitTest(t, tc, authReq, err, sessionCache, SAME_DEVICE)
 		})
 	}

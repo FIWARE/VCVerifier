@@ -222,7 +222,7 @@ func AuthorizationEndpoint(c *gin.Context) {
 	var err error
 	switch authorizationType {
 	case DEEPLINK:
-		redirect, err = getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, "", clientId, verifier.REQUEST_MODE_BY_REFERENCE, scope, verifier.OPENID4VP_PROTOCOL)
+		redirect, err = getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, "", clientId, nonce, verifier.REQUEST_MODE_BY_REFERENCE, scope, verifier.OPENID4VP_PROTOCOL)
 		if err != nil {
 			logging.Log().Warnf("Was not able start a same device flow. Err: %v", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageFailedSameDevice)
@@ -482,7 +482,7 @@ func StartSIOPSameDevice(c *gin.Context) {
 		scope = ""
 	}
 
-	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, requestMode, scope, requestProtocol)
+	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, "", requestMode, scope, requestProtocol)
 	if err != nil {
 		logging.Log().Warnf("Error starting the same-device flow. Err: %v", err)
 		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
