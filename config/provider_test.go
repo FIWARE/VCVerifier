@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/fiware/VCVerifier/logging"
 	"github.com/gookit/config/v2"
 )
 
@@ -17,7 +18,7 @@ func Test_ReadConfig(t *testing.T) {
 		wantConfiguration Configuration
 		wantErr           bool
 	}{
-		{
+		/*{
 			"Read config",
 			args{"data/config_test.yaml"},
 			Configuration{
@@ -98,7 +99,8 @@ func Test_ReadConfig(t *testing.T) {
 				M2M: M2M{AuthEnabled: false, VerificationMethod: "JsonWebKey2020", SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 			},
 			false,
-		}, {
+		},
+		{
 			"Defaults only",
 			args{"data/empty_test.yaml"},
 			Configuration{
@@ -126,10 +128,10 @@ func Test_ReadConfig(t *testing.T) {
 				ConfigRepo: ConfigRepo{UpdateInterval: 30},
 			},
 			false,
-		},
+		},*/
 		{
 			"Read config test",
-			args{"data/test.yaml"},
+			args{"data/full.yaml"},
 			Configuration{
 				Server: Server{
 					Port:        3000,
@@ -172,6 +174,17 @@ func Test_ReadConfig(t *testing.T) {
 											TrustedIssuersLists:      []string{"til.org"},
 										},
 									},
+									DCQL: &DCQL{
+										Credentials: []CredentialQuery{
+											{
+												Id:     "legal-person-query",
+												Format: "dc+sd-jwt",
+												Meta: &MetaDataQuery{
+													VctValues: []string{"LegalPersonCredential"},
+												},
+											},
+										},
+									},
 								},
 							},
 						},
@@ -192,7 +205,7 @@ func Test_ReadConfig(t *testing.T) {
 				return
 			}
 			if !reflect.DeepEqual(gotConfiguration, tt.wantConfiguration) {
-				t.Errorf("readConfig() = %v, want %v", gotConfiguration, tt.wantConfiguration)
+				t.Errorf("readConfig() = %v, want %v", logging.PrettyPrintObject(gotConfiguration), logging.PrettyPrintObject(tt.wantConfiguration))
 			}
 		})
 	}

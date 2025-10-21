@@ -32,3 +32,10 @@ configRepo:
                   url: tir.org
               trustedIssuersLists: 
                 - til.org
+          dcql:
+            credentials:
+              - id: legal-person-query
+                format: dc+sd-jwt
+                meta:
+                  vct_values:
+                    - LegalPersonCredential

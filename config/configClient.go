@@ -53,7 +53,7 @@ type ScopeEntry struct {
 	// 	Proofs to be requested - see https://identity.foundation/presentation-exchange/#presentation-definition
 	PresentationDefinition *PresentationDefinition `json:"presentationDefinition" mapstructure:"presentationDefinition"`
 	// JSON encoded query to request the credentials to be included in the presentation
-	DCQL *DCQL `json:"dcql,omitempty" mapstructure:"dcql,omitempty"`
+	DCQL *DCQL `json:"dcql" mapstructure:"dcql"`
 	// When set, the claim are flatten to plain JWT-claims before beeing included, instead of keeping the credential/presentation structure, where the claims are under the key vc or vp
 	FlatClaims bool `json:"flatClaims" mapstructure:"flatClaims"`
 }
@@ -157,7 +157,7 @@ type CredentialQuery struct {
 	// A string that specifies the format of the requested Credential.
 	Format string `json:"format,omitempty" mapstructure:"format,omitempty"`
 	// A boolean which indicates whether multiple Credentials can be returned for this Credential Query. If omitted, the default value is false.
-	Multiple bool `json:"multiple,omitempty" mapstructure:"multiple,omitempty"`
+	Multiple bool `json:"multiple" mapstructure:"multiple"`
 	// A non-empty array of objects  that specifies claims in the requested Credential. Verifiers MUST NOT point to the same claim more than once in a single query. Wallets SHOULD ignore such duplicate claim queries.
 	Claims []ClaimsQuery `json:"claims,omitempty" mapstructure:"claims,omitempty"`
 	// Defines additional properties requested by the Verifier that apply to the metadata and validity data of the Credential. The properties of this object are defined per Credential Format. If empty, no specific constraints are placed on the metadata or validity of the requested Credential.

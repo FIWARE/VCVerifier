@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/gookit/config/v2"
 	"github.com/gookit/config/v2/yaml"
@@ -60,5 +61,17 @@ func forceStringKeys(m interface{}) interface{} {
 		return v
 	default:
 		return v
+	}
+}
+
+func autoAllocHook() mapstructure.DecodeHookFunc {
+	return func(from reflect.Type, to reflect.Type, data interface{}) (interface{}, error) {
+		// If target type is a pointer to struct, and source is a map,
+		// allocate the target before decoding.
+		if to.Kind() == reflect.Ptr && to.Elem().Kind() == reflect.Struct {
+			v := reflect.New(to.Elem())
+			return v.Interface(), nil
+		}
+		return data, nil
 	}
 }

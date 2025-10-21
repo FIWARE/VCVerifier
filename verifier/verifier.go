@@ -1099,6 +1099,7 @@ func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, h
 	} else if len(credentials) > 1 {
 		jwtBuilder.Claim("verifiablePresentation", credentials)
 	} else {
+		logging.Log().Debugf("Credentials %s", logging.PrettyPrintObject(credentials))
 		jwtBuilder.Claim("verifiableCredential", credentials[0])
 	}
 
