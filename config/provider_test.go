@@ -18,7 +18,7 @@ func Test_ReadConfig(t *testing.T) {
 		wantConfiguration Configuration
 		wantErr           bool
 	}{
-		/*{
+		{
 			"Read config",
 			args{"data/config_test.yaml"},
 			Configuration{
@@ -126,72 +126,6 @@ func Test_ReadConfig(t *testing.T) {
 				},
 				M2M:        M2M{AuthEnabled: false, VerificationMethod: "JsonWebKey2020", SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				ConfigRepo: ConfigRepo{UpdateInterval: 30},
-			},
-			false,
-		},*/
-		{
-			"Read config test",
-			args{"data/full.yaml"},
-			Configuration{
-				Server: Server{
-					Port:        3000,
-					Host:        "http://localhost:8080",
-					TemplateDir: "views/",
-					StaticDir:   "views/static",
-				},
-				Verifier: Verifier{
-					Did:            "did:key:somekey",
-					TirAddress:     "https://test.dev/trusted_issuer/v3/issuers/",
-					TirCacheExpiry: 30,
-					TilCacheExpiry: 30,
-					SessionExpiry:  30,
-					ValidationMode: "none",
-					KeyAlgorithm:   "RS256",
-					GenerateKey:    true,
-					SupportedModes: []string{"byValue", "byReference"},
-				},
-				Logging: Logging{
-					Level:       "DEBUG",
-					JsonLogging: true,
-					LogRequests: true,
-					PathsToSkip: []string{"/metrics", "/health"},
-				},
-				ConfigRepo: ConfigRepo{
-					ConfigEndpoint: "",
-					Services: []ConfiguredService{
-						{
-							Id:                "test-service-sd",
-							DefaultOidcScope:  "sd-test",
-							AuthorizationType: "DEEPLINK",
-							AuthorizationPath: "/test-service-sd/authorization",
-							ServiceScopes: map[string]ScopeEntry{
-								"sd-test": {
-									Credentials: []Credential{
-
-										{
-											Type:                     "LegalPersonCredential",
-											TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "tir.org"}},
-											TrustedIssuersLists:      []string{"til.org"},
-										},
-									},
-									DCQL: &DCQL{
-										Credentials: []CredentialQuery{
-											{
-												Id:     "legal-person-query",
-												Format: "dc+sd-jwt",
-												Meta: &MetaDataQuery{
-													VctValues: []string{"LegalPersonCredential"},
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-					UpdateInterval: 30,
-				},
-				M2M: M2M{AuthEnabled: false, VerificationMethod: "JsonWebKey2020", SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 			},
 			false,
 		},
