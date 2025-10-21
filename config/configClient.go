@@ -44,6 +44,7 @@ type ConfiguredService struct {
 	ServiceScopes     map[string]ScopeEntry `json:"oidcScopes" mapstructure:"oidcScopes"`
 	Id                string                `json:"id" mapstructure:"id"`
 	AuthorizationType string                `json:"authorizationType,omitempty" mapstructure:"authorizationType,omitempty"`
+	AuthorizationPath string                `json:"authorizationPath,omitempty" mapstructure:"authorizationPath,omitempty"`
 }
 
 type ScopeEntry struct {

@@ -236,7 +236,7 @@ func TestStartSIOPSameDevice(t *testing.T) {
 		{testName: "If all neccessary parameters provided, a valid redirect should be returned.", testState: "my-state", testRedirectPath: "/my-redirect", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
 		{testName: "If no state is provided, a 400 should be returned.", testState: "", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 400, expectedLocation: ""},
 		{testName: "If the verifier returns an error, a 500 should be returned.", testState: "my-state", testRedirectPath: "/", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: errors.New("verifier_failure"), expectedStatusCode: 500, expectedLocation: ""},
-		{testName: "If no path is provided, a deeplink should be returned.", testState: "my-state", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 200, expectedLocation: "", expectedResponse: "http://host.org/api/v1/authentication_response"},
+		{testName: "If no path is provided, a deeplink should be returned.", testState: "my-state", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response", expectedResponse: ""},
 	}
 
 	for _, tc := range tests {

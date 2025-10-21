@@ -261,8 +261,11 @@ func GetVerifier() Verifier {
 **/
 func InitVerifier(config *configModel.Configuration) (err error) {
 
+	logging.Log().Info("Init verifeir")
+
 	err = verifyConfig(&config.Verifier)
 	if err != nil {
+		logging.Log().Warnf("Was not able to verify config. Err: %v", err)
 		return
 	}
 	verifierConfig := &config.Verifier
@@ -708,7 +711,11 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 	if err != nil {
 		return metadata, err
 	}
-	authorizationPath := v.verifierConfig.AuthorizationEndpoint
+	authorizationPath := v.credentialsConfig.GetAuthorizationPath(serviceIdentifier)
+
+	if authorizationPath == "" {
+		authorizationPath = v.verifierConfig.AuthorizationEndpoint
+	}
 	if authorizationPath == "" {
 		// static default in case nothing is provided
 		authorizationPath = DEFAULT_AUTHORIZATION_PATH

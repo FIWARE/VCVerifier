@@ -26,6 +26,8 @@ type CredentialsConfig interface {
 	GetScope(serviceIdentifier string) (scopes []string, err error)
 	// should return the authorization type to be provided in the redirect
 	GetAuthorizationType(serviceIdentifier string) (path string, err error)
+	// should return the authorization path to be provided in the redirect
+	GetAuthorizationPath(serviceIdentifier string) (path string)
 	// should return the presentationDefinition be requested via the scope parameter
 	GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *config.PresentationDefinition)
 	// should return the presentatiodcql to be requested via the scope parameter
@@ -162,6 +164,16 @@ func (cc ServiceBackedCredentialsConfig) GetAuthorizationType(serviceIdentifier 
 	return "", nil
 }
 
+func (cc ServiceBackedCredentialsConfig) GetAuthorizationPath(serviceIdentifier string) (path string) {
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		logging.Log().Debugf("Found authorization-endpoint for %s", serviceIdentifier)
+		configuredService := cacheEntry.(config.ConfiguredService)
+		return configuredService.AuthorizationPath
+	}
+	logging.Log().Debugf("No authorization-path entry for %s", serviceIdentifier)
+	return ""
+}
 func (cc ServiceBackedCredentialsConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *config.PresentationDefinition) {
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
 	if hit {
