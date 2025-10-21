@@ -54,6 +54,7 @@ type ServiceBackedCredentialsConfig struct {
 
 func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credentialsConfig CredentialsConfig, err error) {
 	var configClient config.ConfigClient
+	var static = repoConfig.ConfigEndpoint == ""
 	if repoConfig.ConfigEndpoint == "" {
 		logging.Log().Warn("No endpoint for the configuration service is configured. Only static configuration will be provided.")
 	} else {
@@ -71,7 +72,7 @@ func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credenti
 
 	scb := ServiceBackedCredentialsConfig{configClient: &configClient, initialConfig: repoConfig}
 
-	err = scb.fillStaticValues()
+	err = scb.fillStaticValues(static)
 	if err != nil {
 		return nil, err
 	}
@@ -84,14 +85,19 @@ func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credenti
 			return nil, err
 		}
 	}
+	logging.Log().Info("The Service Backed Config.")
 
 	return scb, err
 }
 
-func (cc ServiceBackedCredentialsConfig) fillStaticValues() error {
+func (cc ServiceBackedCredentialsConfig) fillStaticValues(static bool) error {
+	var exipiration = cache.DefaultExpiration
+	if static {
+		exipiration = cache.NoExpiration
+	}
 	for _, configuredService := range cc.initialConfig.Services {
 		logging.Log().Debugf("Add to service cache: %s", configuredService.Id)
-		common.GlobalCache.ServiceCache.Set(configuredService.Id, configuredService, cache.DefaultExpiration)
+		common.GlobalCache.ServiceCache.Set(configuredService.Id, configuredService, exipiration)
 	}
 	return nil
 }
