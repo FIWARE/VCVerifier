@@ -24,6 +24,10 @@ const CACHE_EXPIRY = 60
 type CredentialsConfig interface {
 	// should return the list of scopes to be requested via the scope parameter
 	GetScope(serviceIdentifier string) (scopes []string, err error)
+	// should return the authorization type to be provided in the redirect
+	GetAuthorizationType(serviceIdentifier string) (path string, err error)
+	// should return the authorization path to be provided in the redirect
+	GetAuthorizationPath(serviceIdentifier string) (path string)
 	// should return the presentationDefinition be requested via the scope parameter
 	GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *config.PresentationDefinition)
 	// should return the presentatiodcql to be requested via the scope parameter
@@ -52,6 +56,7 @@ type ServiceBackedCredentialsConfig struct {
 
 func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credentialsConfig CredentialsConfig, err error) {
 	var configClient config.ConfigClient
+	var static = repoConfig.ConfigEndpoint == ""
 	if repoConfig.ConfigEndpoint == "" {
 		logging.Log().Warn("No endpoint for the configuration service is configured. Only static configuration will be provided.")
 	} else {
@@ -69,7 +74,7 @@ func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credenti
 
 	scb := ServiceBackedCredentialsConfig{configClient: &configClient, initialConfig: repoConfig}
 
-	err = scb.fillStaticValues()
+	err = scb.fillStaticValues(static)
 	if err != nil {
 		return nil, err
 	}
@@ -86,10 +91,14 @@ func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credenti
 	return scb, err
 }
 
-func (cc ServiceBackedCredentialsConfig) fillStaticValues() error {
+func (cc ServiceBackedCredentialsConfig) fillStaticValues(static bool) error {
+	var exipiration = cache.DefaultExpiration
+	if static {
+		exipiration = cache.NoExpiration
+	}
 	for _, configuredService := range cc.initialConfig.Services {
-		logging.Log().Debugf("Add to service cache: %s", configuredService.Id)
-		common.GlobalCache.ServiceCache.Set(configuredService.Id, configuredService, cache.DefaultExpiration)
+		logging.Log().Debugf("Add service %s to cache.", logging.PrettyPrintObject(configuredService))
+		common.GlobalCache.ServiceCache.Set(configuredService.Id, configuredService, exipiration)
 	}
 	return nil
 }
@@ -135,20 +144,38 @@ func (cc ServiceBackedCredentialsConfig) RequiredCredentialTypes(serviceIdentifi
 func (cc ServiceBackedCredentialsConfig) GetScope(serviceIdentifier string) (scopes []string, err error) {
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
 	if hit {
-		logging.Log().Debugf("Found scope for %s", serviceIdentifier)
 		configuredService := cacheEntry.(config.ConfiguredService)
+		logging.Log().Debugf("Found scope %s for %s", logging.PrettyPrintObject(configuredService.ServiceScopes), serviceIdentifier)
 		return maps.Keys(configuredService.ServiceScopes), nil
 	}
 	logging.Log().Debugf("No scope entry for %s", serviceIdentifier)
 	return []string{}, nil
 }
 
+func (cc ServiceBackedCredentialsConfig) GetAuthorizationType(serviceIdentifier string) (path string, err error) {
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		logging.Log().Debugf("Found authorization-type for %s", serviceIdentifier)
+		configuredService := cacheEntry.(config.ConfiguredService)
+		return configuredService.AuthorizationType, nil
+	}
+	logging.Log().Debugf("No authorization-type entry for %s", serviceIdentifier)
+	return "", nil
+}
+
+func (cc ServiceBackedCredentialsConfig) GetAuthorizationPath(serviceIdentifier string) (path string) {
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		logging.Log().Debugf("Found authorization-endpoint for %s", serviceIdentifier)
+		configuredService := cacheEntry.(config.ConfiguredService)
+		return configuredService.AuthorizationPath
+	}
+	logging.Log().Debugf("No authorization-path entry for %s", serviceIdentifier)
+	return ""
+}
 func (cc ServiceBackedCredentialsConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *config.PresentationDefinition) {
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
 	if hit {
-
-		logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
-
 		return cacheEntry.(config.ConfiguredService).GetPresentationDefinition(scope)
 
 	}
@@ -158,6 +185,7 @@ func (cc ServiceBackedCredentialsConfig) GetPresentationDefinition(serviceIdenti
 
 func (cc ServiceBackedCredentialsConfig) GetDcqlQuery(serviceIdentifier string, scope string) (dcql *config.DCQL) {
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	logging.Log().Debug("Get the dcql")
 	if hit {
 		return cacheEntry.(config.ConfiguredService).GetDcqlQuery(scope)
 

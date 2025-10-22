@@ -19,7 +19,6 @@ import (
 	"golang.org/x/exp/slices"
 
 	common "github.com/fiware/VCVerifier/common"
-	"github.com/fiware/VCVerifier/config"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
@@ -48,6 +47,12 @@ const (
 	SAME_DEVICE
 )
 
+const OPENID4VP_PROTOCOL = "openid4vp"
+const REDIRECT_PROTOCOL = "redirect"
+
+const DEFAULT_AUTHORIZATION_PATH = "/api/v1/authorization"
+const DEFAULT_SERIVCE_AUTHORIZATION_TYPE = "FRONTEND_V2"
+
 var ErrorNoDID = errors.New("no_did_configured")
 var ErrorNoTIR = errors.New("no_tir_configured")
 var ErrorUnsupportedKeyAlgorithm = errors.New("unsupported_key_algorithm")
@@ -75,8 +80,8 @@ var ErrorInvalidNonce = errors.New("invalid_nonce")
 type Verifier interface {
 	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (qr string, err error)
 	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error)
-	StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (connectionString string, err error)
-	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string) (authenticationRequest string, err error)
+	StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error)
+	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
 	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error)
 	GetJWKS() jwk.Set
 	AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice Response, err error)
@@ -84,6 +89,7 @@ type Verifier interface {
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
 	GetRequestObject(state string) (jwt string, err error)
 	GetHost() string
+	GetAuthorizationType(clientId string) string
 }
 
 type ValidationService interface {
@@ -124,7 +130,7 @@ type CredentialVerifier struct {
 	// Client identification for signing the request objects
 	clientIdentification configModel.ClientIdentification
 	// config of the verifier
-	verifierConfig config.Verifier
+	verifierConfig configModel.Verifier
 }
 
 // allow singleton access to the verifier
@@ -254,8 +260,11 @@ func GetVerifier() Verifier {
 **/
 func InitVerifier(config *configModel.Configuration) (err error) {
 
+	logging.Log().Info("Init verifeir")
+
 	err = verifyConfig(&config.Verifier)
 	if err != nil {
+		logging.Log().Warnf("Was not able to verify config. Err: %v", err)
 		return
 	}
 	verifierConfig := &config.Verifier
@@ -397,29 +406,34 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 /**
 * Starts a siop-flow and returns the required connection information
 **/
-func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (connectionString string, err error) {
+func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error) {
 	logging.Log().Debugf("Start a plain siop-flow for %s.", callback)
 
-	return v.initSiopFlow(host, protocol, callback, sessionId, clientId, nonce, requestMode)
+	return v.initSiopFlow(host, protocol, callback, state, clientId, nonce, requestMode)
 }
 
 /**
 * Starts a same-device siop-flow and returns the required redirection information
 **/
-func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestMode string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, state string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error) {
 	logging.Log().Debugf("Initiate samedevice flow for %s - %s.", host, clientId)
-	state := v.nonceGenerator.GenerateNonce()
+	if nonce == "" {
+		nonce = v.nonceGenerator.GenerateNonce()
+	}
 
-	loginSession := loginSession{fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId, "", clientId, "", SAME_DEVICE}
+	loginSession := loginSession{callback: fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId: state, nonce: nonce, clientId: clientId, version: SAME_DEVICE}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the login session %s in cache. Err: %v", logging.PrettyPrintObject(loginSession), err)
 		return authenticationRequest, err
 	}
 
-	redirectUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
-
-	return v.generateAuthenticationRequest(protocol+"://"+host+redirectPath, clientId, "", redirectUri, state, "", loginSession, requestMode)
+	authResponseUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
+	if requestProtocol == OPENID4VP_PROTOCOL {
+		return v.generateAuthenticationRequest(requestProtocol+"://", clientId, scope, authResponseUri, state, nonce, loginSession, requestMode)
+	} else {
+		return v.generateAuthenticationRequest(protocol+"://"+host+redirectPath, clientId, scope, authResponseUri, state, nonce, loginSession, requestMode)
+	}
 }
 
 /**
@@ -479,9 +493,13 @@ func (v *CredentialVerifier) GetJWKS() jwk.Set {
 
 func extractCredentialTypes(verifiablePresentation *verifiable.Presentation) (credentialsByType map[string][]*verifiable.Credential, credentialTypes []string) {
 
+	js, _ := verifiablePresentation.MarshalJSON()
+	logging.Log().Debugf("Presentation %s", js)
 	credentialsByType = map[string][]*verifiable.Credential{}
 	credentialTypes = []string{}
 	for _, vc := range verifiablePresentation.Credentials() {
+		logging.Log().Debugf("Contained credential %s", logging.PrettyPrintObject(vc))
+		logging.Log().Debugf("Contained credential contents %s", logging.PrettyPrintObject(vc.Contents()))
 		for _, credentialType := range vc.Contents().Types {
 			if _, ok := credentialsByType[credentialType]; !ok {
 				credentialsByType[credentialType] = []*verifiable.Credential{}
@@ -612,7 +630,7 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	return expiration, string(tokenBytes), nil
 }
 
-func buildInclusion(credential *verifiable.Credential, inclusionConfig config.JwtInclusion) (inclusion map[string]interface{}) {
+func buildInclusion(credential *verifiable.Credential, inclusionConfig configModel.JwtInclusion) (inclusion map[string]interface{}) {
 	if inclusionConfig.FullInclusion {
 		logging.Log().Debugf("Include the full credential: %s", logging.PrettyPrintObject(credential))
 		return credential.ToRawJSON()
@@ -677,7 +695,7 @@ func setValueAtPath(m map[string]interface{}, path []string, value interface{}) 
 	}
 }
 
-func (v *CredentialVerifier) shouldBeIncluded(clientId string, scope string, credentialTypes []string) (enabled bool, inclusion config.JwtInclusion) {
+func (v *CredentialVerifier) shouldBeIncluded(clientId string, scope string, credentialTypes []string) (enabled bool, inclusion configModel.JwtInclusion) {
 	logging.Log().Debugf("Check inclusion %s", credentialTypes)
 	for _, credentialType := range credentialTypes {
 		inclusion, _ := v.credentialsConfig.GetJwtInclusion(clientId, scope, credentialType)
@@ -694,18 +712,43 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 	if err != nil {
 		return metadata, err
 	}
+	authorizationPath := v.credentialsConfig.GetAuthorizationPath(serviceIdentifier)
+
+	if authorizationPath == "" {
+		authorizationPath = v.verifierConfig.AuthorizationEndpoint
+	}
+	if authorizationPath == "" {
+		// static default in case nothing is provided
+		authorizationPath = DEFAULT_AUTHORIZATION_PATH
+	}
+
+	logging.Log().Debugf("Scopes %s for %s", scopes, serviceIdentifier)
 
 	return common.OpenIDProviderMetadata{
 		Issuer:                           v.host,
-		AuthorizationEndpoint:            v.host + v.verifierConfig.AuthorizationEndpoint,
+		AuthorizationEndpoint:            appendPath(v.host, authorizationPath),
 		TokenEndpoint:                    v.host + "/services/" + serviceIdentifier + "/token",
 		JwksUri:                          v.host + "/.well-known/jwks",
-		GrantTypesSupported:              []string{"authorization_code", "vp_token"},
-		ResponseTypesSupported:           []string{"token"},
+		GrantTypesSupported:              []string{"authorization_code", "vp_token", "urn:ietf:params:oauth:grant-type:token-exchange"},
+		ResponseTypesSupported:           []string{"code"},
 		ResponseModeSupported:            []string{"direct_post"},
 		SubjectTypesSupported:            []string{"public"},
 		IdTokenSigningAlgValuesSupported: []string{"EdDSA", "ES256"},
 		ScopesSupported:                  scopes}, err
+}
+
+func (v *CredentialVerifier) GetAuthorizationType(serviceIdentifier string) string {
+	authorizationType, err := v.credentialsConfig.GetAuthorizationType(serviceIdentifier)
+	if err != nil {
+		return DEFAULT_SERIVCE_AUTHORIZATION_TYPE
+	}
+	return authorizationType
+}
+
+func appendPath(host string, path string) string {
+	host = strings.TrimSuffix(host, "/")
+	path = strings.TrimPrefix(path, "/")
+	return host + "/" + path
 }
 
 /**
@@ -768,7 +811,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		toBeIncluded = append(toBeIncluded, credential.ToRawJSON())
 	}
 
-	flatClaims, _ := v.credentialsConfig.GetFlatClaims(loginSession.clientId, config.SERVICE_DEFAULT_SCOPE)
+	flatClaims, _ := v.credentialsConfig.GetFlatClaims(loginSession.clientId, configModel.SERVICE_DEFAULT_SCOPE)
 	token, err := v.generateJWT(toBeIncluded, verifiablePresentation.Holder, hostname, flatClaims)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)
@@ -915,7 +958,7 @@ func (v *CredentialVerifier) getTrustRegistriesValidationContextFromScope(client
 	// Check if all required credentials were presented
 	for _, credentialType := range requiredCredentialTypes {
 		if !slices.Contains(credentialTypes, credentialType) {
-			logging.Log().Warnf("Required Credential of Type %s was not provided", credentialType)
+			logging.Log().Warnf("Required Credential of Type %s was not provided. Type was: %s", credentialType, credentialTypes)
 			return verificationContext, ErrorRequiredCredentialNotProvided
 		}
 	}
@@ -991,10 +1034,13 @@ func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string,
 }
 
 // initializes the cross-device siop flow
-func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (authenticationRequest string, err error) {
 
-	state := v.nonceGenerator.GenerateNonce()
-	loginSession := loginSession{callback, sessionId, nonce, clientId, "", CROSS_DEVICE_V1}
+	if nonce == "" {
+		logging.Log().Debugf("No nonce provided, generate one.")
+		nonce = v.nonceGenerator.GenerateNonce()
+	}
+	loginSession := loginSession{callback, state, nonce, clientId, "", CROSS_DEVICE_V1}
 	err = v.sessionCache.Add(state, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
@@ -1018,17 +1064,19 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 		return authenticationRequest, err
 	case REQUEST_MODE_BY_REFERENCE:
 		requestObject, err := v.createAuthenticationRequestObject(redirectUri, state, clientId, scope, nonce)
+
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the authentication request by reference. Error: %v", err)
+		} else {
+			logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
+		}
+
 		loginSession.requestObject = string(requestObject[:])
 
 		logging.Log().Debugf("Store session with id %s", state)
 		v.sessionCache.Set(state, loginSession, cache.DefaultExpiration)
 
 		authenticationRequest = v.createAuthenticationRequestByReference(base, state)
-		if err != nil {
-			logging.Log().Warnf("Was not able to create the authentication request by reference. Error: %v", err)
-		} else {
-			logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
-		}
 
 		return authenticationRequest, err
 	default:
@@ -1050,6 +1098,7 @@ func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, h
 	} else if len(credentials) > 1 {
 		jwtBuilder.Claim("verifiablePresentation", credentials)
 	} else {
+		logging.Log().Debugf("Credentials %s", logging.PrettyPrintObject(credentials))
 		jwtBuilder.Claim("verifiableCredential", credentials[0])
 	}
 
@@ -1090,13 +1139,12 @@ func (v *CredentialVerifier) createAuthenticationRequestByReference(base string,
 }
 
 func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri string, state string, clientId string, scope string, nonce string) (requestObject []byte, err error) {
-	jwtBuilder := jwt.NewBuilder().Issuer(v.did)
+	jwtBuilder := jwt.NewBuilder().Issuer(v.clientIdentification.Id)
 	jwtBuilder.Claim("response_type", "vp_token")
 	jwtBuilder.Claim("response_mode", "direct_post")
 	jwtBuilder.Claim("client_id", v.clientIdentification.Id)
 	jwtBuilder.Claim("response_uri", response_uri)
 	jwtBuilder.Claim("state", state)
-	jwtBuilder.Claim("scope", "openid")
 	if nonce != "" {
 		jwtBuilder.Claim("nonce", nonce)
 	}
@@ -1112,6 +1160,8 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	if dcql != nil {
 		logging.Log().Debugf("The dcql %s", logging.PrettyPrintObject(dcql))
 		jwtBuilder.Claim("dcql_query", &dcql)
+	} else {
+		logging.Log().Debugf("No dcql configured for %s - %s.", clientId, scope)
 	}
 
 	requestToken, err := jwtBuilder.Build()
@@ -1151,11 +1201,15 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	}
 	var opts jwt.SignEncryptParseOption
 
+	logging.Log().Debugf("Signing key algo: %s - key: %v", signingKeyAlgorithm, *v.requestSigningKey)
+
 	if signingKeyAlgorithm == "ES256" || signingKeyAlgorithm == "ES256K" || signingKeyAlgorithm == "ES384" || signingKeyAlgorithm == "ES512" {
 		convertedKey, _ := (*v.requestSigningKey).(jwk.ECDSAPrivateKey)
+		logging.Log().Debug("Init with ECDSA key")
 		opts = jwt.WithKey(keyAlgorithm, convertedKey, jws.WithProtectedHeaders(headers))
 	} else {
 		convertedKey, _ := (*v.requestSigningKey).(jwk.RSAPrivateKey)
+		logging.Log().Debug("Init with RSA key")
 		opts = jwt.WithKey(keyAlgorithm, convertedKey, jws.WithProtectedHeaders(headers))
 	}
 

@@ -29,10 +29,12 @@ type RequestObjectClient struct {
 type ClientRequestObject struct {
 	Iss          string   `json:"iss"`
 	Aud          []string `json:"aud"`
-	ResponseType string   `json:"response_type"`
-	ClientId     string   `json:"client_id"`
-	RedirectUri  string   `json:"redirect_uri"`
-	Scope        string   `json:"scope"`
+	ResponseType string   `json:"response_type,omitempty"`
+	ClientId     string   `json:"client_id,omitempty"`
+	RedirectUri  string   `json:"redirect_uri,omitempty"`
+	Scope        string   `json:"scope,omitempty"`
+	Nonce        string   `json:"nonce,omitempty"`
+	State        string   `json:"state,omitempty"`
 }
 
 func NewRequestObjectClient() (roc *RequestObjectClient) {

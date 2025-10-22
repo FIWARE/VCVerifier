@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/fiware/VCVerifier/logging"
 	"github.com/gookit/config/v2"
 )
 
@@ -98,7 +99,8 @@ func Test_ReadConfig(t *testing.T) {
 				M2M: M2M{AuthEnabled: false, VerificationMethod: "JsonWebKey2020", SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 			},
 			false,
-		}, {
+		},
+		{
 			"Defaults only",
 			args{"data/empty_test.yaml"},
 			Configuration{
@@ -107,15 +109,14 @@ func Test_ReadConfig(t *testing.T) {
 					StaticDir:   "views/static/",
 				},
 				Verifier: Verifier{Did: "",
-					TirAddress:            "",
-					TirCacheExpiry:        30,
-					TilCacheExpiry:        30,
-					SessionExpiry:         30,
-					ValidationMode:        "none",
-					KeyAlgorithm:          "RS256",
-					GenerateKey:           true,
-					SupportedModes:        []string{"urlEncoded"},
-					AuthorizationEndpoint: "/api/v2/loginQR",
+					TirAddress:     "",
+					TirCacheExpiry: 30,
+					TilCacheExpiry: 30,
+					SessionExpiry:  30,
+					ValidationMode: "none",
+					KeyAlgorithm:   "RS256",
+					GenerateKey:    true,
+					SupportedModes: []string{"urlEncoded"},
 				},
 				Logging: Logging{
 					Level:       "INFO",
@@ -138,7 +139,7 @@ func Test_ReadConfig(t *testing.T) {
 				return
 			}
 			if !reflect.DeepEqual(gotConfiguration, tt.wantConfiguration) {
-				t.Errorf("readConfig() = %v, want %v", gotConfiguration, tt.wantConfiguration)
+				t.Errorf("readConfig() = %v, want %v", logging.PrettyPrintObject(gotConfiguration), logging.PrettyPrintObject(tt.wantConfiguration))
 			}
 		})
 	}
