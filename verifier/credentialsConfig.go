@@ -87,7 +87,6 @@ func InitServiceBackedCredentialsConfig(repoConfig *config.ConfigRepo) (credenti
 			return nil, err
 		}
 	}
-	logging.Log().Info("The Service Backed Config.")
 
 	return scb, err
 }

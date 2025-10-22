@@ -19,7 +19,6 @@ import (
 	"golang.org/x/exp/slices"
 
 	common "github.com/fiware/VCVerifier/common"
-	"github.com/fiware/VCVerifier/config"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
@@ -131,7 +130,7 @@ type CredentialVerifier struct {
 	// Client identification for signing the request objects
 	clientIdentification configModel.ClientIdentification
 	// config of the verifier
-	verifierConfig config.Verifier
+	verifierConfig configModel.Verifier
 }
 
 // allow singleton access to the verifier
@@ -631,7 +630,7 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	return expiration, string(tokenBytes), nil
 }
 
-func buildInclusion(credential *verifiable.Credential, inclusionConfig config.JwtInclusion) (inclusion map[string]interface{}) {
+func buildInclusion(credential *verifiable.Credential, inclusionConfig configModel.JwtInclusion) (inclusion map[string]interface{}) {
 	if inclusionConfig.FullInclusion {
 		logging.Log().Debugf("Include the full credential: %s", logging.PrettyPrintObject(credential))
 		return credential.ToRawJSON()
@@ -696,7 +695,7 @@ func setValueAtPath(m map[string]interface{}, path []string, value interface{}) 
 	}
 }
 
-func (v *CredentialVerifier) shouldBeIncluded(clientId string, scope string, credentialTypes []string) (enabled bool, inclusion config.JwtInclusion) {
+func (v *CredentialVerifier) shouldBeIncluded(clientId string, scope string, credentialTypes []string) (enabled bool, inclusion configModel.JwtInclusion) {
 	logging.Log().Debugf("Check inclusion %s", credentialTypes)
 	for _, credentialType := range credentialTypes {
 		inclusion, _ := v.credentialsConfig.GetJwtInclusion(clientId, scope, credentialType)
@@ -812,7 +811,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		toBeIncluded = append(toBeIncluded, credential.ToRawJSON())
 	}
 
-	flatClaims, _ := v.credentialsConfig.GetFlatClaims(loginSession.clientId, config.SERVICE_DEFAULT_SCOPE)
+	flatClaims, _ := v.credentialsConfig.GetFlatClaims(loginSession.clientId, configModel.SERVICE_DEFAULT_SCOPE)
 	token, err := v.generateJWT(toBeIncluded, verifiablePresentation.Holder, hostname, flatClaims)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)

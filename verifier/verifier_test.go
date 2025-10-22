@@ -59,15 +59,6 @@ func TestVerifyConfig(t *testing.T) {
 
 }
 
-type mockFileAccessor struct {
-	mockFile  []byte
-	mockError error
-}
-
-func (mfa mockFileAccessor) ReadFile(filename string) ([]byte, error) {
-	return mfa.mockFile, mfa.mockError
-}
-
 type mockNonceGenerator struct {
 	staticValues []string
 }
@@ -99,7 +90,7 @@ type mockCredentialConfig struct {
 }
 
 func createMockCredentials(serviceId, scope, credentialType, url, holderClaim string, holderVerfication bool) map[string]map[string]configModel.ScopeEntry {
-	credential := configModel.Credential{Type: credentialType, TrustedParticipantsLists: []configModel.TrustedParticipantsList{{"ebsi", url}}, TrustedIssuersLists: []string{url}, HolderVerification: configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim}}
+	credential := configModel.Credential{Type: credentialType, TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: url}}, TrustedIssuersLists: []string{url}, HolderVerification: configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim}}
 
 	entry := configModel.ScopeEntry{Credentials: []configModel.Credential{credential}}
 
@@ -799,16 +790,6 @@ func TestGetToken(t *testing.T) {
 func getToken() jwt.Token {
 	token, _ := jwt.NewBuilder().Expiration(time.Unix(1000, 0)).Build()
 	return token
-}
-
-type badRandom struct {
-}
-
-func (br badRandom) Read(p []byte) (n int, err error) {
-	for i := range p {
-		p[i] = 1
-	}
-	return len(p), nil
 }
 
 type openIdProviderMetadataTest struct {
