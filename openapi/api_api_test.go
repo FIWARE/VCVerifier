@@ -23,15 +23,16 @@ import (
 )
 
 type mockVerifier struct {
-	mockJWTString        string
-	mockQR               string
-	mockConnectionString string
-	mockAuthRequest      string
-	mockJWKS             jwk.Set
-	mockOpenIDConfig     common.OpenIDProviderMetadata
-	mockSameDevice       verifier.Response
-	mockExpiration       int64
-	mockError            error
+	mockJWTString         string
+	mockQR                string
+	mockConnectionString  string
+	mockAuthRequest       string
+	mockJWKS              jwk.Set
+	mockOpenIDConfig      common.OpenIDProviderMetadata
+	mockSameDevice        verifier.Response
+	mockExpiration        int64
+	mockError             error
+	mockAuthorizationType string
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
@@ -43,7 +44,7 @@ func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback s
 func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (connectionString string, err error) {
 	return mV.mockConnectionString, mV.mockError
 }
-func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, requestType string) (authenticationRequest string, err error) {
+func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestType string, scope string, requestProtocol string) (authenticationRequest string, err error) {
 	return mV.mockAuthRequest, mV.mockError
 }
 func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error) {
@@ -52,6 +53,11 @@ func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, v
 func (mV *mockVerifier) GetJWKS() jwk.Set {
 	return mV.mockJWKS
 }
+
+func (mV *mockVerifier) GetAuthorizationType(clientId string) string {
+	return mV.mockAuthorizationType
+}
+
 func (mV *mockVerifier) AuthenticationResponse(state string, presentation *verifiable.Presentation) (sameDevice verifier.Response, err error) {
 	return mV.mockSameDevice, mV.mockError
 }
@@ -76,19 +82,22 @@ func TestGetToken(t *testing.T) {
 	logging.Configure(true, "DEBUG", true, []string{})
 
 	type test struct {
-		testName           string
-		proofCheck         bool
-		testGrantType      string
-		testCode           string
-		testRedirectUri    string
-		testVPToken        string
-		testScope          string
-		mockJWTString      string
-		mockExpiration     int64
-		mockError          error
-		expectedStatusCode int
-		expectedResponse   TokenResponse
-		expectedError      ErrorMessage
+		testName               string
+		proofCheck             bool
+		testGrantType          string
+		testCode               string
+		testRedirectUri        string
+		testVPToken            string
+		testScope              string
+		testResource           string
+		testSubjectTokenType   string
+		testRequestedTokenType string
+		mockJWTString          string
+		mockExpiration         int64
+		mockError              error
+		expectedStatusCode     int
+		expectedResponse       TokenResponse
+		expectedError          ErrorMessage
 	}
 	tests := []test{
 		{testName: "If a valid authorization_code request is received a token should be responded.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockJWTString: "theJWT", mockExpiration: 10, mockError: nil, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}, expectedError: ErrorMessage{}},
@@ -98,10 +107,17 @@ func TestGetToken(t *testing.T) {
 		{testName: "If no redirect uri is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", expectedStatusCode: 400, expectedError: ErrorMessageInvalidTokenRequest},
 		{testName: "If the verify returns an error, a 403 should be answerd.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockError: errors.New("invalid"), expectedStatusCode: 403, expectedError: ErrorMessage{}},
 
-		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}},
-		{testName: "If a valid signed vp_token request is received a token should be responded.", proofCheck: true, testGrantType: "vp_token", testVPToken: getValidSignedDidKeyVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT"}},
+		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
+		{testName: "If a valid signed vp_token request is received a token should be responded.", proofCheck: true, testGrantType: "vp_token", testVPToken: getValidSignedDidKeyVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
 		{testName: "If no valid vp_token is provided, the request should fail.", proofCheck: false, testGrantType: "vp_token", testScope: "tir_read", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
 		{testName: "If no valid scope is provided, the request should fail.", proofCheck: false, testVPToken: getValidVPToken(), testGrantType: "vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoScope},
+		// token-exchange
+		{testName: "If a valid token-exchange request is received a token should be responded.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
+		{testName: "If a token-exchange request is received without resource, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoResource},
+		{testName: "If a token-exchange request is received with invalid subject_token_type, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "invalid_type", expectedStatusCode: 400, expectedError: ErrorMessageInvalidSubjectTokenType},
+		{testName: "If a token-exchange request is received with invalid requested_token_type, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", testRequestedTokenType: "invalid_type", expectedStatusCode: 400, expectedError: ErrorMessageInvalidRequestedTokenType},
+		{testName: "If a token-exchange request is received without subject_token, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
+		{testName: "If a token-exchange request is received without scope, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoScope},
 	}
 
 	for _, tc := range tests {
@@ -143,7 +159,21 @@ func TestGetToken(t *testing.T) {
 			}
 
 			if tc.testVPToken != "" {
-				formArray = append(formArray, "vp_token="+tc.testVPToken)
+				if tc.testGrantType == "vp_token" {
+					formArray = append(formArray, "vp_token="+tc.testVPToken)
+				} else if tc.testGrantType == "urn:ietf:params:oauth:grant-type:token-exchange" {
+					formArray = append(formArray, "subject_token="+tc.testVPToken)
+				}
+			}
+
+			if tc.testResource != "" {
+				formArray = append(formArray, "resource="+tc.testResource)
+			}
+			if tc.testSubjectTokenType != "" {
+				formArray = append(formArray, "subject_token_type="+tc.testSubjectTokenType)
+			}
+			if tc.testRequestedTokenType != "" {
+				formArray = append(formArray, "requested_token_type="+tc.testRequestedTokenType)
 			}
 
 			body := bytes.NewBufferString(strings.Join(formArray, "&"))
@@ -199,13 +229,14 @@ func TestStartSIOPSameDevice(t *testing.T) {
 		mockError          error
 		expectedStatusCode int
 		expectedLocation   string
+		expectedResponse   string
 	}
 
 	tests := []test{
-		{"If all neccessary parameters provided, a valid redirect should be returned.", "my-state", "/my-redirect", "http://host.org", "http://host.org/api/v1/authentication_response", nil, 302, "http://host.org/api/v1/authentication_response"},
-		{"If no path is provided, the default redirect should be returned.", "my-state", "", "http://host.org", "http://host.org/api/v1/authentication_response", nil, 302, "http://host.org/api/v1/authentication_response"},
-		{"If no state is provided, a 400 should be returned.", "", "", "http://host.org", "http://host.org/api/v1/authentication_response", nil, 400, ""},
-		{"If the verifier returns an error, a 500 should be returned.", "my-state", "/", "http://host.org", "http://host.org/api/v1/authentication_response", errors.New("verifier_failure"), 500, ""},
+		{testName: "If all neccessary parameters provided, a valid redirect should be returned.", testState: "my-state", testRedirectPath: "/my-redirect", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
+		{testName: "If no state is provided, a 400 should be returned.", testState: "", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 400, expectedLocation: ""},
+		{testName: "If the verifier returns an error, a 500 should be returned.", testState: "my-state", testRedirectPath: "/", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: errors.New("verifier_failure"), expectedStatusCode: 500, expectedLocation: ""},
+		{testName: "If no path is provided, a deeplink should be returned.", testState: "my-state", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response", expectedResponse: ""},
 	}
 
 	for _, tc := range tests {
@@ -233,6 +264,13 @@ func TestStartSIOPSameDevice(t *testing.T) {
 				t.Errorf("%s - Expected status %v but was %v.", tc.testName, tc.expectedStatusCode, recorder.Code)
 				return
 			}
+			if tc.expectedStatusCode == 200 {
+				responseString := recorder.Body.String()
+				if tc.expectedResponse != responseString {
+					t.Errorf("%s - Expected response %v but was %v.", tc.testName, tc.expectedResponse, responseString)
+				}
+			}
+
 			if tc.expectedStatusCode != 302 {
 				// everything other is an error, we dont care about the details
 				return

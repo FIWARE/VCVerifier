@@ -5,14 +5,15 @@ server:
 
 logging:
   level: "DEBUG"
-  jsonLogging: "true"
-  logRequests: "true"
+  jsonLogging: true
+  logRequests: true
   pathsToSkip: [/health]
 
 verifier:
   did: "did:key:somekey"
   tirAddress: "https://test.dev/trusted_issuer/v3/issuers/"
   sessionExpiry: 30
+  authorizationEndpoint: "/api/v2/loginQR"
   policies:
     default:
       SignaturePolicy: {}
