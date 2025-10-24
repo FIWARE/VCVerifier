@@ -10,7 +10,7 @@ require (
 	github.com/foolin/goview v0.3.0
 	github.com/gin-contrib/cors v1.4.0
 	github.com/gin-gonic/gin v1.9.1
-	github.com/go-jose/go-jose/v3 v3.0.1-0.20221117193127-916db76e8214
+	github.com/go-jose/go-jose/v3 v3.0.4
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.3.0
 	github.com/gookit/config/v2 v2.2.1
@@ -101,7 +101,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.14.1 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.0
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.4 // indirect
 	github.com/leodido/go-urn v1.2.4 // indirect
@@ -118,7 +118,7 @@ require (
 	github.com/valyala/fasttemplate v1.2.2
 	golang.org/x/arch v0.5.0 // indirect
 	golang.org/x/crypto v0.37.0 // indirect
-	golang.org/x/net v0.21.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sys v0.32.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect

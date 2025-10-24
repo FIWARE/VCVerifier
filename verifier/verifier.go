@@ -90,6 +90,7 @@ type Verifier interface {
 	GetRequestObject(state string) (jwt string, err error)
 	GetHost() string
 	GetAuthorizationType(clientId string) string
+	GetDefaultScope(serviceIdentifier string) (string, error)
 }
 
 type ValidationService interface {
@@ -704,6 +705,10 @@ func (v *CredentialVerifier) shouldBeIncluded(clientId string, scope string, cre
 		}
 	}
 	return false, inclusion
+}
+
+func (v *CredentialVerifier) GetDefaultScope(serviceIdentifier string) (scope string, err error) {
+	return v.credentialsConfig.GetDefaultScope(serviceIdentifier)
 }
 
 func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error) {

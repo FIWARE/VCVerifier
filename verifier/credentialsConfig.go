@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -16,6 +17,8 @@ import (
 	"golang.org/x/exp/maps"
 )
 
+var ErrorNoDefaultScope = errors.New("no_default_scope_configured")
+
 const CACHE_EXPIRY = 60
 
 /**
@@ -24,6 +27,8 @@ const CACHE_EXPIRY = 60
 type CredentialsConfig interface {
 	// should return the list of scopes to be requested via the scope parameter
 	GetScope(serviceIdentifier string) (scopes []string, err error)
+	// should return the configured default scope
+	GetDefaultScope(serviceIdentifier string) (scope string, err error)
 	// should return the authorization type to be provided in the redirect
 	GetAuthorizationType(serviceIdentifier string) (path string, err error)
 	// should return the authorization path to be provided in the redirect
@@ -139,6 +144,17 @@ func (cc ServiceBackedCredentialsConfig) RequiredCredentialTypes(serviceIdentifi
 	}
 	logging.Log().Errorf("No service entry for %s", serviceIdentifier)
 	return []string{}, fmt.Errorf("no service %s configured", serviceIdentifier)
+}
+
+func (cc ServiceBackedCredentialsConfig) GetDefaultScope(serviceIdentifier string) (scope string, err error) {
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		configuredService := cacheEntry.(config.ConfiguredService)
+		logging.Log().Debugf("Found scope %s for %s", logging.PrettyPrintObject(configuredService.ServiceScopes), serviceIdentifier)
+		return configuredService.DefaultOidcScope, nil
+	}
+	logging.Log().Debugf("No scope entry for %s", serviceIdentifier)
+	return "", ErrorNoDefaultScope
 }
 
 func (cc ServiceBackedCredentialsConfig) GetScope(serviceIdentifier string) (scopes []string, err error) {
