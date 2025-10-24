@@ -276,7 +276,7 @@ components:
     Scope:
       name: scope
       in: query
-      required: true
+      required: false
       schema: 
         type: string
         example: openid
