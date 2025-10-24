@@ -36,6 +36,8 @@ const DEEPLINK = "DEEPLINK"
 const FRONTEND_V1 = "FRONTEND_V1"
 const FRONTEND_V2 = "FRONTEND_V2"
 
+const DEFAULT_SCOPE = "openid"
+
 var apiVerifier verifier.Verifier
 var presentationParser verifier.PresentationParser
 var sdJwtParser verifier.SdJwtParser
@@ -365,9 +367,8 @@ func getScopesFromRequest(c *gin.Context) (scopes []string) {
 
 	scope, scopeExists := c.GetPostForm("scope")
 	if !scopeExists {
-		logging.Log().Debug("No scope present in the request.")
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoScope)
-		return scopes
+		logging.Log().Debugf("No scope present in the request, use the default scope %s", DEFAULT_SCOPE)
+		return []string{DEFAULT_SCOPE}
 	}
 
 	return strings.Split(scope, ",")
