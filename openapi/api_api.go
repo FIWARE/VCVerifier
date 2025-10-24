@@ -36,8 +36,6 @@ const DEEPLINK = "DEEPLINK"
 const FRONTEND_V1 = "FRONTEND_V1"
 const FRONTEND_V2 = "FRONTEND_V2"
 
-const DEFAULT_SCOPE = "openid"
-
 var apiVerifier verifier.Verifier
 var presentationParser verifier.PresentationParser
 var sdJwtParser verifier.SdJwtParser
@@ -275,10 +273,7 @@ func handleTokenTypeTokenExchange(c *gin.Context, clientId string) {
 		return
 	}
 
-	scopes := getScopesFromRequest(c)
-	if len(scopes) == 0 {
-		return
-	}
+	scopes := getScopesFromRequest(c, clientId)
 
 	audience, audienceExists := c.GetPostForm("audience")
 	if !audienceExists {
@@ -307,7 +302,7 @@ func handleTokenTypeVPToken(c *gin.Context, clientId string) {
 
 	logging.Log().Warnf("Got token %s", vpToken)
 
-	scopes := getScopesFromRequest(c)
+	scopes := getScopesFromRequest(c, clientId)
 	if len(scopes) == 0 {
 		return
 	}
@@ -363,12 +358,17 @@ func handleTokenTypeCode(c *gin.Context) {
 	c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidTokenRequest)
 }
 
-func getScopesFromRequest(c *gin.Context) (scopes []string) {
+func getScopesFromRequest(c *gin.Context, clientId string) (scopes []string) {
 
 	scope, scopeExists := c.GetPostForm("scope")
 	if !scopeExists {
-		logging.Log().Debugf("No scope present in the request, use the default scope %s", DEFAULT_SCOPE)
-		return []string{DEFAULT_SCOPE}
+		defaultScope, err := getApiVerifier().GetDefaultScope(clientId)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoScope)
+			return scopes
+		}
+		logging.Log().Debugf("No scope present in the request, use the default scope %s", defaultScope)
+		return []string{defaultScope}
 	}
 
 	return strings.Split(scope, ",")

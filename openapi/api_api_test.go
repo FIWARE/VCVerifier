@@ -53,6 +53,9 @@ func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, v
 func (mV *mockVerifier) GetJWKS() jwk.Set {
 	return mV.mockJWKS
 }
+func (mV *mockVerifier) GetDefaultScope(clientId string) (string, error) {
+	return "openid", nil
+}
 
 func (mV *mockVerifier) GetAuthorizationType(clientId string) string {
 	return mV.mockAuthorizationType

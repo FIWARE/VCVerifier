@@ -147,6 +147,10 @@ func (mcc mockCredentialConfig) GetTrustedIssuersLists(serviceIdentifier string,
 	return trustedIssuersRegistryUrl, err
 }
 
+func (mcc mockCredentialConfig) GetDefaultScope(serviceIdentifier string) (string, error) {
+	return "openid", nil
+}
+
 func (mcc mockCredentialConfig) RequiredCredentialTypes(serviceIdentifier string, scope string) (credentialTypes []string, err error) {
 	if mcc.mockError != nil {
 		return credentialTypes, mcc.mockError
