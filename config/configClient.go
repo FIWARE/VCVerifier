@@ -17,6 +17,7 @@ const SERVICE_DEFAULT_SCOPE = ""
 var ErrorCcsNoResponse = errors.New("no_response_from_ccs")
 var ErrorCcsErrorResponse = errors.New("error_response_from_ccs")
 var ErrorCcsEmptyResponse = errors.New("empty_response_from_ccs")
+var ErrorNoSuchScope = errors.New("requested_scope_does_not_exist")
 
 type HttpClient interface {
 	Get(url string) (resp *http.Response, err error)
@@ -214,38 +215,59 @@ type CredentialSetQuery struct {
 	Purpose interface{} `json:"purpose,omitempty" mapstructure:"purpose,omitempty"`
 }
 
-func (cs ConfiguredService) GetRequiredCredentialTypes(scope string) []string {
-	types := []string{}
-	for _, credential := range cs.GetCredentials(scope) {
+func (cs ConfiguredService) GetRequiredCredentialTypes(scope string) (types []string, err error) {
+	credentials, err := cs.GetCredentials(scope)
+	if err != nil {
+		return types, err
+	}
+	for _, credential := range credentials {
 		types = append(types, credential.Type)
 	}
-	return types
+	return types, err
 }
 
-func (cs ConfiguredService) GetScope(scope string) ScopeEntry {
+func (cs ConfiguredService) GetScope(scope string) (scopeEntry ScopeEntry, err error) {
 	if scope != SERVICE_DEFAULT_SCOPE {
-		return cs.ServiceScopes[scope]
+		scope = cs.DefaultOidcScope
 	}
-	return cs.ServiceScopes[cs.DefaultOidcScope]
+	scopeEntry, exists := cs.ServiceScopes[scope]
+	if !exists {
+		return scopeEntry, ErrorNoSuchScope
+	}
+	return scopeEntry, nil
 }
 
-func (cs ConfiguredService) GetCredentials(scope string) []Credential {
-	return cs.GetScope(scope).Credentials
+func (cs ConfiguredService) GetCredentials(scope string) (credentials []Credential, err error) {
+	scopeEntry, err := cs.GetScope(scope)
+	if err != nil {
+		return credentials, err
+	}
+	return scopeEntry.Credentials, err
 }
 
-func (cs ConfiguredService) GetPresentationDefinition(scope string) *PresentationDefinition {
-	return cs.GetScope(scope).PresentationDefinition
+func (cs ConfiguredService) GetPresentationDefinition(scope string) (pd *PresentationDefinition, err error) {
+	scopeEntry, err := cs.GetScope(scope)
+	if err != nil {
+		return pd, err
+	}
+	return scopeEntry.PresentationDefinition, err
 }
 
-func (cs ConfiguredService) GetDcqlQuery(scope string) *DCQL {
-	return cs.GetScope(scope).DCQL
+func (cs ConfiguredService) GetDcqlQuery(scope string) (dcql *DCQL, err error) {
+	scopeEntry, err := cs.GetScope(scope)
+	if err != nil {
+		return dcql, err
+	}
+	return scopeEntry.DCQL, err
 }
 
 func (cs ConfiguredService) GetCredential(scope, credentialType string) (Credential, bool) {
-	credentials := cs.GetCredentials(scope)
-	for _, credential := range credentials {
-		if credential.Type == credentialType {
-			return credential, true
+	credentials, err := cs.GetCredentials(scope)
+	if err == nil {
+		for _, credential := range credentials {
+			if credential.Type == credentialType {
+				return credential, true
+			}
 		}
 	}
 	return Credential{}, false
