@@ -1155,13 +1155,19 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	}
 	jwtBuilder.Expiration(v.clock.Now().Add(time.Second * 30))
 
-	presentationDefinition := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
+	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
+	if err != nil {
+		return
+	}
 	if presentationDefinition != nil {
 		logging.Log().Debugf("The definition %s", logging.PrettyPrintObject(presentationDefinition))
 		jwtBuilder.Claim("presentation_definition", &presentationDefinition)
 	}
 
-	dcql := v.credentialsConfig.GetDcqlQuery(clientId, scope)
+	dcql, err := v.credentialsConfig.GetDcqlQuery(clientId, scope)
+	if err != nil {
+		return
+	}
 	if dcql != nil {
 		logging.Log().Debugf("The dcql %s", logging.PrettyPrintObject(dcql))
 		jwtBuilder.Claim("dcql_query", &dcql)
