@@ -110,18 +110,18 @@ func (mcc mockCredentialConfig) GetAuthorizationPath(serviceIdentifier string) (
 	}
 	return DEFAULT_AUTHORIZATION_PATH
 }
-func (mcc mockCredentialConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *configModel.PresentationDefinition) {
+func (mcc mockCredentialConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *configModel.PresentationDefinition, err error) {
 	if mcc.mockError != nil {
-		return presentationDefinition
+		return presentationDefinition, mcc.mockError
 	}
-	return mcc.mockScopes[serviceIdentifier][scope].PresentationDefinition
+	return mcc.mockScopes[serviceIdentifier][scope].PresentationDefinition, mcc.mockError
 }
 
-func (mcc mockCredentialConfig) GetDcqlQuery(serviceIdentifier string, scope string) (dcql *configModel.DCQL) {
+func (mcc mockCredentialConfig) GetDcqlQuery(serviceIdentifier string, scope string) (dcql *configModel.DCQL, err error) {
 	if mcc.mockError != nil {
-		return dcql
+		return dcql, mcc.mockError
 	}
-	return mcc.mockScopes[serviceIdentifier][scope].DCQL
+	return mcc.mockScopes[serviceIdentifier][scope].DCQL, mcc.mockError
 }
 func (mcc mockCredentialConfig) GetTrustedParticipantLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []configModel.TrustedParticipantsList, err error) {
 	if mcc.mockError != nil {
