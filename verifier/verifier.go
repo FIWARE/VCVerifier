@@ -307,6 +307,15 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 
 	key, err := initPrivateKey(verifierConfig.KeyAlgorithm, verifierConfig.GenerateKey, verifierConfig.KeyPath)
 
+	kid := verifierConfig.ClientIdentification.Id
+	if verifierConfig.ClientIdentification.Kid != "" {
+		kid = verifierConfig.ClientIdentification.Kid
+	}
+	if key != nil && !key.Has(jwk.KeyIDKey) {
+		logging.Log().Infof("Adding kid='%s' to keyset", kid)
+		key.Set(jwk.KeyIDKey, kid)
+	}
+
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate a signing key. Err: %v", err)
 		return err

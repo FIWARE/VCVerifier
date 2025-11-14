@@ -1,4 +1,4 @@
-# VCVerifier for SIOP-2/OIDC4VP 
+# VCVerifier for SIOP-2/OIDC4VP
 
 VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html#name-cross-device-self-issued-op)/[OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#request_scope) compliant authentication flows. It exchanges [VerfiableCredentials](https://www.w3.org/TR/vc-data-model/) for [JWT](https://www.rfc-editor.org/rfc/rfc7519), that can be used for authorization and authentication in down-stream components.
 
@@ -29,7 +29,7 @@ VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer 
 
 ## Background
 
-[VerifiableCredentials](https://www.w3.org/TR/vc-data-model/) provide a mechanism to represent information in a tamper-evident and therefor trustworthy way. The term "verifiable" refers to the characteristic of a credential being able to be verified by a 3rd party(e.g. a verifier). Verification in that regard means, that it can be proven, that the claims made in the credential are as they were provided by the issuer of that credential. 
+[VerifiableCredentials](https://www.w3.org/TR/vc-data-model/) provide a mechanism to represent information in a tamper-evident and therefor trustworthy way. The term "verifiable" refers to the characteristic of a credential being able to be verified by a 3rd party(e.g. a verifier). Verification in that regard means, that it can be proven, that the claims made in the credential are as they were provided by the issuer of that credential.
 This characteristics make [VerifiableCredentials](https://www.w3.org/TR/vc-data-model/) a good option to be used for authentication and authorization, as a replacement of other credentials types, like the traditional username/password. The [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html#name-cross-device-self-issued-op)/[OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#request_scope) standards define a flow to request and present such credentials as an extension to the well-established [OpenID Connect](https://openid.net/connect/).
 The VCVerifier provides the necessary endpoints required for a `Relying Party`(as used in the [SIOP-2 spec](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html#name-abbreviations)) to participate in the authentication flows. It verifies the credentials using the [Trustbloc Libraries](https://github.com/trustbloc/vc-go) to provide Verfiable Credentials specific functionality and return a signed [JWT](https://www.rfc-editor.org/rfc/rfc7519), containing the credential as a claim, to be used for further interaction by the participant.
 
@@ -45,7 +45,7 @@ The following actions occur in the interaction:
 2. The frontend-application forwards the user to the login-page of VCVerifier
 3. The VCVerifier presents a QR-code, containing the ```openid:```-connection string with all necessary information to start the authentication process. The QR-code is scanned by the user's wallet.
     1. the Verifier retrieves the Scope-Information from the Config-Service
-4. The user approves the wallet's interaction with the VCVerifier and the VerifiableCredential is presented via the OIDC4VP-flow. 
+4. The user approves the wallet's interaction with the VCVerifier and the VerifiableCredential is presented via the OIDC4VP-flow.
 5. VCVerifier verifies the credential:
     1. at WaltID-SSIKit with the configured set of policies
     2. (Optional) if a Gaia-X compliant chain is provided
@@ -54,7 +54,7 @@ The following actions occur in the interaction:
 6. A JWT is created, the frontend-application is informed via callback and the token is retrieved via the token-endpoint.
 7. Frontend start to interact with the backend-service, using the jwt.
 8. Authorization-Layer requests the JWKS from the VCVerifier(this can happen asynchronously, not in the sequential flow of the diagram).
-9. Authorization-Layer verifies the JWT(using the retrieved JWKS) and handles authorization based on its contents. 
+9. Authorization-Layer verifies the JWT(using the retrieved JWKS) and handles authorization based on its contents.
 
 ## Install
 
@@ -64,7 +64,7 @@ The VCVerifier is provided as a container and can be run via ```docker run -p 80
 
 ### Kubernetes
 
-To ease the deployment on [Kubernetes](https://kubernetes.io/) environments, the helm-chart [i4trust/vcverfier](https://github.com/i4Trust/helm-charts/tree/main/charts/vcverifier) can be used. 
+To ease the deployment on [Kubernetes](https://kubernetes.io/) environments, the helm-chart [i4trust/vcverfier](https://github.com/i4Trust/helm-charts/tree/main/charts/vcverifier) can be used.
 
 ### Local setup
 
@@ -95,25 +95,27 @@ logging:
     level: "INFO"
     # should the log output be in structured json-format
     jsonLogging: true
-    # should the verifier log all incoming requests 
+    # should the verifier log all incoming requests
     logRequests: true
     # a list of paths that should be excluded from the request logging. Can f.e. be used to omit continuous health-checks
     pathsToSkip:
 
-# configuration directly connected to the functionality 
-verifier: 
+# configuration directly connected to the functionality
+verifier:
     # did to be used by the verifier.
     did:
-    # identification of the verifier in communication with wallets 
+    # identification of the verifier in communication with wallets
     clientIdentification:
         # identification used by the verifier when requesting authorization. Can be a did, but also methods like x509_san_dns
-        id: 
+        id:
         # path to the signing key(in pem format) for request object. Needs to correspond with the id
         keyPath:
         # algorithm to be used for signing the request. Needs to match the signing key
-        requestKeyAlgorithm: 
+        requestKeyAlgorithm:
         # depending on the id type, the certificate chain needs to be included in the object(f.e. in case of x509_san_dns)
-        certificatePath: 
+        certificatePath:
+        # Kid used when key certificate does not include it. If both are missing, id is used
+        kid:
     # supported modes for requesting authentication. in case of byReference and byValue, the clientIdentification needs to be properly configured
     supportedModes: ["urlEncoded", "byReference","byValue"]
     # address of the (ebsi-compliant) trusted-issuers-registry to be used for verifying the issuer of a received credential
@@ -129,22 +131,22 @@ verifier:
 	# * `jsonLd`: uses JSON-LD parser for validation
 	# * `baseContext`: validates that only the fields and values (when applicable)are present in the document. No extra fields are allowed (outside of credentialSubject).
 	# Default is set to `none` to ensure backwards compatibility
-    validationMode: 
+    validationMode:
     # algorithm to be used for the jwt signatures - currently supported: RS256 and ES256, default is RS256
-    keyAlgorithm: 
+    keyAlgorithm:
     # when set to true, the private key is generated on startup. Its not persisted and just kept in memory.
     generateKey: true
     # path to the private key(in PEM format) for jwt signatures
-    keyPath: 
+    keyPath:
 
 # configuration of the service to retrieve configuration for
 configRepo:
     # endpoint of the configuration service, to retrieve the scope to be requested and the trust endpoints for the credentials.
     configEndpoint: http://config-service:8080
     # static configuration for services
-    services: 
+    services:
         # name of the service to be configured
-        -   id: testService 
+        -   id: testService
             # default scope for the service
             defaultOidcScope: "default"
             # the concrete scopes for the service, defining the trust for credentials and the presentation definition to be requested
@@ -152,23 +154,23 @@ configRepo:
                 # the concrete scope configuration
                 default:
                     # credentials and their trust configuration
-                    credentials: 
+                    credentials:
                         -   type: CustomerCredential
-                            # trusted participants endpoint configuration 
+                            # trusted participants endpoint configuration
                             trustedParticipantsLists:
                                 # the credentials type to configure the endpoint(s) for
-                                VerifiableCredential: 
+                                VerifiableCredential:
                                 - https://tir-pdc.ebsi.fiware.dev
                                 # the credentials type to configure the endpoint(s) for
-                                CustomerCredential: 
+                                CustomerCredential:
                                 - https://tir-pdc.ebsi.fiware.dev
                             # trusted issuers endpoint configuration
                             trustedIssuersLists:
                                 # the credentials type to configure the endpoint(s) for
-                                VerifiableCredential: 
+                                VerifiableCredential:
                                 - https://tir-pdc.ebsi.fiware.dev
                                 # the credentials type to configure the endpoint(s) for
-                                CustomerCredential: 
+                                CustomerCredential:
                                 - https://tir-pdc.ebsi.fiware.dev
                             # configuration for verifying the holder of a credential
                             holderVerification:
@@ -185,15 +187,15 @@ configRepo:
 	                        # defines the infromation to be requested
                             constraints:
                                 # array of objects to describe the information to be included
-                                fields: 
+                                fields:
                                     - id: my-field
                                       path:
                                         - $.vct
                                       filter:
-                                        const: "CustomerCredential" 
+                                        const: "CustomerCredential"
                             # format of the credential to be requested
                             format:
-                                'sd+jwt-vc': 
+                                'sd+jwt-vc':
                                     alg: ES256
 ```
 #### Templating
@@ -202,17 +204,17 @@ The login-page, provided at ```/api/v1/loginQR```, can be configured by providin
 
 ## Usage
 
-The VCVerifier provides support for integration in frontend-applications(e.g. typical H2M-interactin) or plain api-usage(mostly M2M). 
+The VCVerifier provides support for integration in frontend-applications(e.g. typical H2M-interactin) or plain api-usage(mostly M2M).
 
 ### Frontend-Integration
 
-In order to ease the integration into frontends, VCVerifier offers a login-page at ```/api/v1/loginQR```. The loginQr-endpoint expects a ```state```(that will be used on the callback, so that the calling frontend-application can identify the user-session) and a ```client_callback``` url, which will be contacted by the verifier after successfull verfication via ```GET``` with the query-parameters ```state```(the originally send state) and ```code```(which is the authorization_code to be provided at the token endpoint for retrieving the actual JWT). 
+In order to ease the integration into frontends, VCVerifier offers a login-page at ```/api/v1/loginQR```. The loginQr-endpoint expects a ```state```(that will be used on the callback, so that the calling frontend-application can identify the user-session) and a ```client_callback``` url, which will be contacted by the verifier after successfull verfication via ```GET``` with the query-parameters ```state```(the originally send state) and ```code```(which is the authorization_code to be provided at the token endpoint for retrieving the actual JWT).
 
 ### REST-Example
 
 In order to start a ```same-device```-flow(e.g. the credential is hold by the requestor, instead of an additional device like a mobile wallet) call:
 
-```shell            
+```shell
 curl -X 'GET' \
   'http://localhost:8080/api/v1/samedevice?state=274e7465-cc9d-4cad-b75f-190db927e56a'
 ```
@@ -234,9 +236,9 @@ curl -X 'POST' \
 The post will be answered with just another redirect, containing the ```state``` and the ```code``` to be used for retrieving the JWT:
 ```
     location: http://localhost:8080/?state=274e7465-cc9d-4cad-b75f-190db927e56a&code=IwMTgvY3JlZGVudGlhbHMv
-``` 
+```
 
-The original requestor now can use to retrieve the JWT through the standarad token flow: 
+The original requestor now can use to retrieve the JWT through the standarad token flow:
 
 ```shell
 curl -X 'POST' \
@@ -267,27 +269,27 @@ The Verifier currently supports 2 types of Participant Lists:
 
 ### EBSI TIR
 
-In order to check an issuer against an EBSI Trusted Issuers Registry, it needs to be configured for the supported credentials. When using the file config, it would look like: 
+In order to check an issuer against an EBSI Trusted Issuers Registry, it needs to be configured for the supported credentials. When using the file config, it would look like:
 
 ```yaml
 configRepo:
     # static configuration for services
-    services: 
+    services:
         # name of the service to be configured
-        testService: 
+        testService:
             # scope to be requested from the wallet
-            scope: 
+            scope:
                 - VerifiableCredential
-            # trusted participants endpoint configuration 
+            # trusted participants endpoint configuration
             trustedParticipants:
                 # the credentials type to configure the endpoint(s) for
-                VerifiableCredential: 
-                - type: ebsi 
+                VerifiableCredential:
+                - type: ebsi
             # scope to be requested from the wallet
-            scope: 
+            scope:
                 - VerifiableCredential
                 - CustomerCredential
-            
+
                   url: https://tir-pdc.ebsi.fiware.dev
 ```
 
@@ -296,16 +298,16 @@ For backward compatibility, the EBSI List is the default at the moment, thus the
 ```yaml
 configRepo:
     # static configuration for services
-    services: 
+    services:
         # name of the service to be configured
-        testService: 
+        testService:
             # scope to be requested from the wallet
-            scope: 
+            scope:
                 - VerifiableCredential
-            # trusted participants endpoint configuration 
+            # trusted participants endpoint configuration
             trustedParticipants:
                 # the credentials type to configure the endpoint(s) for
-                VerifiableCredential: 
+                VerifiableCredential:
                 - https://tir-pdc.ebsi.fiware.dev
 ```
 
@@ -316,17 +318,17 @@ When using the [Gaia-X Digital Clearing House's](https://gaia-x.eu/services-deli
 ```yaml
 configRepo:
     # static configuration for services
-    services: 
+    services:
         # name of the service to be configured
-        testService: 
+        testService:
             # scope to be requested from the wallet
-            scope: 
+            scope:
                 - VerifiableCredential
-            # trusted participants endpoint configuration 
+            # trusted participants endpoint configuration
             trustedParticipants:
                 # the credentials type to configure the endpoint(s) for
-                VerifiableCredential: 
-                - type: gaia-x 
+                VerifiableCredential:
+                - type: gaia-x
                   url: https://registry.lab.gaia-x.eu
 ```
 
@@ -336,19 +338,19 @@ Its also possible to trust multiple list with different types. In this case, the
 ```yaml
 configRepo:
     # static configuration for services
-    services: 
+    services:
         # name of the service to be configured
-        testService: 
+        testService:
             # scope to be requested from the wallet
-            scope: 
+            scope:
                 - VerifiableCredential
-            # trusted participants endpoint configuration 
+            # trusted participants endpoint configuration
             trustedParticipants:
                 # the credentials type to configure the endpoint(s) for
-                VerifiableCredential: 
+                VerifiableCredential:
                 - type: ebsi
                   url: https://tir-pdc.ebsi.fiware.dev
-                - type: gaia-x 
+                - type: gaia-x
                   url: https://registry.lab.gaia-x.eu
 ```
 
@@ -372,7 +374,7 @@ Example:
 
 #### byValue
 Example:
-```			
+```
     openid4vp://?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJwcmVzZW50YXRpb25fZGVmaW5pdGlvbiI6eyJpZCI6IiIsImlucHV0X2Rlc2NyaXB0b3JzIjpudWxsLCJmb3JtYXQiOm51bGx9LCJyZWRpcmVjdF91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJzY29wZSI6Im9wZW5pZCIsInN0YXRlIjoicmFuZG9tU3RhdGUifQ.Z0xv_E9vvhRN2nBeKQ49LgH8lkjkX-weR7R5eCmX9ebGr1aE8_6usa2PO9nJ4LRv8oWMg0q9fsQ2x5DTYbvLdA
 ```
 Decoded:
@@ -425,7 +427,7 @@ The VCVerifier does currently not support all functionalities defined in the con
 
 ## Testing
 
-Functionality of the verifier is tested via parameterized Unit-Tests, following golang-bestpractices. In addition, the verifier is integrated into the [VC-Integration-Test](https://github.com/fiware/VC-Integration-Test), involving all components used in a typical, VerifiableCredentials based, scenario. 
+Functionality of the verifier is tested via parameterized Unit-Tests, following golang-bestpractices. In addition, the verifier is integrated into the [VC-Integration-Test](https://github.com/fiware/VC-Integration-Test), involving all components used in a typical, VerifiableCredentials based, scenario.
 
 
 ## License
