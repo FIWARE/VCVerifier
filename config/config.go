@@ -101,6 +101,8 @@ type ClientIdentification struct {
 	Id string `mapstructure:"id"`
 	// optional path to the certifcate to embed in the jwt header
 	CertificatePath string `mapstructure:"certificatePath"`
+	// Kid used when key certificate does not include it. If both are missing, id is used
+	Kid string `mapstructure:"kid"`
 }
 
 type Elsi struct {
