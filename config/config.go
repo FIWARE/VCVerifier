@@ -88,6 +88,8 @@ type Verifier struct {
 	GenerateKey bool `mapstructure:"generateKey" default:"true"`
 	// path to the private key for jwt signatures
 	KeyPath string `mapstructure:"keyPath"`
+	// expiration time in minutes for JWT tokens
+	JwtExpiration int `mapstructure:"jwtExpiration" default:"30"`
 }
 
 type ClientIdentification struct {
