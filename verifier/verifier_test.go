@@ -5,10 +5,14 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"math/big"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -617,6 +621,17 @@ func TestInitVerifier(t *testing.T) {
 		testConfig    configModel.Configuration
 		expectedError error
 	}
+	// Generate a key without KID
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	keyPath := filepath.Join(t.TempDir(), "private.pem")
+	privBlock := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+	}
+	pemBytes := pem.EncodeToMemory(privBlock)
+	if err := os.WriteFile(keyPath, pemBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []test{
 		{"A verifier should be properly intantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}}}, nil},
@@ -625,6 +640,8 @@ func TestInitVerifier(t *testing.T) {
 		{"Without a validationMode, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "blub", SessionExpiry: 30, KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, ErrorUnsupportedValidationMode},
 		{"Without a valid key algorithm, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "SomethingWeird", SupportedModes: []string{"urlEncoded"}}}, ErrorInvalidKeyConfig},
 		{"Without supported modes, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256"}}, ErrorSupportedModesNotSet},
+		{"KID should be added if the key does not contain it and a KID value is configured", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Kid: "random-kid"}}}, nil},
+		{"ClientID should be added to the key when KID value and config are missing", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Id: "client-id-value"}}}, nil},
 	}
 
 	for _, tc := range tests {
@@ -644,8 +661,22 @@ func TestInitVerifier(t *testing.T) {
 				return
 			}
 
-			if GetVerifier() == nil {
+			verifier = GetVerifier()
+			if verifier == nil {
 				t.Errorf("%s - Verifier should have been initiated, but is not available.", tc.testName)
+				return
+			}
+			jwks := verifier.GetJWKS()
+			if jwks.Len() != 1 {
+				t.Errorf("%s - Unexpected JWKS length: expected 1, got %d.", tc.testName, jwks.Len())
+				return
+			}
+			key, _ := jwks.Key(0)
+
+			kid, existsKid := key.KeyID()
+			if !existsKid || kid == "" {
+				t.Errorf("%s - JWK does not contain a valid KID.", tc.testName)
+				return
 			}
 		})
 	}
