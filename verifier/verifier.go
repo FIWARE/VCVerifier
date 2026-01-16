@@ -132,6 +132,8 @@ type CredentialVerifier struct {
 	clientIdentification configModel.ClientIdentification
 	// config of the verifier
 	verifierConfig configModel.Verifier
+	// JWT token expiration time in minutes
+	jwtExpiration time.Duration
 }
 
 // allow singleton access to the verifier
@@ -351,6 +353,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 		&didSigningKey,
 		verifierConfig.ClientIdentification,
 		*verifierConfig,
+		time.Duration(verifierConfig.JwtExpiration) * time.Minute,
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
@@ -1101,7 +1104,7 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 // generate a jwt, containing the credential and mandatory information as defined by the dsba-convergence
 func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, holder string, audience string, flatValues bool) (generatedJwt jwt.Token, err error) {
 
-	jwtBuilder := jwt.NewBuilder().Issuer(v.GetHost()).Audience([]string{audience}).Expiration(v.clock.Now().Add(time.Minute * 30))
+	jwtBuilder := jwt.NewBuilder().Issuer(v.GetHost()).Audience([]string{audience}).Expiration(v.clock.Now().Add(v.jwtExpiration))
 
 	if holder != "" {
 		jwtBuilder.Subject(holder)
