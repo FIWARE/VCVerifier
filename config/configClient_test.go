@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"net/http"
+	"reflect"
 
+	"github.com/fiware/VCVerifier/logging"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -25,6 +27,39 @@ func readFile(filename string, t *testing.T) string {
 		t.Error("could not read file", err)
 	}
 	return string(data)
+}
+
+func Test_getScope(t *testing.T) {
+
+	logging.Configure(true, "DEBUG", true, []string{})
+	type test struct {
+		testName          string
+		testScope         string
+		expectedEntry     ScopeEntry
+		expectedError     error
+		mockServiceScopes map[string]ScopeEntry
+	}
+
+	tests := []test{
+		{testName: "For an existing scope, the correct entry should be returned.", testScope: "exists", mockServiceScopes: map[string]ScopeEntry{"exists": {Credentials: []Credential{{Type: "Test"}}}, "other": {Credentials: []Credential{{Type: "Other"}}}}, expectedEntry: ScopeEntry{Credentials: []Credential{{Type: "Test"}}}},
+		{testName: "For an non-existing scope, an error should be returned.", testScope: "non-existing", mockServiceScopes: map[string]ScopeEntry{"exists": {Credentials: []Credential{{Type: "Test"}}}, "other": {Credentials: []Credential{{Type: "Other"}}}}, expectedError: ErrorNoSuchScope},
+	}
+	for _, tc := range tests {
+
+		t.Run(tc.testName, func(t *testing.T) {
+			testService := ConfiguredService{ServiceScopes: tc.mockServiceScopes}
+			scopeEntry, err := testService.GetScope(tc.testScope)
+			if tc.expectedError != err {
+				t.Errorf("%s - expected error %s but was %s.", tc.testName, tc.expectedError, err)
+				return
+			}
+			if !reflect.DeepEqual(tc.expectedEntry, scopeEntry) {
+				t.Errorf("%s - expected entry %s but was %s.", tc.testName, logging.PrettyPrintObject(tc.expectedEntry), logging.PrettyPrintObject(scopeEntry))
+				return
+			}
+		})
+	}
+
 }
 
 func Test_getServices(t *testing.T) {
