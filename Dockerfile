@@ -1,21 +1,25 @@
-FROM golang:1.24-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /go/src/app
 COPY ./ ./
 
-RUN apk add build-base
+RUN apk add --no-cache build-base
 
-RUN go get -d -v ./...
-RUN go build -v .
+RUN go mod download
 
-FROM golang:1.24-alpine
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o VCVerifier .
+
+FROM alpine:3.23
 
 LABEL org.opencontainers.image.source="https://github.com/FIWARE/VCVerifier"
 
-WORKDIR /go/src/app
+WORKDIR /app
 
-COPY --from=build /go/src/app/views /go/src/app/views
-COPY --from=build /go/src/app/VCVerifier /go/src/app/VCVerifier
-COPY --from=build /go/src/app/server.yaml /go/src/app/server.yaml
+COPY --from=build /go/src/app/views ./views
+COPY --from=build /go/src/app/VCVerifier ./VCVerifier
+COPY --from=build /go/src/app/server.yaml ./server.yaml
 
 CMD ["./VCVerifier"]
