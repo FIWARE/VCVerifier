@@ -790,7 +790,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 
 	for _, credential := range verifiablePresentation.Credentials() {
 
-		verificationContext, err := v.getTrustRegistriesValidationContext(loginSession.clientId, credential.Contents().Types)
+		verificationContext, err := v.getTrustRegistriesValidationContext(loginSession.clientId, credential.Contents().Types, loginSession.scope)
 		if err != nil {
 			logging.Log().Warnf("Was not able to create a valid verification context. Credential will be rejected. Err: %v", err)
 			return sameDevice, ErrorVerficationContextSetup
@@ -830,7 +830,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		toBeIncluded = append(toBeIncluded, credential.ToRawJSON())
 	}
 
-	flatClaims, _ := v.credentialsConfig.GetFlatClaims(loginSession.clientId, configModel.SERVICE_DEFAULT_SCOPE)
+	flatClaims, _ := v.credentialsConfig.GetFlatClaims(loginSession.clientId, loginSession.scope)
 	token, err := v.generateJWT(toBeIncluded, verifiablePresentation.Holder, hostname, flatClaims)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)
@@ -942,17 +942,18 @@ func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope s
 	return validationContexts, err
 }
 
-func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string, credentialTypes []string) (verificationContext TrustRegistriesValidationContext, err error) {
+func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string, credentialTypes []string, scope string) (verificationContext TrustRegistriesValidationContext, err error) {
+	logging.Log().Debugf("Create trust registry validation context for client '%s', scope '%s' and credential types %s", clientId, scope, credentialTypes)
 	trustedIssuersLists := map[string][]string{}
 	trustedParticipantsRegistries := map[string][]configModel.TrustedParticipantsList{}
 
 	for _, credentialType := range credentialTypes {
-		issuersLists, err := v.credentialsConfig.GetTrustedIssuersLists(clientId, configModel.SERVICE_DEFAULT_SCOPE, credentialType)
+		issuersLists, err := v.credentialsConfig.GetTrustedIssuersLists(clientId, scope, credentialType)
 		if err != nil {
 			logging.Log().Warnf("Was not able to get valid trusted-issuers-lists for client %s and type %s. Err: %v", clientId, credentialType, err)
 			return verificationContext, err
 		}
-		participantsLists, err := v.credentialsConfig.GetTrustedParticipantLists(clientId, configModel.SERVICE_DEFAULT_SCOPE, credentialType)
+		participantsLists, err := v.credentialsConfig.GetTrustedParticipantLists(clientId, scope, credentialType)
 		if err != nil {
 			logging.Log().Warnf("Was not able to get valid trusted-pariticpants-registries for client %s and type %s. Err: %v", clientId, credentialType, err)
 			return verificationContext, err
