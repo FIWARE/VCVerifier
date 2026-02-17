@@ -2,39 +2,60 @@ package logging
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 /**
 * Global logger
  */
-var logger = logrus.New()
-
+var sugar *zap.SugaredLogger
 var logRequests bool
 var skipPaths []string
+
+/**
+* Initialize the global logger with default values. This will be overridden by the Configure method,
+* but ensures that we have a logger available even if Configure is not called.
+**/
+func init() {
+	conf := zap.NewProductionConfig()
+	l, _ := conf.Build()
+	sugar = l.Sugar()
+}
 
 /**
 * Apply the given configuration to the global logger.
 **/
 func Configure(jsonLogging bool, logLevel string, logRequestsParam bool, skipPathsParam []string) {
-	if logLevel == "DEBUG" {
-		logger.SetLevel(logrus.DebugLevel)
-	} else if logLevel == "INFO" {
-		logger.SetLevel(logrus.InfoLevel)
-	} else if logLevel == "WARN" {
-		logger.SetLevel(logrus.WarnLevel)
-	} else if logLevel == "ERROR" {
-		logger.SetLevel(logrus.ErrorLevel)
+
+	var config zap.Config
+	if jsonLogging {
+		config = zap.NewProductionConfig()
+	} else {
+		config = zap.NewDevelopmentConfig()
+		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	}
 
-	if jsonLogging {
-		logger.SetFormatter(&logrus.JSONFormatter{})
-	} else {
-		logger.SetFormatter(&logrus.TextFormatter{})
+	switch strings.ToUpper(logLevel) {
+	case "DEBUG":
+		config.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
+	case "INFO":
+		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+	case "WARN":
+		config.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
+	case "ERROR":
+		config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
+	default:
+		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
 	}
+
+	logger, _ := config.Build()
+	sugar = logger.Sugar()
 
 	logRequests = logRequestsParam
 	skipPaths = skipPathsParam
@@ -43,8 +64,8 @@ func Configure(jsonLogging bool, logLevel string, logRequestsParam bool, skipPat
 /**
 *  Global access to the singleton logger
 **/
-func Log() *logrus.Logger {
-	return logger
+func Log() *zap.SugaredLogger {
+	return sugar
 }
 
 /**
@@ -54,34 +75,33 @@ func GinHandlerFunc() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !logRequests {
 			c.Next()
+			return
+		}
+		// Start timer
+		start := time.Now()
+		path := c.Request.URL.Path
+		raw := c.Request.URL.RawQuery
+		if raw != "" {
+			path = path + "?" + raw
+		}
+
+		// Process request
+		c.Next()
+
+		if slices.Contains(skipPaths, path) {
+			return
+		}
+
+		// Stop timer
+		latency := time.Since(start)
+		method := c.Request.Method
+		statusCode := c.Writer.Status()
+		errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
+
+		if errorMessage != "" {
+			Log().Warnf("Request [%s]%s took %d ms - Result: %d - %s", method, path, latency, statusCode, errorMessage)
 		} else {
-			// Start timer
-			start := time.Now()
-			path := c.Request.URL.Path
-			raw := c.Request.URL.RawQuery
-			if raw != "" {
-				path = path + "?" + raw
-			}
-
-			// Process request
-			c.Next()
-
-			if contains(skipPaths, path) {
-				return
-			}
-
-			// Stop timer
-			end := time.Now()
-			latency := end.Sub(start)
-			method := c.Request.Method
-			statusCode := c.Writer.Status()
-			errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
-
-			if errorMessage != "" {
-				Log().Warnf("Request [%s]%s took %d ms - Result: %d - %s", method, path, latency, statusCode, errorMessage)
-			} else {
-				Log().Infof("Request [%s]%s took %d ms - Result: %d", method, path, latency, statusCode)
-			}
+			Log().Infof("Request [%s]%s took %d ms - Result: %d", method, path, latency, statusCode)
 		}
 	}
 }
@@ -92,18 +112,8 @@ func GinHandlerFunc() gin.HandlerFunc {
 func PrettyPrintObject(objectInterface interface{}) string {
 	jsonBytes, err := json.Marshal(objectInterface)
 	if err != nil {
-		logger.Debugf("Was not able to pretty print the object: %v", objectInterface)
+		Log().Debugf("Was not able to pretty print the object: %v", objectInterface)
 		return ""
 	}
 	return string(jsonBytes)
-}
-
-// helper method to check if s contains e
-func contains(s []string, e string) bool {
-	for _, a := range s {
-		if a == e {
-			return true
-		}
-	}
-	return false
 }
