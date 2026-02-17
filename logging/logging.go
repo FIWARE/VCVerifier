@@ -18,6 +18,18 @@ var sugar *zap.SugaredLogger
 var logRequests bool
 var skipPaths []string
 
+// logging config
+type LoggingConfig struct {
+	// loglevel to be used - can be DEBUG, INFO, WARN or ERROR
+	Level string `mapstructure:"level" default:"INFO"`
+	// should the logging in a structured json format
+	JsonLogging bool `mapstructure:"jsonLogging" default:"true"`
+	// should requests be logged
+	LogRequests bool `mapstructure:"logRequests" default:"true"`
+	// list of paths to be ignored on request logging(could be often called operational endpoints like f.e. metrics)
+	PathsToSkip []string `mapstructure:"pathsToSkip"`
+}
+
 /**
 * Initialize the global logger with default values. This will be overridden by the Configure method,
 * but ensures that we have a logger available even if Configure is not called.
@@ -31,17 +43,17 @@ func init() {
 /**
 * Apply the given configuration to the global logger.
 **/
-func Configure(jsonLogging bool, logLevel string, logRequestsParam bool, skipPathsParam []string) {
+func Configure(logConfig LoggingConfig) {
 
 	var config zap.Config
-	if jsonLogging {
+	if logConfig.JsonLogging {
 		config = zap.NewProductionConfig()
 	} else {
 		config = zap.NewDevelopmentConfig()
 		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	}
 
-	switch strings.ToUpper(logLevel) {
+	switch strings.ToUpper(logConfig.Level) {
 	case "DEBUG":
 		config.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
 	case "INFO":
@@ -57,8 +69,8 @@ func Configure(jsonLogging bool, logLevel string, logRequestsParam bool, skipPat
 	logger, _ := config.Build()
 	sugar = logger.Sugar()
 
-	logRequests = logRequestsParam
-	skipPaths = skipPathsParam
+	logRequests = logConfig.LogRequests
+	skipPaths = logConfig.PathsToSkip
 }
 
 /**

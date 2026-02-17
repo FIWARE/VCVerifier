@@ -30,11 +30,7 @@ func main() {
 		panic(err)
 	}
 
-	logging.Configure(
-		configuration.Logging.JsonLogging,
-		configuration.Logging.Level,
-		configuration.Logging.LogRequests,
-		configuration.Logging.PathsToSkip)
+	logging.Configure(configuration.Logging)
 
 	logger := logging.Log()
 

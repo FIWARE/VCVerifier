@@ -1,15 +1,17 @@
 package config
 
+import "github.com/fiware/VCVerifier/logging"
+
 // CONFIGURATION STRUCTURE FOR THE VERIFIER CONFIG
 
 // general structure of the configuration file
 type Configuration struct {
-	Server     Server     `mapstructure:"server"`
-	Verifier   Verifier   `mapstructure:"verifier"`
-	Logging    Logging    `mapstructure:"logging"`
-	ConfigRepo ConfigRepo `mapstructure:"configRepo"`
-	M2M        M2M        `mapstructure:"m2m"`
-	Elsi       Elsi       `mapstructure:"elsi"`
+	Server     Server                `mapstructure:"server"`
+	Verifier   Verifier              `mapstructure:"verifier"`
+	Logging    logging.LoggingConfig `mapstructure:"logging"`
+	ConfigRepo ConfigRepo            `mapstructure:"configRepo"`
+	M2M        M2M                   `mapstructure:"m2m"`
+	Elsi       Elsi                  `mapstructure:"elsi"`
 }
 
 // general configuration to run the application
@@ -40,18 +42,6 @@ type M2M struct {
 	SignatureType string `mapstructure:"signatureType" default:"JsonWebSignature2020"`
 	// type of the provided key
 	KeyType string `mapstructure:"keyType" default:"RSAPS256"`
-}
-
-// logging config
-type Logging struct {
-	// loglevel to be used - can be DEBUG, INFO, WARN or ERROR
-	Level string `mapstructure:"level" default:"INFO"`
-	// should the logging in a structured json format
-	JsonLogging bool `mapstructure:"jsonLogging" default:"true"`
-	// should requests be logged
-	LogRequests bool `mapstructure:"logRequests" default:"true"`
-	// list of paths to be ignored on request logging(could be often called operational endpoints like f.e. metrics)
-	PathsToSkip []string `mapstructure:"pathsToSkip"`
 }
 
 // configuration specific to the functionality of the verifier
