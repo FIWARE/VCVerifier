@@ -2,6 +2,7 @@ package logging
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -103,15 +104,16 @@ func GinHandlerFunc() gin.HandlerFunc {
 		}
 
 		// Stop timer
-		latency := time.Since(start)
-		method := c.Request.Method
+		latency := time.Since(start).Seconds() * 1000
 		statusCode := c.Writer.Status()
 		errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
+		request := fmt.Sprintf("%s %s %s", c.Request.Method, c.Request.URL.RequestURI(), c.Request.Proto)
+		size := c.Writer.Size()
 
 		if errorMessage != "" {
-			Log().Warnf("Request [%s]%s took %d ms - Result: %d - %s", method, path, latency, statusCode, errorMessage)
+			Log().Warnf("Request \"%s\" %d (%d) - %.3fms. Error %s", request, statusCode, size, latency, errorMessage)
 		} else {
-			Log().Infof("Request [%s]%s took %d ms - Result: %d", method, path, latency, statusCode)
+			Log().Infof("Request \"%s\" %d (%d) - %.3fms", request, statusCode, size, latency)
 		}
 	}
 }
