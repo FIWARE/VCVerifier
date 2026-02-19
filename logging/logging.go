@@ -2,6 +2,7 @@ package logging
 
 import (
 	"encoding/json"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -53,22 +54,19 @@ func Configure(logConfig LoggingConfig) {
 		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	}
 
-	switch strings.ToUpper(logConfig.Level) {
-	case "DEBUG":
-		config.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
-	case "INFO":
-		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	case "WARN":
-		config.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
-	case "ERROR":
-		config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
-	default:
-		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+	var level zapcore.Level
+	levelErr := level.Set(logConfig.Level)
+	if levelErr != nil {
+		level = zapcore.InfoLevel
 	}
 
+	config.Level = zap.NewAtomicLevelAt(level)
 	logger, _ := config.Build()
 	sugar = logger.Sugar()
 
+	if levelErr != nil {
+		sugar.Warnf("Invalid log level %v, defaulting to INFO", logConfig.Level)
+	}
 	logRequests = logConfig.LogRequests
 	skipPaths = logConfig.PathsToSkip
 }
@@ -128,4 +126,32 @@ func PrettyPrintObject(objectInterface interface{}) string {
 		return ""
 	}
 	return string(jsonBytes)
+}
+
+type zapWriterFunc func(p []byte) (n int, err error)
+
+func (f zapWriterFunc) Write(p []byte) (n int, err error) {
+	return f(p)
+}
+
+func GetGinInternalWriter() io.Writer {
+	return zapWriterFunc(func(p []byte) (n int, err error) {
+		msg := string(p)
+		cleanMsg := strings.TrimSpace(msg)
+
+		if cleanMsg == "" {
+			return len(p), nil
+		}
+
+		switch {
+		case strings.Contains(msg, "[ERROR]"):
+			sugar.Error(cleanMsg)
+		case strings.Contains(msg, "[WARNING]"):
+			sugar.Warn(cleanMsg)
+		default:
+			sugar.Info(cleanMsg)
+		}
+
+		return len(p), nil
+	})
 }
