@@ -64,7 +64,7 @@ func (v *GaiaXRegistryValidationService) ValidateVC(verifiableCredential *verifi
 			return true, nil
 		} else {
 			logging.Log().Warnf("Failed to validate credential %s. Issuer was not in trusted issuer list", logging.PrettyPrintObject(verifiableCredential))
-			return false, nil
+			return false, fmt.Errorf("Issuer %s is not in trusted issuer list", verifiableCredential.Contents().Issuer.ID)
 		}
 	}
 	// No need to validate

@@ -3,6 +3,7 @@ package verifier
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
 	"github.com/fiware/VCVerifier/logging"
@@ -42,7 +43,7 @@ func (cvs *ComplianceValidationService) ValidateVC(verifiableCredential *verifia
 		}
 
 	}
-	return false, err
+	return false, fmt.Errorf("No compliance subject found for credential ID %s", credentialId)
 }
 
 func checkSignature(rawCredential []byte, signature string) (valid bool, err error) {

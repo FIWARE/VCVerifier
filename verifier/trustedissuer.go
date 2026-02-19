@@ -16,6 +16,10 @@ import (
 const WILDCARD_TIL = "*"
 
 var ErrorInvalidTil = errors.New("invalid_til_configured")
+var ErrorEmptyTilList = errors.New("empty_til_list")
+var ErrorNoTilForType = errors.New("no_til_defined_for_credential_type")
+var ErrorNoTilDefined = errors.New("no_til_defined_for_credential_type")
+var ErrorForbiddenClaims = errors.New("forbidden_claim_or_value")
 
 /**
 *	The trusted participant verification service will validate the entry of a participant within the trusted list.
@@ -44,7 +48,7 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *ver
 
 	if !tilSpecified {
 		logging.Log().Debug("The validation context does not specify a trusted issuers list, therefor we consider no issuer as trusted.")
-		return false, err
+		return false, ErrorEmptyTilList
 	}
 
 	til := trustContext.GetTrustedIssuersLists()
@@ -62,7 +66,7 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *ver
 		tilAddress, credentialSupported := til[credentialType]
 		if !credentialSupported {
 			logging.Log().Debugf("No trusted issuers list configured for type %s", credentialType)
-			return false, err
+			return false, ErrorNoTilForType
 		}
 
 		exist, trustedIssuer, err := tpvs.tirClient.GetTrustedIssuer(tilAddress, verifiableCredential.Contents().Issuer.ID)
@@ -73,7 +77,7 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *ver
 		}
 		if !exist {
 			logging.Log().Warnf("Trusted issuer for %s does not exist in context %s.", logging.PrettyPrintObject(verifiableCredential), logging.PrettyPrintObject(validationContext))
-			return false, err
+			return false, ErrorNoTilDefined
 		}
 		credentials, err := parseAttributes(trustedIssuer)
 		if err != nil {
@@ -124,7 +128,7 @@ func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, cr
 	}
 	if !subjectAllowed {
 		logging.Log().Debugf("The subject contains forbidden claims or values: %s.", logging.PrettyPrintObject(verifiableCredential.Contents().Subject[0]))
-		return false, err
+		return false, ErrorForbiddenClaims
 	}
 	logging.Log().Debugf("Credential %s is allowed by the config %s.", logging.PrettyPrintObject(verifiableCredential), logging.PrettyPrintObject(credentials))
 	return true, err

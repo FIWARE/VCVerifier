@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/fiware/VCVerifier/logging"
@@ -26,9 +27,13 @@ func (hvs *HolderValidationService) ValidateVC(verifiableCredential *verifiable.
 	currentClaim := credentialJson["credentialSubject"].(map[string]interface{})
 	for i, p := range path {
 		if i == pathLength-1 {
-			return currentClaim[p].(string) == holderContext.holder, err
+			valid := currentClaim[p].(string) == holderContext.holder
+			if !valid {
+				logging.Log().Debugf("Credential %v has not expected holder '%s' at claim path '%s'", logging.PrettyPrintObject(credentialJson), holderContext.holder, holderContext.claim)
+			}
+			return valid, err
 		}
 		currentClaim = currentClaim[p].(verifiable.JSONObject)
 	}
-	return false, err
+	return false, fmt.Errorf("Credential has not holder claim '%s'", holderContext.claim)
 }
