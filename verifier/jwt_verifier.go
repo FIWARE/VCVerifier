@@ -37,11 +37,13 @@ func (jwtVMR JWTVerfificationMethodResolver) ResolveVerificationMethod(verificat
 		return nil, ErrorUnresolvableDid
 	}
 	for _, vm := range didDocument.DIDDocument.VerificationMethod {
+		logging.Log().Debugf("Comparing verification method=%s vs ID=%s", verificationMethod, vm.ID)
 		if compareVerificationMethod(verificationMethod, vm.ID) {
 			var vermethod = vermethod.VerificationMethod{Type: vm.Type, Value: vm.Value, JWK: vm.JSONWebKey()}
 			return &vermethod, err
 		}
 	}
+	logging.Log().Warnf("No valid verification method=%s with expectedProofIssuer=%s", verificationMethod, expectedProofIssuer)
 	return nil, ErrorNoVerificationKey
 }
 
