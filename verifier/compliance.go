@@ -3,7 +3,7 @@ package verifier
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"errors"
 
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
 	"github.com/fiware/VCVerifier/logging"
@@ -13,6 +13,8 @@ import (
 const (
 	GAIA_X_COMPLIANCE_SUBJECT_TYPE = "gx:compliance"
 )
+
+var ErrorNoComplianceID = errors.New("No compliance subject found for credential")
 
 type ComplianceValidationContext struct {
 	complianceSubjects []ComplianceSubject
@@ -43,7 +45,8 @@ func (cvs *ComplianceValidationService) ValidateVC(verifiableCredential *verifia
 		}
 
 	}
-	return false, fmt.Errorf("No compliance subject found for credential ID %s", credentialId)
+	logging.Log().Warnf("No compliance subject found for credential ID %s", credentialId)
+	return false, ErrorNoComplianceID
 }
 
 func checkSignature(rawCredential []byte, signature string) (valid bool, err error) {
@@ -51,7 +54,7 @@ func checkSignature(rawCredential []byte, signature string) (valid bool, err err
 	canonicalized, err := jsoncanonicalizer.Transform(rawCredential)
 	if err != nil {
 		logging.Log().Warnf("Was not able to canonicalize credential %v. Error: %v", string(rawCredential), err)
-		return false, err
+		return false, ErrorNoComplianceID
 	}
 
 	hash := sha256.Sum256(canonicalized)

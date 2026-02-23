@@ -3,7 +3,7 @@ package openapi
 import (
 	"encoding/json"
 	"errors"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,7 +17,7 @@ import (
 
 func TestVerifierPageDisplayQRSIOP(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
 		testName           string
@@ -69,7 +69,7 @@ func TestVerifierPageDisplayQRSIOP(t *testing.T) {
 		}
 
 		if tc.expectedStatusCode == 400 {
-			errorBody, _ := ioutil.ReadAll(recorder.Body)
+			errorBody, _ := io.ReadAll(recorder.Body)
 			errorMessage := ErrorMessage{}
 			json.Unmarshal(errorBody, &errorMessage)
 			if errorMessage != tc.expectedError {

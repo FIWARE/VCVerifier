@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"errors"
 	"fmt"
 
 	configModel "github.com/fiware/VCVerifier/config"
@@ -13,6 +14,8 @@ import (
 
 const gaiaxCompliancePolicy = "GaiaXComplianceIssuer"
 const registryUrlPropertyName = "registryAddress"
+
+var ErrorNoTrustedIssuer = errors.New("Issuer is not in trusted issuer list")
 
 type GaiaXRegistryValidationService struct {
 	validateAll               bool

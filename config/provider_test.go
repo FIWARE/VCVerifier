@@ -51,9 +51,9 @@ func Test_ReadConfig(t *testing.T) {
 					KeyAlgorithm:          "RS256",
 					GenerateKey:           true,
 					SupportedModes:        []string{"urlEncoded"},
-					JwtExpiration:		 30,
+					JwtExpiration:         30,
 				},
-				Logging: Logging{
+				Logging: logging.LoggingConfig{
 					Level:       "DEBUG",
 					JsonLogging: true,
 					LogRequests: true,
@@ -120,7 +120,7 @@ func Test_ReadConfig(t *testing.T) {
 					SupportedModes: []string{"urlEncoded"},
 					JwtExpiration:  30,
 				},
-				Logging: Logging{
+				Logging: logging.LoggingConfig{
 					Level:       "INFO",
 					JsonLogging: true,
 					LogRequests: true,

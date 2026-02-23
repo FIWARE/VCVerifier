@@ -17,6 +17,14 @@ type MockHttpClient struct {
 	Answer string
 }
 
+var LOGGING_CONFIG = logging.LoggingConfig{
+	Level:         "DEBUG",
+	JsonLogging:   true,
+	LogRequests:   true,
+	PathsToSkip:   []string{},
+	DisableCaller: false,
+}
+
 func (mhc MockHttpClient) Get(url string) (resp *http.Response, err error) {
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(mhc.Answer))}, nil
 }
@@ -31,7 +39,7 @@ func readFile(filename string, t *testing.T) string {
 
 func Test_getScope(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 	type test struct {
 		testName          string
 		testScope         string
