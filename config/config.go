@@ -24,6 +24,15 @@ type Server struct {
 	TemplateDir string `mapstructure:"templateDir" default:"views/"`
 	// directory of static files to be provided, f.e. to be used inside the templates
 	StaticDir string `mapstructure:"staticDir" default:"views/static/"`
+
+	// ReadTimeout is the maximum duration for reading the entire request, including the body.
+	ReadTimeout int `mapstructure:"readTimeout" default:"5"`
+	// WriteTimeout is the maximum duration before timing out writes of the response.
+	WriteTimeout int `mapstructure:"writeTimeout" default:"10"`
+	// IdleTimeout is the maximum amount of time to wait for the next request when keep-alives are enabled.
+	IdleTimeout int `mapstructure:"idleTimeout" default:"120"`
+	// ShutdownTimeout is the time allowed for active requests to finish during shutdown.
+	ShutdownTimeout int `mapstructure:"shutdownTimeout" default:"5"`
 }
 
 // configuration for M2M interaction
