@@ -376,10 +376,10 @@ func verifyInitTest(t *testing.T, tc siopInitTest, authRequest string, err error
 		expectedNonce = "randomNonce"
 	}
 	if tc.requestMode == REQUEST_MODE_BY_REFERENCE {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
 		cachedSession.requestObject = removeSignature(cachedSession.requestObject)
 	} else {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
 	}
 	if cachedSession != expectedSession {
 		t.Errorf("%s - The login session was expected to be %v but was %v.", tc.testName, expectedSession, cachedSession)
