@@ -115,6 +115,7 @@ func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, cr
 	for _, credentialType := range verifiableCredential.Contents().Types {
 		config, exists := credentialsConfigMap[credentialType]
 		if !exists {
+			logging.Log().Warnf("The credential type %s is not allowed by the config %s.", credentialType, logging.PrettyPrintObject(credentialsConfigMap))
 			subjectAllowed = false
 			break
 		}
@@ -135,9 +136,10 @@ func verifyForType(subjectToVerfiy verifiable.Subject, credentialConfig tir.Cred
 		if claim.Path != "" {
 			validClaim := verifyWithJsonPath(subjectToVerfiy, claim)
 			if validClaim {
-				logging.Log().Debugf("Claim with path %s is valid.", claim.Path)
+				logging.Log().Debugf("Claim with path %s is valid. Credential Subject %s", claim.Path, logging.PrettyPrintObject(subjectToVerfiy))
 				continue
 			} else {
+				logging.Log().Warnf("Claim with path %s is not valid.", claim.Path)
 				return false
 			}
 		} else {

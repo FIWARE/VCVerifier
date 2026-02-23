@@ -68,6 +68,7 @@ var ErrorRedirectUriMismatch = errors.New("redirect_uri_does_not_match")
 var ErrorVerficationContextSetup = errors.New("no_valid_verification_context")
 var ErrorTokenUnparsable = errors.New("unable_to_parse_token")
 var ErrorRequiredCredentialNotProvided = errors.New("required_credential_not_provided")
+var ErrorNoValidCredentialTypeProvided = errors.New("no_valid_credential_type_provided")
 var ErrorUnsupportedRequestMode = errors.New("unsupported_request_mode")
 var ErrorNoExpiration = errors.New("no_jwt_expiration_set")
 var ErrorNoKeyId = errors.New("no_key_id_available")
@@ -615,6 +616,14 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 			flatClaims, _ = v.credentialsConfig.GetFlatClaims(clientId, scope)
 		}
 	}
+	if len(credentialsToBeIncluded) == 0 {
+		vcTypes := []string{}
+		for k := range credentialsByType {
+			vcTypes = append(vcTypes, k)
+		}
+		logging.Log().Warnf("No valid credential type was provided. Provided credential type: %v", vcTypes)
+		return 0, "", ErrorNoValidCredentialTypeProvided
+	}
 	token, err := v.generateJWT(credentialsToBeIncluded, holder, audience, flatClaims)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create the token. Err: %v", err)
@@ -1119,7 +1128,7 @@ func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, h
 		jwtBuilder.Claim("verifiablePresentation", credentials)
 	} else {
 		logging.Log().Debugf("Credentials %s", logging.PrettyPrintObject(credentials))
-		jwtBuilder.Claim("verifiableCredential", credentials[0])
+		jwtBuilder.Claim("verifiableCredential", credentials)
 	}
 
 	token, err := jwtBuilder.Build()
