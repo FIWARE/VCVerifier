@@ -1170,4 +1170,103 @@ func TestExtractCredentialTypes(t *testing.T) {
 			}
 		})
 	}
+
+}
+func TestGenerateToken(t *testing.T) {
+
+	logging.Configure(true, "DEBUG", true, []string{})
+
+	type test struct {
+		testName           string
+		clientId           string
+		subject            string
+		audience           string
+		scopes             []string
+		presentation       *verifiable.Presentation
+		credentialScopes   map[string]map[string]configModel.ScopeEntry
+		configError        error
+		mockTokenSignError error
+		expectedError      error
+	}
+
+	testKey := getECDSAKey()
+	emptyPresentation, _ := verifiable.NewPresentation()
+	vc1, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+		ID:    "vc1",
+		Types: []string{"type1", "typeA"},
+	}, verifiable.CustomFields{})
+	invalidPresentation, _ := verifiable.NewPresentation(verifiable.WithCredentials(vc1))
+
+	tests := []test{
+		{
+			testName:           "When presentation is empty, ErrorNoValidCredentialTypeProvided should be returned",
+			clientId:           "test-client",
+			subject:            "subject-id",
+			audience:           "audience-id",
+			scopes:             []string{"test-scope"},
+			presentation:       emptyPresentation,
+			credentialScopes:   map[string]map[string]configModel.ScopeEntry{},
+			configError:        nil,
+			mockTokenSignError: nil,
+			expectedError:      ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			testName:           "When presentation has not valid types, ErrorNoValidCredentialTypeProvided should be returned",
+			clientId:           "test-client",
+			subject:            "subject-id",
+			audience:           "audience-id",
+			scopes:             []string{"test-scope"},
+			presentation:       invalidPresentation,
+			credentialScopes:   map[string]map[string]configModel.ScopeEntry{},
+			configError:        nil,
+			mockTokenSignError: nil,
+			expectedError:      ErrorNoValidCredentialTypeProvided,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			mockConfig := mockCredentialConfig{mockScopes: tc.credentialScopes, mockError: tc.configError}
+
+			verifier := CredentialVerifier{
+				credentialsConfig:  &mockConfig,
+				validationServices: []ValidationService{},
+				signingKey:         testKey,
+				clock:              mockClock{},
+				tokenSigner:        mockTokenSigner{tc.mockTokenSignError},
+				signingAlgorithm:   "ES256",
+				host:               "https://verifier.example.com",
+				jwtExpiration:      time.Hour,
+			}
+
+			expiration, tokenString, err := verifier.GenerateToken(tc.clientId, tc.subject, tc.audience, tc.scopes, tc.presentation)
+
+			if tc.expectedError != nil {
+				if err == nil {
+					t.Errorf("%s - Expected error %v but got none.", tc.testName, tc.expectedError)
+					return
+				}
+				if err.Error() != tc.expectedError.Error() {
+					t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
+					return
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("%s - Expected no error but got %v.", tc.testName, err)
+				return
+			}
+
+			if tokenString == "" {
+				t.Errorf("%s - Expected token string but got empty.", tc.testName)
+				return
+			}
+
+			if expiration == 0 {
+				t.Errorf("%s - Expected expiration but got 0.", tc.testName)
+				return
+			}
+		})
+	}
 }
