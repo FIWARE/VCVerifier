@@ -30,6 +30,8 @@ type LoggingConfig struct {
 	LogRequests bool `mapstructure:"logRequests" default:"true"`
 	// list of paths to be ignored on request logging(could be often called operational endpoints like f.e. metrics)
 	PathsToSkip []string `mapstructure:"pathsToSkip"`
+	// stops annotating logs with the calling function's file name and line number
+	DisableCaller bool `mapstructure:"disableCaller" default:"false"`
 }
 
 /**
@@ -60,7 +62,7 @@ func Configure(logConfig LoggingConfig) {
 	if levelErr != nil {
 		level = zapcore.InfoLevel
 	}
-
+	config.DisableCaller = logConfig.DisableCaller
 	config.Level = zap.NewAtomicLevelAt(level)
 	logger, _ := config.Build()
 	sugar = logger.Sugar()
