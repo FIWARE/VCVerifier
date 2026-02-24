@@ -1,79 +1,115 @@
 {{define "verifier_present_qr_v2"}}
-<!doctype html>
+<!DOCTYPE html>
+<html lang="es" class="transition-colors duration-300">
 
-<html>
-    <head>
-        <meta charset="utf-8" />
-        <link href="/static/css/w3pro.css" rel="stylesheet">
-        <link href="/static/css/mystyle.css" rel="stylesheet">
-        <link href="/static/css/prism.css" rel="stylesheet">
-    
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="theme-color" content="#919597">
-        <title>Credential Verifier</title>
-    
-    </head>
-    
-    <body>
-        <div class="w3-bar w3-card color-primary w3-margin-bottom w3-large">
-            <a class="w3-bar-item w3-right" href="https://www.fiware.org/"><img src="/static/img/logo.png" alt="FIWARE" style="width:222px;height:50px;">
-            </a>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verificador OpenID4VC</title>
+    <meta name="wsUrl" content="{{.wsUrl}}">
+    <meta name="qrDuration" content="{{.qrDuration}}">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/static/js/v2_app.js" defer> </script>
+
+    <style>
+        .bg-primary {
+            background-color: var(--color-primary);
+        }
+
+        .text-primary {
+            color: var(--color-primary);
+        }
+
+        .border-primary {
+            border-color: var(--color-primary);
+        }
+    </style>
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { primary: 'var(--color-primary)' } } }
+        }
+    </script>
+</head>
+
+<body
+    class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen flex flex-col transition-colors duration-300 font-sans">
+
+    <header class="w-full bg-primary shadow-md border-b border-black/10 dark:border-white/10 px-4 py-3 text-white">
+        <div class="max-w-5xl mx-auto flex justify-between items-center">
+            <div class="flex items-center">
+                <a href="https://www.fiware.org/" class="block">
+                    <img src="/static/img/logo.png" alt="FIWARE" class="h-10 w-auto object-contain hover:opacity-80" />
+                </a>
+            </div>
+
+            <div class="flex items-center space-x-3">
+                <select id="lang-selector"
+                    class="cursor-pointer bg-blue-500 dark:bg-blue-700 text-white text-xs font-bold rounded-lg px-3 py-2 border border-blue-400 focus:ring-2 focus:ring-white outline-none transition-colors">
+                    <option value="es" class="text-gray-900">ES</option>
+                    <option value="en" class="text-gray-900">EN</option>
+                </select>
+
+                <button id="theme-toggle" aria-label="Toggle Theme"
+                    class="p-2 rounded-xl bg-blue-500/50 dark:bg-blue-900/50 text-white hover:bg-blue-400 dark:hover:bg-blue-600 transition-all active:scale-95">
+                    <svg id="theme-toggle-dark-icon" class="hidden w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path
+                            d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z">
+                        </path>
+                    </svg>
+                    <svg id="theme-toggle-light-icon" class="hidden w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"></path>
+                    </svg>
+                </button>
+            </div>
         </div>
-        <main class="w3-container w3-center">
+    </header>
 
-            <h3>Scan this QR code to authenticate with your Wallet.</h3>
+    <main class="flex-grow flex items-center justify-center p-6">
+        <div
+            class="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-2xl max-w-sm w-full text-center border border-gray-100 dark:border-gray-700">
+            <h2 data-i18n="title" class="text-2xl font-extrabold mb-2 tracking-tight">Secure Access</h2>
+            <p data-i18n="description" class="text-gray-500 dark:text-gray-400 mb-8 text-sm leading-relaxed">Scan the
+                code with your Wallet to verify your credentials.</p>
 
-            <img src="data:{{.qrcode}}" alt="the qr.">
+            <div class="relative mx-auto w-fit bg-white p-6 rounded-3xl shadow-inner border border-gray-50 mb-8">
+                <div id="qrcode">
+                    <img src="data:{{.qrcode}}" alt="the qr.">
+                </div>
+                <div id="expired-overlay"
+                    class="hidden absolute inset-0 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md rounded-3xl flex flex-col items-center justify-center p-4 text-center z-10">
+                    <svg class="w-12 h-12 text-red-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p data-i18n="expired_title" class="text-sm font-bold text-gray-900 dark:text-white">QR Expired</p>
+                    <p data-i18n="expired_desc" class="text-[12px] text-gray-500 dark:text-white mb-3">For security, request a new code.
+                    </p>
+                    <button onclick="window.location.reload()" data-i18n="expired_refresh"
+                        class="bg-primary text-white text-xs px-4 py-2 rounded-full hover:scale-105 transition-transform font-bold">
+                        Refresh
+                    </button>
+                </div>
+            </div>
 
-        </main>
-        <script>
-            function startWebSocket(wsUrl) {
-                return new Promise((resolve, reject) => {
-                    const socket = new WebSocket(wsUrl)
-            
-                    socket.onopen = () => {
-                        console.log('WebSocket connected')
-                    }
-                
-                    socket.onmessage = (event) => {
-                        try {
-                        const message = JSON.parse(event.data)
-                
-                        switch (message.type) {
-                            case "session": 
-                                console.log("Session initiatied")  
-                            break              
-                            case "authenticated":
-                            console.log("Redirect initiatied " + message.redirectUrl)  
-                                window.location.href = message.redirectUrl;
-                            break
-                
-                            case "error":
-                                console.log("error")  
-                                socket.close()
-                            break
-                        }
-                        } catch (err) {
-                            console.log(err)  
-                        }
-                    }
-                
-                    socket.onerror = (err) => {
-                        console.log(err)  
-                    }
-                
-                    socket.onclose = (e) => {
-                        if (e.code !== 1000) {
-                            console.log(e.code)  
-                        }
-                    }
-                })
-            }
+            <div class="space-y-3 mb-6">
+                <div class="flex justify-between items-end px-1">
+                    <span data-i18n="timer_label"
+                        class="text-[11px] font-bold text-gray-400 uppercase tracking-tighter">QR expire in</span>
+                    <span id="timer-text" class="text-sm font-mono font-bold text-primary">{{.qrDuration}}s</span>
+                </div>
+                <div class="w-full bg-gray-100 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
+                    <div id="progress-bar"
+                        class="bg-primary h-full rounded-full transition-all duration-1000 ease-linear"
+                        style="width: 100%">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
 
-            document.addEventListener('DOMContentLoaded', () => {
-                startWebSocket("{{.wsUrl}}")
-            })
-        </script>
-    </body>
+</body>
+
 </html>
 {{end}}

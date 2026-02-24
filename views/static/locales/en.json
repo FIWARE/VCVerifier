@@ -1,0 +1,8 @@
+{
+    "title": "Secure Access",
+    "description": "Scan the code with your Wallet to verify your credentials.",
+    "timer_label": "QR expire in",
+    "expired_title": "QR Expired",
+    "expired_desc": "For security, request a new code.",
+    "expired_refresh": "Refresh"
+}
