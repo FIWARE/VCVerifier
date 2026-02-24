@@ -1,0 +1,8 @@
+{
+    "title": "Acceso Seguro",
+    "description": "Escanea el código con tu Wallet para verificar tus credenciales.",
+    "timer_label": "QR expira en",
+    "expired_title": "QR Expirado",
+    "expired_desc": "Por seguridad, solicita un nuevo código.",
+    "expired_refresh": "Actualizar"
+}
