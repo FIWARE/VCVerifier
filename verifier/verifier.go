@@ -80,9 +80,10 @@ var ErrorInvalidNonce = errors.New("invalid_nonce")
 
 // Verifier QR Information
 type QRLoginInfo struct {
-	QR            string
-	ExpireAt      time.Time
-	TotalDuration int
+	QR                    string
+	ExpireAt              time.Time
+	TotalDuration         int
+	AuthenticationRequest string
 }
 
 // verifier interface
@@ -429,9 +430,10 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 
 	_, expireAt, _ := v.sessionCache.GetWithExpiration(sessionId)
 	qrInfo = QRLoginInfo{
-		QR:            base64Img,
-		ExpireAt:      expireAt,
-		TotalDuration: int(v.sessionDuration),
+		QR:                    base64Img,
+		ExpireAt:              expireAt,
+		TotalDuration:         int(v.sessionDuration),
+		AuthenticationRequest: authenticationRequest,
 	}
 	return qrInfo, err
 }

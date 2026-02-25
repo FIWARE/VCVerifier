@@ -37,6 +37,7 @@ class ConfigManager {
     document.querySelectorAll('meta[name]').forEach(meta => {
       cfg[meta.getAttribute('name')] = meta.getAttribute('content');
     });
+    cfg.qrExpireAt = Date.now() + 30 * 1000
     return cfg;
   }
 
@@ -121,9 +122,18 @@ class AppManager {
       const wsUrl = this.config.get('wsUrl');
       if (wsUrl) this.#connectWebSocket(wsUrl);
     });
+
+    document.addEventListener("DOMContentLoaded", function () {
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      const walletButtonContainer = document.querySelector('#openWallet');
+
+      if (isMobile) {
+        walletButtonContainer.classList.remove('hidden');
+      }
+    });
   }
 
-#startTimer() {
+  #startTimer() {
     const expireAt = this.config.getInt('qrExpireAt');
     const duration = this.config.getInt('qrDuration');
 
@@ -134,29 +144,29 @@ class AppManager {
 
     const update = () => {
       const nowMs = Date.now();
-        const timeLeftMs = expireAt - nowMs;
-        const timeLeftSec = Math.ceil(timeLeftMs / 1000);
+      const timeLeftMs = expireAt - nowMs;
+      const timeLeftSec = Math.ceil(timeLeftMs / 1000);
 
-        if (timerText) {
-            timerText.innerText = `${Math.max(timeLeftSec, 0)}s`;
-        }
+      if (timerText) {
+        timerText.innerText = `${Math.max(timeLeftSec, 0)}s`;
+      }
 
-        if (progressBar) {
-            const percentage =(timeLeftMs / (duration * 1000)) * 100;
-            const safePercentage = Math.min(Math.max(percentage, 0), 100);
-            progressBar.style.width = `${safePercentage}%`;
-        }
+      if (progressBar) {
+        const percentage = (timeLeftMs / (duration * 1000)) * 100;
+        const safePercentage = Math.min(Math.max(percentage, 0), 100);
+        progressBar.style.width = `${safePercentage}%`;
+      }
 
-        // Must match animation duration
-        if (timeLeftMs <= -100) {
-            clearInterval(this.timerInterval);
-            this.#handleExpiration();
-        }
+      // Must match animation duration
+      if (timeLeftMs <= -100) {
+        clearInterval(this.timerInterval);
+        this.#handleExpiration();
+      }
     };
 
     update();
     this.timerInterval = setInterval(update, 100);
-}
+  }
 
   #handleExpiration() {
     document.getElementById('qrcode')?.classList.add('blur-lg', 'grayscale', 'opacity-50');

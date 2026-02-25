@@ -4,5 +4,6 @@
     "timer_label": "QR expire in",
     "expired_title": "QR Expired",
     "expired_desc": "For security, request a new code.",
-    "expired_refresh": "Refresh"
+    "expired_refresh": "Refresh",
+    "open_wallet": "Open in Wallet"
 }
