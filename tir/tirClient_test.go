@@ -40,6 +40,9 @@ func (mc mockCache) Add(k string, x interface{}, d time.Duration) error { return
 func (mc mockCache) Set(k string, x interface{}, d time.Duration)       {}
 func (mc mockCache) Get(k string) (interface{}, bool)                   { return nil, false }
 func (mc mockCache) Delete(k string)                                    {}
+func (mc mockCache) GetWithExpiration(k string) (interface{}, time.Time, bool) {
+	return nil, time.Now(), false
+}
 
 func TestIsTrustedParticipant(t *testing.T) {
 	type test struct {
@@ -126,7 +129,7 @@ func getNotFoundResponse() *http.Response {
 	return &http.Response{StatusCode: 404}
 }
 func getUnparsableResponse() *http.Response {
-	issuer := io.NopCloser(strings.NewReader(fmt.Sprintf("did-i-dachs")))
+	issuer := io.NopCloser(strings.NewReader("did-i-dachs"))
 	response := http.Response{
 		StatusCode: 200,
 		Body:       issuer,

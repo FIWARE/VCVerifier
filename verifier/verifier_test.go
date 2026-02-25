@@ -239,6 +239,11 @@ func (msc *mockSessionCache) Delete(k string) {
 	delete(msc.sessions, k)
 }
 
+func (msc *mockSessionCache) GetWithExpiration(k string) (interface{}, time.Time, bool) {
+	v, found := msc.sessions[k]
+	return v, <-time.After(5 * time.Second), found
+}
+
 func (mtc *mockTokenCache) Add(k string, x interface{}, d time.Duration) error {
 	if mtc.errorToThrow != nil {
 		return mtc.errorToThrow
@@ -258,6 +263,11 @@ func (mtc *mockTokenCache) Get(k string) (interface{}, bool) {
 
 func (mtc *mockTokenCache) Delete(k string) {
 	delete(mtc.tokens, k)
+}
+
+func (mtc *mockTokenCache) GetWithExpiration(k string) (interface{}, time.Time, bool) {
+	v, found := mtc.tokens[k]
+	return v, <-time.After(5 * time.Second), found
 }
 
 type siopInitTest struct {
