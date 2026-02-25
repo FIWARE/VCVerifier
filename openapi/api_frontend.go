@@ -10,6 +10,7 @@
 package openapi
 
 import (
+	"html/template"
 	"net/http"
 	"slices"
 
@@ -147,7 +148,13 @@ func VerifierLoginQr(c *gin.Context) {
 		return
 	}
 
-	c.HTML(http.StatusOK, "verifier_present_qr_v2", gin.H{"qrcode": qrInfo.QR, "wsUrl": getFrontendVerifier().GetHost() + "/ws?state=" + state, "qrExpireAt": qrInfo.ExpireAt.UnixMilli(), "qrDuration": qrInfo.TotalDuration})
+	c.HTML(http.StatusOK, "verifier_present_qr_v2", gin.H{
+		"qrcode":      template.URL(qrInfo.QR),
+		"wsUrl":       getFrontendVerifier().GetHost() + "/ws?state=" + state,
+		"qrExpireAt":  qrInfo.ExpireAt.UnixMilli(),
+		"qrDuration":  qrInfo.TotalDuration,
+		"authRequest": template.URL(qrInfo.AuthenticationRequest),
+	})
 }
 
 // VerifierPageLoginExpired - Presents a page when the login session is expired
