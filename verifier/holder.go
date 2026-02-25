@@ -1,7 +1,7 @@
 package verifier
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 
 	"github.com/fiware/VCVerifier/logging"
@@ -9,6 +9,8 @@ import (
 )
 
 type HolderValidationService struct{}
+
+var ErrorNoHolderClaim = errors.New("Credential has not holder claim")
 
 func (hvs *HolderValidationService) ValidateVC(verifiableCredential *verifiable.Credential, validationContext ValidationContext) (result bool, err error) {
 	logging.Log().Debugf("Validate holder for %s", logging.PrettyPrintObject(verifiableCredential))
@@ -35,5 +37,6 @@ func (hvs *HolderValidationService) ValidateVC(verifiableCredential *verifiable.
 		}
 		currentClaim = currentClaim[p].(verifiable.JSONObject)
 	}
-	return false, fmt.Errorf("Credential has not holder claim '%s'", holderContext.claim)
+	logging.Log().Warnf("Credential %v has not holder claim '%s'", logging.PrettyPrintObject(verifiableCredential), holderContext.claim)
+	return false, ErrorNoHolderClaim
 }
