@@ -194,10 +194,10 @@ class AppManager {
 
         switch (message.type) {
           case "session":
-            console.log("Session initiatied")
+            console.log("Session initiated")
             break
           case "authenticated":
-            console.log("Redirect initiatied " + message.redirectUrl)
+            console.log("Redirect initiated " + message.redirectUrl)
             window.location.href = message.redirectUrl;
             break
 
