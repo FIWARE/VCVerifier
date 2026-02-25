@@ -9,6 +9,7 @@
     <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
     <meta name="wsUrl" content="{{.wsUrl}}">
     <meta name="qrDuration" content="{{.qrDuration}}">
+    <meta name="qrExpireAt" content="{{.qrExpireAt}}">
     <link href="/static/css/main.min.css" rel="stylesheet">
     <script src="/static/js/app.js" defer> </script>
 </head>
@@ -77,11 +78,11 @@
                 <div class="flex justify-between items-end px-1">
                     <span data-i18n="timer_label"
                         class="text-[11px] font-bold text-gray-400 uppercase tracking-tighter">QR expire in</span>
-                    <span id="timer-text" class="text-sm font-mono font-bold text-primary">{{.qrDuration}}s</span>
+                    <span id="timer-text" class="text-sm font-mono font-bold text-primary"></span>
                 </div>
                 <div class="w-full bg-gray-100 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
                     <div id="progress-bar"
-                        class="bg-primary h-full rounded-full transition-all duration-1000 ease-linear"
+                        class="bg-primary h-full rounded-full transition-all duration-100 ease-linear"
                         style="width: 100%">
                     </div>
                 </div>

@@ -78,10 +78,17 @@ var ErrorInvalidNonce = errors.New("invalid_nonce")
 
 // Actual implementation of the verfifier functionality
 
+// Verifier QR Information
+type QRLoginInfo struct {
+	QR            string
+	ExpireAt      time.Time
+	TotalDuration int
+}
+
 // verifier interface
 type Verifier interface {
 	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (qr string, err error)
-	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error)
+	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qrLoginInfo QRLoginInfo, err error)
 	StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error)
 	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
 	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error)
@@ -136,6 +143,8 @@ type CredentialVerifier struct {
 	verifierConfig configModel.Verifier
 	// JWT token expiration time in minutes
 	jwtExpiration time.Duration
+	// Session duration in seconds
+	sessionDuration time.Duration
 }
 
 // allow singleton access to the verifier
@@ -358,6 +367,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 		verifierConfig.ClientIdentification,
 		*verifierConfig,
 		time.Duration(verifierConfig.JwtExpiration) * time.Minute,
+		time.Duration(verifierConfig.SessionExpiry),
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
@@ -395,7 +405,7 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 /**
 *   Initializes the cross-device login flow and returns all neccessary information as a qr-code
 **/
-func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redircetUri string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error) {
+func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redircetUri string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qrInfo QRLoginInfo, err error) {
 
 	for _, v := range v.supportedRequestModes {
 		logging.Log().Warnf("Supported: %s", v)
@@ -403,21 +413,27 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 
 	if !slices.Contains(v.supportedRequestModes, requestMode) {
 		logging.Log().Infof("QR with mode %s was requested, but only %v is supported.", requestMode, v.supportedRequestModes)
-		return qr, ErrorUnsupportedRequestMode
+		return qrInfo, ErrorUnsupportedRequestMode
 	}
 
 	logging.Log().Debugf("Generate a login qr for %s.", redircetUri)
 	authenticationRequest, err := v.initOid4VPCrossDevice(host, protocol, redircetUri, sessionId, clientId, scope, nonce, requestMode)
 
 	if err != nil {
-		return qr, err
+		return qrInfo, err
 	}
 
 	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, 256)
 	base64Img := base64.StdEncoding.EncodeToString(png)
 	base64Img = "data:image/png;base64," + base64Img
 
-	return base64Img, err
+	_, expireAt, _ := v.sessionCache.GetWithExpiration(sessionId)
+	qrInfo = QRLoginInfo{
+		QR:            base64Img,
+		ExpireAt:      expireAt,
+		TotalDuration: int(v.sessionDuration),
+	}
+	return qrInfo, err
 }
 
 /**

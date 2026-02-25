@@ -123,33 +123,40 @@ class AppManager {
     });
   }
 
-  #startTimer() {
+#startTimer() {
+    const expireAt = this.config.getInt('qrExpireAt');
     const duration = this.config.getInt('qrDuration');
-    let timeLeft = duration;
 
     const progressBar = document.getElementById('progress-bar');
     const timerText = document.getElementById('timer-text');
 
-    if (progressBar) progressBar.style.width = '100%';
+    if (this.timerInterval) clearInterval(this.timerInterval);
 
-    const interval = setInterval(() => {
-      timeLeft--;
+    const update = () => {
+      const nowMs = Date.now();
+        const timeLeftMs = expireAt - nowMs;
+        const timeLeftSec = Math.ceil(timeLeftMs / 1000);
 
-      if (timerText) timerText.innerText = `${Math.max(timeLeft, 0)}s`;
+        if (timerText) {
+            timerText.innerText = `${Math.max(timeLeftSec, 0)}s`;
+        }
 
-      if (progressBar) {
-        const percentage = (timeLeft / duration) * 100;
-        progressBar.style.width = `${Math.max(percentage, 0)}%`;
-      }
+        if (progressBar) {
+            const percentage =(timeLeftMs / (duration * 1000)) * 100;
+            const safePercentage = Math.min(Math.max(percentage, 0), 100);
+            progressBar.style.width = `${safePercentage}%`;
+        }
 
-      if (timeLeft <= 0) {
-        clearInterval(interval);
-        setTimeout(() => {
-          this.#handleExpiration();
-        }, 1000);
-      }
-    }, 1000);
-  }
+        // Must match animation duration
+        if (timeLeftMs <= -100) {
+            clearInterval(this.timerInterval);
+            this.#handleExpiration();
+        }
+    };
+
+    update();
+    this.timerInterval = setInterval(update, 100);
+}
 
   #handleExpiration() {
     document.getElementById('qrcode')?.classList.add('blur-lg', 'grayscale', 'opacity-50');
