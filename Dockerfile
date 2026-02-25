@@ -22,4 +22,6 @@ COPY --from=build /go/src/app/views ./views
 COPY --from=build /go/src/app/VCVerifier ./VCVerifier
 COPY --from=build /go/src/app/server.yaml ./server.yaml
 
+ENV GIN_MODE=release
+
 CMD ["./VCVerifier"]

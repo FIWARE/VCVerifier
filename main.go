@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	configModel "github.com/fiware/VCVerifier/config"
 	logging "github.com/fiware/VCVerifier/logging"
@@ -30,11 +34,7 @@ func main() {
 		panic(err)
 	}
 
-	logging.Configure(
-		configuration.Logging.JsonLogging,
-		configuration.Logging.Level,
-		configuration.Logging.LogRequests,
-		configuration.Logging.PathsToSkip)
+	logging.Configure(configuration.Logging)
 
 	logger := logging.Log()
 
@@ -77,31 +77,53 @@ func main() {
 	metrics.SetMetricPath("/metrics")
 	metrics.Use(router)
 
-	router.Run(fmt.Sprintf("0.0.0.0:%v", configuration.Server.Port))
+	srv := &http.Server{
+		Addr:         fmt.Sprintf("0.0.0.0:%v", configuration.Server.Port),
+		Handler:      router,
+		ReadTimeout:  time.Duration(configuration.Server.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(configuration.Server.WriteTimeout) * time.Second,
+		IdleTimeout:  time.Duration(configuration.Server.IdleTimeout) * time.Second,
+	}
 
-	logger.Infof("Started router at %v", configuration.Server.Port)
+	// Start the server in a goroutine so it doesn't block
+	go func() {
+		logging.Log().Infof("Starting server on port %v", configuration.Server.Port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logging.Log().Errorf("Failed to start server: %v", err)
+			os.Exit(1)
+		}
+	}()
+
+	// --- Graceful Shutdown Logic ---
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	<-quit
+	logging.Log().Info("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(configuration.Server.ShutdownTimeout)*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logging.Log().Errorf("Server forced to shutdown: %v", err)
+	}
+
+	logging.Log().Info("Server exiting gracefully")
 }
 
 // initiate the router
 func getRouter() *gin.Engine {
+
 	// the openapi generated router uses the defaults, which we want to override to improve and configure logging
+	writer := logging.GetGinInternalWriter()
+	gin.DefaultWriter = writer
+	gin.DefaultErrorWriter = writer
 	router := gin.New()
+
 	router.Use(logging.GinHandlerFunc(), gin.Recovery())
 
 	for _, route := range api.NewRouter().Routes() {
-
-		switch route.Method {
-		case http.MethodGet:
-			router.GET(route.Path, route.HandlerFunc)
-		case http.MethodPost:
-			router.POST(route.Path, route.HandlerFunc)
-		case http.MethodPut:
-			router.PUT(route.Path, route.HandlerFunc)
-		case http.MethodPatch:
-			router.PATCH(route.Path, route.HandlerFunc)
-		case http.MethodDelete:
-			router.DELETE(route.Path, route.HandlerFunc)
-		}
+		router.Handle(route.Method, route.Path, route.HandlerFunc)
 	}
 
 	return router

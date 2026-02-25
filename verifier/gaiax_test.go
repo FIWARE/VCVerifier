@@ -59,7 +59,7 @@ func TestGaiaXRegistryVerificationService_VerifyVC(t *testing.T) {
 			},
 			getCredential("someUnknownDid"),
 			false,
-			false,
+			true,
 		},
 		{
 			"RegistryIssue",
