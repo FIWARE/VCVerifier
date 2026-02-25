@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/fiware/VCVerifier/verifier"
 
@@ -142,13 +141,13 @@ func VerifierLoginQr(c *gin.Context) {
 		requestMode = DEFAULT_REQUEST_MODE
 	}
 
-	qr, err := getFrontendVerifier().ReturnLoginQRV2(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode)
+	qrInfo, err := getFrontendVerifier().ReturnLoginQRV2(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode)
 	if err != nil {
 		c.AbortWithStatusJSON(500, ErrorMessage{"qr_generation_error", err.Error()})
 		return
 	}
 
-	c.HTML(http.StatusOK, "verifier_present_qr_v2", gin.H{"qrcode": qr, "wsUrl": getFrontendVerifier().GetHost() + "/ws?state=" + state, "qrDuration": common.CacheExpiry})
+	c.HTML(http.StatusOK, "verifier_present_qr_v2", gin.H{"qrcode": qrInfo.QR, "wsUrl": getFrontendVerifier().GetHost() + "/ws?state=" + state, "qrExpireAt": qrInfo.ExpireAt.UnixMilli(), "qrDuration": qrInfo.TotalDuration})
 }
 
 // VerifierPageLoginExpired - Presents a page when the login session is expired
