@@ -31,9 +31,17 @@ import (
 	"golang.org/x/exp/maps"
 )
 
+var LOGGING_CONFIG = logging.LoggingConfig{
+	Level:         "DEBUG",
+	JsonLogging:   true,
+	LogRequests:   true,
+	PathsToSkip:   []string{},
+	DisableCaller: false,
+}
+
 func TestVerifyConfig(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
 		testName      string
@@ -305,7 +313,7 @@ func getInitSiopTests() []siopInitTest {
 
 func TestInitSiopFlow(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	testKey := getECDSAKey()
 
@@ -326,7 +334,7 @@ func TestInitSiopFlow(t *testing.T) {
 // the start siop flow method just returns the init result, therefor the test is basically the same
 func TestStartSiopFlow(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	testKey := getECDSAKey()
 
@@ -395,7 +403,7 @@ func removeSignature(jwt string) string {
 func TestStartSameDeviceFlow(t *testing.T) {
 
 	cacheFailError := errors.New("cache_fail")
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	testKey := getECDSAKey()
 
@@ -484,7 +492,7 @@ type authTest struct {
 }
 
 func TestAuthenticationResponse(t *testing.T) {
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	ssiKitError := errors.New("ssikit_failure")
 	cacheError := errors.New("cache_failure")
@@ -614,7 +622,7 @@ func getRequest(request string) *url.URL {
 
 func TestInitVerifier(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
 		testName      string
@@ -683,7 +691,7 @@ func TestInitVerifier(t *testing.T) {
 }
 
 func TestGetJWKS(t *testing.T) {
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
 		testName string
@@ -763,7 +771,7 @@ func getECDSAKey() (key jwk.Key) {
 
 func TestGetToken(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	signingError := errors.New("signature_failure")
 
@@ -1174,7 +1182,7 @@ func TestExtractCredentialTypes(t *testing.T) {
 }
 func TestGenerateToken(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
 		testName           string

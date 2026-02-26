@@ -22,6 +22,14 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
+var LOGGING_CONFIG = logging.LoggingConfig{
+	Level:         "DEBUG",
+	JsonLogging:   true,
+	LogRequests:   true,
+	PathsToSkip:   []string{},
+	DisableCaller: false,
+}
+
 type mockVerifier struct {
 	mockJWTString         string
 	mockQR                string
@@ -82,7 +90,7 @@ func (mV *mockVerifier) GenerateToken(clientId, subject, audience string, scope 
 
 func TestGetToken(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
 		testName               string
@@ -222,7 +230,7 @@ func TestGetToken(t *testing.T) {
 
 func TestStartSIOPSameDevice(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
 		testName           string
@@ -290,7 +298,7 @@ func TestStartSIOPSameDevice(t *testing.T) {
 
 func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
 		testName               string
@@ -389,7 +397,7 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 
 func TestVerifierAPIStartSIOP(t *testing.T) {
 
-	logging.Configure(true, "DEBUG", true, []string{})
+	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
 		testName                 string

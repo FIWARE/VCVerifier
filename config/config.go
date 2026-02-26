@@ -1,15 +1,17 @@
 package config
 
+import "github.com/fiware/VCVerifier/logging"
+
 // CONFIGURATION STRUCTURE FOR THE VERIFIER CONFIG
 
 // general structure of the configuration file
 type Configuration struct {
-	Server     Server     `mapstructure:"server"`
-	Verifier   Verifier   `mapstructure:"verifier"`
-	Logging    Logging    `mapstructure:"logging"`
-	ConfigRepo ConfigRepo `mapstructure:"configRepo"`
-	M2M        M2M        `mapstructure:"m2m"`
-	Elsi       Elsi       `mapstructure:"elsi"`
+	Server     Server                `mapstructure:"server"`
+	Verifier   Verifier              `mapstructure:"verifier"`
+	Logging    logging.LoggingConfig `mapstructure:"logging"`
+	ConfigRepo ConfigRepo            `mapstructure:"configRepo"`
+	M2M        M2M                   `mapstructure:"m2m"`
+	Elsi       Elsi                  `mapstructure:"elsi"`
 }
 
 // general configuration to run the application
@@ -22,6 +24,15 @@ type Server struct {
 	TemplateDir string `mapstructure:"templateDir" default:"views/"`
 	// directory of static files to be provided, f.e. to be used inside the templates
 	StaticDir string `mapstructure:"staticDir" default:"views/static/"`
+
+	// ReadTimeout is the maximum duration for reading the entire request, including the body.
+	ReadTimeout int `mapstructure:"readTimeout" default:"5"`
+	// WriteTimeout is the maximum duration before timing out writes of the response.
+	WriteTimeout int `mapstructure:"writeTimeout" default:"10"`
+	// IdleTimeout is the maximum amount of time to wait for the next request when keep-alives are enabled.
+	IdleTimeout int `mapstructure:"idleTimeout" default:"120"`
+	// ShutdownTimeout is the time allowed for active requests to finish during shutdown.
+	ShutdownTimeout int `mapstructure:"shutdownTimeout" default:"5"`
 }
 
 // configuration for M2M interaction
@@ -40,18 +51,6 @@ type M2M struct {
 	SignatureType string `mapstructure:"signatureType" default:"JsonWebSignature2020"`
 	// type of the provided key
 	KeyType string `mapstructure:"keyType" default:"RSAPS256"`
-}
-
-// logging config
-type Logging struct {
-	// loglevel to be used - can be DEBUG, INFO, WARN or ERROR
-	Level string `mapstructure:"level" default:"INFO"`
-	// should the logging in a structured json format
-	JsonLogging bool `mapstructure:"jsonLogging" default:"true"`
-	// should requests be logged
-	LogRequests bool `mapstructure:"logRequests" default:"true"`
-	// list of paths to be ignored on request logging(could be often called operational endpoints like f.e. metrics)
-	PathsToSkip []string `mapstructure:"pathsToSkip"`
 }
 
 // configuration specific to the functionality of the verifier
