@@ -22,6 +22,8 @@ import (
 	utiltime "github.com/trustbloc/did-go/doc/util/time"
 	"github.com/trustbloc/vc-go/verifiable"
 
+	"encoding/json"
+
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	logging "github.com/fiware/VCVerifier/logging"
@@ -1275,6 +1277,112 @@ func TestGenerateToken(t *testing.T) {
 				t.Errorf("%s - Expected expiration but got 0.", tc.testName)
 				return
 			}
+		})
+	}
+}
+
+func TestGenerateJWT(t *testing.T) {
+
+	logging.Configure(LOGGING_CONFIG)
+
+	testKey := getECDSAKey()
+	v := CredentialVerifier{
+		signingKey:    testKey,
+		clock:         mockClock{},
+		host:          "https://verifier.example.com",
+		jwtExpiration: time.Hour,
+	}
+
+	type jwtTest struct {
+		testName    string
+		credentials []map[string]any
+		holder      string
+		audience    string
+		flat        bool
+		verify      func(t *testing.T, tok jwt.Token)
+	}
+
+	cred1 := map[string]any{"role": "superadmin"}
+	cred2 := map[string]any{"organizationId": "super-id"}
+
+	tests := []jwtTest{
+		{
+			testName:    "single credential uses verifiableCredential claim and subject",
+			credentials: []map[string]any{cred1},
+			holder:      "holder1",
+			audience:    "aud1",
+			flat:        false,
+			verify: func(t *testing.T, tok jwt.Token) {
+				sub, exists := tok.Subject()
+				if !exists || sub != "holder1" {
+					t.Errorf("expected subject holder1, got %s", sub)
+				}
+
+				var vcClaim any
+				err := tok.Get("verifiableCredential", &vcClaim)
+				if err != nil {
+					t.Errorf("expected verifiableCredential claim, got error %v", err)
+				}
+				b1, _ := json.Marshal(vcClaim)
+				bExp1, _ := json.Marshal(cred1)
+				if string(b1) != string(bExp1) {
+					t.Errorf("credential claim mismatch, expected %s got %s", string(bExp1), string(b1))
+				}
+			},
+		},
+		{
+			testName:    "multiple credentials use verifiablePresentation claim",
+			credentials: []map[string]any{cred1, cred2},
+			holder:      "",
+			audience:    "aud2",
+			flat:        false,
+			verify: func(t *testing.T, tok jwt.Token) {
+				var vpClaim any
+				err := tok.Get("verifiablePresentation", &vpClaim)
+				if err != nil {
+					t.Errorf("expected verifiablePresentation claim, got error %v", err)
+				}
+				bvp, _ := json.Marshal(vpClaim)
+				expvp, _ := json.Marshal([]map[string]any{cred1, cred2})
+				if string(bvp) != string(expvp) {
+					t.Errorf("presentation claim mismatch, expected %s got %s", string(expvp), string(bvp))
+				}
+			},
+		},
+		{
+			testName:    "flat claim mode flattens all values",
+			credentials: []map[string]any{cred1, cred2},
+			holder:      "",
+			audience:    "aud3",
+			flat:        true,
+			verify: func(t *testing.T, tok jwt.Token) {
+				var role any
+				err := tok.Get("role", &role)
+				if err != nil {
+					t.Errorf("expected flat claim role, got error %v", err)
+				}
+				if role != cred1["role"] {
+					t.Errorf("flat claim role expected %s got %v", cred1["role"], role)
+				}
+				var organizationId any
+				err = tok.Get("organizationId", &organizationId)
+				if err != nil {
+					t.Errorf("expected flat claim organizationId, got error %v", err)
+				}
+				if organizationId != cred2["organizationId"] {
+					t.Errorf("flat claim organizationId expected %s got %v", cred2["organizationId"], organizationId)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			token, err := v.generateJWT(tc.credentials, tc.holder, tc.audience, tc.flat)
+			if err != nil {
+				t.Fatalf("unexpected error building jwt: %v", err)
+			}
+			tc.verify(t, token)
 		})
 	}
 }
