@@ -531,7 +531,17 @@ func TestAuthenticationResponse(t *testing.T) {
 			testKey, _ := jwk.Import(ecdsaKey)
 			jwk.AssignKeyID(testKey)
 			nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
-			credentialsConfig := mockCredentialConfig{}
+			credentialsConfig := mockCredentialConfig{
+				mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {
+					"": {
+						Credentials: []configModel.Credential{{
+							Type:         "VerifiableCredential",
+							JwtInclusion: configModel.JwtInclusion{Enabled: true},
+						}},
+					},
+				},
+				},
+			}
 			verifier := CredentialVerifier{did: "did:key:verifier", signingKey: testKey, tokenCache: &tokenCache, sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, validationServices: []ValidationService{&mockExternalSsiKit{tc.verificationResult, tc.verificationError}}, clock: mockClock{}, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"}}
 
 			sameDeviceResponse, err := verifier.AuthenticationResponse(tc.requestedState, &tc.testVP)

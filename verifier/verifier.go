@@ -812,8 +812,6 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	}
 	loginSession := loginSessionInterface.(loginSession)
 
-	// TODO extract into separate policy
-
 	credentialsByType, _ := extractCredentialTypes(verifiablePresentation)
 	trustedChain, _ := verifyChain(verifiablePresentation.Credentials())
 	var credentialsToBeIncluded []map[string]interface{}
