@@ -62,6 +62,7 @@ var ErrorUnsupportedValidationMode = errors.New("unsupported_validation_mode")
 var ErrorSupportedModesNotSet = errors.New("no_supported_request_mode_set")
 var ErrorNoSigningKey = errors.New("no_signing_key_available")
 var ErrorInvalidVC = errors.New("invalid_vc")
+var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorWrongGrantType = errors.New("wrong_grant_type")
 var ErrorNoSuchCode = errors.New("no_such_code")
@@ -577,8 +578,8 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 					return 0, "", err
 				}
 				if !result {
-					logging.Log().Infof("VC %s is not valid.", logging.PrettyPrintObject(credential))
-					return 0, "", ErrorInvalidVC
+					logging.Log().Infof("VC %s is not valid. Invalid holder", logging.PrettyPrintObject(credential))
+					return 0, "", ErrorInvalidVCHolder
 				}
 			}
 			for _, verificationService := range v.validationServices {
@@ -1157,8 +1158,7 @@ func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, h
 	} else if len(credentials) > 1 {
 		jwtBuilder.Claim("verifiablePresentation", credentials)
 	} else {
-		logging.Log().Debugf("Credentials %s", logging.PrettyPrintObject(credentials))
-		jwtBuilder.Claim("verifiableCredential", credentials)
+		jwtBuilder.Claim("verifiableCredential", credentials[0])
 	}
 
 	token, err := jwtBuilder.Build()

@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"errors"
 	"fmt"
 
 	configModel "github.com/fiware/VCVerifier/config"
@@ -13,6 +14,8 @@ import (
 
 const gaiaxCompliancePolicy = "GaiaXComplianceIssuer"
 const registryUrlPropertyName = "registryAddress"
+
+var ErrorNoTrustedIssuer = errors.New("Issuer is not in trusted issuer list")
 
 type GaiaXRegistryValidationService struct {
 	validateAll               bool
@@ -64,7 +67,7 @@ func (v *GaiaXRegistryValidationService) ValidateVC(verifiableCredential *verifi
 			return true, nil
 		} else {
 			logging.Log().Warnf("Failed to validate credential %s. Issuer was not in trusted issuer list", logging.PrettyPrintObject(verifiableCredential))
-			return false, nil
+			return false, ErrorNoTrustedIssuer
 		}
 	}
 	// No need to validate

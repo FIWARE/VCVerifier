@@ -10,6 +10,7 @@ import (
 )
 
 var ErrorCannotConverContext = errors.New("cannot_convert_context")
+var ErrorInvalidCredential = errors.New("invalid_trusted_participant_type")
 
 const (
 	typeGaiaX = "gaia-x"
@@ -64,5 +65,5 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 		}
 	}
 
-	return false, err
+	return false, ErrorInvalidCredential
 }

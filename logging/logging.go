@@ -2,49 +2,83 @@ package logging
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/sirupsen/logrus"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 /**
 * Global logger
  */
-var logger = logrus.New()
-
+var sugar *zap.SugaredLogger
 var logRequests bool
 var skipPaths []string
+
+// logging config
+type LoggingConfig struct {
+	// loglevel to be used - can be DEBUG, INFO, WARN or ERROR
+	Level string `mapstructure:"level" default:"INFO"`
+	// should the logging in a structured json format
+	JsonLogging bool `mapstructure:"jsonLogging" default:"true"`
+	// should requests be logged
+	LogRequests bool `mapstructure:"logRequests" default:"true"`
+	// list of paths to be ignored on request logging(could be often called operational endpoints like f.e. metrics)
+	PathsToSkip []string `mapstructure:"pathsToSkip"`
+	// stops annotating logs with the calling function's file name and line number
+	DisableCaller bool `mapstructure:"disableCaller" default:"false"`
+}
+
+/**
+* Initialize the global logger with default values. This will be overridden by the Configure method,
+* but ensures that we have a logger available even if Configure is not called.
+**/
+func init() {
+	conf := zap.NewProductionConfig()
+	l, _ := conf.Build()
+	sugar = l.Sugar()
+}
 
 /**
 * Apply the given configuration to the global logger.
 **/
-func Configure(jsonLogging bool, logLevel string, logRequestsParam bool, skipPathsParam []string) {
-	if logLevel == "DEBUG" {
-		logger.SetLevel(logrus.DebugLevel)
-	} else if logLevel == "INFO" {
-		logger.SetLevel(logrus.InfoLevel)
-	} else if logLevel == "WARN" {
-		logger.SetLevel(logrus.WarnLevel)
-	} else if logLevel == "ERROR" {
-		logger.SetLevel(logrus.ErrorLevel)
-	}
+func Configure(logConfig LoggingConfig) {
 
-	if jsonLogging {
-		logger.SetFormatter(&logrus.JSONFormatter{})
+	var config zap.Config
+	if logConfig.JsonLogging {
+		config = zap.NewProductionConfig()
 	} else {
-		logger.SetFormatter(&logrus.TextFormatter{})
+		config = zap.NewDevelopmentConfig()
+		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	}
 
-	logRequests = logRequestsParam
-	skipPaths = skipPathsParam
+	var level zapcore.Level
+	levelErr := level.Set(logConfig.Level)
+	if levelErr != nil {
+		level = zapcore.InfoLevel
+	}
+	config.DisableCaller = logConfig.DisableCaller
+	config.Level = zap.NewAtomicLevelAt(level)
+	logger, _ := config.Build()
+	sugar = logger.Sugar()
+
+	if levelErr != nil {
+		sugar.Warnf("Invalid log level %v, defaulting to INFO", logConfig.Level)
+	}
+	logRequests = logConfig.LogRequests
+	skipPaths = logConfig.PathsToSkip
 }
 
 /**
 *  Global access to the singleton logger
 **/
-func Log() *logrus.Logger {
-	return logger
+func Log() *zap.SugaredLogger {
+	return sugar
 }
 
 /**
@@ -54,34 +88,34 @@ func GinHandlerFunc() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !logRequests {
 			c.Next()
+			return
+		}
+		// Start timer
+		start := time.Now()
+		path := c.Request.URL.Path
+		raw := c.Request.URL.RawQuery
+		if raw != "" {
+			path = path + "?" + raw
+		}
+
+		// Process request
+		c.Next()
+
+		if slices.Contains(skipPaths, path) {
+			return
+		}
+
+		// Stop timer
+		latency := time.Since(start).Seconds() * 1000
+		statusCode := c.Writer.Status()
+		errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
+		request := fmt.Sprintf("%s %s %s", c.Request.Method, c.Request.URL.RequestURI(), c.Request.Proto)
+		size := c.Writer.Size()
+
+		if errorMessage != "" {
+			Log().Warnf("Request \"%s\" %d (%d) - %.3fms. Error %s", request, statusCode, size, latency, errorMessage)
 		} else {
-			// Start timer
-			start := time.Now()
-			path := c.Request.URL.Path
-			raw := c.Request.URL.RawQuery
-			if raw != "" {
-				path = path + "?" + raw
-			}
-
-			// Process request
-			c.Next()
-
-			if contains(skipPaths, path) {
-				return
-			}
-
-			// Stop timer
-			end := time.Now()
-			latency := end.Sub(start)
-			method := c.Request.Method
-			statusCode := c.Writer.Status()
-			errorMessage := c.Errors.ByType(gin.ErrorTypePrivate).String()
-
-			if errorMessage != "" {
-				Log().Warnf("Request [%s]%s took %d ms - Result: %d - %s", method, path, latency, statusCode, errorMessage)
-			} else {
-				Log().Infof("Request [%s]%s took %d ms - Result: %d", method, path, latency, statusCode)
-			}
+			Log().Infof("Request \"%s\" %d (%d) - %.3fms", request, statusCode, size, latency)
 		}
 	}
 }
@@ -92,18 +126,36 @@ func GinHandlerFunc() gin.HandlerFunc {
 func PrettyPrintObject(objectInterface interface{}) string {
 	jsonBytes, err := json.Marshal(objectInterface)
 	if err != nil {
-		logger.Debugf("Was not able to pretty print the object: %v", objectInterface)
+		Log().Debugf("Was not able to pretty print the object: %v", objectInterface)
 		return ""
 	}
 	return string(jsonBytes)
 }
 
-// helper method to check if s contains e
-func contains(s []string, e string) bool {
-	for _, a := range s {
-		if a == e {
-			return true
+type zapWriterFunc func(p []byte) (n int, err error)
+
+func (f zapWriterFunc) Write(p []byte) (n int, err error) {
+	return f(p)
+}
+
+func GetGinInternalWriter() io.Writer {
+	return zapWriterFunc(func(p []byte) (n int, err error) {
+		msg := string(p)
+		cleanMsg := strings.TrimSpace(msg)
+
+		if cleanMsg == "" {
+			return len(p), nil
 		}
-	}
-	return false
+
+		switch {
+		case strings.Contains(msg, "[ERROR]"):
+			sugar.Error(cleanMsg)
+		case strings.Contains(msg, "[WARNING]"):
+			sugar.Warn(cleanMsg)
+		default:
+			sugar.Info(cleanMsg)
+		}
+
+		return len(p), nil
+	})
 }
