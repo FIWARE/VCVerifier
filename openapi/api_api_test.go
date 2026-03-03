@@ -46,8 +46,8 @@ type mockVerifier struct {
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
 	return mV.mockQR, mV.mockError
 }
-func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qr string, err error) {
-	return mV.mockQR, mV.mockError
+func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qrInfo verifier.QRLoginInfo, err error) {
+	return verifier.QRLoginInfo{QR: mV.mockQR}, mV.mockError
 }
 func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (connectionString string, err error) {
 	return mV.mockConnectionString, mV.mockError
