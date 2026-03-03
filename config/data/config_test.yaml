@@ -2,12 +2,16 @@ server:
   port: 3000
   staticDir: "views/static"
   templateDir: "views/"
-
+  ReadTimeout: 100
+  WriteTimeout: 200
+  IdleTimeout: 300
+  ShutdownTimeout:  400
 logging:
   level: "DEBUG"
   jsonLogging: true
   logRequests: true
   pathsToSkip: [/health]
+  disableCaller: true
 
 verifier:
   did: "did:key:somekey"
@@ -26,10 +30,10 @@ verifier:
 ssiKit:
   auditorURL: http://waltid:7003
 
-m2m: 
+m2m:
   authEnabled: false
 configRepo:
-  services: 
+  services:
     - id: testService
       defaultOidcScope: someScope
       oidcScopes:
@@ -45,9 +49,8 @@ configRepo:
             id: my-pd
             input_descriptors:
               - id: my-descriptor
-                constraints: 
-                  fields: 
+                constraints:
+                  fields:
                     - id: my-field
                       path:
                         - $.vc.my.claim
-        

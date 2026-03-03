@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
@@ -12,11 +13,11 @@ import (
 
 func TestCheckSignature(t *testing.T) {
 	type test struct {
-		testName        string
-		rawCredential   []byte
-		signature       string
-		expectedResult  bool
-		expectedError   bool
+		testName       string
+		rawCredential  []byte
+		signature      string
+		expectedResult bool
+		expectedError  bool
 	}
 
 	credential := map[string]interface{}{"test": "value"}
@@ -27,25 +28,25 @@ func TestCheckSignature(t *testing.T) {
 
 	tests := []test{
 		{
-			testName:        "Valid signature",
-			rawCredential:   rawCredential,
-			signature:       hashHex,
-			expectedResult:  true,
-			expectedError:   false,
+			testName:       "Valid signature",
+			rawCredential:  rawCredential,
+			signature:      hashHex,
+			expectedResult: true,
+			expectedError:  false,
 		},
 		{
-			testName:        "Invalid signature",
-			rawCredential:   rawCredential,
-			signature:       "invalid_signature",
-			expectedResult:  false,
-			expectedError:   false,
+			testName:       "Invalid signature",
+			rawCredential:  rawCredential,
+			signature:      "invalid_signature",
+			expectedResult: false,
+			expectedError:  false,
 		},
 		{
-			testName:        "Invalid JSON",
-			rawCredential:   []byte("invalid_json"),
-			signature:       "any_signature",
-			expectedResult:  false,
-			expectedError:   true,
+			testName:       "Invalid JSON",
+			rawCredential:  []byte("invalid_json"),
+			signature:      "any_signature",
+			expectedResult: false,
+			expectedError:  true,
 		},
 	}
 
@@ -90,8 +91,8 @@ func TestComplianceValidationService_ValidateVC(t *testing.T) {
 					{Type: GAIA_X_COMPLIANCE_SUBJECT_TYPE, Id: "test_credential", Integrity: hashHex},
 				},
 			},
-			expectedResult:       true,
-			expectedError:        nil,
+			expectedResult: true,
+			expectedError:  nil,
 		},
 		{
 			testName:             "No matching compliance subject",
@@ -101,8 +102,8 @@ func TestComplianceValidationService_ValidateVC(t *testing.T) {
 					{Type: GAIA_X_COMPLIANCE_SUBJECT_TYPE, Id: "other_credential", Integrity: hashHex},
 				},
 			},
-			expectedResult:       false,
-			expectedError:        nil,
+			expectedResult: false,
+			expectedError:  ErrorNoComplianceID,
 		},
 		{
 			testName:             "Mismatched signature",
@@ -112,8 +113,8 @@ func TestComplianceValidationService_ValidateVC(t *testing.T) {
 					{Type: GAIA_X_COMPLIANCE_SUBJECT_TYPE, Id: "test_credential", Integrity: "invalid_signature"},
 				},
 			},
-			expectedResult:       false,
-			expectedError:        nil,
+			expectedResult: false,
+			expectedError:  nil,
 		},
 		{
 			testName:             "Invalid validation context",
@@ -133,7 +134,7 @@ func TestComplianceValidationService_ValidateVC(t *testing.T) {
 				t.Errorf("Expected result %v, but got %v", tc.expectedResult, result)
 			}
 
-			if err != tc.expectedError {
+			if !errors.Is(err, tc.expectedError) {
 				t.Errorf("Expected error %v, but got %v", tc.expectedError, err)
 			}
 		})
