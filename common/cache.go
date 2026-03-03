@@ -12,6 +12,7 @@ type Cache interface {
 	Add(k string, x interface{}, d time.Duration) error
 	Get(k string) (interface{}, bool)
 	Set(k string, x interface{}, d time.Duration)
+	GetWithExpiration(k string) (interface{}, time.Time, bool)
 	Delete(k string)
 }
 
