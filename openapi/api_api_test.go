@@ -69,7 +69,7 @@ func (mV *mockVerifier) GetAuthorizationType(clientId string) string {
 	return mV.mockAuthorizationType
 }
 
-func (mV *mockVerifier) AuthenticationResponse(state string, presentation *verifiable.Presentation) (sameDevice verifier.Response, err error) {
+func (mV *mockVerifier) AuthenticationResponse(state string, presentation *common.Presentation) (sameDevice verifier.Response, err error) {
 	return mV.mockSameDevice, mV.mockError
 }
 func (mV *mockVerifier) GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error) {
@@ -84,7 +84,7 @@ func (mV *mockVerifier) GetRequestObject(state string) (jwt string, err error) {
 	return jwt, err
 }
 
-func (mV *mockVerifier) GenerateToken(clientId, subject, audience string, scope []string, presentation *verifiable.Presentation) (int64, string, error) {
+func (mV *mockVerifier) GenerateToken(clientId, subject, audience string, scope []string, presentation *common.Presentation) (int64, string, error) {
 	return mV.mockExpiration, mV.mockJWTString, mV.mockError
 }
 

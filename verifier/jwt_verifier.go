@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
 	jose_jwk "github.com/trustbloc/kms-go/doc/jose/jwk"
@@ -99,17 +100,27 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 }
 
 // the credential is already verified after parsing it from the VP, only content validation should happen here.
-func (tbv TrustBlocValidator) ValidateVC(verifiableCredential *verifiable.Credential, verificationContext ValidationContext) (result bool, err error) {
+func (tbv TrustBlocValidator) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error) {
 
 	switch tbv.validationMode {
 	case "none":
 		return true, err
-	case "combined":
-		err = verifiableCredential.ValidateCredential()
-	case "jsonLd":
-		err = verifiableCredential.ValidateCredential(verifiable.WithJSONLDValidation())
-	case "baseContext":
-		err = verifiableCredential.ValidateCredential(verifiable.WithBaseContextValidation())
+	case "combined", "jsonLd", "baseContext":
+		// Use the bridge to access the original trustbloc credential for validation.
+		// This will be removed once trustbloc validation is replaced (Step 9).
+		tbCred, ok := verifiableCredential.OriginalVC().(*verifiable.Credential)
+		if !ok || tbCred == nil {
+			logging.Log().Warn("No original trustbloc credential available for validation.")
+			return false, errors.New("no_original_credential_for_validation")
+		}
+		switch tbv.validationMode {
+		case "combined":
+			err = tbCred.ValidateCredential()
+		case "jsonLd":
+			err = tbCred.ValidateCredential(verifiable.WithJSONLDValidation())
+		case "baseContext":
+			err = tbCred.ValidateCredential(verifiable.WithBaseContextValidation())
+		}
 	}
 	if err != nil {
 		logging.Log().Info("Credential is invalid.")

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/jades"
 	"github.com/fiware/VCVerifier/logging"
@@ -46,12 +47,12 @@ var sdJwtParser SdJwtParser
 
 // parser interface
 type PresentationParser interface {
-	ParsePresentation(tokenBytes []byte) (*verifiable.Presentation, error)
+	ParsePresentation(tokenBytes []byte) (*common.Presentation, error)
 }
 
 type SdJwtParser interface {
 	Parse(tokenString string) (map[string]interface{}, error)
-	ParseWithSdJwt(tokenBytes []byte) (presentation *verifiable.Presentation, err error)
+	ParseWithSdJwt(tokenBytes []byte) (presentation *common.Presentation, err error)
 }
 
 type ConfigurablePresentationParser struct {
@@ -138,15 +139,19 @@ func buildAddress(host, path string) string {
 	return strings.TrimSuffix(host, "/") + "/" + strings.TrimPrefix(path, "/")
 }
 
-func (cpp *ConfigurablePresentationParser) ParsePresentation(tokenBytes []byte) (*verifiable.Presentation, error) {
-	return verifiable.ParsePresentation(tokenBytes, cpp.PresentationOpts...)
+func (cpp *ConfigurablePresentationParser) ParsePresentation(tokenBytes []byte) (*common.Presentation, error) {
+	tbPres, err := verifiable.ParsePresentation(tokenBytes, cpp.PresentationOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return convertTrustblocPresentation(tbPres), nil
 }
 
 func (sjp *ConfigurableSdJwtParser) Parse(tokenString string) (map[string]interface{}, error) {
 	return sdv.Parse(tokenString, sjp.ParserOpts...)
 }
 
-func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interface{}) (credential *verifiable.Credential, err error) {
+func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interface{}) (credential *common.Credential, err error) {
 
 	issuer, i_ok := claims["iss"]
 	vct, vct_ok := claims["vct"]
@@ -154,18 +159,18 @@ func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interfa
 		logging.Log().Infof("Token does not contain issuer(%v) or vct(%v).", i_ok, vct_ok)
 		return credential, ErrorInvalidSdJwt
 	}
-	customFields := verifiable.CustomFields{}
+	customFields := common.CustomFields{}
 	for k, v := range claims {
 		if k != "iss" && k != "vct" {
 			customFields[k] = v
 		}
 	}
-	subject := verifiable.Subject{CustomFields: customFields}
-	contents := verifiable.CredentialContents{Issuer: &verifiable.Issuer{ID: issuer.(string)}, Types: []string{vct.(string)}, Subject: []verifiable.Subject{subject}}
-	return verifiable.CreateCredential(contents, verifiable.CustomFields{})
+	subject := common.Subject{CustomFields: customFields}
+	contents := common.CredentialContents{Issuer: &common.Issuer{ID: issuer.(string)}, Types: []string{vct.(string)}, Subject: []common.Subject{subject}}
+	return common.CreateCredential(contents, common.CustomFields{})
 }
 
-func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentation *verifiable.Presentation, err error) {
+func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentation *common.Presentation, err error) {
 	logging.Log().Debug("Parse with SD-Jwt")
 
 	tokenString := string(tokenBytes)
@@ -187,7 +192,7 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 		return presentation, ErrorPresentationNoCredentials
 	}
 
-	presentation, err = verifiable.NewPresentation()
+	presentation, err = common.NewPresentation()
 	if err != nil {
 		return nil, err
 	}
@@ -214,4 +219,53 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 	}
 
 	return presentation, nil
+}
+
+// convertTrustblocCredential converts a trustbloc *verifiable.Credential to a *common.Credential.
+// The original trustbloc credential is stored via SetOriginalVC for bridge compatibility.
+func convertTrustblocCredential(tbCred *verifiable.Credential) *common.Credential {
+	tbContents := tbCred.Contents()
+
+	commonContents := common.CredentialContents{
+		Context: tbContents.Context,
+		ID:      tbContents.ID,
+		Types:   tbContents.Types,
+	}
+
+	if tbContents.Issuer != nil {
+		commonContents.Issuer = &common.Issuer{ID: tbContents.Issuer.ID}
+	}
+
+	for _, s := range tbContents.Subject {
+		commonContents.Subject = append(commonContents.Subject, common.Subject{
+			ID:           s.ID,
+			CustomFields: s.CustomFields,
+		})
+	}
+
+	if tbContents.Issued != nil {
+		t := tbContents.Issued.Time
+		commonContents.ValidFrom = &t
+	}
+	if tbContents.Expired != nil {
+		t := tbContents.Expired.Time
+		commonContents.ValidUntil = &t
+	}
+
+	cred, _ := common.CreateCredential(commonContents, common.CustomFields{})
+	cred.SetRawJSON(tbCred.ToRawJSON())
+	cred.SetOriginalVC(tbCred)
+	return cred
+}
+
+// convertTrustblocPresentation converts a trustbloc *verifiable.Presentation to a *common.Presentation.
+func convertTrustblocPresentation(tbPres *verifiable.Presentation) *common.Presentation {
+	pres, _ := common.NewPresentation()
+	pres.Holder = tbPres.Holder
+
+	for _, tbCred := range tbPres.Credentials() {
+		pres.AddCredentials(convertTrustblocCredential(tbCred))
+	}
+
+	return pres
 }

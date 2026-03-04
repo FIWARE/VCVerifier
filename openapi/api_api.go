@@ -25,7 +25,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwt"
-	"github.com/trustbloc/vc-go/verifiable"
 
 	"github.com/gin-gonic/gin"
 )
@@ -558,7 +557,7 @@ func GetRequestByReference(c *gin.Context) {
 	c.String(http.StatusOK, jwt)
 }
 
-func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
+func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *common.Presentation, err error) {
 
 	logging.Log().Debugf("The token %s.", vpToken)
 
@@ -575,7 +574,7 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *ver
 
 }
 
-func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
+func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *common.Presentation, err error) {
 	tokenBytes := decodeVpString(vpToken)
 
 	isSdJWT, parsedPresentation, err := isSdJWT(c, vpToken)
@@ -612,7 +611,7 @@ func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *ve
 	return
 }
 
-func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
+func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentation *common.Presentation, err error) {
 	tokenBytes := decodeVpString(vpToken)
 
 	var queryMap map[string]string
@@ -638,7 +637,7 @@ func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentatio
 }
 
 // checks if the presented token contains a single sd-jwt credential. Will be repackage to a presentation for further validation
-func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *verifiable.Presentation, err error) {
+func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *common.Presentation, err error) {
 	claims, err := getSdJwtParser().Parse(vpToken)
 	if err != nil {
 		logging.Log().Debugf("Was not a sdjwt. Err: %v", err)
@@ -651,21 +650,21 @@ func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *verifi
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
 		return true, presentation, errors.New(ErrorMessageInvalidSdJwt.Summary)
 	}
-	customFields := verifiable.CustomFields{}
+	customFields := common.CustomFields{}
 	for k, v := range claims {
 		if k != "iss" && k != "vct" {
 			customFields[k] = v
 		}
 	}
-	subject := verifiable.Subject{CustomFields: customFields}
-	contents := verifiable.CredentialContents{Issuer: &verifiable.Issuer{ID: issuer.(string)}, Types: []string{vct.(string)}, Subject: []verifiable.Subject{subject}}
-	credential, err := verifiable.CreateCredential(contents, verifiable.CustomFields{})
+	subject := common.Subject{CustomFields: customFields}
+	contents := common.CredentialContents{Issuer: &common.Issuer{ID: issuer.(string)}, Types: []string{vct.(string)}, Subject: []common.Subject{subject}}
+	credential, err := common.CreateCredential(contents, common.CustomFields{})
 	if err != nil {
 		logging.Log().Infof("Was not able to create credential from sdJwt. E: %v", err)
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
 		return true, presentation, err
 	}
-	presentation, err = verifiable.NewPresentation()
+	presentation, err = common.NewPresentation()
 	if err != nil {
 		logging.Log().Infof("Was not able to create credpresentation from sdJwt. E: %v", err)
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
@@ -685,7 +684,7 @@ func decodeVpString(vpToken string) (tokenBytes []byte) {
 	return tokenBytes
 }
 
-func handleAuthenticationResponse(c *gin.Context, state string, presentation *verifiable.Presentation) {
+func handleAuthenticationResponse(c *gin.Context, state string, presentation *common.Presentation) {
 
 	response, err := getApiVerifier().AuthenticationResponse(state, presentation)
 	if err != nil {

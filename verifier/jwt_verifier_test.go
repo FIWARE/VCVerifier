@@ -3,6 +3,7 @@ package verifier
 import (
 	"testing"
 
+	common "github.com/fiware/VCVerifier/common"
 	"github.com/trustbloc/vc-go/verifiable"
 )
 
@@ -130,13 +131,13 @@ func TestValidationService_NoneMode(t *testing.T) {
 	// Test that a ValidationService with mode "none" always passes, regardless of credential content.
 	var validator ValidationService = TrustBlocValidator{validationMode: "none"}
 
-	credential, _ := verifiable.CreateCredential(verifiable.CredentialContents{
-		Issuer: &verifiable.Issuer{ID: "did:web:example.com"},
+	credential, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:web:example.com"},
 		Types:  []string{"VerifiableCredential"},
-		Subject: []verifiable.Subject{
+		Subject: []common.Subject{
 			{CustomFields: map[string]interface{}{"name": "test"}},
 		},
-	}, verifiable.CustomFields{})
+	}, common.CustomFields{})
 
 	result, err := validator.ValidateVC(credential, nil)
 	if !result {
@@ -151,13 +152,24 @@ func TestValidationService_NonNoneModeRejectsInvalid(t *testing.T) {
 	// Test that non-"none" validation modes reject credentials that lack required VC fields.
 	// This verifies the validator actually performs content checks in combined/jsonLd modes.
 
-	credential, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+	// Create the common credential
+	credential, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:web:example.com"},
+		Types:  []string{"VerifiableCredential"},
+		Subject: []common.Subject{
+			{CustomFields: map[string]interface{}{"name": "test"}},
+		},
+	}, common.CustomFields{})
+
+	// Create a trustbloc credential and set it as the original VC for non-"none" validation
+	tbCred, _ := verifiable.CreateCredential(verifiable.CredentialContents{
 		Issuer: &verifiable.Issuer{ID: "did:web:example.com"},
 		Types:  []string{"VerifiableCredential"},
 		Subject: []verifiable.Subject{
 			{CustomFields: map[string]interface{}{"name": "test"}},
 		},
 	}, verifiable.CustomFields{})
+	credential.SetOriginalVC(tbCred)
 
 	for _, mode := range []string{"combined", "jsonLd"} {
 		t.Run(mode, func(t *testing.T) {

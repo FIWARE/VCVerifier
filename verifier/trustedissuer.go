@@ -6,10 +6,10 @@ import (
 	"errors"
 
 	"github.com/PaesslerAG/jsonpath"
+	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/google/go-cmp/cmp"
-	"github.com/trustbloc/vc-go/verifiable"
 	"golang.org/x/exp/slices"
 )
 
@@ -28,7 +28,7 @@ type TrustedIssuerValidationService struct {
 	tirClient tir.TirClient
 }
 
-func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *verifiable.Credential, validationContext ValidationContext) (result bool, err error) {
+func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *common.Credential, validationContext ValidationContext) (result bool, err error) {
 
 	logging.Log().Debugf("Validate trusted issuer for %s with context %v", logging.PrettyPrintObject(verifiableCredential), validationContext)
 	defer func() {
@@ -103,7 +103,7 @@ func isWildcardTil(tilList []string) (isWildcard bool, err error) {
 	return false, err
 }
 
-func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, credentials []tir.Credential) (result bool, err error) {
+func verifyWithCredentialsConfig(verifiableCredential *common.Credential, credentials []tir.Credential) (result bool, err error) {
 
 	credentialsConfigMap := map[string]tir.Credential{}
 
@@ -134,7 +134,7 @@ func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, cr
 	return true, err
 }
 
-func verifyForType(subjectToVerfiy verifiable.Subject, credentialConfig tir.Credential) (result bool) {
+func verifyForType(subjectToVerfiy common.Subject, credentialConfig tir.Credential) (result bool) {
 	for _, claim := range credentialConfig.Claims {
 
 		if claim.Path != "" {
@@ -165,7 +165,7 @@ func verifyForType(subjectToVerfiy verifiable.Subject, credentialConfig tir.Cred
 	return true
 }
 
-func verifyWithJsonPath(subjectToVerfiy verifiable.Subject, claim tir.Claim) (result bool) {
+func verifyWithJsonPath(subjectToVerfiy common.Subject, claim tir.Claim) (result bool) {
 	jsonSubject, _ := json.Marshal(subjectToVerfiy.CustomFields)
 	var subjectAsMap map[string]interface{}
 	if err := json.Unmarshal(jsonSubject, &subjectAsMap); err != nil {
