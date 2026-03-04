@@ -1,14 +1,13 @@
 package verifier
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
-	"github.com/trustbloc/did-go/method/jwk"
-	"github.com/trustbloc/did-go/method/key"
-	"github.com/trustbloc/did-go/method/web"
-	"github.com/trustbloc/did-go/vdr"
+	jose_jwk "github.com/trustbloc/kms-go/doc/jose/jwk"
 	"github.com/trustbloc/vc-go/verifiable"
 	"github.com/trustbloc/vc-go/vermethod"
 )
@@ -30,7 +29,7 @@ type TrustBlocValidator struct {
 type JWTVerfificationMethodResolver struct{}
 
 func (jwtVMR JWTVerfificationMethodResolver) ResolveVerificationMethod(verificationMethod string, expectedProofIssuer string) (*vermethod.VerificationMethod, error) {
-	registry := vdr.New(vdr.WithVDR(web.New()), vdr.WithVDR(key.New()), vdr.WithVDR(jwk.New()))
+	registry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
 	didDocument, err := registry.Resolve(expectedProofIssuer)
 	if err != nil {
 		logging.Log().Warnf("Was not able to resolve the issuer %s. E: %v", expectedProofIssuer, err)
@@ -39,8 +38,22 @@ func (jwtVMR JWTVerfificationMethodResolver) ResolveVerificationMethod(verificat
 	for _, vm := range didDocument.DIDDocument.VerificationMethod {
 		logging.Log().Debugf("Comparing verification method=%s vs ID=%s", verificationMethod, vm.ID)
 		if compareVerificationMethod(verificationMethod, vm.ID) {
-			var vermethod = vermethod.VerificationMethod{Type: vm.Type, Value: vm.Value, JWK: vm.JSONWebKey()}
-			return &vermethod, err
+			// Convert lestrrat-go/jwx key to trustbloc JWK for the proof checker
+			var tbJWK *jose_jwk.JWK
+			if vm.JSONWebKey() != nil {
+				jwkBytes, marshalErr := json.Marshal(vm.JSONWebKey())
+				if marshalErr != nil {
+					logging.Log().Warnf("Failed to marshal JWK for verification method %s: %v", vm.ID, marshalErr)
+					return nil, marshalErr
+				}
+				tbJWK = &jose_jwk.JWK{}
+				if unmarshalErr := tbJWK.UnmarshalJSON(jwkBytes); unmarshalErr != nil {
+					logging.Log().Warnf("Failed to convert JWK for verification method %s: %v", vm.ID, unmarshalErr)
+					return nil, unmarshalErr
+				}
+			}
+			result := vermethod.VerificationMethod{Type: vm.Type, Value: vm.Value, JWK: tbJWK}
+			return &result, nil
 		}
 	}
 	logging.Log().Warnf("No valid verification method=%s with expectedProofIssuer=%s", verificationMethod, expectedProofIssuer)
