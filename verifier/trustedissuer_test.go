@@ -6,10 +6,10 @@ import (
 	"errors"
 	"testing"
 
+	common "github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 func TestVerifyWithJsonPath(t *testing.T) {
@@ -18,7 +18,7 @@ func TestVerifyWithJsonPath(t *testing.T) {
 		testName            string
 		path                string
 		allowedValues       []interface{}
-		credentialToVerifiy verifiable.Credential
+		credentialToVerifiy common.Credential
 		expectedResult      bool
 	}
 
@@ -71,7 +71,7 @@ func TestVerifyVC_Issuers(t *testing.T) {
 
 	type test struct {
 		testName            string
-		credentialToVerifiy verifiable.Credential
+		credentialToVerifiy common.Credential
 		verificationContext ValidationContext
 		participantsList    []string
 		tirResponse         tir.TrustedIssuer
@@ -186,58 +186,58 @@ func getWildcardAndNormalVerificationContext() ValidationContext {
 	return TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"VerifiableCredential": {{Type: "ebsi", Url: "http://my-trust-registry.org"}}, "SecondType": {{Type: "ebsi", Url: "http://my-trust-registry.org"}}}, trustedIssuersLists: map[string][]string{"VerifiableCredential": {"*"}, "SecondType": {"http://my-til.org"}}}
 }
 
-func getMultiTypeCredential(types []string, claimName string, value interface{}) verifiable.Credential {
-	vc, _ := verifiable.CreateCredential(verifiable.CredentialContents{
-		Issuer: &verifiable.Issuer{ID: "did:test:issuer"},
+func getMultiTypeCredential(types []string, claimName string, value interface{}) common.Credential {
+	vc, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:test:issuer"},
 		Types:  types,
-		Subject: []verifiable.Subject{
+		Subject: []common.Subject{
 			{
 				CustomFields: map[string]interface{}{claimName: value},
 			},
-		}}, verifiable.CustomFields{})
+		}}, common.CustomFields{})
 	return *vc
 }
 
-func getMultiClaimCredential(claims map[string]interface{}) verifiable.Credential {
+func getMultiClaimCredential(claims map[string]interface{}) common.Credential {
 
-	vc, _ := verifiable.CreateCredential(verifiable.CredentialContents{
-		Issuer: &verifiable.Issuer{ID: "did:test:issuer"},
+	vc, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:test:issuer"},
 		Types:  []string{"VerifiableCredential"},
-		Subject: []verifiable.Subject{
+		Subject: []common.Subject{
 			{
 				CustomFields: claims,
 			},
-		}}, verifiable.CustomFields{})
+		}}, common.CustomFields{})
 
 	return *vc
 
 }
 
-func getTypedCredential(credentialType, claimName string, value interface{}) verifiable.Credential {
-	vc, _ := verifiable.CreateCredential(verifiable.CredentialContents{
-		Issuer: &verifiable.Issuer{ID: "did:test:issuer"},
+func getTypedCredential(credentialType, claimName string, value interface{}) common.Credential {
+	vc, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:test:issuer"},
 		Types:  []string{credentialType},
-		Subject: []verifiable.Subject{
+		Subject: []common.Subject{
 			{
 				CustomFields: map[string]interface{}{claimName: value},
 			},
-		}}, verifiable.CustomFields{})
+		}}, common.CustomFields{})
 	return *vc
 }
 
-func getVerifiableCredential(claimName string, value interface{}) verifiable.Credential {
+func getVerifiableCredential(claimName string, value interface{}) common.Credential {
 	return getTypedCredential("VerifiableCredential", claimName, value)
 }
 
-func getTestCredential(subject map[string]interface{}) verifiable.Credential {
-	vc, _ := verifiable.CreateCredential(verifiable.CredentialContents{
-		Issuer: &verifiable.Issuer{ID: "did:test:issuer"},
+func getTestCredential(subject map[string]interface{}) common.Credential {
+	vc, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:test:issuer"},
 		Types:  []string{"OperatorCredential"},
-		Subject: []verifiable.Subject{
+		Subject: []common.Subject{
 			{
 				CustomFields: subject,
 			},
-		}}, verifiable.CustomFields{})
+		}}, common.CustomFields{})
 	return *vc
 }
 

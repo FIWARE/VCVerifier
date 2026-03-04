@@ -62,10 +62,7 @@ func TestCredential_ToRawJSON(t *testing.T) {
 		Status:    &TypedID{ID: "https://example.com/status/1", Type: "StatusList2021Entry"},
 	}, CustomFields{})
 
-	raw, err := cred.ToRawJSON()
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
+	raw := cred.ToRawJSON()
 	if raw[JSONLDKeyID] != "vc-1" {
 		t.Errorf("Expected id=vc-1, got %v", raw[JSONLDKeyID])
 	}
@@ -101,10 +98,7 @@ func TestCredential_ToRawJSON_MultipleSubjects(t *testing.T) {
 		},
 	}, CustomFields{})
 
-	raw, err := cred.ToRawJSON()
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
+	raw := cred.ToRawJSON()
 
 	subjects, ok := raw[VCKeyCredentialSubject].([]JSONObject)
 	if !ok {
@@ -120,10 +114,7 @@ func TestCredential_ToRawJSON_CustomFields(t *testing.T) {
 		ID: "vc-1",
 	}, CustomFields{JSONLDKeyContext: []string{ContextCredentialsV1}, "extra": "value"})
 
-	raw, err := cred.ToRawJSON()
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
+	raw := cred.ToRawJSON()
 	if raw[JSONLDKeyID] != "vc-1" {
 		t.Errorf("Expected id=vc-1, got %v", raw[JSONLDKeyID])
 	}
@@ -138,10 +129,7 @@ func TestCredential_ToRawJSON_SchemasAndEvidence(t *testing.T) {
 		Evidence: []interface{}{map[string]interface{}{"type": "DocumentVerification"}},
 	}, CustomFields{})
 
-	raw, err := cred.ToRawJSON()
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
+	raw := cred.ToRawJSON()
 	schemas, ok := raw[VCKeyCredentialSchema].([]JSONObject)
 	if !ok || len(schemas) != 1 {
 		t.Fatalf("Expected 1 schema, got %v", raw[VCKeyCredentialSchema])
