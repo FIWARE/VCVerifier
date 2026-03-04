@@ -9,63 +9,46 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
-	"github.com/trustbloc/did-go/doc/did"
-	diddoc "github.com/trustbloc/did-go/doc/did"
-	"github.com/trustbloc/did-go/vdr/api"
-	kmsjwk "github.com/trustbloc/kms-go/doc/jose/jwk"
-
-	gojose "github.com/go-jose/go-jose/v3"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
 var _ = logging.Log()
 
-// mockVDR implements api.VDR for testing
+// mockVDR implements did.VDR for testing
 type mockVDR struct {
-	readFunc func(did string, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error)
+	readFunc func(didStr string) (*did.DocResolution, error)
 }
 
-func (m *mockVDR) Read(did string, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error) {
-	return m.readFunc(did, opts...)
+func (m *mockVDR) Read(didStr string) (*did.DocResolution, error) {
+	return m.readFunc(didStr)
 }
-func (m *mockVDR) Create(did *diddoc.Doc, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error) {
-	return nil, nil
-}
-func (m *mockVDR) Accept(method string, opts ...api.DIDMethodOption) bool { return true }
-func (m *mockVDR) Update(did *diddoc.Doc, opts ...api.DIDMethodOption) error {
-	return nil
-}
-func (m *mockVDR) Deactivate(did string, opts ...api.DIDMethodOption) error { return nil }
-func (m *mockVDR) Close() error                                             { return nil }
+func (m *mockVDR) Accept(method string) bool { return true }
 
 // helper: create a DID document with an EC key verification method
-func createTestDocResolution(didID, vmID string) (*diddoc.DocResolution, error) {
+func createTestDocResolution(didID, vmID string) (*did.DocResolution, error) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 
-	jwkObj := &kmsjwk.JWK{
-		JSONWebKey: gojose.JSONWebKey{
-			Key:       &privKey.PublicKey,
-			KeyID:     vmID,
-			Algorithm: "ES256",
-		},
-		Kty: "EC",
-		Crv: "P-256",
-	}
-
-	vm, err := diddoc.NewVerificationMethodFromJWK(vmID, "JsonWebKey2020", didID, jwkObj)
+	jwkKey, err := jwk.Import(&privKey.PublicKey)
 	if err != nil {
 		return nil, err
 	}
 
-	doc := &diddoc.Doc{
+	vm, err := did.NewVerificationMethodFromJWK(vmID, "JsonWebKey2020", didID, jwkKey)
+	if err != nil {
+		return nil, err
+	}
+
+	doc := &did.Doc{
 		ID:                 didID,
 		VerificationMethod: []did.VerificationMethod{*vm},
 	}
 
-	return &diddoc.DocResolution{DIDDocument: doc}, nil
+	return &did.DocResolution{DIDDocument: doc}, nil
 }
 
 func TestResolvePublicKeyFromDID_WithFragment(t *testing.T) {
@@ -75,7 +58,7 @@ func TestResolvePublicKeyFromDID_WithFragment(t *testing.T) {
 	}
 
 	vdr := &mockVDR{
-		readFunc: func(d string, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error) {
+		readFunc: func(d string) (*did.DocResolution, error) {
 			if d == "did:web:example.com" {
 				return docRes, nil
 			}
@@ -83,7 +66,7 @@ func TestResolvePublicKeyFromDID_WithFragment(t *testing.T) {
 		},
 	}
 
-	resolver := &VdrKeyResolver{Vdr: []api.VDR{vdr}}
+	resolver := &VdrKeyResolver{Vdr: []did.VDR{vdr}}
 	key, err := resolver.ResolvePublicKeyFromDID("did:web:example.com#key-1")
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -94,20 +77,18 @@ func TestResolvePublicKeyFromDID_WithFragment(t *testing.T) {
 }
 
 func TestResolvePublicKeyFromDID_WithoutFragment(t *testing.T) {
-	// For a DID without fragment, the code builds combinedKeyId = kid + "#" + last part of did
-	// VM ID must match either keyID (the full DID) or combinedKeyId
 	docRes, err := createTestDocResolution("did:web:example.com", "did:web:example.com")
 	if err != nil {
 		t.Fatalf("Failed to create test doc: %v", err)
 	}
 
 	vdr := &mockVDR{
-		readFunc: func(d string, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error) {
+		readFunc: func(d string) (*did.DocResolution, error) {
 			return docRes, nil
 		},
 	}
 
-	resolver := &VdrKeyResolver{Vdr: []api.VDR{vdr}}
+	resolver := &VdrKeyResolver{Vdr: []did.VDR{vdr}}
 	key, err := resolver.ResolvePublicKeyFromDID("did:web:example.com")
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -119,12 +100,12 @@ func TestResolvePublicKeyFromDID_WithoutFragment(t *testing.T) {
 
 func TestResolvePublicKeyFromDID_AllVDRsFail(t *testing.T) {
 	failVdr := &mockVDR{
-		readFunc: func(d string, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error) {
+		readFunc: func(d string) (*did.DocResolution, error) {
 			return nil, errors.New("resolution failed")
 		},
 	}
 
-	resolver := &VdrKeyResolver{Vdr: []api.VDR{failVdr}}
+	resolver := &VdrKeyResolver{Vdr: []did.VDR{failVdr}}
 	key, err := resolver.ResolvePublicKeyFromDID("did:web:example.com#key-1")
 	if err == nil {
 		t.Error("Expected an error, got nil")
@@ -141,12 +122,12 @@ func TestResolvePublicKeyFromDID_KeyIDNotFound(t *testing.T) {
 	}
 
 	vdr := &mockVDR{
-		readFunc: func(d string, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error) {
+		readFunc: func(d string) (*did.DocResolution, error) {
 			return docRes, nil
 		},
 	}
 
-	resolver := &VdrKeyResolver{Vdr: []api.VDR{vdr}}
+	resolver := &VdrKeyResolver{Vdr: []did.VDR{vdr}}
 	key, err := resolver.ResolvePublicKeyFromDID("did:web:example.com#key-1")
 	if err != ErrorInvalidJWT {
 		t.Errorf("Expected ErrorInvalidJWT, got %v", err)
@@ -158,22 +139,20 @@ func TestResolvePublicKeyFromDID_KeyIDNotFound(t *testing.T) {
 
 func TestResolvePublicKeyFromDID_NilJWK(t *testing.T) {
 	// Create a verification method with no JWK (Value-only)
-	vm := diddoc.NewVerificationMethodFromBytes("did:web:example.com#key-1", "Ed25519VerificationKey2018", "did:web:example.com", []byte("rawbytes"))
-	doc := &diddoc.Doc{
+	vm := did.NewVerificationMethodFromBytes("did:web:example.com#key-1", "Ed25519VerificationKey2018", "did:web:example.com", []byte("rawbytes"))
+	doc := &did.Doc{
 		ID:                 "did:web:example.com",
 		VerificationMethod: []did.VerificationMethod{*vm},
 	}
-	docRes := &diddoc.DocResolution{DIDDocument: doc}
+	docRes := &did.DocResolution{DIDDocument: doc}
 
 	vdr := &mockVDR{
-		readFunc: func(d string, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error) {
+		readFunc: func(d string) (*did.DocResolution, error) {
 			return docRes, nil
 		},
 	}
 
-	resolver := &VdrKeyResolver{Vdr: []api.VDR{vdr}}
-	// JSONWebKey() returns nil when created from bytes without JWK, json.Marshal(nil) = "null"
-	// jwk.ParseKey("null") will fail
+	resolver := &VdrKeyResolver{Vdr: []did.VDR{vdr}}
 	key, err := resolver.ResolvePublicKeyFromDID("did:web:example.com#key-1")
 	if err == nil {
 		t.Error("Expected error for nil JWK, got nil")
@@ -190,17 +169,17 @@ func TestResolvePublicKeyFromDID_FirstVDRFailsSecondSucceeds(t *testing.T) {
 	}
 
 	failVdr := &mockVDR{
-		readFunc: func(d string, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error) {
+		readFunc: func(d string) (*did.DocResolution, error) {
 			return nil, errors.New("not supported")
 		},
 	}
 	successVdr := &mockVDR{
-		readFunc: func(d string, opts ...api.DIDMethodOption) (*diddoc.DocResolution, error) {
+		readFunc: func(d string) (*did.DocResolution, error) {
 			return docRes, nil
 		},
 	}
 
-	resolver := &VdrKeyResolver{Vdr: []api.VDR{failVdr, successVdr}}
+	resolver := &VdrKeyResolver{Vdr: []did.VDR{failVdr, successVdr}}
 	key, err := resolver.ResolvePublicKeyFromDID("did:web:example.com#key-1")
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)

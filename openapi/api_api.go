@@ -19,15 +19,12 @@ import (
 	"strings"
 
 	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/fiware/VCVerifier/verifier"
 	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwt"
-	vdr_jwk "github.com/trustbloc/did-go/method/jwk"
-	vdr_key "github.com/trustbloc/did-go/method/key"
-	vdr_web "github.com/trustbloc/did-go/method/web"
-	"github.com/trustbloc/did-go/vdr/api"
 	"github.com/trustbloc/vc-go/verifiable"
 
 	"github.com/gin-gonic/gin"
@@ -93,7 +90,7 @@ func getSdJwtParser() verifier.SdJwtParser {
 
 func getKeyResolver() verifier.KeyResolver {
 	if keyResolver == nil {
-		keyResolver = &verifier.VdrKeyResolver{Vdr: []api.VDR{vdr_key.New(), vdr_jwk.New(), vdr_web.New()}}
+		keyResolver = &verifier.VdrKeyResolver{Vdr: []did.VDR{did.NewKeyVDR(), did.NewJWKVDR(), did.NewWebVDR()}}
 	}
 	return keyResolver
 }
