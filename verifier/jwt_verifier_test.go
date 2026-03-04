@@ -2,6 +2,8 @@ package verifier
 
 import (
 	"testing"
+
+	"github.com/trustbloc/vc-go/verifiable"
 )
 
 func TestGetKeyFromMethod(t *testing.T) {
@@ -121,5 +123,67 @@ func TestCompareVerificationMethod(t *testing.T) {
 				t.Errorf("Expected result %v, but got %v", tc.expectedResult, result)
 			}
 		})
+	}
+}
+
+func TestValidationService_NoneMode(t *testing.T) {
+	// Test that a ValidationService with mode "none" always passes, regardless of credential content.
+	var validator ValidationService = TrustBlocValidator{validationMode: "none"}
+
+	credential, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+		Issuer: &verifiable.Issuer{ID: "did:web:example.com"},
+		Types:  []string{"VerifiableCredential"},
+		Subject: []verifiable.Subject{
+			{CustomFields: map[string]interface{}{"name": "test"}},
+		},
+	}, verifiable.CustomFields{})
+
+	result, err := validator.ValidateVC(credential, nil)
+	if !result {
+		t.Error("Expected true for none mode")
+	}
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestValidationService_NonNoneModeRejectsInvalid(t *testing.T) {
+	// Test that non-"none" validation modes reject credentials that lack required VC fields.
+	// This verifies the validator actually performs content checks in combined/jsonLd modes.
+
+	credential, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+		Issuer: &verifiable.Issuer{ID: "did:web:example.com"},
+		Types:  []string{"VerifiableCredential"},
+		Subject: []verifiable.Subject{
+			{CustomFields: map[string]interface{}{"name": "test"}},
+		},
+	}, verifiable.CustomFields{})
+
+	for _, mode := range []string{"combined", "jsonLd"} {
+		t.Run(mode, func(t *testing.T) {
+			var validator ValidationService = TrustBlocValidator{validationMode: mode}
+			result, err := validator.ValidateVC(credential, nil)
+			if result {
+				t.Errorf("Expected false for %s mode with incomplete credential", mode)
+			}
+			if err == nil {
+				t.Errorf("Expected error for %s mode with incomplete credential", mode)
+			}
+		})
+	}
+}
+
+func TestSupportedModes(t *testing.T) {
+	// Verify that all documented modes are present in SupportedModes.
+	expected := map[string]bool{"none": false, "combined": false, "jsonLd": false, "baseContext": false}
+	for _, m := range SupportedModes {
+		if _, ok := expected[m]; ok {
+			expected[m] = true
+		}
+	}
+	for mode, found := range expected {
+		if !found {
+			t.Errorf("Expected mode %q in SupportedModes", mode)
+		}
 	}
 }

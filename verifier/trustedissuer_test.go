@@ -245,3 +245,71 @@ type Roles struct {
 	Target string   `json:"target"`
 	Names  []string `json:"names"`
 }
+
+// --- Tests for parseAttribute ---
+
+func TestParseAttribute_ValidBase64(t *testing.T) {
+	credJSON := `{"credentialsType":"VerifiableCredential","claims":[]}`
+	encoded := base64.StdEncoding.EncodeToString([]byte(credJSON))
+	attr := tir.IssuerAttribute{Body: encoded}
+
+	cred, err := parseAttribute(attr)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if cred.CredentialsType != "VerifiableCredential" {
+		t.Errorf("Expected VerifiableCredential, got %s", cred.CredentialsType)
+	}
+}
+
+func TestParseAttribute_InvalidBase64(t *testing.T) {
+	attr := tir.IssuerAttribute{Body: "!!!not-base64!!!"}
+
+	_, err := parseAttribute(attr)
+	if err == nil {
+		t.Error("Expected error for invalid base64, got nil")
+	}
+}
+
+func TestParseAttribute_InvalidJSON(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte("not json"))
+	attr := tir.IssuerAttribute{Body: encoded}
+
+	_, err := parseAttribute(attr)
+	if err == nil {
+		t.Error("Expected error for invalid JSON, got nil")
+	}
+}
+
+func TestParseAttributes_Empty(t *testing.T) {
+	issuer := tir.TrustedIssuer{Attributes: []tir.IssuerAttribute{}}
+
+	creds, err := parseAttributes(issuer)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(creds) != 0 {
+		t.Errorf("Expected empty credentials, got %d", len(creds))
+	}
+}
+
+func TestParseAttributes_MultipleWithOneInvalid(t *testing.T) {
+	validJSON := `{"credentialsType":"VC","claims":[]}`
+	validEncoded := base64.StdEncoding.EncodeToString([]byte(validJSON))
+
+	issuer := tir.TrustedIssuer{
+		Attributes: []tir.IssuerAttribute{
+			{Body: validEncoded},
+			{Body: "!!!invalid!!!"},
+		},
+	}
+
+	creds, err := parseAttributes(issuer)
+	if err == nil {
+		t.Error("Expected error for invalid attribute, got nil")
+	}
+	// Should have parsed the first one before failing
+	if len(creds) != 1 {
+		t.Errorf("Expected 1 credential before failure, got %d", len(creds))
+	}
+}
