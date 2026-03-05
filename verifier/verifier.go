@@ -884,8 +884,6 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		return sameDevice, ErrorNoValidCredentialTypeProvided
 	}
 
-	logging.Log().Warnf("properly handle inclusion config")
-
 	token, err := v.generateJWT(credentialsToBeIncluded, verifiablePresentation.Holder, hostname, flatClaims)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)
