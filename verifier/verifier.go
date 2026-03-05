@@ -108,7 +108,7 @@ type ValidationService interface {
 	ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error)
 }
 
-// implementation of the verifier, using trustbloc and gaia-x compliance issuers registry as a validation backends.
+// CredentialVerifier implements the Verifier interface using gaia-x compliance issuers registry as a validation backend.
 type CredentialVerifier struct {
 	// host of the verifier
 	host string

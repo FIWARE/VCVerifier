@@ -61,6 +61,18 @@ const (
 
 	// VPKeyVerifiableCredential is the verifiableCredential key in a VP JSON representation.
 	VPKeyVerifiableCredential = "verifiableCredential"
+
+	// VPKeyProof is the proof key in a VP/VC JSON representation.
+	VPKeyProof = "proof"
+
+	// VCKeyIssuanceDate is the issuanceDate key (VC Data Model 1.1).
+	VCKeyIssuanceDate = "issuanceDate"
+
+	// VCKeyExpirationDate is the expirationDate key (VC Data Model 1.1).
+	VCKeyExpirationDate = "expirationDate"
+
+	// VCKeyIssued is the issued key (legacy VC date field).
+	VCKeyIssued = "issued"
 )
 
 // JWT standard claim keys (RFC 7519).
@@ -238,6 +250,7 @@ type Presentation struct {
 	Type        []string
 	Holder      string
 	credentials []*Credential
+	Proof       *LDProof
 	// holderKey stores the resolved public key that signed the VP JWT.
 	// Stored as interface{} to avoid jwx dependency in the common package.
 	// The verifier package type-asserts to jwk.Key.
@@ -297,6 +310,10 @@ func (p *Presentation) MarshalJSON() ([]byte, error) {
 			vcs = append(vcs, credJSON)
 		}
 		result[VPKeyVerifiableCredential] = vcs
+	}
+
+	if p.Proof != nil {
+		result[VPKeyProof] = p.Proof
 	}
 
 	return json.Marshal(result)
