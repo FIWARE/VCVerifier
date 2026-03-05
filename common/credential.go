@@ -127,12 +127,7 @@ type Credential struct {
 	contents     CredentialContents
 	customFields CustomFields
 	// rawJSON, if set, is returned by ToRawJSON() instead of building from contents.
-	// Used during the trustbloc bridge period to preserve original JSON format.
 	rawJSON JSONObject
-	// originalVC temporarily holds the original trustbloc *verifiable.Credential
-	// so that TrustBlocValidator can access it for validation.
-	// This field will be removed once trustbloc validation is replaced (Step 9).
-	originalVC interface{}
 }
 
 // Contents returns the structured content of the credential.
@@ -220,20 +215,7 @@ func (c *Credential) MarshalJSON() ([]byte, error) {
 	return json.Marshal(c.ToRawJSON())
 }
 
-// SetOriginalVC stores the original trustbloc credential for bridge compatibility.
-// This is temporary and will be removed in Step 9.
-func (c *Credential) SetOriginalVC(vc interface{}) {
-	c.originalVC = vc
-}
-
-// OriginalVC returns the original trustbloc credential, if set.
-// This is temporary and will be removed in Step 9.
-func (c *Credential) OriginalVC() interface{} {
-	return c.originalVC
-}
-
 // SetRawJSON stores a pre-built raw JSON map to be returned by ToRawJSON().
-// This is used during the trustbloc bridge period to preserve original JSON format.
 func (c *Credential) SetRawJSON(raw JSONObject) {
 	c.rawJSON = raw
 }

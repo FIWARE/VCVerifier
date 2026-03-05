@@ -1,65 +1,41 @@
 package verifier
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 
 	"github.com/fiware/VCVerifier/common"
-	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
-	jose_jwk "github.com/trustbloc/kms-go/doc/jose/jwk"
-	"github.com/trustbloc/vc-go/verifiable"
-	"github.com/trustbloc/vc-go/vermethod"
 )
 
-var ErrorNoKID = errors.New("no_kid_provided")
-var ErrorUnresolvableDid = errors.New("unresolvable_did")
-var ErrorNoVerificationKey = errors.New("no_verification_key")
-var ErrorNotAValidVerficationMethod = errors.New("not_a_valid_verfication_method")
-var ErrorNoOriginalCredential = errors.New("no_original_credential_for_validation")
+// Validation mode constants.
+const (
+	ValidationModeNone        = "none"
+	ValidationModeCombined    = "combined"
+	ValidationModeJsonLd      = "jsonLd"
+	ValidationModeBaseContext  = "baseContext"
+)
 
-const RsaVerificationKey2018 = "RsaVerificationKey2018"
-const Ed25519VerificationKey2018 = "Ed25519VerificationKey2018"
+// W3C base context credential types.
+const (
+	TypeVerifiableCredential   = "VerifiableCredential"
+	TypeVerifiablePresentation = "VerifiablePresentation"
+)
 
-var SupportedModes = []string{"none", "combined", "jsonLd", "baseContext"}
+var (
+	ErrorNoVerificationKey          = errors.New("no_verification_key")
+	ErrorNotAValidVerficationMethod = errors.New("not_a_valid_verfication_method")
+	ErrorNoOriginalCredential       = errors.New("no_original_credential_for_validation")
+	ErrorCredentialMissingIssuer    = errors.New("credential_missing_issuer")
+	ErrorCredentialMissingType      = errors.New("credential_missing_type")
+	ErrorCredentialNonBaseType      = errors.New("credential_contains_non_base_context_type")
+)
 
-type TrustBlocValidator struct {
+var SupportedModes = []string{ValidationModeNone, ValidationModeCombined, ValidationModeJsonLd, ValidationModeBaseContext}
+
+// CredentialValidator validates credential content (not signatures — those are checked by JWTProofChecker).
+type CredentialValidator struct {
 	validationMode string
-}
-
-type JWTVerfificationMethodResolver struct{}
-
-func (jwtVMR JWTVerfificationMethodResolver) ResolveVerificationMethod(verificationMethod string, expectedProofIssuer string) (*vermethod.VerificationMethod, error) {
-	registry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
-	didDocument, err := registry.Resolve(expectedProofIssuer)
-	if err != nil {
-		logging.Log().Warnf("Was not able to resolve the issuer %s. E: %v", expectedProofIssuer, err)
-		return nil, ErrorUnresolvableDid
-	}
-	for _, vm := range didDocument.DIDDocument.VerificationMethod {
-		logging.Log().Debugf("Comparing verification method=%s vs ID=%s", verificationMethod, vm.ID)
-		if compareVerificationMethod(verificationMethod, vm.ID) {
-			// Convert lestrrat-go/jwx key to trustbloc JWK for the proof checker
-			var tbJWK *jose_jwk.JWK
-			if vm.JSONWebKey() != nil {
-				jwkBytes, marshalErr := json.Marshal(vm.JSONWebKey())
-				if marshalErr != nil {
-					logging.Log().Warnf("Failed to marshal JWK for verification method %s: %v", vm.ID, marshalErr)
-					return nil, marshalErr
-				}
-				tbJWK = &jose_jwk.JWK{}
-				if unmarshalErr := tbJWK.UnmarshalJSON(jwkBytes); unmarshalErr != nil {
-					logging.Log().Warnf("Failed to convert JWK for verification method %s: %v", vm.ID, unmarshalErr)
-					return nil, unmarshalErr
-				}
-			}
-			result := vermethod.VerificationMethod{Type: vm.Type, Value: vm.Value, JWK: tbJWK}
-			return &result, nil
-		}
-	}
-	logging.Log().Warnf("No valid verification method=%s with expectedProofIssuer=%s", verificationMethod, expectedProofIssuer)
-	return nil, ErrorNoVerificationKey
 }
 
 // the jwt-vc standard defines multiple options for the kid-header, while the standard implementation only allows for absolute paths.
@@ -100,32 +76,53 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 	return keyId, absolutePath, fullAbsolutePath, ErrorNotAValidVerficationMethod
 }
 
-// the credential is already verified after parsing it from the VP, only content validation should happen here.
-func (tbv TrustBlocValidator) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error) {
+// ValidateVC validates credential content. Signature verification is handled separately by JWTProofChecker.
+func (cv CredentialValidator) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error) {
 
-	switch tbv.validationMode {
-	case "none":
-		return true, err
-	case "combined", "jsonLd", "baseContext":
-		// Use the bridge to access the original trustbloc credential for validation.
-		// This will be removed once trustbloc validation is replaced (Step 9).
-		tbCred, ok := verifiableCredential.OriginalVC().(*verifiable.Credential)
-		if !ok || tbCred == nil {
-			logging.Log().Warn("No original trustbloc credential available for validation.")
-			return false, ErrorNoOriginalCredential
-		}
-		switch tbv.validationMode {
-		case "combined":
-			err = tbCred.ValidateCredential()
-		case "jsonLd":
-			err = tbCred.ValidateCredential(verifiable.WithJSONLDValidation())
-		case "baseContext":
-			err = tbCred.ValidateCredential(verifiable.WithBaseContextValidation())
+	switch cv.validationMode {
+	case ValidationModeNone:
+		return true, nil
+	case ValidationModeCombined:
+		return validateCredentialContent(verifiableCredential)
+	case ValidationModeJsonLd:
+		return validateCredentialContent(verifiableCredential)
+	case ValidationModeBaseContext:
+		return validateBaseContext(verifiableCredential)
+	}
+	return true, nil
+}
+
+// validateCredentialContent checks that essential credential fields are present.
+func validateCredentialContent(cred *common.Credential) (bool, error) {
+	contents := cred.Contents()
+	if contents.Issuer == nil || contents.Issuer.ID == "" {
+		logging.Log().Warn("Credential validation failed: missing issuer")
+		return false, ErrorCredentialMissingIssuer
+	}
+	if len(contents.Types) == 0 {
+		logging.Log().Warn("Credential validation failed: missing type")
+		return false, ErrorCredentialMissingType
+	}
+	return true, nil
+}
+
+// validateBaseContext checks that the credential uses only W3C base context types.
+var baseContextTypes = map[string]bool{
+	TypeVerifiableCredential:   true,
+	TypeVerifiablePresentation: true,
+}
+
+func validateBaseContext(cred *common.Credential) (bool, error) {
+	contents := cred.Contents()
+	if contents.Issuer == nil || contents.Issuer.ID == "" {
+		logging.Log().Warn("Credential validation failed: missing issuer")
+		return false, ErrorCredentialMissingIssuer
+	}
+	for _, t := range contents.Types {
+		if !baseContextTypes[t] {
+			logging.Log().Warnf("Credential validation failed: non-base-context type %s", t)
+			return false, ErrorCredentialNonBaseType
 		}
 	}
-	if err != nil {
-		logging.Log().Info("Credential is invalid.")
-		return false, err
-	}
-	return true, err
+	return true, nil
 }

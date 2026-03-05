@@ -289,7 +289,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 	sessionCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 	tokenCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 
-	credentialsVerifier := TrustBlocValidator{validationMode: config.Verifier.ValidationMode}
+	credentialsVerifier := CredentialValidator{validationMode: config.Verifier.ValidationMode}
 
 	externalGaiaXValidator := InitGaiaXRegistryValidationService(verifierConfig)
 
