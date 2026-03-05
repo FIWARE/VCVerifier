@@ -14,7 +14,6 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	ljwk "github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
-	sdv "github.com/trustbloc/vc-go/sdjwt/verifier"
 )
 
 func TestValidateConfig(t *testing.T) {
@@ -191,7 +190,7 @@ func buildFakeJWT(payload map[string]interface{}) string {
 }
 
 func TestParseWithSdJwt_MissingVpClaim(t *testing.T) {
-	parser := &ConfigurableSdJwtParser{ParserOpts: []sdv.ParseOpt{}}
+	parser := &ConfigurableSdJwtParser{}
 	token := buildFakeJWT(map[string]interface{}{
 		"iss": "did:web:test",
 	})
@@ -203,7 +202,7 @@ func TestParseWithSdJwt_MissingVpClaim(t *testing.T) {
 }
 
 func TestParseWithSdJwt_MissingVerifiableCredential(t *testing.T) {
-	parser := &ConfigurableSdJwtParser{ParserOpts: []sdv.ParseOpt{}}
+	parser := &ConfigurableSdJwtParser{}
 	token := buildFakeJWT(map[string]interface{}{
 		"vp": map[string]interface{}{
 			"holder": "did:web:holder",
@@ -217,7 +216,7 @@ func TestParseWithSdJwt_MissingVerifiableCredential(t *testing.T) {
 }
 
 func TestParseWithSdJwt_MalformedPayload(t *testing.T) {
-	parser := &ConfigurableSdJwtParser{ParserOpts: []sdv.ParseOpt{}}
+	parser := &ConfigurableSdJwtParser{}
 	// Create token with invalid base64 in payload position
 	token := "eyJhbGciOiJFUzI1NiJ9.!!!invalid!!!.fakesig"
 
@@ -302,27 +301,30 @@ func TestParsePresentation_RejectsUnsignedVP(t *testing.T) {
 
 func TestParseWithSdJwt_RejectsUnverifiableVCSignature(t *testing.T) {
 	// Verify that SD-JWT VC signature verification is enforced during ParseWithSdJwt.
-	// Use default SD-JWT parser opts (which include signature verification).
 	// The VC is signed with a key whose DID is not resolvable, so verification should fail.
 
 	// Build a properly signed SD-JWT VC with an unresolvable issuer DID
 	vcPayload := map[string]interface{}{
-		"iss":  "did:web:unreachable.issuer.example.com",
-		"vct":  "VerifiableCredential",
-		"name": "Alice",
+		"iss":     "did:web:unreachable.issuer.example.com",
+		"vct":     "VerifiableCredential",
+		"name":    "Alice",
+		"_sd":     []string{},
+		"_sd_alg": "sha-256",
 	}
 	vcToken := buildSignedJWT(t, "did:web:unreachable.issuer.example.com#key-1", vcPayload)
+	sdJwtVC := string(vcToken) + "~" // Make it an SD-JWT by adding ~ separator
 
-	// Build the VP JWT payload containing the VC
+	// Build the VP JWT payload containing the SD-JWT VC
 	vpPayload := map[string]interface{}{
 		"vp": map[string]interface{}{
 			"holder":               "did:web:holder.example.com",
-			"verifiableCredential": []interface{}{string(vcToken)},
+			"verifiableCredential": []interface{}{sdJwtVC},
 		},
 	}
 	vpToken := buildFakeJWT(vpPayload)
 
-	parser := &ConfigurableSdJwtParser{ParserOpts: defaultSdJwtParserOptions}
+	checker := newTestProofChecker()
+	parser := &ConfigurableSdJwtParser{ProofChecker: checker}
 	_, err := parser.ParseWithSdJwt([]byte(vpToken))
 	if err == nil {
 		t.Error("Expected error for VP with unverifiable VC signature, got nil")

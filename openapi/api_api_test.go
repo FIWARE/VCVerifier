@@ -22,8 +22,6 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
 	"github.com/multiformats/go-multibase"
-	"github.com/trustbloc/vc-go/proof/defaults"
-	sdv "github.com/trustbloc/vc-go/sdjwt/verifier"
 
 	"github.com/gin-gonic/gin"
 )
@@ -147,10 +145,7 @@ func TestGetToken(t *testing.T) {
 			}
 
 			sdJwtParser = &verifier.ConfigurableSdJwtParser{
-				ParserOpts: []sdv.ParseOpt{
-					sdv.WithSignatureVerifier(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
-					sdv.WithHolderVerificationRequired(false),
-					sdv.WithIssuerSigningAlgorithms([]string{"ES256", "PS256"})}}
+				ProofChecker: newTestProofChecker()}
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
@@ -333,10 +328,7 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 			presentationParser = &verifier.ConfigurablePresentationParser{
 				ProofChecker: newTestProofChecker()}
 			sdJwtParser = &verifier.ConfigurableSdJwtParser{
-				ParserOpts: []sdv.ParseOpt{
-					sdv.WithSignatureVerifier(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
-					sdv.WithHolderVerificationRequired(false),
-					sdv.WithIssuerSigningAlgorithms([]string{"ES256", "PS256"})}}
+				ProofChecker: newTestProofChecker()}
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)

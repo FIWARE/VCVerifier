@@ -12,7 +12,6 @@ package openapi
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -643,16 +642,16 @@ func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *common
 		logging.Log().Debugf("Was not a sdjwt. Err: %v", err)
 		return false, presentation, err
 	}
-	issuer, i_ok := claims["iss"]
-	vct, vct_ok := claims["vct"]
+	issuer, i_ok := claims[common.JWTClaimIss]
+	vct, vct_ok := claims[common.JWTClaimVct]
 	if !i_ok || !vct_ok {
-		logging.Log().Infof("Token does not contain issuer(%v) or vct(%v).", i_ok, vct_ok)
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
-		return true, presentation, errors.New(ErrorMessageInvalidSdJwt.Summary)
+		// Not an SD-JWT VC (missing iss or vct) — let other parsers handle it
+		logging.Log().Debugf("Token does not contain issuer(%v) or vct(%v), not an SD-JWT VC.", i_ok, vct_ok)
+		return false, presentation, nil
 	}
 	customFields := common.CustomFields{}
 	for k, v := range claims {
-		if k != "iss" && k != "vct" {
+		if k != common.JWTClaimIss && k != common.JWTClaimVct {
 			customFields[k] = v
 		}
 	}

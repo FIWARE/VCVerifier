@@ -16,8 +16,6 @@ import (
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/hellofresh/health-go/v5"
 	"github.com/lestrrat-go/jwx/v3/jwk"
-	"github.com/trustbloc/vc-go/proof/defaults"
-	sdv "github.com/trustbloc/vc-go/sdjwt/verifier"
 )
 
 var ErrorNoValidationEndpoint = errors.New("no_validation_endpoint_configured")
@@ -28,17 +26,6 @@ var ErrorInvalidProof = errors.New("invalid_vp_proof")
 var ErrorVCNotArray = errors.New("verifiable_credential_not_array")
 var ErrorInvalidJWTFormat = errors.New("invalid_jwt_format")
 var ErrorCnfKeyMismatch = errors.New("cnf_key_does_not_match_vp_signer")
-
-// sdJwtProofChecker is the trustbloc-based proof checker used only for SD-JWT parsing.
-// This will be replaced in Step 8 when SD-JWT parsing is also moved to custom code.
-var sdJwtProofChecker = defaults.NewDefaultProofChecker(JWTVerfificationMethodResolver{})
-
-var defaultSdJwtParserOptions = []sdv.ParseOpt{
-	sdv.WithSignatureVerifier(sdJwtProofChecker),
-	sdv.WithHolderVerificationRequired(false),
-	sdv.WithHolderSigningAlgorithms([]string{"ES256", "PS256"}),
-	sdv.WithIssuerSigningAlgorithms([]string{"ES256", "PS256"}),
-}
 
 // allow singleton access to the parser
 var presentationParser PresentationParser
@@ -61,7 +48,6 @@ type ConfigurablePresentationParser struct {
 }
 
 type ConfigurableSdJwtParser struct {
-	ParserOpts   []sdv.ParseOpt
 	ProofChecker *JWTProofChecker
 }
 
@@ -118,7 +104,6 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 	checker := NewJWTProofChecker(registry, jAdESValidator)
 	presentationParser = &ConfigurablePresentationParser{ProofChecker: checker}
 	sdJwtParser = &ConfigurableSdJwtParser{
-		ParserOpts:   defaultSdJwtParserOptions,
 		ProofChecker: checker,
 	}
 
@@ -464,7 +449,11 @@ func parseJSONLDCredential(vcMap map[string]interface{}) (*common.Credential, er
 }
 
 func (sjp *ConfigurableSdJwtParser) Parse(tokenString string) (map[string]interface{}, error) {
-	return sdv.Parse(tokenString, sjp.ParserOpts...)
+	var verifyFunc func([]byte) ([]byte, error)
+	if sjp.ProofChecker != nil {
+		verifyFunc = sjp.ProofChecker.VerifyJWT
+	}
+	return common.ParseSDJWT(tokenString, verifyFunc)
 }
 
 func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interface{}) (credential *common.Credential, err error) {
@@ -472,7 +461,7 @@ func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interfa
 	issuer, i_ok := claims[common.JWTClaimIss]
 	vct, vct_ok := claims[common.JWTClaimVct]
 	if !i_ok || !vct_ok {
-		logging.Log().Infof("Token does not contain issuer(%v) or vct(%v).", i_ok, vct_ok)
+		logging.Log().Warnf("Token does not contain issuer(%v) or vct(%v).", i_ok, vct_ok)
 		return credential, ErrorInvalidSdJwt
 	}
 	customFields := common.CustomFields{}
@@ -495,16 +484,19 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 
 	var vpMap map[string]interface{}
 	if err := json.Unmarshal(payloadBytes, &vpMap); err != nil {
+		logging.Log().Warnf("Failed to unmarshal VP payload: %v", err)
 		return nil, err
 	}
 
 	vp, ok := vpMap[common.JWTClaimVP].(map[string]interface{})
 	if !ok {
+		logging.Log().Warn("VP token does not contain vp claim")
 		return presentation, ErrorPresentationNoCredentials
 	}
 
 	vcs, ok := vp[common.VPKeyVerifiableCredential]
 	if !ok {
+		logging.Log().Warn("VP does not contain verifiableCredential")
 		return presentation, ErrorPresentationNoCredentials
 	}
 
@@ -520,10 +512,12 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 		logging.Log().Debugf("The vc %s", vc.(string))
 		parsed, err := sjp.Parse(vc.(string))
 		if err != nil {
+			logging.Log().Warnf("Failed to parse SD-JWT VC: %v", err)
 			return nil, err
 		}
 		credential, err := sjp.ClaimsToCredential(parsed)
 		if err != nil {
+			logging.Log().Warnf("Failed to create credential from SD-JWT claims: %v", err)
 			return nil, err
 		}
 		presentation.AddCredentials(credential)
@@ -533,6 +527,7 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 	if sjp.ProofChecker != nil {
 		_, holderKey, err := sjp.ProofChecker.VerifyJWTAndReturnKey(tokenBytes)
 		if err != nil {
+			logging.Log().Warnf("VP JWT signature verification failed: %v", err)
 			return nil, ErrorInvalidProof
 		}
 		if holderKey != nil {
