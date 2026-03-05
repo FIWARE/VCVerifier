@@ -21,6 +21,7 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/fiware/VCVerifier/verifier"
+	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwt"
 	vdr_jwk "github.com/trustbloc/did-go/method/jwk"
@@ -196,8 +197,7 @@ func AuthorizationEndpoint(c *gin.Context) {
 	}
 	if !nonceExists {
 		logging.Log().Info("Received an authorization request without a nonce.")
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoNonce)
-		return
+		nonce = uuid.NewString()
 	}
 	if !stateExists {
 		logging.Log().Info("Received an authorization request without a state.")
@@ -235,6 +235,7 @@ func AuthorizationEndpoint(c *gin.Context) {
 }
 
 func buildFrontendV2Address(protocol, host, state, clientId, redirectUri, scope, nonce string) string {
+	logging.Log().Debugf("%s://%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, state, clientId, redirectUri, scope, nonce)
 	return fmt.Sprintf("%s://%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, state, clientId, redirectUri, scope, nonce)
 }
 

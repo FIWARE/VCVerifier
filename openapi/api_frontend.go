@@ -16,6 +16,7 @@ import (
 
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/fiware/VCVerifier/verifier"
+	"github.com/google/uuid"
 
 	"github.com/gin-gonic/gin"
 )
@@ -131,9 +132,7 @@ func VerifierLoginQr(c *gin.Context) {
 
 	nonce, nonceExists := c.GetQuery("nonce")
 	if !nonceExists {
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoNonce)
-		// early exit
-		return
+		nonce = uuid.NewString()
 	}
 
 	requestMode, requestModeExists := c.GetQuery("request_mode")

@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/exp/slices"
 
+	"github.com/PaesslerAG/jsonpath"
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/gaiax"
@@ -682,14 +683,31 @@ func buildInclusion(credential *verifiable.Credential, inclusionConfig configMod
 
 	inclusion = make(map[string]interface{})
 	for _, claim := range inclusionConfig.ClaimsToInclude {
-		pathParts := strings.Split(claim.OriginalKey, ".")
-		if val, ok := getValueFromPath(credential.ToRawJSON(), pathParts); ok {
+		if strings.HasPrefix(claim.OriginalKey, "$") {
+			logging.Log().Debugf("Claim uses json path: %s from %s", claim.OriginalKey, logging.PrettyPrintObject(credential.ToRawJSON()))
+			claimValues, err := jsonpath.Get(claim.OriginalKey, credential.ToRawJSON())
+
+			if err != nil {
+				logging.Log().Warnf("Was not able to evaluate path %s", claim.OriginalKey)
+				continue
+			}
+
 			if claim.NewKey != "" {
-				setValueAtPath(inclusion, strings.Split(claim.NewKey, "."), val)
+				setValueAtPath(inclusion, strings.Split(claim.NewKey, "."), claimValues)
 			} else {
-				setValueAtPath(inclusion, strings.Split(claim.OriginalKey, "."), val)
+				setValueAtPath(inclusion, strings.Split(claim.OriginalKey, "."), claimValues)
+			}
+		} else {
+			pathParts := strings.Split(claim.OriginalKey, ".")
+			if val, ok := getValueFromPath(credential.ToRawJSON(), pathParts); ok {
+				if claim.NewKey != "" {
+					setValueAtPath(inclusion, strings.Split(claim.NewKey, "."), val)
+				} else {
+					setValueAtPath(inclusion, strings.Split(claim.OriginalKey, "."), val)
+				}
 			}
 		}
+
 	}
 	return inclusion
 }
@@ -813,9 +831,11 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	}
 	loginSession := loginSessionInterface.(loginSession)
 
-	// TODO extract into separate policy
+	credentialsByType, _ := extractCredentialTypes(verifiablePresentation)
 	trustedChain, _ := verifyChain(verifiablePresentation.Credentials())
+	var credentialsToBeIncluded []map[string]interface{}
 
+	flatClaims := false
 	for _, credential := range verifiablePresentation.Credentials() {
 
 		verificationContext, err := v.getTrustRegistriesValidationContext(loginSession.clientId, credential.Contents().Types, loginSession.scope)
@@ -845,21 +865,27 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 				logging.Log().Infof("VC %s is not valid.", logging.PrettyPrintObject(credential))
 				return sameDevice, ErrorInvalidVC
 			}
+			shouldBeIncluded, inclusionConfig := v.shouldBeIncluded(loginSession.clientId, loginSession.scope, credential.Contents().Types)
+			if shouldBeIncluded {
+				credentialsToBeIncluded = append(credentialsToBeIncluded, buildInclusion(credential, inclusionConfig))
+			}
+			flatClaims, _ = v.credentialsConfig.GetFlatClaims(loginSession.clientId, loginSession.scope)
 		}
 	}
 
 	// we ignore the error here, since the only consequence is that sub will be empty.
 	hostname, _ := getHostName(loginSession.callback)
 
-	//TODO: properly handle inclusion config
-
-	var toBeIncluded []map[string]interface{}
-	for _, credential := range verifiablePresentation.Credentials() {
-		toBeIncluded = append(toBeIncluded, credential.ToRawJSON())
+	if len(credentialsToBeIncluded) == 0 {
+		vcTypes := []string{}
+		for k := range credentialsByType {
+			vcTypes = append(vcTypes, k)
+		}
+		logging.Log().Warnf("No valid credential type was provided. Provided credential type: %v", vcTypes)
+		return sameDevice, ErrorNoValidCredentialTypeProvided
 	}
 
-	flatClaims, _ := v.credentialsConfig.GetFlatClaims(loginSession.clientId, loginSession.scope)
-	token, err := v.generateJWT(toBeIncluded, verifiablePresentation.Holder, hostname, flatClaims)
+	token, err := v.generateJWT(credentialsToBeIncluded, verifiablePresentation.Holder, hostname, flatClaims)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)
 		return sameDevice, err
