@@ -4,15 +4,15 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 type HolderValidationService struct{}
 
 var ErrorNoHolderClaim = errors.New("Credential has not holder claim")
 
-func (hvs *HolderValidationService) ValidateVC(verifiableCredential *verifiable.Credential, validationContext ValidationContext) (result bool, err error) {
+func (hvs *HolderValidationService) ValidateVC(verifiableCredential *common.Credential, validationContext ValidationContext) (result bool, err error) {
 	logging.Log().Debugf("Validate holder for %s", logging.PrettyPrintObject(verifiableCredential))
 	defer func() {
 		if recErr := recover(); recErr != nil {
@@ -35,7 +35,7 @@ func (hvs *HolderValidationService) ValidateVC(verifiableCredential *verifiable.
 			}
 			return valid, err
 		}
-		currentClaim = currentClaim[p].(verifiable.JSONObject)
+		currentClaim = currentClaim[p].(common.JSONObject)
 	}
 	logging.Log().Warnf("Credential %v has not holder claim '%s'", logging.PrettyPrintObject(verifiableCredential), holderContext.claim)
 	return false, ErrorNoHolderClaim

@@ -12,23 +12,18 @@ package openapi
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 
 	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/fiware/VCVerifier/verifier"
 	"github.com/google/uuid"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwt"
-	vdr_jwk "github.com/trustbloc/did-go/method/jwk"
-	vdr_key "github.com/trustbloc/did-go/method/key"
-	vdr_web "github.com/trustbloc/did-go/method/web"
-	"github.com/trustbloc/did-go/vdr/api"
-	"github.com/trustbloc/vc-go/verifiable"
 
 	"github.com/gin-gonic/gin"
 )
@@ -93,7 +88,7 @@ func getSdJwtParser() verifier.SdJwtParser {
 
 func getKeyResolver() verifier.KeyResolver {
 	if keyResolver == nil {
-		keyResolver = &verifier.VdrKeyResolver{Vdr: []api.VDR{vdr_key.New(), vdr_jwk.New(), vdr_web.New()}}
+		keyResolver = &verifier.VdrKeyResolver{Vdr: []did.VDR{did.NewKeyVDR(), did.NewJWKVDR(), did.NewWebVDR()}}
 	}
 	return keyResolver
 }
@@ -561,7 +556,7 @@ func GetRequestByReference(c *gin.Context) {
 	c.String(http.StatusOK, jwt)
 }
 
-func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
+func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *common.Presentation, err error) {
 
 	logging.Log().Debugf("The token %s.", vpToken)
 
@@ -578,7 +573,7 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *ver
 
 }
 
-func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
+func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *common.Presentation, err error) {
 	tokenBytes := decodeVpString(vpToken)
 
 	isSdJWT, parsedPresentation, err := isSdJWT(c, vpToken)
@@ -615,7 +610,7 @@ func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *ve
 	return
 }
 
-func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentation *verifiable.Presentation, err error) {
+func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentation *common.Presentation, err error) {
 	tokenBytes := decodeVpString(vpToken)
 
 	var queryMap map[string]string
@@ -641,34 +636,34 @@ func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentatio
 }
 
 // checks if the presented token contains a single sd-jwt credential. Will be repackage to a presentation for further validation
-func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *verifiable.Presentation, err error) {
+func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *common.Presentation, err error) {
 	claims, err := getSdJwtParser().Parse(vpToken)
 	if err != nil {
 		logging.Log().Debugf("Was not a sdjwt. Err: %v", err)
 		return false, presentation, err
 	}
-	issuer, i_ok := claims["iss"]
-	vct, vct_ok := claims["vct"]
+	issuer, i_ok := claims[common.JWTClaimIss]
+	vct, vct_ok := claims[common.JWTClaimVct]
 	if !i_ok || !vct_ok {
-		logging.Log().Infof("Token does not contain issuer(%v) or vct(%v).", i_ok, vct_ok)
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
-		return true, presentation, errors.New(ErrorMessageInvalidSdJwt.Summary)
+		// Not an SD-JWT VC (missing iss or vct) — let other parsers handle it
+		logging.Log().Debugf("Token does not contain issuer(%v) or vct(%v), not an SD-JWT VC.", i_ok, vct_ok)
+		return false, presentation, nil
 	}
-	customFields := verifiable.CustomFields{}
+	customFields := common.CustomFields{}
 	for k, v := range claims {
-		if k != "iss" && k != "vct" {
+		if k != common.JWTClaimIss && k != common.JWTClaimVct {
 			customFields[k] = v
 		}
 	}
-	subject := verifiable.Subject{CustomFields: customFields}
-	contents := verifiable.CredentialContents{Issuer: &verifiable.Issuer{ID: issuer.(string)}, Types: []string{vct.(string)}, Subject: []verifiable.Subject{subject}}
-	credential, err := verifiable.CreateCredential(contents, verifiable.CustomFields{})
+	subject := common.Subject{CustomFields: customFields}
+	contents := common.CredentialContents{Issuer: &common.Issuer{ID: issuer.(string)}, Types: []string{vct.(string)}, Subject: []common.Subject{subject}}
+	credential, err := common.CreateCredential(contents, common.CustomFields{})
 	if err != nil {
 		logging.Log().Infof("Was not able to create credential from sdJwt. E: %v", err)
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
 		return true, presentation, err
 	}
-	presentation, err = verifiable.NewPresentation()
+	presentation, err = common.NewPresentation()
 	if err != nil {
 		logging.Log().Infof("Was not able to create credpresentation from sdJwt. E: %v", err)
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
@@ -688,7 +683,7 @@ func decodeVpString(vpToken string) (tokenBytes []byte) {
 	return tokenBytes
 }
 
-func handleAuthenticationResponse(c *gin.Context, state string, presentation *verifiable.Presentation) {
+func handleAuthenticationResponse(c *gin.Context, state string, presentation *common.Presentation) {
 
 	response, err := getApiVerifier().AuthenticationResponse(state, presentation)
 	if err != nil {

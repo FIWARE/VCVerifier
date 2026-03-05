@@ -3,10 +3,10 @@ package verifier
 import (
 	"errors"
 
+	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 var ErrorCannotConverContext = errors.New("cannot_convert_context")
@@ -25,7 +25,7 @@ type TrustedParticipantValidationService struct {
 	gaiaXClient gaiax.GaiaXClient
 }
 
-func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential *verifiable.Credential, validationContext ValidationContext) (result bool, err error) {
+func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential *common.Credential, validationContext ValidationContext) (result bool, err error) {
 
 	logging.Log().Debugf("Verify trusted participant for %s", logging.PrettyPrintObject(verifiableCredential))
 	defer func() {

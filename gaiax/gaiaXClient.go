@@ -8,11 +8,8 @@ import (
 	"strings"
 
 	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
-	"github.com/trustbloc/did-go/doc/did"
-	"github.com/trustbloc/did-go/method/web"
-	"github.com/trustbloc/did-go/vdr"
-	vdrapi "github.com/trustbloc/did-go/vdr/api"
 )
 
 const GAIAX_REGISTRY_TRUSTANCHOR_FILE = "/v2/api/trustAnchor/chain/file"
@@ -26,31 +23,36 @@ type GaiaXClient interface {
 	IsTrustedParticipant(registryEndpoint string, did string) (trusted bool)
 }
 
+// DIDResolver resolves DIDs to their documents.
+type DIDResolver interface {
+	Resolve(didStr string) (*did.DocResolution, error)
+}
+
 type GaiaXHttpClient struct {
 	client      common.HttpClient
-	didRegistry vdrapi.Registry
+	didRegistry DIDResolver
 }
 
 func NewGaiaXHttpClient() (client GaiaXClient, err error) {
-	return GaiaXHttpClient{client: &http.Client{}, didRegistry: vdr.New(vdr.WithVDR(web.New()))}, nil
+	return GaiaXHttpClient{client: &http.Client{}, didRegistry: did.NewRegistry(did.WithVDR(did.NewWebVDR()))}, nil
 }
 
-func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, did string) (trusted bool) {
+func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, didStr string) (trusted bool) {
 
-	logging.Log().Debugf("Verify participant %s at gaia-x registry %s.", did, registryEndpoint)
+	logging.Log().Debugf("Verify participant %s at gaia-x registry %s.", didStr, registryEndpoint)
 
 	// 1. get jwk from did
-	didDocument, err := ghc.resolveIssuer(did)
+	didDocument, err := ghc.resolveIssuer(didStr)
 
 	if err != nil {
-		logging.Log().Warnf("Was not able to resolve the issuer %s. E: %v", did, err)
+		logging.Log().Warnf("Was not able to resolve the issuer %s. E: %v", didStr, err)
 		return false
 	}
 
 	// 2. verify at the registry
 	for _, verficationMethod := range didDocument.DIDDocument.VerificationMethod {
-		if verficationMethod.ID == did || verficationMethod.Controller == did {
-			logging.Log().Debugf("Verify the issuer %s.", did)
+		if verficationMethod.ID == didStr || verficationMethod.Controller == didStr {
+			logging.Log().Debugf("Verify the issuer %s.", didStr)
 			return ghc.verifiyIssuer(registryEndpoint, verficationMethod)
 		}
 	}
@@ -59,12 +61,19 @@ func (ghc GaiaXHttpClient) IsTrustedParticipant(registryEndpoint string, did str
 }
 
 func (ghc GaiaXHttpClient) verifiyIssuer(registryEndpoint string, verificationMethod did.VerificationMethod) (trusted bool) {
-	jwk := verificationMethod.JSONWebKey()
+	jwkKey := verificationMethod.JSONWebKey()
+	if jwkKey == nil {
+		logging.Log().Debug("Verification method has no JWK key")
+		return false
+	}
 
-	if jwk.CertificatesURL != nil {
-		return ghc.verifyFileChain(registryEndpoint, jwk.CertificatesURL.String())
+	// Extract x5u (X.509 certificate URL) from the JWK
+	var x5u string
+	if err := jwkKey.Get("x5u", &x5u); err == nil && x5u != "" {
+		return ghc.verifyFileChain(registryEndpoint, x5u)
 	}
 	// gaia-x did-json need to provide an x5u, thus x5c checks are not required.
+	logging.Log().Debug("Verification method JWK has no x5u field")
 	return false
 }
 
@@ -95,10 +104,10 @@ func (ghc GaiaXHttpClient) verifyFileChain(registryEndpoint string, x5u string) 
 	return true
 }
 
-func (ghc GaiaXHttpClient) resolveIssuer(did string) (didDocument *did.DocResolution, err error) {
-	didDocument, err = ghc.didRegistry.Resolve(did)
+func (ghc GaiaXHttpClient) resolveIssuer(didStr string) (didDocument *did.DocResolution, err error) {
+	didDocument, err = ghc.didRegistry.Resolve(didStr)
 	if err != nil {
-		logging.Log().Warnf("Was not able to resolve the issuer %s.", did)
+		logging.Log().Warnf("Was not able to resolve the issuer %s.", didStr)
 		return nil, ErrorUnresolvableDid
 	}
 	return didDocument, err
