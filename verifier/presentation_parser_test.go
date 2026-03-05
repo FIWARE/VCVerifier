@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
+	"github.com/fiware/VCVerifier/did"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	ljwk "github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
@@ -256,6 +258,11 @@ func buildSignedJWT(t *testing.T, kid string, payload map[string]interface{}) []
 	return signed
 }
 
+func newTestProofChecker() *JWTProofChecker {
+	registry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
+	return NewJWTProofChecker(registry, nil)
+}
+
 func TestParsePresentation_RejectsUnverifiableSignature(t *testing.T) {
 	// Create a VP JWT with valid structure but signed with a key whose DID is not resolvable.
 	// The proof checker should fail because it cannot resolve the DID to get the public key.
@@ -269,7 +276,7 @@ func TestParsePresentation_RejectsUnverifiableSignature(t *testing.T) {
 
 	signed := buildSignedJWT(t, "did:web:unreachable.example.com#key-1", vpPayload)
 
-	parser := &ConfigurablePresentationParser{PresentationOpts: defaultPresentationOptions}
+	parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
 	_, err := parser.ParsePresentation(signed)
 	if err == nil {
 		t.Error("Expected error for VP with unresolvable DID, got nil")
@@ -286,7 +293,7 @@ func TestParsePresentation_RejectsUnsignedVP(t *testing.T) {
 		},
 	})
 
-	parser := &ConfigurablePresentationParser{PresentationOpts: defaultPresentationOptions}
+	parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
 	_, err := parser.ParsePresentation([]byte(token))
 	if err == nil {
 		t.Error("Expected error for unsigned VP, got nil")
@@ -322,3 +329,155 @@ func TestParseWithSdJwt_RejectsUnverifiableVCSignature(t *testing.T) {
 	}
 }
 
+// --- Tests for JSON-LD VP parsing ---
+
+func TestParseJSONLDPresentation(t *testing.T) {
+	vpJSON := `{
+		"@context": ["https://www.w3.org/2018/credentials/v1"],
+		"type": ["VerifiablePresentation"],
+		"holder": "did:web:holder.example.com",
+		"verifiableCredential": [{
+			"@context": ["https://www.w3.org/2018/credentials/v1"],
+			"type": ["VerifiableCredential"],
+			"issuer": "did:web:issuer.example.com",
+			"credentialSubject": {
+				"id": "did:web:subject.example.com",
+				"name": "Alice"
+			}
+		}]
+	}`
+
+	parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
+	pres, err := parser.ParsePresentation([]byte(vpJSON))
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if pres.Holder != "did:web:holder.example.com" {
+		t.Errorf("Expected holder did:web:holder.example.com, got %s", pres.Holder)
+	}
+	creds := pres.Credentials()
+	if len(creds) != 1 {
+		t.Fatalf("Expected 1 credential, got %d", len(creds))
+	}
+	if creds[0].Contents().Issuer.ID != "did:web:issuer.example.com" {
+		t.Errorf("Expected issuer did:web:issuer.example.com, got %s", creds[0].Contents().Issuer.ID)
+	}
+}
+
+// --- Tests for jwtClaimsToCredential ---
+
+func TestJwtClaimsToCredential(t *testing.T) {
+	claims := map[string]interface{}{
+		"iss": "did:web:issuer.example.com",
+		"jti": "urn:uuid:test-id",
+		"nbf": float64(1700000000),
+		"exp": float64(1700100000),
+		"vc": map[string]interface{}{
+			"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":     []interface{}{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{
+				"id":   "did:web:subject.example.com",
+				"name": "Alice",
+			},
+		},
+	}
+
+	cred, err := jwtClaimsToCredential(claims)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	contents := cred.Contents()
+	if contents.Issuer.ID != "did:web:issuer.example.com" {
+		t.Errorf("Expected issuer, got %s", contents.Issuer.ID)
+	}
+	if contents.ID != "urn:uuid:test-id" {
+		t.Errorf("Expected ID, got %s", contents.ID)
+	}
+	if len(contents.Types) != 1 || contents.Types[0] != "VerifiableCredential" {
+		t.Errorf("Expected types, got %v", contents.Types)
+	}
+	if len(contents.Subject) != 1 || contents.Subject[0].ID != "did:web:subject.example.com" {
+		t.Errorf("Expected subject, got %v", contents.Subject)
+	}
+	if contents.Subject[0].CustomFields["name"] != "Alice" {
+		t.Errorf("Expected name=Alice, got %v", contents.Subject[0].CustomFields["name"])
+	}
+	if contents.ValidFrom == nil {
+		t.Error("Expected ValidFrom to be set")
+	}
+	if contents.ValidUntil == nil {
+		t.Error("Expected ValidUntil to be set")
+	}
+}
+
+// --- Tests for verifyCnfBinding ---
+
+func TestVerifyCnfBinding_MatchingKey(t *testing.T) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+	holderKey, err := ljwk.Import(privKey)
+	if err != nil {
+		t.Fatalf("Failed to import key: %v", err)
+	}
+
+	// Build a credential with cnf.jwk matching the holder key
+	pubKey, err := holderKey.PublicKey()
+	if err != nil {
+		t.Fatalf("Failed to get public key: %v", err)
+	}
+	pubKeyBytes, err := json.Marshal(pubKey)
+	if err != nil {
+		t.Fatalf("Failed to marshal public key: %v", err)
+	}
+	var pubKeyMap map[string]interface{}
+	json.Unmarshal(pubKeyBytes, &pubKeyMap)
+
+	cred, _ := common.CreateCredential(common.CredentialContents{}, common.CustomFields{
+		common.JWTClaimCnf: map[string]interface{}{
+			common.CnfKeyJWK: pubKeyMap,
+		},
+	})
+
+	err = verifyCnfBinding(cred, holderKey)
+	if err != nil {
+		t.Errorf("Expected no error for matching CNF key, got %v", err)
+	}
+}
+
+func TestVerifyCnfBinding_MismatchedKey(t *testing.T) {
+	privKey1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	holderKey, _ := ljwk.Import(privKey1)
+
+	// Different key in cnf
+	privKey2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	otherKey, _ := ljwk.Import(privKey2)
+	otherPubKey, _ := otherKey.PublicKey()
+	otherPubKeyBytes, _ := json.Marshal(otherPubKey)
+	var otherPubKeyMap map[string]interface{}
+	json.Unmarshal(otherPubKeyBytes, &otherPubKeyMap)
+
+	cred, _ := common.CreateCredential(common.CredentialContents{}, common.CustomFields{
+		common.JWTClaimCnf: map[string]interface{}{
+			common.CnfKeyJWK: otherPubKeyMap,
+		},
+	})
+
+	err := verifyCnfBinding(cred, holderKey)
+	if err != ErrorCnfKeyMismatch {
+		t.Errorf("Expected ErrorCnfKeyMismatch, got %v", err)
+	}
+}
+
+func TestVerifyCnfBinding_NoCnf(t *testing.T) {
+	privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	holderKey, _ := ljwk.Import(privKey)
+
+	cred, _ := common.CreateCredential(common.CredentialContents{}, common.CustomFields{})
+
+	err := verifyCnfBinding(cred, holderKey)
+	if err != nil {
+		t.Errorf("Expected no error when cnf is absent, got %v", err)
+	}
+}

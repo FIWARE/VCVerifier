@@ -63,6 +63,25 @@ const (
 	VPKeyVerifiableCredential = "verifiableCredential"
 )
 
+// JWT standard claim keys (RFC 7519).
+const (
+	JWTClaimIss = "iss" // Issuer
+	JWTClaimSub = "sub" // Subject
+	JWTClaimJti = "jti" // JWT ID
+	JWTClaimNbf = "nbf" // Not Before
+	JWTClaimIat = "iat" // Issued At
+	JWTClaimExp = "exp" // Expiration Time
+)
+
+// JWT-VC/VP specific claim keys.
+const (
+	JWTClaimVC  = "vc"  // VC claim in a JWT-encoded Verifiable Credential
+	JWTClaimVP  = "vp"  // VP claim in a JWT-encoded Verifiable Presentation
+	JWTClaimVct = "vct" // Verifiable Credential Type (SD-JWT VC)
+	JWTClaimCnf = "cnf" // Confirmation method (RFC 7800, used for cryptographic holder binding)
+	CnfKeyJWK   = "jwk" // JWK key within the cnf claim (RFC 7800 §3.2)
+)
+
 // JSONObject is an alias for a generic JSON map.
 type JSONObject = map[string]interface{}
 
@@ -119,6 +138,11 @@ type Credential struct {
 // Contents returns the structured content of the credential.
 func (c *Credential) Contents() CredentialContents {
 	return c.contents
+}
+
+// CustomFields returns the custom fields of the credential.
+func (c *Credential) CustomFields() CustomFields {
+	return c.customFields
 }
 
 // ToRawJSON converts the credential to a JSON map representation.
@@ -232,6 +256,20 @@ type Presentation struct {
 	Type        []string
 	Holder      string
 	credentials []*Credential
+	// holderKey stores the resolved public key that signed the VP JWT.
+	// Stored as interface{} to avoid jwx dependency in the common package.
+	// The verifier package type-asserts to jwk.Key.
+	holderKey interface{}
+}
+
+// HolderKey returns the public key that signed the VP JWT, if available.
+func (p *Presentation) HolderKey() interface{} {
+	return p.holderKey
+}
+
+// SetHolderKey stores the public key that signed the VP JWT.
+func (p *Presentation) SetHolderKey(key interface{}) {
+	p.holderKey = key
 }
 
 // Credentials returns the credentials contained in the presentation.

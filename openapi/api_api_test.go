@@ -2,6 +2,10 @@ package openapi
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,15 +15,17 @@ import (
 	"testing"
 
 	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
 	verifier "github.com/fiware/VCVerifier/verifier"
-	"github.com/piprate/json-gold/ld"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jws"
+	"github.com/multiformats/go-multibase"
 	"github.com/trustbloc/vc-go/proof/defaults"
 	sdv "github.com/trustbloc/vc-go/sdjwt/verifier"
-	"github.com/trustbloc/vc-go/verifiable"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lestrrat-go/jwx/v3/jwk"
 )
 
 var LOGGING_CONFIG = logging.LoggingConfig{
@@ -120,7 +126,7 @@ func TestGetToken(t *testing.T) {
 		{testName: "If no valid scope is provided, the request should be executed in the default scope.", proofCheck: false, testVPToken: getValidVPToken(), testGrantType: "vp_token", expectedStatusCode: 200},
 
 		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
-		{testName: "If a valid signed vp_token request is received a token should be responded.", proofCheck: true, testGrantType: "vp_token", testVPToken: getValidSignedDidKeyVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
+		{testName: "If a valid signed vp_token request is received a token should be responded.", proofCheck: true, testGrantType: "vp_token", testVPToken: buildSignedVPToken(t), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
 		{testName: "If no valid vp_token is provided, the request should fail.", proofCheck: false, testGrantType: "vp_token", testScope: "tir_read", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
 		// token-exchange
 		{testName: "If a valid token-exchange request is received a token should be responded.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
@@ -135,12 +141,9 @@ func TestGetToken(t *testing.T) {
 		t.Run(tc.testName, func(t *testing.T) {
 			if tc.proofCheck {
 				presentationParser = &verifier.ConfigurablePresentationParser{
-					PresentationOpts: []verifiable.PresentationOpt{
-						verifiable.WithPresProofChecker(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
-						verifiable.WithPresJSONLDDocumentLoader(verifier.NewCachingDocumentLoader(ld.NewDefaultDocumentLoader(http.DefaultClient)))}}
+					ProofChecker: newTestProofChecker()}
 			} else {
-				presentationParser = &verifier.ConfigurablePresentationParser{
-					PresentationOpts: []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}}
+				presentationParser = &verifier.ConfigurablePresentationParser{}
 			}
 
 			sdJwtParser = &verifier.ConfigurableSdJwtParser{
@@ -254,8 +257,7 @@ func TestStartSIOPSameDevice(t *testing.T) {
 	for _, tc := range tests {
 
 		t.Run(tc.testName, func(t *testing.T) {
-			presentationParser = &verifier.ConfigurablePresentationParser{
-				PresentationOpts: []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}}
+			presentationParser = &verifier.ConfigurablePresentationParser{}
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
@@ -320,8 +322,8 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 		{"If the same-device flow responds an error, a 400 should be returend", true, "my-state", getValidVPToken(), errors.New("verification_error"), verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessage{Summary: "verification_error"}},
 		{"If no state is provided, a 400 should be returned.", true, "", getValidVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageNoState},
 		{"If an no token is provided, a 400 should be returned.", true, "my-state", "", nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageNoToken},
-		{"If a token with invalid credentials is provided, a 400 should be returned.", true, "my-state", getNoVCVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageUnableToDecodeToken},
-		{"If a token with an invalid holder is provided, a 400 should be returned.", true, "my-state", getNoHolderVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageUnableToDecodeToken},
+		{"If a token with no credentials is provided, a redirect should still occur.", true, "my-state", getNoVCVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 302, "/?state=&code=", ErrorMessage{}},
+		{"If a token with a non-string holder is provided, a redirect should still occur.", true, "my-state", getNoHolderVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 302, "/?state=&code=", ErrorMessage{}},
 	}
 
 	for _, tc := range tests {
@@ -329,9 +331,7 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 		t.Run(tc.testName, func(t *testing.T) {
 
 			presentationParser = &verifier.ConfigurablePresentationParser{
-				PresentationOpts: []verifiable.PresentationOpt{
-					verifiable.WithPresProofChecker(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
-					verifiable.WithPresJSONLDDocumentLoader(ld.NewDefaultDocumentLoader(http.DefaultClient))}}
+				ProofChecker: newTestProofChecker()}
 			sdJwtParser = &verifier.ConfigurableSdJwtParser{
 				ParserOpts: []sdv.ParseOpt{
 					sdv.WithSignatureVerifier(defaults.NewDefaultProofChecker(verifier.JWTVerfificationMethodResolver{})),
@@ -423,8 +423,7 @@ func TestVerifierAPIStartSIOP(t *testing.T) {
 		logging.Log().Info("TestVerifierAPIStartSIOP +++++++++++++++++ Running test: ", tc.testName)
 
 		t.Run(tc.testName, func(t *testing.T) {
-			presentationParser = &verifier.ConfigurablePresentationParser{
-				PresentationOpts: []verifiable.PresentationOpt{verifiable.WithPresDisabledProofCheck(), verifiable.WithDisabledJSONLDChecks()}}
+			presentationParser = &verifier.ConfigurablePresentationParser{}
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
@@ -477,12 +476,93 @@ func getValidSDJwtToken() string {
 	return "eyJhbGciOiJFUzI1NiIsInR5cCIgOiAidmMrc2Qtand0Iiwia2lkIiA6ICJkaWQ6a2V5OnpEbmFlYzVmYnZkNzhjUms1UUo0elpvVnhtU1hLVUg1S1ZHblVFQjR6UnJ5elFtY3kifQ.eyJfc2QiOlsiNDdhOS1uaU9TT3B0RjZ2eXJoUlgyN3ZPVkFJZGFJSmlYR1Zpd1hJNGJ6OCIsIjdXbUhfbXFEVHV0Z3hKX1RWOXh2Q3V0MDVJYkRwTnhRRDRyZm1DUlk5aEUiLCJDUmFOT2hia2t3TUJQXzFmRWNDcEtVcjl3Rm5BbGd5VXQySnpSVUtTZXQ4IiwiUUJ0TG1LRnpDMHEyYTZGVXJJVTdBdzRoXzNheElfaVc1bms0YXA1T3hLTSIsIlJRMktXdXJRTWt1VHdEaE1OZFdjNU5yYkc3djlyOGw5MHU1Rkp6Smh3Z0kiLCJhU2pvZFNGdkR3dWtLdERVcjhzVkVhMGZtdnhvSmVtaXM5b1RyaVFVQ3pnIiwiZThIUkpES194X3k2WDVzZmlhY2RhZWlMWDNfR2RDUXdVRjFKaWpsZXRVUSIsIm5EZDZra25Cb3Bxak9JOU42enB3R3hRYk1YSy02Z0xKSG5mYXgxR0hCOGsiLCJvRi14cG1JM2NlRUN6b2xtVXRSQ2w4SmV4WExIRzAwdDhLRE1KSWdqRFZnIiwib3FuWklsM1ZXODh2QS1BZWdPM2EzSnFxbHBOS0FSbFphWEpvbm1UenpXdyIsInBPUm8yUldMTzhmVENGTUhOeTY5NXNJd1ZYZ0R0aG9IUElnc2NXT2s4Vk0iLCJ4ckZiQWZfc0IzOGhzVjV2T2t6Mmh4TFlWdVNOZTJvTlI0UVl3dXRqdmMwIl0sIl9zZF9hbGciOiJzaGEtMjU2IiwidmN0IjoiQ2l0aXplbkNyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6a2V5OnpEbmFlYzVmYnZkNzhjUms1UUo0elpvVnhtU1hLVUg1S1ZHblVFQjR6UnJ5elFtY3kiLCJlbWFpbCI6ImNpdGl6ZW5AY2l0eS5vcmcifQ.2_f_wirBJNccecvp6t-Gowx38qWq8ErYrg3aqrjsxJ09EphPhE-KeisJ9LIoldSU2VjFkiOjGpUr9rHl_YCJhg~WyJhdzVrS3FkLWFxN29QMS0zR1IzLWN3IiwgImZpcnN0TmFtZSIsICJUZXN0Il0~"
 }
 
-func getValidSignedDidKeyVPToken() string {
-	return "eyJhbGciOiJFUzI1NiIsICJ0eXAiOiJKV1QiLCAia2lkIjoiZGlkOmtleTp6RG5hZXdtRXRKTVpIVVhweHo3OGFyNFFSV2JyVjdCVG1BaGlUOVlNRHAyU0ZlR1VvIn0.eyJpc3MiOiAiZGlkOmtleTp6RG5hZXdtRXRKTVpIVVhweHo3OGFyNFFSV2JyVjdCVG1BaGlUOVlNRHAyU0ZlR1VvIiwgInN1YiI6ICJkaWQ6a2V5OnpEbmFld21FdEpNWkhVWHB4ejc4YXI0UVJXYnJWN0JUbUFoaVQ5WU1EcDJTRmVHVW8iLCAidnAiOiB7CiAgICAiQGNvbnRleHQiOiBbImh0dHBzOi8vd3d3LnczLm9yZy8yMDE4L2NyZWRlbnRpYWxzL3YxIl0sCiAgICAidHlwZSI6IFsiVmVyaWZpYWJsZVByZXNlbnRhdGlvbiJdLAogICAgInZlcmlmaWFibGVDcmVkZW50aWFsIjogWwogICAgICAgICJleUpoYkdjaU9pSkZVekkxTmlJc0luUjVjQ0lnT2lBaVNsZFVJaXdpYTJsa0lpQTZJQ0prYVdRNmEyVjVPbnBFYm1GbGFYTlpkV2RqYm1kM1YycEdSMUJGY21Oa1RscHBjSEpLUzBadlZURjZlbVk0VFV4a00wZENSalpEZEc4aWZRLmV5SnVZbVlpT2pFM05ERXpORGMxT1RNc0ltcDBhU0k2SW5WeWJqcDFkV2xrT21RNE0ySTNaRGd6TFdGbE1XRXROR0kxT0MxaU5ESTNMVFF4WldZMFlXWTNZVGd6T1NJc0ltbHpjeUk2SW1ScFpEcHJaWGs2ZWtSdVlXVnBjMWwxWjJOdVozZFhha1pIVUVWeVkyUk9XbWx3Y2twTFJtOVZNWHA2WmpoTlRHUXpSMEpHTmtOMGJ5SXNJblpqSWpwN0luUjVjR1VpT2xzaVZYTmxja055WldSbGJuUnBZV3dpWFN3aWFYTnpkV1Z5SWpvaVpHbGtPbXRsZVRwNlJHNWhaV2x6V1hWblkyNW5kMWRxUmtkUVJYSmpaRTVhYVhCeVNrdEdiMVV4ZW5wbU9FMU1aRE5IUWtZMlEzUnZJaXdpYVhOemRXRnVZMlZFWVhSbElqb3hOelF4TXpRM05Ua3pMamM1TmpBd01EQXdNQ3dpWTNKbFpHVnVkR2xoYkZOMVltcGxZM1FpT25zaVptbHljM1JPWVcxbElqb2lWR1Z6ZENJc0lteGhjM1JPWVcxbElqb2lVbVZoWkdWeUlpd2laVzFoYVd3aU9pSjBaWE4wUUhWelpYSXViM0puSW4wc0lrQmpiMjUwWlhoMElqcGJJbWgwZEhCek9pOHZkM2QzTG5jekxtOXlaeTh5TURFNEwyTnlaV1JsYm5ScFlXeHpMM1l4SWl3aWFIUjBjSE02THk5M2QzY3Vkek11YjNKbkwyNXpMMk55WldSbGJuUnBZV3h6TDNZeElsMTlmUS5qbDlDeUVVM0YwUnc2bUhMaS1MLTNHRi1pWlhjLUp6OG1ONjhFcm9zWmlFaXpGZDRTRHd5WVFtU05iR2ROMXA2Q2V4SlV0Ym91M0xKRHFFckZiMGNfZyIKICAgIF0sCiAgICAiaG9sZGVyIjogImRpZDprZXk6ekRuYWV3bUV0Sk1aSFVYcHh6NzhhcjRRUldiclY3QlRtQWhpVDlZTURwMlNGZUdVbyIKICB9fQ.MEQCIDfyueLikfY19XexQ8h95jvdElQy1IUS50jaIoAWQHeNAiAB6nOqwDv5xnHUr-_fbCAkhb4WFOegbw3sKEorHAdbbQ"
-}
-
 func getNoVCVPToken() string {
 	return "ewogICJAY29udGV4dCI6IFsKICAgICJodHRwczovL3d3dy53My5vcmcvMjAxOC9jcmVkZW50aWFscy92MSIKICBdLAogICJ0eXBlIjogWwogICAgIlZlcmlmaWFibGVQcmVzZW50YXRpb24iCiAgXSwKICAiaWQiOiAiZWJjNmYxYzIiLAogICJob2xkZXIiOiB7CiAgICAiaWQiOiAiZGlkOmtleTp6Nk1rczltOWlmTHd5M0pXcUg0YzU3RWJCUVZTMlNwUkNqZmE3OXdIYjV2V002dmgiCiAgfSwKICAicHJvb2YiOiB7CiAgICAidHlwZSI6ICJKc29uV2ViU2lnbmF0dXJlMjAyMCIsCiAgICAiY3JlYXRvciI6ICJkaWQ6a2V5Ono2TWtzOW05aWZMd3kzSldxSDRjNTdFYkJRVlMyU3BSQ2pmYTc5d0hiNXZXTTZ2aCIsCiAgICAiY3JlYXRlZCI6ICIyMDIzLTAxLTA2VDA3OjUxOjM2WiIsCiAgICAidmVyaWZpY2F0aW9uTWV0aG9kIjogImRpZDprZXk6ejZNa3M5bTlpZkx3eTNKV3FINGM1N0ViQlFWUzJTcFJDamZhNzl3SGI1dldNNnZoI3o2TWtzOW05aWZMd3kzSldxSDRjNTdFYkJRVlMyU3BSQ2pmYTc5d0hiNXZXTTZ2aCIsCiAgICAiandzIjogImV5SmlOalFpT21aaGJITmxMQ0pqY21sMElqcGJJbUkyTkNKZExDSmhiR2NpT2lKRlpFUlRRU0o5Li42eFNxb1pqYTBOd2pGMGFmOVprbnF4M0NiaDlHRU51bkJmOUM4dUwydWxHZnd1czNVRk1fWm5oUGpXdEhQbC03MkU5cDNCVDVmMnB0Wm9Za3RNS3BEQSIKICB9Cn0"
+}
+
+func newTestProofChecker() *verifier.JWTProofChecker {
+	registry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
+	return verifier.NewJWTProofChecker(registry, nil)
+}
+
+// ecKeyToDidKey encodes a P-256 public key as a did:key identifier.
+func ecKeyToDidKey(pub *ecdsa.PublicKey) string {
+	compressed := elliptic.MarshalCompressed(pub.Curve, pub.X, pub.Y)
+	// P-256 multicodec = 0x1200, varint encoded as 2 bytes
+	var buf [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(buf[:], 0x1200)
+	keyBytes := append(buf[:n], compressed...)
+	encoded, _ := multibase.Encode(multibase.Base58BTC, keyBytes)
+	return "did:key:" + encoded
+}
+
+// buildSignedVPToken creates a properly signed VP JWT containing a properly signed VC JWT,
+// using random P-256 keys with did:key identifiers that can be resolved.
+func buildSignedVPToken(t *testing.T) string {
+	t.Helper()
+
+	// Generate issuer key for VC
+	issuerPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate issuer key: %v", err)
+	}
+	issuerDID := ecKeyToDidKey(&issuerPriv.PublicKey)
+	issuerJWK, _ := jwk.Import(issuerPriv)
+
+	// Sign VC
+	vcPayload, _ := json.Marshal(map[string]interface{}{
+		"iss": issuerDID,
+		"nbf": 1741347593,
+		"jti": "urn:uuid:d83b7d83-ae1a-4b58-b427-41ef4af7a839",
+		"vc": map[string]interface{}{
+			"type":   []string{"UserCredential"},
+			"issuer": issuerDID,
+			"credentialSubject": map[string]interface{}{
+				"firstName": "Test",
+				"lastName":  "Reader",
+				"email":     "test@user.org",
+			},
+			"@context": []string{"https://www.w3.org/2018/credentials/v1"},
+		},
+	})
+	vcHdrs := jws.NewHeaders()
+	vcHdrs.Set(jws.KeyIDKey, issuerDID)
+	vcHdrs.Set(jws.AlgorithmKey, jwa.ES256())
+	vcHdrs.Set("typ", "JWT")
+	vcSigned, err := jws.Sign(vcPayload, jws.WithKey(jwa.ES256(), issuerJWK, jws.WithProtectedHeaders(vcHdrs)))
+	if err != nil {
+		t.Fatalf("Failed to sign VC: %v", err)
+	}
+
+	// Generate holder key for VP
+	holderPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate holder key: %v", err)
+	}
+	holderDID := ecKeyToDidKey(&holderPriv.PublicKey)
+	holderJWK, _ := jwk.Import(holderPriv)
+
+	// Sign VP
+	vpPayload, _ := json.Marshal(map[string]interface{}{
+		"iss": holderDID,
+		"sub": holderDID,
+		"vp": map[string]interface{}{
+			"@context":             []string{"https://www.w3.org/2018/credentials/v1"},
+			"type":                 []string{"VerifiablePresentation"},
+			"verifiableCredential": []string{string(vcSigned)},
+			"holder":               holderDID,
+		},
+	})
+	vpHdrs := jws.NewHeaders()
+	vpHdrs.Set(jws.KeyIDKey, holderDID)
+	vpHdrs.Set(jws.AlgorithmKey, jwa.ES256())
+	vpHdrs.Set("typ", "JWT")
+	vpSigned, err := jws.Sign(vpPayload, jws.WithKey(jwa.ES256(), holderJWK, jws.WithProtectedHeaders(vpHdrs)))
+	if err != nil {
+		t.Fatalf("Failed to sign VP: %v", err)
+	}
+
+	return string(vpSigned)
 }
 
 func getNoHolderVPToken() string {

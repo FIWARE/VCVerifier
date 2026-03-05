@@ -17,6 +17,7 @@ var ErrorNoKID = errors.New("no_kid_provided")
 var ErrorUnresolvableDid = errors.New("unresolvable_did")
 var ErrorNoVerificationKey = errors.New("no_verification_key")
 var ErrorNotAValidVerficationMethod = errors.New("not_a_valid_verfication_method")
+var ErrorNoOriginalCredential = errors.New("no_original_credential_for_validation")
 
 const RsaVerificationKey2018 = "RsaVerificationKey2018"
 const Ed25519VerificationKey2018 = "Ed25519VerificationKey2018"
@@ -111,7 +112,7 @@ func (tbv TrustBlocValidator) ValidateVC(verifiableCredential *common.Credential
 		tbCred, ok := verifiableCredential.OriginalVC().(*verifiable.Credential)
 		if !ok || tbCred == nil {
 			logging.Log().Warn("No original trustbloc credential available for validation.")
-			return false, errors.New("no_original_credential_for_validation")
+			return false, ErrorNoOriginalCredential
 		}
 		switch tbv.validationMode {
 		case "combined":
