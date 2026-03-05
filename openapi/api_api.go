@@ -235,7 +235,7 @@ func AuthorizationEndpoint(c *gin.Context) {
 }
 
 func buildFrontendV2Address(protocol, host, state, clientId, redirectUri, scope, nonce string) string {
-	logging.Log().Warn(fmt.Sprintf("%s://%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, state, clientId, redirectUri, scope, nonce))
+	logging.Log().Debugf("%s://%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, state, clientId, redirectUri, scope, nonce)
 	return fmt.Sprintf("%s://%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, state, clientId, redirectUri, scope, nonce)
 }
 
