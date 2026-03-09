@@ -327,7 +327,7 @@ func verifiyVPToken(c *gin.Context, vpToken string, clientId string, scopes []st
 		c.AbortWithStatusJSON(http.StatusBadRequest, err)
 		return
 	}
-	response := TokenResponse{TokenType: "Bearer", IssuedTokenType: common.TYPE_ACCESS_TOKEN, ExpiresIn: float32(expiration), AccessToken: signedToken, Scope: strings.Join(scopes, ",")}
+	response := TokenResponse{TokenType: "Bearer", IssuedTokenType: common.TYPE_ACCESS_TOKEN, ExpiresIn: float32(expiration), IdToken: signedToken, AccessToken: signedToken, Scope: strings.Join(scopes, ",")}
 	logging.Log().Infof("Generated and signed token: %v", response)
 	c.JSON(http.StatusOK, response)
 }
@@ -349,7 +349,7 @@ func handleTokenTypeCode(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), AccessToken: jwt})
+		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt})
 		return
 	}
 	if assertionTypeExists {
@@ -444,7 +444,7 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), AccessToken: jwt})
+	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt})
 }
 
 // StartSIOPSameDevice - Starts the siop flow for credentials hold by the same device
