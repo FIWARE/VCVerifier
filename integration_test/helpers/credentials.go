@@ -147,6 +147,49 @@ func CreateVPWithSDJWT(holder *TestIdentity, nonce string, audience string, sdJW
 	return CreateVPToken(holder, nonce, audience, sdJWTs...)
 }
 
+// CreateVPTokenWithMismatchedSigner creates a VP JWT where the issuer/holder DID
+// comes from claimedHolder, but the JWT is actually signed by actualSigner's key.
+// This produces a VP whose signature cannot be verified against the claimed holder's public key.
+func CreateVPTokenWithMismatchedSigner(claimedHolder, actualSigner *TestIdentity, nonce string, audience string, vcJWTs ...string) (string, error) {
+	now := time.Now()
+
+	vpClaim := map[string]interface{}{
+		"@context":             []string{"https://www.w3.org/2018/credentials/v1"},
+		"type":                 "VerifiablePresentation",
+		"holder":               claimedHolder.DID,
+		"verifiableCredential": vcJWTs,
+	}
+
+	builder := jwt.NewBuilder().
+		Issuer(claimedHolder.DID).
+		Audience([]string{audience}).
+		IssuedAt(now).
+		Expiration(now.Add(5 * time.Minute))
+
+	if nonce != "" {
+		builder.Claim("nonce", nonce)
+	}
+	builder.Claim("vp", vpClaim)
+
+	token, err := builder.Build()
+	if err != nil {
+		return "", fmt.Errorf("building mismatched VP token: %w", err)
+	}
+
+	// Sign with actualSigner's key but use claimedHolder's kid in the header.
+	headers := jws.NewHeaders()
+	if err := headers.Set(jws.KeyIDKey, claimedHolder.KeyID); err != nil {
+		return "", fmt.Errorf("setting kid header: %w", err)
+	}
+
+	signed, err := jwt.Sign(token, jwt.WithKey(jwa.ES256(), actualSigner.PrivateKey, jws.WithProtectedHeaders(headers)))
+	if err != nil {
+		return "", fmt.Errorf("signing mismatched VP: %w", err)
+	}
+
+	return string(signed), nil
+}
+
 // CreateDCQLResponse builds the JSON-encoded vp_token value for a DCQL response.
 // The queryResponses map keys are DCQL credential query IDs and values are VP JWT strings.
 func CreateDCQLResponse(queryResponses map[string]string) (string, error) {
