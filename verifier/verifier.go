@@ -23,6 +23,7 @@ import (
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
+	"github.com/google/uuid"
 	"github.com/trustbloc/vc-go/verifiable"
 
 	logging "github.com/fiware/VCVerifier/logging"
@@ -644,7 +645,7 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 		logging.Log().Warnf("No valid credential type was provided. Provided credential type: %v", vcTypes)
 		return 0, "", ErrorNoValidCredentialTypeProvided
 	}
-	token, err := v.generateJWT(credentialsToBeIncluded, holder, audience, flatClaims)
+	token, err := v.generateJWT(credentialsToBeIncluded, holder, audience, flatClaims, uuid.NewString())
 	if err != nil {
 		logging.Log().Warnf("Was not able to create the token. Err: %v", err)
 		return 0, "", err
@@ -873,9 +874,6 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		}
 	}
 
-	// we ignore the error here, since the only consequence is that sub will be empty.
-	hostname, _ := getHostName(loginSession.callback)
-
 	if len(credentialsToBeIncluded) == 0 {
 		vcTypes := []string{}
 		for k := range credentialsByType {
@@ -885,7 +883,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		return sameDevice, ErrorNoValidCredentialTypeProvided
 	}
 
-	token, err := v.generateJWT(credentialsToBeIncluded, verifiablePresentation.Holder, hostname, flatClaims)
+	token, err := v.generateJWT(credentialsToBeIncluded, verifiablePresentation.Holder, loginSession.clientId, flatClaims, loginSession.nonce)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)
 		return sameDevice, err
@@ -1159,7 +1157,7 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 }
 
 // generate a jwt, containing the credential and mandatory information as defined by the dsba-convergence
-func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, holder string, audience string, flatValues bool) (generatedJwt jwt.Token, err error) {
+func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, holder string, audience string, flatValues bool, nonce string) (generatedJwt jwt.Token, err error) {
 
 	jwtBuilder := jwt.NewBuilder().Issuer(v.GetHost()).Audience([]string{audience}).Expiration(v.clock.Now().Add(v.jwtExpiration))
 
@@ -1173,6 +1171,10 @@ func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, h
 		jwtBuilder.Claim("verifiablePresentation", credentials)
 	} else {
 		jwtBuilder.Claim("verifiableCredential", credentials[0])
+	}
+
+	if nonce != "" {
+		jwtBuilder.Claim("nonce", nonce)
 	}
 
 	token, err := jwtBuilder.Build()
