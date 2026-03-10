@@ -80,6 +80,13 @@ type CredentialConfig struct {
 	TrustedIssuersLists  []string
 	HolderVerification   *HolderVerificationConfig
 	TrustedParticipants  []TrustedParticipantsListConfig
+	JwtInclusion         *JwtInclusionConfig
+}
+
+// JwtInclusionConfig defines JWT inclusion settings for a credential type.
+type JwtInclusionConfig struct {
+	Enabled       bool
+	FullInclusion bool
 }
 
 // HolderVerificationConfig defines holder verification settings.
@@ -147,6 +154,22 @@ func (cb *ConfigBuilder) WithHolderVerification(serviceID, scope, credType, clai
 			sc.Credentials[i].HolderVerification = &HolderVerificationConfig{
 				Enabled: true,
 				Claim:   claim,
+			}
+			return cb
+		}
+	}
+	return cb
+}
+
+// WithJwtInclusion enables JWT inclusion for a credential type in a scope.
+func (cb *ConfigBuilder) WithJwtInclusion(serviceID, scope, credType string, fullInclusion bool) *ConfigBuilder {
+	svc := cb.ensureService(serviceID)
+	sc := cb.ensureScope(svc, scope)
+	for i := range sc.Credentials {
+		if sc.Credentials[i].Type == credType {
+			sc.Credentials[i].JwtInclusion = &JwtInclusionConfig{
+				Enabled:       true,
+				FullInclusion: fullInclusion,
 			}
 			return cb
 		}
@@ -284,6 +307,12 @@ func (cb *ConfigBuilder) writeCredential(b *strings.Builder, cred *CredentialCon
 		if cred.HolderVerification.Claim != "" {
 			b.WriteString(fmt.Sprintf("                claim: \"%s\"\n", cred.HolderVerification.Claim))
 		}
+	}
+
+	if cred.JwtInclusion != nil {
+		b.WriteString("              jwtInclusion:\n")
+		b.WriteString(fmt.Sprintf("                enabled: %t\n", cred.JwtInclusion.Enabled))
+		b.WriteString(fmt.Sprintf("                fullInclusion: %t\n", cred.JwtInclusion.FullInclusion))
 	}
 }
 

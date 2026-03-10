@@ -76,7 +76,12 @@ func BuildIssuerAttribute(credentialType string, claims []TIRClaim) IssuerAttrib
 //   - GET /v3/issuers/<did> — same as v4 (fallback path)
 func NewMockTIR(issuers map[string]TrustedIssuer) *httptest.Server {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
+		// Use RawPath to preserve percent-encoding in DIDs (e.g., did:web:host%3Aport).
+		// RawPath is set when the path contains percent-encoded characters; otherwise fall back to Path.
+		path := r.URL.RawPath
+		if path == "" {
+			path = r.URL.Path
+		}
 
 		// Handle v4/issuers/<did> and v3/issuers/<did>
 		var did string

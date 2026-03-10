@@ -117,6 +117,8 @@ func CreateSDJWT(issuer *TestIdentity, vct string, claims map[string]interface{}
 		IssuedAt(now).
 		Expiration(now.Add(24 * time.Hour))
 	builder.Claim("vct", vct)
+	// _sd_alg is required by the verifier's SD-JWT parser even when no claims use selective disclosure.
+	builder.Claim("_sd_alg", "sha-256")
 
 	for k, v := range claims {
 		builder.Claim(k, v)

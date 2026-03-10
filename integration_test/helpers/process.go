@@ -54,7 +54,8 @@ func BuildVerifier(projectRoot string) (binaryPath string, err error) {
 
 // StartVerifier launches a VCVerifier process with the given YAML config and waits until it is healthy.
 // projectRoot is needed so the binary can find view templates via relative paths.
-func StartVerifier(configYAML string, projectRoot string, binaryPath string) (*VerifierProcess, error) {
+// Optional extraEnv entries are added to the process environment (e.g., "SSL_CERT_FILE=/path/to/ca.pem").
+func StartVerifier(configYAML string, projectRoot string, binaryPath string, extraEnv ...string) (*VerifierProcess, error) {
 	configDir, err := os.MkdirTemp("", "vcverifier-config-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating config temp dir: %w", err)
@@ -79,6 +80,7 @@ func StartVerifier(configYAML string, projectRoot string, binaryPath string) (*V
 		"CONFIG_FILE="+configPath,
 		"GIN_MODE=release",
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
