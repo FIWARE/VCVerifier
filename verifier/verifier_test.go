@@ -1396,7 +1396,7 @@ func TestGenerateJWT(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
-			token, err := v.generateJWT(tc.credentials, tc.holder, tc.audience, tc.flat)
+			token, err := v.generateJWT(tc.credentials, tc.holder, tc.audience, tc.flat, "nonce")
 			if err != nil {
 				t.Fatalf("unexpected error building jwt: %v", err)
 			}
