@@ -2,6 +2,8 @@ package verifier
 
 import (
 	"testing"
+
+	common "github.com/fiware/VCVerifier/common"
 )
 
 func TestGetKeyFromMethod(t *testing.T) {
@@ -121,5 +123,104 @@ func TestCompareVerificationMethod(t *testing.T) {
 				t.Errorf("Expected result %v, but got %v", tc.expectedResult, result)
 			}
 		})
+	}
+}
+
+func TestValidationService_NoneMode(t *testing.T) {
+	// Test that a CredentialValidator with mode "none" always passes, regardless of credential content.
+	var validator ValidationService = CredentialValidator{validationMode: ValidationModeNone}
+
+	credential, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:web:example.com"},
+		Types:  []string{"VerifiableCredential"},
+		Subject: []common.Subject{
+			{CustomFields: map[string]interface{}{"name": "test"}},
+		},
+	}, common.CustomFields{})
+
+	result, err := validator.ValidateVC(credential, nil)
+	if !result {
+		t.Error("Expected true for none mode")
+	}
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestValidationService_NonNoneModeRejectsInvalid(t *testing.T) {
+	// Test that non-"none" validation modes reject credentials that lack required fields.
+
+	// Create a credential with no issuer
+	credential, _ := common.CreateCredential(common.CredentialContents{
+		Types: []string{"VerifiableCredential"},
+		Subject: []common.Subject{
+			{CustomFields: map[string]interface{}{"name": "test"}},
+		},
+	}, common.CustomFields{})
+
+	for _, mode := range []string{ValidationModeCombined, ValidationModeJsonLd} {
+		t.Run(mode, func(t *testing.T) {
+			var validator ValidationService = CredentialValidator{validationMode: mode}
+			result, err := validator.ValidateVC(credential, nil)
+			if result {
+				t.Errorf("Expected false for %s mode with missing issuer", mode)
+			}
+			if err == nil {
+				t.Errorf("Expected error for %s mode with missing issuer", mode)
+			}
+		})
+	}
+}
+
+func TestValidationService_BaseContextRejectsCustomTypes(t *testing.T) {
+	credential, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:web:example.com"},
+		Types:  []string{"VerifiableCredential", "CustomType"},
+		Subject: []common.Subject{
+			{CustomFields: map[string]interface{}{"name": "test"}},
+		},
+	}, common.CustomFields{})
+
+	var validator ValidationService = CredentialValidator{validationMode: ValidationModeBaseContext}
+	result, err := validator.ValidateVC(credential, nil)
+	if result {
+		t.Error("Expected false for baseContext mode with custom type")
+	}
+	if err == nil {
+		t.Error("Expected error for baseContext mode with custom type")
+	}
+}
+
+func TestValidationService_CombinedAcceptsValid(t *testing.T) {
+	credential, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:web:example.com"},
+		Types:  []string{"VerifiableCredential"},
+		Subject: []common.Subject{
+			{CustomFields: map[string]interface{}{"name": "test"}},
+		},
+	}, common.CustomFields{})
+
+	var validator ValidationService = CredentialValidator{validationMode: ValidationModeCombined}
+	result, err := validator.ValidateVC(credential, nil)
+	if !result {
+		t.Error("Expected true for combined mode with valid credential")
+	}
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestSupportedModes(t *testing.T) {
+	// Verify that all documented modes are present in SupportedModes.
+	expected := map[string]bool{ValidationModeNone: false, ValidationModeCombined: false, ValidationModeJsonLd: false, ValidationModeBaseContext: false}
+	for _, m := range SupportedModes {
+		if _, ok := expected[m]; ok {
+			expected[m] = true
+		}
+	}
+	for mode, found := range expected {
+		if !found {
+			t.Errorf("Expected mode %q in SupportedModes", mode)
+		}
 	}
 }

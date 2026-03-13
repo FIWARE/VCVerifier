@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	utiltime "github.com/trustbloc/did-go/doc/util/time"
-	"github.com/trustbloc/vc-go/verifiable"
 
 	"encoding/json"
 
@@ -454,7 +452,7 @@ type mockExternalSsiKit struct {
 	verificationError   error
 }
 
-func (msk *mockExternalSsiKit) ValidateVC(verifiableCredential *verifiable.Credential, verificationContext ValidationContext) (result bool, err error) {
+func (msk *mockExternalSsiKit) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error) {
 	if msk.verificationError != nil {
 		return result, msk.verificationError
 	}
@@ -490,7 +488,7 @@ type authTest struct {
 	testName           string
 	sameDevice         bool
 	testState          string
-	testVP             verifiable.Presentation
+	testVP             common.Presentation
 	testHolder         string
 	testSession        loginSession
 	requestedState     string
@@ -595,20 +593,20 @@ func verifySameDevice(t *testing.T, sdr Response, tokenCache mockTokenCache, tc 
 	}
 }
 
-func getVP(ids []string) verifiable.Presentation {
-	credentials := []*verifiable.Credential{}
+func getVP(ids []string) common.Presentation {
+	credentials := []*common.Credential{}
 	for _, id := range ids {
 		credentials = append(credentials, getVC(id))
 	}
-	vp, _ := verifiable.NewPresentation(verifiable.WithCredentials(credentials...))
+	vp, _ := common.NewPresentation(common.WithCredentials(credentials...))
 	return *vp
 }
 
-func getVC(id string) *verifiable.Credential {
+func getVC(id string) *common.Credential {
 
-	timeWrapper, _ := utiltime.ParseTimeWrapper("2022-11-23T15:23:13Z")
-	vc, _ := verifiable.CreateCredential(
-		verifiable.CredentialContents{
+	testTime, _ := time.Parse(time.RFC3339, "2022-11-23T15:23:13Z")
+	vc, _ := common.CreateCredential(
+		common.CredentialContents{
 			Context: []string{
 				"https://www.w3.org/2018/credentials/v1",
 				"https://happypets.fiware.io/2022/credentials/employee/v1",
@@ -618,10 +616,10 @@ func getVC(id string) *verifiable.Credential {
 				"VerifiableCredential",
 				"CustomerCredential",
 			},
-			Issuer:  &verifiable.Issuer{ID: "did:key:verifier"},
-			Issued:  timeWrapper,
-			Expired: timeWrapper,
-			Subject: []verifiable.Subject{
+			Issuer:     &common.Issuer{ID: "did:key:verifier"},
+			ValidFrom:  &testTime,
+			ValidUntil: &testTime,
+			Subject: []common.Subject{
 				{
 					ID: id,
 					CustomFields: map[string]interface{}{
@@ -631,7 +629,7 @@ func getVC(id string) *verifiable.Credential {
 				},
 			},
 		},
-		verifiable.CustomFields{},
+		common.CustomFields{},
 	)
 
 	return vc
@@ -1126,28 +1124,28 @@ func TestSetValueAtPath(t *testing.T) {
 func TestExtractCredentialTypes(t *testing.T) {
 	type test struct {
 		testName                  string
-		presentation              *verifiable.Presentation
-		expectedCredentialsByType map[string][]*verifiable.Credential
+		presentation              *common.Presentation
+		expectedCredentialsByType map[string][]*common.Credential
 		expectedCredentialTypes   []string
 	}
 
-	vc1, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+	vc1, _ := common.CreateCredential(common.CredentialContents{
 		ID:    "vc1",
 		Types: []string{"type1", "typeA"},
-	}, verifiable.CustomFields{})
-	vc2, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+	}, common.CustomFields{})
+	vc2, _ := common.CreateCredential(common.CredentialContents{
 		ID:    "vc2",
 		Types: []string{"type2", "typeB"},
-	}, verifiable.CustomFields{})
-	vp1, _ := verifiable.NewPresentation(verifiable.WithCredentials(vc1))
-	vp2, _ := verifiable.NewPresentation(verifiable.WithCredentials(vc1, vc2))
-	vp3, _ := verifiable.NewPresentation()
+	}, common.CustomFields{})
+	vp1, _ := common.NewPresentation(common.WithCredentials(vc1))
+	vp2, _ := common.NewPresentation(common.WithCredentials(vc1, vc2))
+	vp3, _ := common.NewPresentation()
 
 	tests := []test{
 		{
 			testName:     "Presentation with one credential",
 			presentation: vp1,
-			expectedCredentialsByType: map[string][]*verifiable.Credential{
+			expectedCredentialsByType: map[string][]*common.Credential{
 				"type1": {vc1},
 				"typeA": {vc1},
 			},
@@ -1156,7 +1154,7 @@ func TestExtractCredentialTypes(t *testing.T) {
 		{
 			testName:     "Presentation with multiple credentials",
 			presentation: vp2,
-			expectedCredentialsByType: map[string][]*verifiable.Credential{
+			expectedCredentialsByType: map[string][]*common.Credential{
 				"type1": {vc1},
 				"typeA": {vc1},
 				"type2": {vc2},
@@ -1167,7 +1165,7 @@ func TestExtractCredentialTypes(t *testing.T) {
 		{
 			testName:                  "Empty presentation",
 			presentation:              vp3,
-			expectedCredentialsByType: map[string][]*verifiable.Credential{},
+			expectedCredentialsByType: map[string][]*common.Credential{},
 			expectedCredentialTypes:   []string{},
 		},
 	}
@@ -1212,7 +1210,7 @@ func TestGenerateToken(t *testing.T) {
 		subject            string
 		audience           string
 		scopes             []string
-		presentation       *verifiable.Presentation
+		presentation       *common.Presentation
 		credentialScopes   map[string]map[string]configModel.ScopeEntry
 		configError        error
 		mockTokenSignError error
@@ -1220,12 +1218,12 @@ func TestGenerateToken(t *testing.T) {
 	}
 
 	testKey := getECDSAKey()
-	emptyPresentation, _ := verifiable.NewPresentation()
-	vc1, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+	emptyPresentation, _ := common.NewPresentation()
+	vc1, _ := common.CreateCredential(common.CredentialContents{
 		ID:    "vc1",
 		Types: []string{"type1", "typeA"},
-	}, verifiable.CustomFields{})
-	invalidPresentation, _ := verifiable.NewPresentation(verifiable.WithCredentials(vc1))
+	}, common.CustomFields{})
+	invalidPresentation, _ := common.NewPresentation(common.WithCredentials(vc1))
 
 	tests := []test{
 		{

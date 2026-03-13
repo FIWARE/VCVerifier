@@ -3,15 +3,15 @@ package verifier
 import (
 	"testing"
 
+	common "github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 func TestValidateVC(t *testing.T) {
 
 	type test struct {
 		testName            string
-		credentialToVerifiy verifiable.Credential
+		credentialToVerifiy common.Credential
 		validationContext   ValidationContext
 		expectedResult      bool
 	}
@@ -37,27 +37,27 @@ func TestValidateVC(t *testing.T) {
 	}
 }
 
-func getCredentialWithHolder(holderClaim, holder string) verifiable.Credential {
-	vc, _ := verifiable.CreateCredential(verifiable.CredentialContents{
-		Issuer: &verifiable.Issuer{ID: "did:test:issuer"},
+func getCredentialWithHolder(holderClaim, holder string) common.Credential {
+	vc, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:test:issuer"},
 		Types:  []string{"VerifiableCredential"},
-		Subject: []verifiable.Subject{
+		Subject: []common.Subject{
 			{
 				CustomFields: map[string]interface{}{holderClaim: holder},
 			},
-		}}, verifiable.CustomFields{})
+		}}, common.CustomFields{})
 	return *vc
 }
 
-func getCredentialWithHolderInSubelement(holder string) verifiable.Credential {
+func getCredentialWithHolderInSubelement(holder string) common.Credential {
 
-	vc, _ := verifiable.CreateCredential(verifiable.CredentialContents{
-		Issuer: &verifiable.Issuer{ID: "did:test:issuer"},
+	vc, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: "did:test:issuer"},
 		Types:  []string{"VerifiableCredential"},
-		Subject: []verifiable.Subject{
+		Subject: []common.Subject{
 			{
 				CustomFields: map[string]interface{}{"sub": map[string]interface{}{"holder": holder}},
 			},
-		}}, verifiable.CustomFields{})
+		}}, common.CustomFields{})
 	return *vc
 }
