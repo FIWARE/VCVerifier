@@ -3,6 +3,7 @@ package helpers
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -47,6 +48,49 @@ func BuildVerifier(projectRoot string) (binaryPath string, err error) {
 	if err := cmd.Run(); err != nil {
 		os.RemoveAll(tmpDir)
 		return "", fmt.Errorf("building verifier binary: %w", err)
+	}
+
+	return binaryPath, nil
+}
+
+// DownloadVerifier downloads a VCVerifier binary from the given URL and places it in a temporary directory.
+// The binary is made executable after download.
+func DownloadVerifier(binaryURL string) (binaryPath string, err error) {
+	tmpDir, err := os.MkdirTemp("", "vcverifier-it-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp dir for binary: %w", err)
+	}
+
+	binaryPath = filepath.Join(tmpDir, "vcverifier")
+
+	resp, err := http.Get(binaryURL) //nolint:gosec // URL is provided by the test operator via env var
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("downloading verifier binary from %s: %w", binaryURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("downloading verifier binary from %s: HTTP %d", binaryURL, resp.StatusCode)
+	}
+
+	outFile, err := os.Create(binaryPath)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("creating binary file: %w", err)
+	}
+
+	if _, err := io.Copy(outFile, resp.Body); err != nil {
+		outFile.Close()
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("writing binary file: %w", err)
+	}
+	outFile.Close()
+
+	if err := os.Chmod(binaryPath, 0755); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("making binary executable: %w", err)
 	}
 
 	return binaryPath, nil

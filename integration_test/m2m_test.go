@@ -43,13 +43,32 @@ func TestMain(m *testing.M) {
 	}
 	projectRoot = filepath.Dir(wd)
 
-	// Build the verifier binary once for all tests.
-	binaryPath, err = helpers.BuildVerifier(projectRoot)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to build verifier: %v\n", err)
-		os.Exit(1)
+	// Resolve the verifier binary: VERIFIER_BINARY (local path), VERIFIER_BINARY_URL (download),
+	// or build from source.
+	needsCleanup := false
+	if path := os.Getenv("VERIFIER_BINARY"); path != "" {
+		binaryPath = path
+		fmt.Fprintf(os.Stderr, "Using pre-built verifier binary: %s\n", binaryPath)
+	} else if binaryURL := os.Getenv("VERIFIER_BINARY_URL"); binaryURL != "" {
+		fmt.Fprintf(os.Stderr, "Downloading verifier binary from: %s\n", binaryURL)
+		binaryPath, err = helpers.DownloadVerifier(binaryURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to download verifier: %v\n", err)
+			os.Exit(1)
+		}
+		needsCleanup = true
+	} else {
+		binaryPath, err = helpers.BuildVerifier(projectRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to build verifier: %v\n", err)
+			os.Exit(1)
+		}
+		needsCleanup = true
 	}
-	defer os.RemoveAll(filepath.Dir(binaryPath))
+
+	if needsCleanup {
+		defer os.RemoveAll(filepath.Dir(binaryPath))
+	}
 
 	os.Exit(m.Run())
 }

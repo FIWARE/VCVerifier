@@ -444,9 +444,25 @@ A black-box integration test suite lives in `integration_test/`. It builds the v
 
 #### Running
 
+By default, the test suite builds the verifier binary from source. You can override this with environment variables to test a pre-built binary instead:
+
+| Environment Variable | Description |
+|----------------------|-------------|
+| `VERIFIER_BINARY` | Path to a local pre-built verifier binary |
+| `VERIFIER_BINARY_URL` | URL to download a verifier binary from (made executable automatically) |
+
+If both are set, `VERIFIER_BINARY` takes precedence.
+
 ```shell
-# All integration tests
+# All integration tests (builds from source)
 cd integration_test && go test -tags integration -v -count=1 ./...
+
+# Test a pre-built local binary
+VERIFIER_BINARY=/path/to/vcverifier go test -tags integration -v -count=1 ./...
+
+# Test a binary downloaded from a URL
+VERIFIER_BINARY_URL=https://example.com/releases/vcverifier-linux-amd64 \
+  go test -tags integration -v -count=1 ./...
 
 # By category
 go test -tags integration -v -count=1 -run TestM2M ./...
