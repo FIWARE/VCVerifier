@@ -23,6 +23,7 @@ import (
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
+	"github.com/google/uuid"
 
 	logging "github.com/fiware/VCVerifier/logging"
 
