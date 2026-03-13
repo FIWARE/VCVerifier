@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/lestrrat-go/jwx/v3/jwk"
-	"github.com/trustbloc/did-go/doc/did"
-	"github.com/trustbloc/did-go/vdr/api"
 )
 
 type KeyResolver interface {
@@ -17,7 +16,7 @@ type KeyResolver interface {
 }
 
 type VdrKeyResolver struct {
-	Vdr []api.VDR
+	Vdr []did.VDR
 }
 
 func (kr *VdrKeyResolver) ResolvePublicKeyFromDID(kid string) (key jwk.Key, err error) {
@@ -36,11 +35,10 @@ func (kr *VdrKeyResolver) ResolvePublicKeyFromDID(kid string) (key jwk.Key, err 
 		combinedKeyId = kid
 	}
 
-	// Use the did:key resolver (or other depending on method)
+	// Resolve using the appropriate VDR
 	var docRes *did.DocResolution
 	for _, vdr := range kr.Vdr {
-		docRes, err = vdr.Read(didID)
-		if err == nil {
+		if docRes, err = vdr.Read(didID); err == nil {
 			break
 		}
 	}
@@ -51,34 +49,18 @@ func (kr *VdrKeyResolver) ResolvePublicKeyFromDID(kid string) (key jwk.Key, err 
 	doc := docRes.DIDDocument
 
 	// Look for the verification method with the matching key ID
-	var vm *did.VerificationMethod
 	for _, v := range doc.VerificationMethod {
 		if v.ID == keyID || v.ID == combinedKeyId {
-			vm = &v
-			break
+			if v.JSONWebKey() != nil {
+				return v.JSONWebKey(), nil
+			}
+			logging.Log().Warnf("Verification method %s has no JWK key.", v.ID)
+			return nil, ErrorInvalidJWT
 		}
 	}
 
-	if vm == nil {
-		logging.Log().Warnf("KeyId %s not found in verification methods. Doc: %v", keyID, logging.PrettyPrintObject(doc))
-		return nil, ErrorInvalidJWT
-	}
-
-	// Serialize trustbloc's JWK to JSON
-	jwkBytes, err := json.Marshal(vm.JSONWebKey())
-	if err != nil {
-		logging.Log().Warnf("Was not able to serialize the jwk. Err: %v", err)
-		return nil, err
-	}
-
-	// Convert to JWK
-	jwkKey, err := jwk.ParseKey(jwkBytes)
-	if err != nil {
-		logging.Log().Warnf("Was not able to deserialize the jwk. Err: %v", err)
-		return nil, err
-	}
-
-	return jwkKey, nil
+	logging.Log().Warnf("KeyId %s not found in verification methods.", keyID)
+	return nil, ErrorInvalidJWT
 }
 
 func (kr *VdrKeyResolver) ExtractKIDFromJWT(tokenString string) (string, error) {
