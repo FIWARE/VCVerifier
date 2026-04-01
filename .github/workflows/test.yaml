@@ -30,10 +30,6 @@ jobs:
         run: |
           go test ./... -v -coverprofile=profile.cov ./...
 
-      - uses: shogo82148/actions-goveralls@v1
-        with:
-          path-to-profile: profile.cov
-
     integration-test:
       runs-on: ubuntu-latest
 
