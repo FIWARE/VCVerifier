@@ -25,6 +25,8 @@ VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer 
 * [API](#api)
     * [Open Issues](#open-issues)
 * [Testing](#testing)
+    * [Unit Tests](#unit-tests)
+    * [Integration Tests](#integration-tests)
 * [License](#license)
 
 ## Background
@@ -427,7 +429,97 @@ The VCVerifier does currently not support all functionalities defined in the con
 
 ## Testing
 
+### Unit Tests
+
 Functionality of the verifier is tested via parameterized Unit-Tests, following golang-bestpractices. In addition, the verifier is integrated into the [VC-Integration-Test](https://github.com/fiware/VC-Integration-Test), involving all components used in a typical, VerifiableCredentials based, scenario.
+
+Run unit tests:
+```shell
+go test ./... -v
+```
+
+### Integration Tests
+
+A black-box integration test suite lives in `integration_test/`. It builds the verifier binary, launches it as a subprocess with generated YAML configs, and interacts purely over HTTP — no internal Go imports from verifier packages. Tests are gated behind the `integration` build tag so they never run during regular `go test ./...`.
+
+#### Running
+
+By default, the test suite builds the verifier binary from source. You can override this with environment variables to test a pre-built binary instead:
+
+| Environment Variable | Description |
+|----------------------|-------------|
+| `VERIFIER_BINARY` | Path to a local pre-built verifier binary |
+| `VERIFIER_BINARY_URL` | URL to download a verifier binary from (made executable automatically) |
+
+If both are set, `VERIFIER_BINARY` takes precedence.
+
+```shell
+# All integration tests (builds from source)
+cd integration_test && go test -tags integration -v -count=1 ./...
+
+# Test a pre-built local binary
+VERIFIER_BINARY=/path/to/vcverifier go test -tags integration -v -count=1 ./...
+
+# Test a binary downloaded from a URL
+VERIFIER_BINARY_URL=https://example.com/releases/vcverifier-linux-amd64 \
+  go test -tags integration -v -count=1 ./...
+
+# By category
+go test -tags integration -v -count=1 -run TestM2M ./...
+go test -tags integration -v -count=1 -run TestFrontendV2 ./...
+go test -tags integration -v -count=1 -run TestDeeplink ./...
+go test -tags integration -v -count=1 -run TestEndpoints ./...
+```
+
+#### Test Categories
+
+| Category | Tests | Description |
+|----------|-------|-------------|
+| M2M Success | 7 | VP-token-to-JWT exchange with JWT-VC, SD-JWT, did:key, did:web, cnf/claim holder verification |
+| M2M Failure | 6 | Rejection of invalid credentials, untrusted issuers, signature mismatches |
+| Frontend V2 | 2 | Cross-device flow with QR code, WebSocket notifications, authorization code exchange |
+| Deeplink | 2 | Same-device flow with openid4vp:// redirects and 302 authentication responses |
+| Endpoints | 8 | JWKS, OpenID configuration, health check, and parameter validation errors |
+
+#### How to Add a New Test
+
+1. **Pick or create a test file.** Each file covers a flow category (e.g., `m2m_test.go`, `deeplink_test.go`). Every file must start with `//go:build integration`.
+
+2. **Create a fixture function** that sets up identities, a mock TIR, a verifier config, and starts the verifier process. Follow the pattern in existing `setup*` functions:
+
+    ```go
+    func setupMyTest(t *testing.T) *myFixture {
+        t.Helper()
+        issuer, _ := helpers.GenerateDidKeyIdentity()
+        tirServer := helpers.NewMockTIR(map[string]helpers.TrustedIssuer{ /* ... */ })
+        port, _ := helpers.GetFreePort()
+        keyPath, _ := helpers.GenerateSigningKeyPEM(t.TempDir())
+        config := helpers.NewConfigBuilder(port, tirServer.URL).
+            WithSigningKey(keyPath).
+            WithService(serviceID, scopeName, "DEEPLINK").
+            WithCredential(serviceID, scopeName, "MyCredential", tirServer.URL).
+            Build()
+        vp, _ := helpers.StartVerifier(config, projectRoot, binaryPath)
+        return &myFixture{verifier: vp, cleanup: func() { vp.Stop(); tirServer.Close() }}
+    }
+    ```
+
+3. **Write the test function.** Use parameterized sub-tests (`t.Run`) when testing multiple variations. Interact with the verifier only via HTTP. Call `defer fixture.cleanup()` to stop the verifier after the test.
+
+4. **Use the helper library** in `integration_test/helpers/`:
+    - `identity.go` — Generate `did:key` and `did:web` identities
+    - `credentials.go` — Create JWT-VC, SD-JWT, VP tokens, and DCQL responses
+    - `config.go` — Fluent `ConfigBuilder` for verifier YAML configs
+    - `process.go` — Build, start, health-poll, and stop the verifier binary
+    - `tir_mock.go` — Mock Trusted Issuers Registry
+    - `did_web_mock.go` — Mock `did:web` TLS server
+
+5. **Run your new test** in isolation first, then as part of the full suite:
+    ```shell
+    cd integration_test
+    go test -tags integration -v -count=1 -run TestMyNewTest ./...
+    go test -tags integration -v -count=1 ./...
+    ```
 
 
 ## License
