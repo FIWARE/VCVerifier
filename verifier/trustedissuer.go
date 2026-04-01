@@ -105,14 +105,14 @@ func isWildcardTil(tilList []string) (isWildcard bool, err error) {
 
 func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, credentials []tir.Credential) (result bool, err error) {
 
-	credentialsConfigMap := map[string]tir.Credential{}
+	credentialsConfigMap := map[string][]tir.Credential{}
 
 	// format for better validation
 	for _, credential := range credentials {
-		credentialsConfigMap[credential.CredentialsType] = credential
+		credentialsConfigMap[credential.CredentialsType] = append(credentialsConfigMap[credential.CredentialsType], credential)
 	}
 
-	// initalize to true, since everything without a specific rule is considered to be allowed
+	// initialize to true, since everything without a specific rule is considered to be allowed
 	var subjectAllowed = true
 
 	// validate that the type(s) is allowed
@@ -134,39 +134,44 @@ func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, cr
 	return true, err
 }
 
-func verifyForType(subjectToVerfiy verifiable.Subject, credentialConfig tir.Credential) (result bool) {
-	for _, claim := range credentialConfig.Claims {
-
-		if claim.Path != "" {
-			validClaim := verifyWithJsonPath(subjectToVerfiy, claim)
-			if validClaim {
-				logging.Log().Debugf("Claim with path %s is valid. Credential Subject %s", claim.Path, logging.PrettyPrintObject(subjectToVerfiy))
-				continue
+// verifyForType returns true if the subject satisfies at least one credential config (OR).
+// Each config is satisfied only if all its claims are valid (AND).
+func verifyForType(subjectToVerify verifiable.Subject, credentialConfig []tir.Credential) bool {
+	for _, config := range credentialConfig {
+		allClaimsValid := true
+		for _, claim := range config.Claims {
+			if claim.Path != "" {
+				if !verifyWithJsonPath(subjectToVerify, claim) {
+					logging.Log().Warnf("Claim with path %s is not valid.", claim.Path)
+					allClaimsValid = false
+					break
+				}
+				logging.Log().Debugf("Claim with path %s is valid. Credential Subject %s", claim.Path, logging.PrettyPrintObject(subjectToVerify))
 			} else {
-				logging.Log().Warnf("Claim with path %s is not valid.", claim.Path)
-				return false
-			}
-		} else {
-			// old name base logic
-			claimValue, exists := subjectToVerfiy.CustomFields[claim.Name]
-			if !exists {
-				logging.Log().Debugf("Restricted claim %s is not part of the subject %s.", claim.Name, logging.PrettyPrintObject(subjectToVerfiy))
-				continue
-			}
-			isAllowed := contains(claim.AllowedValues, claimValue)
-			if !isAllowed {
-				logging.Log().Debugf("The claim value %s is not allowed by the config %s.", logging.PrettyPrintObject(claimValue), logging.PrettyPrintObject(credentialConfig))
-				return false
+				// legacy name-based validation
+				claimValue, exists := subjectToVerify.CustomFields[claim.Name]
+				if !exists {
+					logging.Log().Debugf("Claim %s is not present in subject %s, skipping.", claim.Name, logging.PrettyPrintObject(subjectToVerify))
+					continue
+				}
+				if !contains(claim.AllowedValues, claimValue) {
+					logging.Log().Debugf("Claim value %s is not allowed by config %s.", logging.PrettyPrintObject(claimValue), logging.PrettyPrintObject(credentialConfig))
+					allClaimsValid = false
+					break
+				}
 			}
 		}
-
+		if allClaimsValid {
+			logging.Log().Debugf("No forbidden claim found for subject %s. Checked config was %s.", logging.PrettyPrintObject(subjectToVerify), logging.PrettyPrintObject(credentialConfig))
+			return true
+		}
 	}
-	logging.Log().Debugf("No forbidden claim found for subject %s. Checked config was %s.", logging.PrettyPrintObject(subjectToVerfiy), logging.PrettyPrintObject(credentialConfig))
-	return true
+	logging.Log().Debugf("No credential config matched for subject %s. Config: %s.", logging.PrettyPrintObject(subjectToVerify), logging.PrettyPrintObject(credentialConfig))
+	return false
 }
 
-func verifyWithJsonPath(subjectToVerfiy verifiable.Subject, claim tir.Claim) (result bool) {
-	jsonSubject, _ := json.Marshal(subjectToVerfiy.CustomFields)
+func verifyWithJsonPath(subjectToVerify verifiable.Subject, claim tir.Claim) (result bool) {
+	jsonSubject, _ := json.Marshal(subjectToVerify.CustomFields)
 	var subjectAsMap map[string]interface{}
 	if err := json.Unmarshal(jsonSubject, &subjectAsMap); err != nil {
 		logging.Log().Warnf("Was not able to unmarshal the subject, set to invalid. Err: %v", err)
@@ -194,7 +199,7 @@ func toSliceOfMaps(raw []interface{}) []map[string]interface{} {
 	for _, item := range raw {
 		m, ok := item.(map[string]interface{})
 		if !ok {
-			logging.Log().Warnf("Was not able to convert the allowed values, dont allow anything. V: %v", item)
+			logging.Log().Warnf("Was not able to convert the allowed values, don't allow anything. V: %v", item)
 			return []map[string]interface{}{}
 		}
 		result = append(result, m)
@@ -241,7 +246,7 @@ func contains(interfaces []interface{}, interfaceToCheck interface{}) bool {
 	for _, i := range interfaces {
 		jsonBytes, err := json.Marshal(i)
 		if err != nil {
-			logging.Log().Warn("Not able to marshal one of the intefaces.")
+			logging.Log().Warn("Not able to marshal one of the interfaces.")
 			continue
 		}
 		if slices.Compare(jsonBytes, jsonBytesToCheck) == 0 {
