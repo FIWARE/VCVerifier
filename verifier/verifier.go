@@ -24,7 +24,6 @@ import (
 	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/google/uuid"
-	"github.com/trustbloc/vc-go/verifiable"
 
 	logging "github.com/fiware/VCVerifier/logging"
 
@@ -96,8 +95,8 @@ type Verifier interface {
 	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
 	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error)
 	GetJWKS() jwk.Set
-	AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice Response, err error)
-	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *verifiable.Presentation) (int64, string, error)
+	AuthenticationResponse(state string, verifiablePresentation *common.Presentation) (sameDevice Response, err error)
+	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *common.Presentation) (int64, string, error)
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
 	GetRequestObject(state string) (jwt string, err error)
 	GetHost() string
@@ -107,10 +106,10 @@ type Verifier interface {
 
 type ValidationService interface {
 	// Validates the given VC. FIXME Currently a positiv result is returned even when no policy was checked
-	ValidateVC(verifiableCredential *verifiable.Credential, verificationContext ValidationContext) (result bool, err error)
+	ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error)
 }
 
-// implementation of the verifier, using trustbloc and gaia-x compliance issuers registry as a validation backends.
+// CredentialVerifier implements the Verifier interface using gaia-x compliance issuers registry as a validation backend.
 type CredentialVerifier struct {
 	// host of the verifier
 	host string
@@ -291,7 +290,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 	sessionCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 	tokenCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 
-	credentialsVerifier := TrustBlocValidator{validationMode: config.Verifier.ValidationMode}
+	credentialsVerifier := CredentialValidator{validationMode: config.Verifier.ValidationMode}
 
 	externalGaiaXValidator := InitGaiaXRegistryValidationService(verifierConfig)
 
@@ -528,18 +527,18 @@ func (v *CredentialVerifier) GetJWKS() jwk.Set {
 	return jwks
 }
 
-func extractCredentialTypes(verifiablePresentation *verifiable.Presentation) (credentialsByType map[string][]*verifiable.Credential, credentialTypes []string) {
+func extractCredentialTypes(verifiablePresentation *common.Presentation) (credentialsByType map[string][]*common.Credential, credentialTypes []string) {
 
 	js, _ := verifiablePresentation.MarshalJSON()
 	logging.Log().Debugf("Presentation %s", js)
-	credentialsByType = map[string][]*verifiable.Credential{}
+	credentialsByType = map[string][]*common.Credential{}
 	credentialTypes = []string{}
 	for _, vc := range verifiablePresentation.Credentials() {
 		logging.Log().Debugf("Contained credential %s", logging.PrettyPrintObject(vc))
 		logging.Log().Debugf("Contained credential contents %s", logging.PrettyPrintObject(vc.Contents()))
 		for _, credentialType := range vc.Contents().Types {
 			if _, ok := credentialsByType[credentialType]; !ok {
-				credentialsByType[credentialType] = []*verifiable.Credential{}
+				credentialsByType[credentialType] = []*common.Credential{}
 			}
 			credentialsByType[credentialType] = append(credentialsByType[credentialType], vc)
 		}
@@ -548,10 +547,10 @@ func extractCredentialTypes(verifiablePresentation *verifiable.Presentation) (cr
 	return
 }
 
-func getCredentialsNeededForScope(verificationContext TrustRegistriesValidationContext, credentialsByType map[string][]*verifiable.Credential) []*verifiable.Credential {
+func getCredentialsNeededForScope(verificationContext TrustRegistriesValidationContext, credentialsByType map[string][]*common.Credential) []*common.Credential {
 	credentialTypesNeededForScope := verificationContext.GetRequiredCredentialTypes()
-	credentialsNeededForScope := []*verifiable.Credential{}
-	seen := make(map[*verifiable.Credential]bool)
+	credentialsNeededForScope := []*common.Credential{}
+	seen := make(map[*common.Credential]bool)
 	// prevent duplicate checks
 	for _, credentialType := range credentialTypesNeededForScope {
 		if cred, ok := credentialsByType[credentialType]; ok {
@@ -566,7 +565,7 @@ func getCredentialsNeededForScope(verificationContext TrustRegistriesValidationC
 	return credentialsNeededForScope
 }
 
-func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, scopes []string, verifiablePresentation *verifiable.Presentation) (int64, string, error) {
+func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, scopes []string, verifiablePresentation *common.Presentation) (int64, string, error) {
 	// collect all submitted credential types
 	credentialsByType, credentialTypes := extractCredentialTypes(verifiablePresentation)
 
@@ -675,7 +674,7 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	return expiration, string(tokenBytes), nil
 }
 
-func buildInclusion(credential *verifiable.Credential, inclusionConfig configModel.JwtInclusion) (inclusion map[string]interface{}) {
+func buildInclusion(credential *common.Credential, inclusionConfig configModel.JwtInclusion) (inclusion map[string]interface{}) {
 	if inclusionConfig.FullInclusion {
 		logging.Log().Debugf("Include the full credential: %s", logging.PrettyPrintObject(credential))
 		return credential.ToRawJSON()
@@ -821,7 +820,7 @@ func appendPath(host string, path string) string {
 * Receive credentials and verify them in the context of an already present login-session. Will return either an error if failed, a sameDevice response to be used for
 * redirection or notify the original initiator(in case of a cross-device flow)
 **/
-func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePresentation *verifiable.Presentation) (sameDevice Response, err error) {
+func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePresentation *common.Presentation) (sameDevice Response, err error) {
 
 	logging.Log().Debugf("Authenticate presentation %v for session %s", logging.PrettyPrintObject(verifiablePresentation), state)
 
@@ -909,7 +908,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 }
 
 // returns the subject for all gaia-x compliancy credentials
-func (v *CredentialVerifier) getComplianceSubjects(presentation *verifiable.Presentation) (complianceSubjects []ComplianceSubject) {
+func (v *CredentialVerifier) getComplianceSubjects(presentation *common.Presentation) (complianceSubjects []ComplianceSubject) {
 	for _, credential := range presentation.Credentials() {
 		subject := credential.ToRawJSON()["credentialSubject"]
 		switch typedSubject := subject.(type) {
@@ -939,7 +938,7 @@ func toComplianceSubject(theMap map[string]interface{}) ComplianceSubject {
 	}
 }
 
-func (v *CredentialVerifier) getComplianceValidationContext(clientId string, scope string, credential *verifiable.Credential, presentation *verifiable.Presentation) (complianceContext []ComplianceValidationContext, err error) {
+func (v *CredentialVerifier) getComplianceValidationContext(clientId string, scope string, credential *common.Credential, presentation *common.Presentation) (complianceContext []ComplianceValidationContext, err error) {
 	credentialTypes := []string{}
 	credentialTypes = append(credentialTypes, credential.Contents().Types...)
 
@@ -1054,15 +1053,15 @@ func (v *CredentialVerifier) getTrustRegistriesValidationContextFromScope(client
 }
 
 // TODO Use more generic approach to validate that every credential is issued by a party that we trust
-func verifyChain(vcs []*verifiable.Credential) (bool, error) {
+func verifyChain(vcs []*common.Credential) (bool, error) {
 	if len(vcs) != 3 {
 		// TODO Simplification to be removed/replaced
 		return false, nil
 	}
 
-	var legalEntity *verifiable.Credential
-	var naturalEntity *verifiable.Credential
-	var compliance *verifiable.Credential
+	var legalEntity *common.Credential
+	var naturalEntity *common.Credential
+	var compliance *common.Credential
 	for _, vc := range vcs {
 		types := vc.Contents().Types
 		if slices.Contains(types, "gx:LegalParticipant") {
