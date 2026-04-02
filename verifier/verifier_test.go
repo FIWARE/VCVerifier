@@ -485,20 +485,22 @@ func (mhc mockHttpClient) PostForm(url string, data url.Values) (r *http.Respons
 }
 
 type authTest struct {
-	testName           string
-	sameDevice         bool
-	testState          string
-	testVP             common.Presentation
-	testHolder         string
-	testSession        loginSession
-	requestedState     string
-	callbackError      error
-	verificationResult []bool
-	verificationError  error
-	expectedResponse   Response
-	expectedCallback   *url.URL
-	expectedError      error
-	tokenCacheError    error
+	testName              string
+	sameDevice            bool
+	testState             string
+	testVP                common.Presentation
+	testHolder            string
+	testSession           loginSession
+	requestedState        string
+	callbackError         error
+	verificationResult    []bool
+	verificationError     error
+	expectedResponse      Response
+	expectedCallback      *url.URL
+	expectedError         error
+	tokenCacheError       error
+	numValidationServices int
+	verifyToken           func(t *testing.T, tok jwt.Token)
 }
 
 func TestAuthenticationResponse(t *testing.T) {
