@@ -6,8 +6,8 @@ import (
 	"errors"
 
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
+	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 const (
@@ -23,7 +23,7 @@ type ComplianceValidationContext struct {
 type ComplianceValidationService struct{}
 
 // check that the given credential is refernced by one of the compliance-credentials and that the signature of the compliance credential matches the given credential
-func (cvs *ComplianceValidationService) ValidateVC(verifiableCredential *verifiable.Credential, validationContext ValidationContext) (result bool, err error) {
+func (cvs *ComplianceValidationService) ValidateVC(verifiableCredential *common.Credential, validationContext ValidationContext) (result bool, err error) {
 	logging.Log().Debugf("Validate compliance for %s", logging.PrettyPrintObject(verifiableCredential))
 	defer func() {
 		if recErr := recover(); recErr != nil {

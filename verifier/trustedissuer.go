@@ -6,10 +6,10 @@ import (
 	"errors"
 
 	"github.com/PaesslerAG/jsonpath"
+	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/google/go-cmp/cmp"
-	"github.com/trustbloc/vc-go/verifiable"
 	"golang.org/x/exp/slices"
 )
 
@@ -28,7 +28,7 @@ type TrustedIssuerValidationService struct {
 	tirClient tir.TirClient
 }
 
-func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *verifiable.Credential, validationContext ValidationContext) (result bool, err error) {
+func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *common.Credential, validationContext ValidationContext) (result bool, err error) {
 
 	logging.Log().Debugf("Validate trusted issuer for %s with context %v", logging.PrettyPrintObject(verifiableCredential), validationContext)
 	defer func() {
@@ -103,7 +103,7 @@ func isWildcardTil(tilList []string) (isWildcard bool, err error) {
 	return false, err
 }
 
-func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, credentials []tir.Credential) (result bool, err error) {
+func verifyWithCredentialsConfig(verifiableCredential *common.Credential, credentials []tir.Credential) (result bool, err error) {
 
 	credentialsConfigMap := map[string][]tir.Credential{}
 
@@ -136,7 +136,7 @@ func verifyWithCredentialsConfig(verifiableCredential *verifiable.Credential, cr
 
 // verifyForType returns true if the subject satisfies at least one credential config (OR).
 // Each config is satisfied only if all its claims are valid (AND).
-func verifyForType(subjectToVerify verifiable.Subject, credentialConfig []tir.Credential) bool {
+func verifyForType(subjectToVerify common.Subject, credentialConfig []tir.Credential) bool {
 	for _, config := range credentialConfig {
 		allClaimsValid := true
 		for _, claim := range config.Claims {
@@ -170,8 +170,8 @@ func verifyForType(subjectToVerify verifiable.Subject, credentialConfig []tir.Cr
 	return false
 }
 
-func verifyWithJsonPath(subjectToVerify verifiable.Subject, claim tir.Claim) (result bool) {
-	jsonSubject, _ := json.Marshal(subjectToVerify.CustomFields)
+func verifyWithJsonPath(subjectToVerfiy common.Subject, claim tir.Claim) (result bool) {
+	jsonSubject, _ := json.Marshal(subjectToVerfiy.CustomFields)
 	var subjectAsMap map[string]interface{}
 	if err := json.Unmarshal(jsonSubject, &subjectAsMap); err != nil {
 		logging.Log().Warnf("Was not able to unmarshal the subject, set to invalid. Err: %v", err)

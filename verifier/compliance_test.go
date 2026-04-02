@@ -7,8 +7,8 @@ import (
 	"errors"
 	"testing"
 
+	common "github.com/fiware/VCVerifier/common"
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 func TestCheckSignature(t *testing.T) {
@@ -68,15 +68,15 @@ func TestCheckSignature(t *testing.T) {
 func TestComplianceValidationService_ValidateVC(t *testing.T) {
 	type test struct {
 		testName             string
-		verifiableCredential *verifiable.Credential
+		verifiableCredential *common.Credential
 		validationContext    ValidationContext
 		expectedResult       bool
 		expectedError        error
 	}
 
-	vc, _ := verifiable.CreateCredential(verifiable.CredentialContents{
+	vc, _ := common.CreateCredential(common.CredentialContents{
 		ID: "test_credential",
-	}, verifiable.CustomFields{})
+	}, common.CustomFields{})
 	rawVC, _ := vc.MarshalJSON()
 	canonicalized, _ := jsoncanonicalizer.Transform(rawVC)
 	hash := sha256.Sum256(canonicalized)

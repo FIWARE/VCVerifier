@@ -77,16 +77,56 @@ jobs:
           username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_PASSWORD }}
 
+  build-binaries:
+    needs: [ "generate-version" ]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -ldflags="-s -w" -o vcverifier-${{ matrix.goos }}-${{ matrix.goarch }} .
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcverifier-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: vcverifier-${{ matrix.goos }}-${{ matrix.goarch }}
+
   git-release:
     needs:
       - generate-version
       - vcverifier
+      - build-binaries
 
     runs-on: ubuntu-latest
 
     steps:
 
       - uses: actions/checkout@v2
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: vcverifier-*
+          merge-multiple: true
 
       - uses: "marvinpinto/action-automatic-releases@latest"
         with:
@@ -96,3 +136,4 @@ jobs:
           title: ${{ needs.generate-version.outputs.version }}
           files: |
             LICENSE
+            release-assets/vcverifier-*
