@@ -866,12 +866,12 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 				logging.Log().Infof("VC %s is not valid.", logging.PrettyPrintObject(credential))
 				return sameDevice, ErrorInvalidVC
 			}
-			shouldBeIncluded, inclusionConfig := v.shouldBeIncluded(loginSession.clientId, loginSession.scope, credential.Contents().Types)
-			if shouldBeIncluded {
-				credentialsToBeIncluded = append(credentialsToBeIncluded, buildInclusion(credential, inclusionConfig))
-			}
-			flatClaims, _ = v.credentialsConfig.GetFlatClaims(loginSession.clientId, loginSession.scope)
 		}
+		shouldBeIncluded, inclusionConfig := v.shouldBeIncluded(loginSession.clientId, loginSession.scope, credential.Contents().Types)
+		if shouldBeIncluded {
+			credentialsToBeIncluded = append(credentialsToBeIncluded, buildInclusion(credential, inclusionConfig))
+		}
+		flatClaims, _ = v.credentialsConfig.GetFlatClaims(loginSession.clientId, loginSession.scope)
 	}
 
 	if len(credentialsToBeIncluded) == 0 {
