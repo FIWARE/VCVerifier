@@ -7,28 +7,16 @@ jobs:
       runs-on: ubuntu-latest
 
       steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.24
-
-      - name: Install coveralls dependencies
-        run: |
-          go get github.com/mattn/goveralls
-          go get github.com/go-playground/validator/v10
-
-      # Build fails due to libs missing in goroot, even when they are in the go.mod file
-      - name: Workaround
-        run: |
-          go get github.com/gookit/goutil@v0.6.6
-          go get github.com/gookit/goutil/envutil@v0.6.6
-          go get github.com/gin-gonic/gin@v1.9.1
+          go-version: '1.24'
 
       - name: Go test
         run: |
-          go test ./... -v -vet=off -coverprofile=profile.cov
+          go test ./... -v -coverprofile=profile.cov
 
       - uses: shogo82148/actions-goveralls@v1
         with:
@@ -38,12 +26,12 @@ jobs:
       runs-on: ubuntu-latest
 
       steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.24
+          go-version: '1.24'
 
       - name: Run integration tests
         working-directory: integration_test
