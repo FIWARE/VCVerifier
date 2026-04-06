@@ -55,7 +55,44 @@
                 code with your Wallet to verify your credentials.</p>
 
             <div class="relative mx-auto w-fit bg-white p-6 rounded-3xl shadow-inner border border-gray-50 mb-8">
-                <div id="qrcode">
+
+                <style>
+                    @keyframes ws-spin {
+                        to {
+                            transform: rotate(360deg);
+                        }
+                    }
+
+                    #ws-spinner {
+                        animation: ws-spin 0.8s linear infinite;
+                    }
+                </style>
+                <div id="ws-connecting" class="flex flex-col items-center justify-center py-8 px-10">
+                    <svg id="ws-spinner" width="40" height="40" viewBox="0 0 40 40" fill="none"
+                        style="display:block;margin-bottom:12px;">
+                        <circle cx="20" cy="20" r="16" stroke="#e5e7eb" stroke-width="4" />
+                        <path d="M20 4a16 16 0 0 1 16 16" stroke="var(--color-primary, #2563eb)" stroke-width="4"
+                            stroke-linecap="round" />
+                    </svg>
+                    <p data-i18n="ws_connecting" class="text-sm text-gray-500">Connecting...</p>
+                </div>
+
+                <div id="ws-error" class="hidden flex-col items-center justify-center py-8 px-10">
+                    <svg class="w-12 h-12 text-red-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <p data-i18n="ws_error_title" class="text-sm font-bold text-gray-900">Connection
+                        Error</p>
+                    <p data-i18n="ws_error_desc" class="text-[12px] text-gray-500 mb-3">Could not
+                        connect to the server.</p>
+                    <button onclick="window.location.reload()" data-i18n="ws_error_retry"
+                        class="bg-primary text-white text-xs px-4 py-2 rounded-full hover:scale-105 transition-transform font-bold">
+                        Retry
+                    </button>
+                </div>
+
+                <div id="qrcode" class="hidden">
                     <img src="{{.qrcode}}" alt="the qr.">
                 </div>
                 <div id="expired-overlay"
@@ -65,7 +102,8 @@
                             d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <p data-i18n="expired_title" class="text-sm font-bold text-gray-900 dark:text-white">QR Expired</p>
-                    <p data-i18n="expired_desc" class="text-[12px] text-gray-500 dark:text-white mb-3">For security, request a new code.
+                    <p data-i18n="expired_desc" class="text-[12px] text-gray-500 dark:text-white mb-3">For security,
+                        request a new code.
                     </p>
                     <button onclick="window.location.reload()" data-i18n="expired_refresh"
                         class="bg-primary text-white text-xs px-4 py-2 rounded-full hover:scale-105 transition-transform font-bold">
@@ -81,7 +119,7 @@
                 </div>
             </div>
 
-            <div class="space-y-3 mb-6">
+            <div id="timer-section" class="hidden space-y-3 mb-6">
                 <div class="flex justify-between items-end px-1">
                     <span data-i18n="timer_label"
                         class="text-[11px] font-bold text-gray-400 uppercase tracking-tighter">QR expire in</span>
