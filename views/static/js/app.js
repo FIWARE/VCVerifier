@@ -37,7 +37,6 @@ class ConfigManager {
     document.querySelectorAll('meta[name]').forEach(meta => {
       cfg[meta.getAttribute('name')] = meta.getAttribute('content');
     });
-    cfg.qrExpireAt = Date.now() + 30 * 1000
     return cfg;
   }
 
