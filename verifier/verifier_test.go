@@ -903,6 +903,7 @@ type openIdProviderMetadataTest struct {
 	host              string
 	testName          string
 	serviceIdentifier string
+	signingAlgorithm  string
 	credentialScopes  map[string]map[string]configModel.ScopeEntry
 	mockConfigError   error
 	expectedOpenID    common.OpenIDProviderMetadata
@@ -915,13 +916,36 @@ func getOpenIdProviderMetadataTests() []openIdProviderMetadataTest {
 		{testName: "Test OIDC metadata with existing scopes", serviceIdentifier: "serviceId", host: verifierHost,
 			credentialScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {"Scope1": {}, "Scope2": {}}}, mockConfigError: nil,
 			expectedOpenID: common.OpenIDProviderMetadata{
-				Issuer:          verifierHost,
-				ScopesSupported: []string{"Scope1", "Scope2"}}},
+				Issuer:                           verifierHost,
+				ScopesSupported:                  []string{"Scope1", "Scope2"},
+				IdTokenSigningAlgValuesSupported: []string{}}},
 		{testName: "Test OIDC metadata with non-existing scopes", serviceIdentifier: "serviceId", host: verifierHost,
 			credentialScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {}}, mockConfigError: nil,
 			expectedOpenID: common.OpenIDProviderMetadata{
-				Issuer:          verifierHost,
-				ScopesSupported: []string{}}},
+				Issuer:                           verifierHost,
+				ScopesSupported:                  []string{},
+				IdTokenSigningAlgValuesSupported: []string{}}},
+		{testName: "Test OIDC metadata supported algorithms with RS256 signing key", serviceIdentifier: "serviceId", host: verifierHost,
+			signingAlgorithm: "RS256",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {}}, mockConfigError: nil,
+			expectedOpenID: common.OpenIDProviderMetadata{
+				Issuer:                           verifierHost,
+				ScopesSupported:                  []string{},
+				IdTokenSigningAlgValuesSupported: []string{"RS256"}}},
+		{testName: "Test OIDC metadata supported algorithms with ES256 signing key", serviceIdentifier: "serviceId", host: verifierHost,
+			signingAlgorithm: "ES256",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {}}, mockConfigError: nil,
+			expectedOpenID: common.OpenIDProviderMetadata{
+				Issuer:                           verifierHost,
+				ScopesSupported:                  []string{},
+				IdTokenSigningAlgValuesSupported: []string{"ES256"}}},
+		{testName: "Test OIDC metadata supported algorithms with EdDSA signing key", serviceIdentifier: "serviceId", host: verifierHost,
+			signingAlgorithm: "EdDSA",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {}}, mockConfigError: nil,
+			expectedOpenID: common.OpenIDProviderMetadata{
+				Issuer:                           verifierHost,
+				ScopesSupported:                  []string{},
+				IdTokenSigningAlgValuesSupported: []string{"EdDSA"}}},
 	}
 }
 
@@ -931,13 +955,17 @@ func TestGetOpenIDConfiguration(t *testing.T) {
 		common.ResetGlobalCache()
 		t.Run(tc.testName, func(t *testing.T) {
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
-			verifier := CredentialVerifier{credentialsConfig: credentialsConfig, host: tc.host}
+			verifier := CredentialVerifier{credentialsConfig: credentialsConfig, host: tc.host, signingAlgorithm: tc.signingAlgorithm}
 			actualOpenID, _ := verifier.GetOpenIDConfiguration(tc.serviceIdentifier)
 
 			assert.Equal(t, tc.expectedOpenID.Issuer, actualOpenID.Issuer)
 			assert.Equal(t, len(tc.expectedOpenID.ScopesSupported), len(actualOpenID.ScopesSupported))
 			for _, scope := range tc.expectedOpenID.ScopesSupported {
 				assert.True(t, slices.Contains(actualOpenID.ScopesSupported, scope))
+			}
+			assert.Equal(t, len(tc.expectedOpenID.IdTokenSigningAlgValuesSupported), len(actualOpenID.IdTokenSigningAlgValuesSupported))
+			for _, alg := range tc.expectedOpenID.IdTokenSigningAlgValuesSupported {
+				assert.True(t, slices.Contains(actualOpenID.IdTokenSigningAlgValuesSupported, alg))
 			}
 		})
 	}
