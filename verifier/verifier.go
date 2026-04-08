@@ -790,6 +790,15 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 
 	logging.Log().Debugf("Scopes %s for %s", scopes, serviceIdentifier)
 
+	supportedAlgorithms := []string{}
+	switch v.signingAlgorithm {
+	case "RS256":
+		supportedAlgorithms = []string{"RS256"}
+	case "ES256":
+	default:
+		supportedAlgorithms = []string{"EdDSA", "ES256"}
+	}
+
 	return common.OpenIDProviderMetadata{
 		Issuer:                           v.host,
 		AuthorizationEndpoint:            appendPath(v.host, authorizationPath),
@@ -799,7 +808,7 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 		ResponseTypesSupported:           []string{"code"},
 		ResponseModeSupported:            []string{"direct_post"},
 		SubjectTypesSupported:            []string{"public"},
-		IdTokenSigningAlgValuesSupported: []string{"EdDSA", "ES256"},
+		IdTokenSigningAlgValuesSupported: supportedAlgorithms,
 		ScopesSupported:                  scopes}, err
 }
 
