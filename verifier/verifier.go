@@ -790,6 +790,11 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 
 	logging.Log().Debugf("Scopes %s for %s", scopes, serviceIdentifier)
 
+	supportedAlgorithms := []string{}
+	if v.signingAlgorithm != "" {
+		supportedAlgorithms = append(supportedAlgorithms, v.signingAlgorithm)
+	}
+
 	return common.OpenIDProviderMetadata{
 		Issuer:                           v.host,
 		AuthorizationEndpoint:            appendPath(v.host, authorizationPath),
@@ -799,7 +804,7 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 		ResponseTypesSupported:           []string{"code"},
 		ResponseModeSupported:            []string{"direct_post"},
 		SubjectTypesSupported:            []string{"public"},
-		IdTokenSigningAlgValuesSupported: []string{"EdDSA", "ES256"},
+		IdTokenSigningAlgValuesSupported: supportedAlgorithms,
 		ScopesSupported:                  scopes}, err
 }
 
@@ -1159,7 +1164,7 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 // generate a jwt, containing the credential and mandatory information as defined by the dsba-convergence
 func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, holder string, audience string, flatValues bool, nonce string) (generatedJwt jwt.Token, err error) {
 
-	jwtBuilder := jwt.NewBuilder().Issuer(v.GetHost()).Audience([]string{audience}).Expiration(v.clock.Now().Add(v.jwtExpiration))
+	jwtBuilder := jwt.NewBuilder().Issuer(v.GetHost()).Audience([]string{audience}).Expiration(v.clock.Now().Add(v.jwtExpiration)).IssuedAt(v.clock.Now())
 
 	if holder != "" {
 		jwtBuilder.Subject(holder)
