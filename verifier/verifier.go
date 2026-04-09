@@ -1164,7 +1164,7 @@ func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId
 // generate a jwt, containing the credential and mandatory information as defined by the dsba-convergence
 func (v *CredentialVerifier) generateJWT(credentials []map[string]interface{}, holder string, audience string, flatValues bool, nonce string) (generatedJwt jwt.Token, err error) {
 
-	jwtBuilder := jwt.NewBuilder().Issuer(v.GetHost()).Audience([]string{audience}).Expiration(v.clock.Now().Add(v.jwtExpiration))
+	jwtBuilder := jwt.NewBuilder().Issuer(v.GetHost()).Audience([]string{audience}).Expiration(v.clock.Now().Add(v.jwtExpiration)).IssuedAt(v.clock.Now())
 
 	if holder != "" {
 		jwtBuilder.Subject(holder)

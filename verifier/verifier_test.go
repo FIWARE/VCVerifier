@@ -1472,6 +1472,29 @@ func TestGenerateJWT(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error building jwt: %v", err)
 			}
+
+			iss, issExists := token.Issuer()
+			assert.True(t, issExists, "iss claim must be present")
+			assert.Equal(t, "https://verifier.example.com", iss)
+
+			aud, audExists := token.Audience()
+			assert.True(t, audExists, "aud claim must be present")
+			assert.Contains(t, aud, tc.audience, "aud claim must contain the audience")
+
+			exp, expExists := token.Expiration()
+			assert.True(t, expExists, "exp claim must be present")
+			assert.Equal(t, int64(3600), exp.Unix())
+
+			iat, iatExists := token.IssuedAt()
+			assert.True(t, iatExists, "iat claim must be present")
+			assert.Equal(t, int64(0), iat.Unix())
+
+			if tc.holder != "" {
+				sub, subExists := token.Subject()
+				assert.True(t, subExists, "sub claim must be present when holder is set")
+				assert.Equal(t, tc.holder, sub)
+			}
+
 			tc.verify(t, token)
 		})
 	}
