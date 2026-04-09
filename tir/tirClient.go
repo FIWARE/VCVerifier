@@ -117,7 +117,7 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 	for _, tirEndpoint := range tirEndpoints {
 
 		cacheKey := tirEndpoint + did
-		trustedIssuer, hit := common.GlobalCache.IssuerCache.Get(cacheKey)
+		trustedIssuer, hit := tc.tirCache.Get(cacheKey)
 		if !hit {
 			resp, err := tc.requestIssuer(tirEndpoint, did)
 			if err != nil {
@@ -137,7 +137,7 @@ func (tc TirHttpClient) GetTrustedIssuer(tirEndpoints []string, did string) (exi
 			logging.Log().Debugf("Got issuer %s.", logging.PrettyPrintObject(trustedIssuer))
 
 			logging.Log().Debugf("Added cache entry for %s", cacheKey)
-			common.GlobalCache.IssuerCache.Set(cacheKey, trustedIssuer, cache.DefaultExpiration)
+			tc.tirCache.Set(cacheKey, trustedIssuer, cache.DefaultExpiration)
 		}
 		return true, trustedIssuer.(TrustedIssuer), err
 
