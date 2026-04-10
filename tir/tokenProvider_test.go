@@ -3,6 +3,7 @@ package tir
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"crypto/rand"
 	"crypto/rsa"
@@ -13,8 +14,6 @@ import (
 
 	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
-	util "github.com/trustbloc/did-go/doc/util/time"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 type mockFileAccessor struct {
@@ -30,7 +29,7 @@ func TestTokenProvider_GetToken(t *testing.T) {
 	type test struct {
 		testName       string
 		testKey        *rsa.PrivateKey
-		testCredential *verifiable.Credential
+		testCredential *common.Credential
 		expectedError  bool
 	}
 
@@ -115,39 +114,31 @@ func getRandomSigningKey() []byte {
 	)
 }
 
-func getTestAuthCredential() *verifiable.Credential {
-	time := util.NewTime(common.RealClock{}.Now())
-	testIssuer := verifiable.Issuer{ID: "did:web:test.org"}
-	credentialSubject := verifiable.Subject{
-		ID: "urn:uuid:credenital",
+func getTestAuthCredential() *common.Credential {
+	now := time.Now()
+	contents := common.CredentialContents{
+		Context:   []string{common.ContextCredentialsV1},
+		Types:     []string{common.TypeVerifiableCredential},
+		ID:        "urn:uuid:aee3ffc9-9700-4e7e-b903-039c446d1bfe",
+		Issuer:    &common.Issuer{ID: "did:web:test.org"},
+		ValidFrom: &now,
+		Subject:   []common.Subject{{ID: "urn:uuid:credenital"}},
 	}
-	contents := verifiable.CredentialContents{
-		Context: []string{"https://www.w3.org/2018/credentials/v1"},
-		Types:   []string{"VerifiableCredential"},
-		ID:      "urn:uuid:aee3ffc9-9700-4e7e-b903-039c446d1bfe",
-		Issuer:  &testIssuer,
-		Issued:  time,
-		Subject: []verifiable.Subject{credentialSubject},
-	}
-	vc, _ := verifiable.CreateCredential(contents, verifiable.CustomFields{})
+	vc, _ := common.CreateCredential(contents, common.CustomFields{})
 	return vc
 }
 
-func getInvalidContextAuthCredential() *verifiable.Credential {
-	time := util.NewTime(common.RealClock{}.Now())
-	testIssuer := verifiable.Issuer{ID: "did:web:test.org"}
-	credentialSubject := verifiable.Subject{
-		ID: "urn:uuid:credenital",
+func getInvalidContextAuthCredential() *common.Credential {
+	now := time.Now()
+	contents := common.CredentialContents{
+		Context:   []string{"https://this.is.nowhere.org"},
+		Types:     []string{common.TypeVerifiableCredential},
+		ID:        "urn:uuid:aee3ffc9-9700-4e7e-b903-039c446d1bfe",
+		Issuer:    &common.Issuer{ID: "did:web:test.org"},
+		ValidFrom: &now,
+		Subject:   []common.Subject{{ID: "urn:uuid:credenital"}},
 	}
-	contents := verifiable.CredentialContents{
-		Context: []string{"https://this.is.nowhere.org"},
-		Types:   []string{"VerifiableCredential"},
-		ID:      "urn:uuid:aee3ffc9-9700-4e7e-b903-039c446d1bfe",
-		Issuer:  &testIssuer,
-		Issued:  time,
-		Subject: []verifiable.Subject{credentialSubject},
-	}
-	vc, _ := verifiable.CreateCredential(contents, verifiable.CustomFields{})
+	vc, _ := common.CreateCredential(contents, common.CustomFields{})
 	return vc
 }
 
@@ -163,7 +154,7 @@ func getInitialConfig() configModel.Configuration {
 			CredentialPath:     "/test/credential.json",
 			VerificationMethod: "JsonWebKey2020",
 			SignatureType:      "JsonWebSignature2020",
-			KeyType:            "RSAPS256",
+			KeyType:            KeyTypeRSAPS256,
 		},
 	}
 }

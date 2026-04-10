@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/gaiax"
-	"github.com/trustbloc/vc-go/verifiable"
 	"golang.org/x/exp/slices"
 
 	logging "github.com/fiware/VCVerifier/logging"
@@ -48,7 +48,7 @@ func InitGaiaXRegistryValidationService(verifierConfig *configModel.Verifier) Ga
 	return verifier
 }
 
-func (v *GaiaXRegistryValidationService) ValidateVC(verifiableCredential *verifiable.Credential, validationContext ValidationContext) (result bool, err error) {
+func (v *GaiaXRegistryValidationService) ValidateVC(verifiableCredential *common.Credential, validationContext ValidationContext) (result bool, err error) {
 	isContained := false
 	for _, t := range verifiableCredential.Contents().Types {
 		isContained = slices.Contains(v.credentialTypesToValidate, t)

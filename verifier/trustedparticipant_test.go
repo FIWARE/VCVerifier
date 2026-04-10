@@ -4,10 +4,10 @@ import (
 	"slices"
 	"testing"
 
+	common "github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 type mockGaiaXClient struct {
@@ -36,7 +36,7 @@ func TestVerifyVC_Participant(t *testing.T) {
 
 	type test struct {
 		testName              string
-		credentialToVerifiy   verifiable.Credential
+		credentialToVerifiy   common.Credential
 		verificationContext   ValidationContext
 		ebsiParticipantsList  []string
 		gaiaXParticipantsList []string
@@ -69,9 +69,9 @@ func TestVerifyVC_Participant(t *testing.T) {
 	}
 }
 
-func getCredential(issuer string) verifiable.Credential {
-	vc, _ := verifiable.CreateCredential(verifiable.CredentialContents{
-		Issuer: &verifiable.Issuer{ID: issuer},
-	}, verifiable.CustomFields{})
+func getCredential(issuer string) common.Credential {
+	vc, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: issuer},
+	}, common.CustomFields{})
 	return *vc
 }
