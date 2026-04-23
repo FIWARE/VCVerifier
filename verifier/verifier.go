@@ -372,7 +372,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 			&externalGaiaXValidator,
 			&trustedParticipantVerificationService,
 			&trustedIssuerVerificationService,
-			credentialStatusVerificationService,
+			&credentialStatusVerificationService,
 		},
 		verifierConfig.KeyAlgorithm,
 		verifierConfig.SupportedModes,

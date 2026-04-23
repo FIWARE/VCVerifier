@@ -65,11 +65,15 @@ type CredentialStatusValidationService struct {
 // The clock is retained for future use (for example to enforce the
 // `validFrom`/`validUntil` window on a fetched status-list credential) and
 // defaults to common.RealClock when nil.
-func NewCredentialStatusValidationService(client StatusListCredentialClient, clock common.Clock) *CredentialStatusValidationService {
+//
+// The service is returned by value so callers can register it through the
+// ValidationService interface in the same &value style used for every other
+// service in verifier.InitVerifier.
+func NewCredentialStatusValidationService(client StatusListCredentialClient, clock common.Clock) CredentialStatusValidationService {
 	if clock == nil {
 		clock = common.RealClock{}
 	}
-	return &CredentialStatusValidationService{client: client, clock: clock}
+	return CredentialStatusValidationService{client: client, clock: clock}
 }
 
 // ValidateVC enforces the per-credential-type revocation-list check against
