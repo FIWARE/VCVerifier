@@ -226,6 +226,19 @@ func (mcc mockCredentialConfig) GetFlatClaims(serviceIdentifier string, scope st
 	return mcc.mockScopes[serviceIdentifier][scope].FlatClaims, err
 }
 
+func (mcc mockCredentialConfig) GetCredentialStatusConfig(serviceIdentifier string, scope string, credentialType string) (credentialStatus configModel.CredentialStatus, err error) {
+	if mcc.mockError != nil {
+		return credentialStatus, mcc.mockError
+	}
+
+	for _, credential := range mcc.mockScopes[serviceIdentifier][scope].Credentials {
+		if credential.Type == credentialType {
+			return credential.CredentialStatus, err
+		}
+	}
+	return credentialStatus, err
+}
+
 func (msc *mockSessionCache) Add(k string, x interface{}, d time.Duration) error {
 	if msc.errorToThrow != nil {
 		return msc.errorToThrow
