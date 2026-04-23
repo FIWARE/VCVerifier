@@ -37,7 +37,6 @@ class ConfigManager {
     document.querySelectorAll('meta[name]').forEach(meta => {
       cfg[meta.getAttribute('name')] = meta.getAttribute('content');
     });
-    cfg.qrExpireAt = Date.now() + 30 * 1000
     return cfg;
   }
 
@@ -177,10 +176,19 @@ class AppManager {
   #connectWebSocket(url) {
     this.socket = new WebSocket(url);
     this.socket.onopen = () => {
-      console.log('WebSocket connected')
+      console.log('WebSocket connected');
+      document.getElementById('ws-connecting')?.classList.add('hidden');
+      document.getElementById('qrcode')?.classList.remove('hidden');
+      document.getElementById('timer-section')?.classList.remove('hidden');
     }
     this.socket.onerror = (err) => {
-      console.log(err)
+      console.error('WebSocket error:', err);
+      document.getElementById('ws-connecting')?.classList.add('hidden');
+      const wsError = document.getElementById('ws-error');
+      if (wsError) {
+        wsError.classList.remove('hidden');
+        wsError.classList.add('flex');
+      }
     }
 
     this.socket.onclose = (e) => {
