@@ -89,6 +89,15 @@ type Verifier struct {
 	KeyPath string `mapstructure:"keyPath"`
 	// expiration time in minutes for JWT tokens
 	JwtExpiration int `mapstructure:"jwtExpiration" default:"30"`
+	// TTL, in seconds, for cached status-list credentials fetched by the
+	// shared status-list client. Does NOT enable the revocation check — it
+	// only parametrises the cache used when at least one credential opts in.
+	StatusListCacheExpiry int `mapstructure:"statusListCacheExpiry" default:"300"`
+	// Timeout, in seconds, for HTTP requests made by the shared status-list
+	// client when fetching a status-list credential. Does NOT enable the
+	// revocation check — it only parametrises the HTTP client used when at
+	// least one credential opts in.
+	StatusListHttpTimeout int `mapstructure:"statusListHttpTimeout" default:"10"`
 }
 
 type ClientIdentification struct {
