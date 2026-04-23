@@ -14,13 +14,6 @@ import (
 	v5 "github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/piprate/json-gold/ld"
-
-	"github.com/trustbloc/did-go/doc/ld/processor"
-	"github.com/trustbloc/kms-go/spi/kms"
-	"github.com/trustbloc/vc-go/proof/creator"
-	"github.com/trustbloc/vc-go/proof/jwtproofs/ps256"
-	"github.com/trustbloc/vc-go/proof/ldproofs/jsonwebsignature2020"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 /**
@@ -28,22 +21,32 @@ import (
  */
 var localFileAccessor common.FileAccessor = common.DiskFileAccessor{}
 
-var ErrorTokenProviderNoKey = errors.New("no_key_configured")
-var ErrorTokenProviderNoVC = errors.New("no_vc_configured")
-var ErrorTokenProviderNoVerificationMethod = errors.New("no_verification_method_configured")
-var ErrorBadPrivateKey = errors.New("bad_private_key_length")
-var ErrorTokenProviderNoDid = errors.New("no_did_configured")
+// Key type constants for M2M token signing.
+const (
+	KeyTypeRSAPS256 = "RSAPS256"
+	KeyTypeRSARS256 = "RSARS256"
+	AlgorithmPS256  = "PS256"
+	AlgorithmRS256  = "RS256"
+)
+
+var (
+	ErrorTokenProviderNoKey                = errors.New("no_key_configured")
+	ErrorTokenProviderNoVC                 = errors.New("no_vc_configured")
+	ErrorTokenProviderNoVerificationMethod = errors.New("no_verification_method_configured")
+	ErrorBadPrivateKey                     = errors.New("bad_private_key_length")
+	ErrorTokenProviderNoDid                = errors.New("no_did_configured")
+)
 
 type TokenProvider interface {
-	GetToken(vc *verifiable.Credential, audience string) (string, error)
-	GetAuthCredential() (vc *verifiable.Credential, err error)
+	GetToken(vc *common.Credential, audience string) (string, error)
+	GetAuthCredential() (vc *common.Credential, err error)
 }
 
 type M2MTokenProvider struct {
 	// encodes the token according to the configuration
 	tokenEncoder TokenEncoder
 	// the credential
-	authCredential *verifiable.Credential
+	authCredential *common.Credential
 	// the signing key
 	signingKey *rsa.PrivateKey
 	// clock to get issuance time from
@@ -59,7 +62,7 @@ type M2MTokenProvider struct {
 }
 
 type TokenEncoder interface {
-	GetEncodedToken(vp *verifiable.Presentation, audience string) (encodedToken string, err error)
+	GetEncodedToken(vp *common.Presentation, audience string) (encodedToken string, err error)
 }
 
 type Base64TokenEncoder struct{}
@@ -83,6 +86,7 @@ func InitM2MTokenProvider(config *configModel.Configuration, clock common.Clock)
 	}
 
 	if m2mConfig.CredentialPath == "" {
+		logging.Log().Warn("No credential path configured, cannot provide m2m tokens.")
 		return tokenProvider, ErrorTokenProviderNoVC
 	}
 	if config.Verifier.Did == "" {
@@ -99,11 +103,11 @@ func InitM2MTokenProvider(config *configModel.Configuration, clock common.Clock)
 	return M2MTokenProvider{tokenEncoder: Base64TokenEncoder{}, authCredential: vc, signingKey: privateKey, did: config.Verifier.Did, clock: clock, verificationMethod: m2mConfig.VerificationMethod, keyType: config.M2M.KeyType, signatureType: config.M2M.SignatureType}, err
 }
 
-func (tokenProvider M2MTokenProvider) GetAuthCredential() (vc *verifiable.Credential, err error) {
+func (tokenProvider M2MTokenProvider) GetAuthCredential() (vc *common.Credential, err error) {
 	return tokenProvider.authCredential, err
 }
 
-func (tokenProvider M2MTokenProvider) GetToken(vc *verifiable.Credential, audience string) (token string, err error) {
+func (tokenProvider M2MTokenProvider) GetToken(vc *common.Credential, audience string) (token string, err error) {
 
 	vp, err := tokenProvider.signVerifiablePresentation(vc)
 	if err != nil {
@@ -113,9 +117,9 @@ func (tokenProvider M2MTokenProvider) GetToken(vc *verifiable.Credential, audien
 	return tokenProvider.tokenEncoder.GetEncodedToken(vp, audience)
 }
 
-func (base64TokenEncoder Base64TokenEncoder) GetEncodedToken(vc *verifiable.Presentation, audience string) (encodedToken string, err error) {
+func (base64TokenEncoder Base64TokenEncoder) GetEncodedToken(vp *common.Presentation, audience string) (encodedToken string, err error) {
 
-	marshalledPayload, err := vc.MarshalJSON()
+	marshalledPayload, err := vp.MarshalJSON()
 	if err != nil {
 		logging.Log().Warnf("Was not able to marshal the token payload. Err: %v", err)
 		return encodedToken, err
@@ -124,8 +128,20 @@ func (base64TokenEncoder Base64TokenEncoder) GetEncodedToken(vc *verifiable.Pres
 	return base64.RawURLEncoding.EncodeToString(marshalledPayload), err
 }
 
-func (tp M2MTokenProvider) signVerifiablePresentation(authCredential *verifiable.Credential) (vp *verifiable.Presentation, err error) {
-	vp, err = verifiable.NewPresentation(verifiable.WithCredentials(authCredential))
+// keyTypeToAlgorithm maps the configured key type to a JWS algorithm name.
+func keyTypeToAlgorithm(keyType string) string {
+	switch keyType {
+	case KeyTypeRSAPS256:
+		return AlgorithmPS256
+	case KeyTypeRSARS256:
+		return AlgorithmRS256
+	default:
+		return AlgorithmPS256
+	}
+}
+
+func (tp M2MTokenProvider) signVerifiablePresentation(authCredential *common.Credential) (vp *common.Presentation, err error) {
+	vp, err = common.NewPresentation(common.WithCredentials(authCredential))
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a presentation. Err: %v", err)
 		return vp, err
@@ -133,17 +149,15 @@ func (tp M2MTokenProvider) signVerifiablePresentation(authCredential *verifiable
 	vp.ID = "urn:uuid:" + uuid.NewString()
 	vp.Holder = tp.did
 
-	proofCreator := creator.New(creator.WithLDProofType(jsonwebsignature2020.New(), NewRS256Signer(tp.signingKey)), creator.WithJWTAlg(ps256.New(), NewRS256Signer(tp.signingKey)))
-
 	created := tp.clock.Now()
-	err = vp.AddLinkedDataProof(&verifiable.LinkedDataProofContext{
-		Created:                 &created,
-		SignatureType:           tp.signatureType,
-		KeyType:                 kms.KeyType(tp.keyType),
-		ProofCreator:            proofCreator,
-		SignatureRepresentation: verifiable.SignatureJWS,
-		VerificationMethod:      tp.verificationMethod,
-	}, processor.WithDocumentLoader(ld.NewDefaultDocumentLoader(http.DefaultClient)))
+	err = vp.AddLinkedDataProof(&common.LinkedDataProofContext{
+		Created:            &created,
+		SignatureType:      tp.signatureType,
+		Algorithm:          keyTypeToAlgorithm(tp.keyType),
+		VerificationMethod: tp.verificationMethod,
+		Signer:             NewRS256Signer(tp.signingKey),
+		DocumentLoader:     ld.NewDefaultDocumentLoader(http.DefaultClient),
+	})
 
 	if err != nil {
 		logging.Log().Warnf("Was not able to add an ld-proof. Err: %v", err)
@@ -172,22 +186,19 @@ func getSigningKey(keyPath string) (key *rsa.PrivateKey, err error) {
 	return
 }
 
-func getCredential(vcPath string) (vc *verifiable.Credential, err error) {
+func getCredential(vcPath string) (vc *common.Credential, err error) {
 	vcBytes, err := localFileAccessor.ReadFile(vcPath)
 	if err != nil {
 		logging.Log().Warnf("Was not able to read the vc file from %s. err: %v", vcPath, err)
 		return vc, err
 	}
-	logging.Log().Warnf("Got bytes %v", string(vcBytes))
+	logging.Log().Debugf("Got bytes %v", string(vcBytes))
 
-	vc, err = verifiable.ParseCredential(vcBytes, verifiable.WithJSONLDDocumentLoader(ld.NewDefaultDocumentLoader(http.DefaultClient)), verifiable.WithDisabledProofCheck())
-
+	vc, err = common.ParseCredentialJSON(vcBytes)
 	if err != nil {
 		logging.Log().Warnf("Was not able to unmarshal the credential. Err: %v", err)
 		return vc, err
 	}
-	c, _ := vc.MarshalJSON()
-	logging.Log().Warnf("The cred %s", string(c))
 
 	return vc, err
 }

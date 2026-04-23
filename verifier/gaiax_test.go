@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
+	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/gaiax"
-	"github.com/trustbloc/vc-go/verifiable"
 )
 
 type mockRegistryClient struct {
@@ -37,7 +37,7 @@ func TestGaiaXRegistryVerificationService_VerifyVC(t *testing.T) {
 	tests := []struct {
 		name                 string
 		fields               fields
-		verifiableCredential verifiable.Credential
+		verifiableCredential common.Credential
 		wantResult           bool
 		wantErr              bool
 	}{
