@@ -1510,3 +1510,140 @@ func TestGenerateJWT(t *testing.T) {
 		})
 	}
 }
+
+// testStatusWiringServiceID / Scope / CredentialType are named constants used
+// by the TestInitVerifier_CredentialStatusWiring test-case fixtures so that no
+// magic strings appear inside the table.
+const (
+	testStatusWiringServiceID      = "wiring-service"
+	testStatusWiringScope          = "openid"
+	testStatusWiringCredentialType = "VerifiableCredential"
+)
+
+// TestInitVerifier_CredentialStatusWiring verifies that the
+// CredentialStatusValidationService is unconditionally appended to the
+// verifier's validation chain (Step 6) and that the per-credential-type
+// context assembled via getCredentialStatusValidationContext reflects whatever
+// CredentialStatus block is configured on the static services (Step 2).
+//
+// The test never exercises the real HTTP status-list client: it only verifies
+// that (a) the service was constructed, (b) its ValidateVC call is a no-op
+// when no credential opts in, and (c) the context's PerType map contains the
+// expected per-type Enabled flag for the provided credential type.
+func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	baseVerifierConfig := configModel.Verifier{
+		Did:            "did:key:verifier",
+		TirAddress:     "https://tir.org",
+		ValidationMode: "none",
+		SessionExpiry:  30,
+		KeyAlgorithm:   "RS256",
+		GenerateKey:    true,
+		SupportedModes: []string{"urlEncoded"},
+	}
+
+	type test struct {
+		testName               string
+		services               []configModel.ConfiguredService
+		expectedPerTypeEnabled bool
+	}
+
+	tests := []test{
+		{
+			testName: "Case A: no credential opts in so the status service is appended and its PerType entry is disabled.",
+			services: []configModel.ConfiguredService{
+				{
+					Id: testStatusWiringServiceID,
+					ServiceScopes: map[string]configModel.ScopeEntry{
+						testStatusWiringScope: {
+							Credentials: []configModel.Credential{
+								{Type: testStatusWiringCredentialType},
+							},
+						},
+					},
+				},
+			},
+			expectedPerTypeEnabled: false,
+		},
+		{
+			testName: "Case B: at least one credential has CredentialStatus.Enabled=true so PerType reflects the opt-in.",
+			services: []configModel.ConfiguredService{
+				{
+					Id: testStatusWiringServiceID,
+					ServiceScopes: map[string]configModel.ScopeEntry{
+						testStatusWiringScope: {
+							Credentials: []configModel.Credential{
+								{
+									Type:             testStatusWiringCredentialType,
+									CredentialStatus: configModel.CredentialStatus{Enabled: true},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedPerTypeEnabled: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			logging.Log().Info("TestInitVerifier_CredentialStatusWiring +++++++++++++++++ Running test: ", tc.testName)
+			common.ResetGlobalCache()
+			t.Cleanup(func() { common.ResetGlobalCache() })
+
+			verifier = nil
+			cfg := configModel.Configuration{
+				Verifier:   baseVerifierConfig,
+				ConfigRepo: configModel.ConfigRepo{Services: tc.services},
+			}
+			if err := InitVerifier(&cfg); err != nil {
+				t.Fatalf("%s - InitVerifier returned unexpected error: %v", tc.testName, err)
+			}
+			if GetVerifier() == nil {
+				t.Fatalf("%s - expected a verifier to be available after InitVerifier", tc.testName)
+			}
+			// GetVerifier returns the Verifier interface; the concrete type
+			// stored globally is *CredentialVerifier so we type-assert to reach
+			// the package-internal fields exercised by the test.
+			initialised, ok := GetVerifier().(*CredentialVerifier)
+			if !ok {
+				t.Fatalf("%s - expected global verifier to be of type *CredentialVerifier, got %T", tc.testName, GetVerifier())
+			}
+
+			// The CredentialStatusValidationService must always be appended,
+			// regardless of per-credential opt-in.
+			var statusService *CredentialStatusValidationService
+			for _, svc := range initialised.validationServices {
+				if s, ok := svc.(*CredentialStatusValidationService); ok {
+					statusService = s
+					break
+				}
+			}
+			assert.NotNil(t, statusService, "%s - CredentialStatusValidationService must be registered", tc.testName)
+
+			// The per-credential-type context is the mechanism the verifier
+			// uses at dispatch time to pass config to the status service;
+			// assert that it reflects the configured CredentialStatus block.
+			ctx, err := initialised.getCredentialStatusValidationContext(
+				testStatusWiringServiceID,
+				testStatusWiringScope,
+				[]string{testStatusWiringCredentialType},
+			)
+			assert.NoError(t, err, "%s - getCredentialStatusValidationContext returned an unexpected error", tc.testName)
+			perTypeEntry, present := ctx.PerType[testStatusWiringCredentialType]
+			assert.True(t, present, "%s - PerType must contain the configured credential type", tc.testName)
+			assert.Equal(t, tc.expectedPerTypeEnabled, perTypeEntry.Enabled, "%s - PerType Enabled flag mismatch", tc.testName)
+
+			// No matter whether any credential opted in, validating with an
+			// empty PerType context must be a no-op — this covers Case A's
+			// "feature off" path without issuing any network calls.
+			emptyCtx := CredentialStatusValidationContext{PerType: map[string]configModel.CredentialStatus{}}
+			vc := getVC("vc-status-wiring")
+			ok, validateErr := statusService.ValidateVC(vc, emptyCtx)
+			assert.NoError(t, validateErr, "%s - ValidateVC with empty PerType must not error", tc.testName)
+			assert.True(t, ok, "%s - ValidateVC with empty PerType must return true", tc.testName)
+		})
+	}
+}
