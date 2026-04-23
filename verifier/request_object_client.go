@@ -7,14 +7,10 @@ import (
 	"net/http"
 
 	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwt"
-	"github.com/trustbloc/did-go/vdr/api"
-
-	vdr_jwk "github.com/trustbloc/did-go/method/jwk"
-	vdr_key "github.com/trustbloc/did-go/method/key"
-	vdr_web "github.com/trustbloc/did-go/method/web"
 )
 
 var ErrorNoRequestObjectReturned = errors.New("no_request_object")
@@ -38,7 +34,7 @@ type ClientRequestObject struct {
 }
 
 func NewRequestObjectClient() (roc *RequestObjectClient) {
-	return &RequestObjectClient{&http.Client{}, &VdrKeyResolver{Vdr: []api.VDR{vdr_key.New(), vdr_jwk.New(), vdr_web.New()}}}
+	return &RequestObjectClient{&http.Client{}, &VdrKeyResolver{Vdr: []did.VDR{did.NewKeyVDR(), did.NewJWKVDR(), did.NewWebVDR()}}}
 }
 
 func (roc *RequestObjectClient) GetClientRequestObject(requestUri string) (clientRequestObject *ClientRequestObject, err error) {
