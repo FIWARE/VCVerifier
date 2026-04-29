@@ -46,9 +46,10 @@ func main() {
 	// --- Optional: Database and Config Server initialization ---
 	var db *sql.DB
 	var configSrv *http.Server
+	var repo database.ServiceRepository
 
 	if configuration.ConfigServer.Enabled {
-		db, configSrv, err = initConfigServer(&configuration)
+		db, configSrv, repo, err = initConfigServer(&configuration)
 		if err != nil {
 			logger.Errorf("Failed to initialize config server: %v", err)
 			panic(err)
@@ -56,7 +57,7 @@ func main() {
 		defer database.Close(db)
 	}
 
-	verifier.InitVerifier(&configuration)
+	verifier.InitVerifier(&configuration, repo)
 	verifier.InitPresentationParser(&configuration, Health())
 
 	router := getRouter()
@@ -154,20 +155,21 @@ func main() {
 // initConfigServer opens a database connection, initializes the schema, creates
 // a service repository, and builds the CCS API HTTP server. Returns the database
 // connection (for deferred close), the config HTTP server (to be started by the
-// caller), or an error if setup fails.
-func initConfigServer(configuration *configModel.Configuration) (*sql.DB, *http.Server, error) {
+// caller), the service repository (for verifier integration), or an error if
+// setup fails.
+func initConfigServer(configuration *configModel.Configuration) (*sql.DB, *http.Server, database.ServiceRepository, error) {
 	logger := logging.Log()
 
 	logger.Info("Initializing database connection for config server...")
 	db, err := database.NewConnection(configuration.Database)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open database connection: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to open database connection: %w", err)
 	}
 
 	logger.Info("Initializing database schema...")
 	if err := database.InitSchema(db, configuration.Database.Type); err != nil {
 		database.Close(db)
-		return nil, nil, fmt.Errorf("failed to initialize database schema: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to initialize database schema: %w", err)
 	}
 
 	repo := database.NewServiceRepository(db, configuration.Database.Type)
@@ -184,7 +186,7 @@ func initConfigServer(configuration *configModel.Configuration) (*sql.DB, *http.
 	}
 
 	logger.Infof("Config server configured on port %v", cfgSrv.Port)
-	return db, srv, nil
+	return db, srv, repo, nil
 }
 
 // getConfigRouter creates a Gin router for the CCS API with health check,

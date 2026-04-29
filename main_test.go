@@ -62,10 +62,11 @@ func TestInitConfigServer_WithSQLite(t *testing.T) {
 		},
 	}
 
-	db, srv, err := initConfigServer(configuration)
+	db, srv, repo, err := initConfigServer(configuration)
 	require.NoError(t, err)
 	assert.NotNil(t, db)
 	assert.NotNil(t, srv)
+	assert.NotNil(t, repo)
 
 	// Verify server is configured with correct address
 	assert.Contains(t, srv.Addr, fmt.Sprintf(":%v", configuration.ConfigServer.Port))
@@ -86,10 +87,11 @@ func TestInitConfigServer_InvalidDBType(t *testing.T) {
 		},
 	}
 
-	db, srv, err := initConfigServer(configuration)
+	db, srv, repo, err := initConfigServer(configuration)
 	assert.Error(t, err)
 	assert.Nil(t, db)
 	assert.Nil(t, srv)
+	assert.Nil(t, repo)
 }
 
 func TestGetConfigRouter_HasHealthEndpoint(t *testing.T) {
@@ -376,7 +378,7 @@ func TestInitConfigServer_SetsCorrectTimeouts(t *testing.T) {
 		},
 	}
 
-	db, srv, err := initConfigServer(configuration)
+	db, srv, _, err := initConfigServer(configuration)
 	require.NoError(t, err)
 	defer database.Close(db)
 
