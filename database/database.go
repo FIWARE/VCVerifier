@@ -1,6 +1,6 @@
 // Package database provides connection management for the integrated
-// Credentials Config Service database. It supports PostgreSQL and MySQL
-// backends, selected via the config.Database.Type field.
+// Credentials Config Service database. It supports PostgreSQL, MySQL, and
+// SQLite backends, selected via the config.Database.Type field.
 package database
 
 import (
@@ -14,6 +14,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	// MySQL driver registration
 	_ "github.com/go-sql-driver/mysql"
+	// Pure-Go SQLite driver registration (no CGO required)
+	_ "modernc.org/sqlite"
 )
 
 // Supported database driver type constants.
@@ -22,6 +24,8 @@ const (
 	DriverTypePostgres = "postgres"
 	// DriverTypeMySQL selects the MySQL/MariaDB driver.
 	DriverTypeMySQL = "mysql"
+	// DriverTypeSQLite selects the pure-Go SQLite driver.
+	DriverTypeSQLite = "sqlite"
 )
 
 // driverName maps a config database type to the Go sql.Open driver name.
@@ -31,15 +35,18 @@ func driverName(dbType string) (string, error) {
 		return "pgx", nil
 	case DriverTypeMySQL:
 		return "mysql", nil
+	case DriverTypeSQLite:
+		return "sqlite", nil
 	default:
-		return "", fmt.Errorf("unsupported database type: %q (must be %q or %q)",
-			dbType, DriverTypePostgres, DriverTypeMySQL)
+		return "", fmt.Errorf("unsupported database type: %q (must be %q, %q, or %q)",
+			dbType, DriverTypePostgres, DriverTypeMySQL, DriverTypeSQLite)
 	}
 }
 
 // buildDSN constructs a data-source name from the provided configuration.
 // For PostgreSQL it returns a libpq-style connection string; for MySQL it
-// returns a DSN in go-sql-driver/mysql format.
+// returns a DSN in go-sql-driver/mysql format; for SQLite it returns the
+// database file path (use ":memory:" for an in-memory database).
 func buildDSN(cfg config.Database) (string, error) {
 	switch cfg.Type {
 	case DriverTypePostgres:
@@ -56,6 +63,12 @@ func buildDSN(cfg config.Database) (string, error) {
 			dsn += fmt.Sprintf("&tls=%s", cfg.SSLMode)
 		}
 		return dsn, nil
+	case DriverTypeSQLite:
+		// For SQLite, Name is the file path or ":memory:" for in-memory.
+		if cfg.Name == "" {
+			return ":memory:", nil
+		}
+		return cfg.Name, nil
 	default:
 		return "", fmt.Errorf("unsupported database type: %q", cfg.Type)
 	}
@@ -80,6 +93,12 @@ func NewConnection(cfg config.Database) (*sql.DB, error) {
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open %s connection: %w", cfg.Type, err)
+	}
+
+	// SQLite does not support concurrent writers and in-memory databases are
+	// per-connection, so restrict the pool to a single connection.
+	if cfg.Type == DriverTypeSQLite {
+		db.SetMaxOpenConns(1)
 	}
 
 	if err := db.Ping(); err != nil {
