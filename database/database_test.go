@@ -22,13 +22,31 @@ func init() {
 
 func TestNewConnection_UnsupportedType(t *testing.T) {
 	cfg := config.Database{
-		Type: "sqlite",
+		Type: "oracle",
 	}
 
 	db, err := NewConnection(cfg)
 	assert.Nil(t, db, "should not return a connection for unsupported type")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported database type")
+}
+
+func TestNewConnection_SQLiteInMemory(t *testing.T) {
+	cfg := config.Database{
+		Type: DriverTypeSQLite,
+		Name: ":memory:",
+	}
+
+	db, err := NewConnection(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer db.Close()
+
+	// Verify the connection works.
+	var result int
+	err = db.QueryRow("SELECT 1").Scan(&result)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result)
 }
 
 func TestNewConnection_EmptyType(t *testing.T) {
@@ -92,6 +110,24 @@ func TestBuildDSN(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "sqlite DSN with file path",
+			cfg: config.Database{
+				Type: DriverTypeSQLite,
+				Name: "/tmp/test.db",
+			},
+			want:    "/tmp/test.db",
+			wantErr: false,
+		},
+		{
+			name: "sqlite DSN defaults to memory",
+			cfg: config.Database{
+				Type: DriverTypeSQLite,
+				Name: "",
+			},
+			want:    ":memory:",
+			wantErr: false,
+		},
+		{
 			name: "unsupported type returns error",
 			cfg: config.Database{
 				Type: "oracle",
@@ -131,6 +167,12 @@ func TestDriverName(t *testing.T) {
 			name:    "mysql maps to mysql",
 			dbType:  DriverTypeMySQL,
 			want:    "mysql",
+			wantErr: false,
+		},
+		{
+			name:    "sqlite maps to sqlite",
+			dbType:  DriverTypeSQLite,
+			want:    "sqlite",
 			wantErr: false,
 		},
 		{
