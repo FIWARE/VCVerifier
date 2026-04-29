@@ -1,0 +1,33 @@
+server:
+  port: 3000
+  staticDir: "views/static"
+  templateDir: "views/"
+
+logging:
+  level: "DEBUG"
+  jsonLogging: true
+  logRequests: true
+
+verifier:
+  did: "did:key:somekey"
+  tirAddress: "https://test.dev/trusted_issuer/v3/issuers/"
+
+m2m:
+  authEnabled: false
+
+database:
+  type: postgres
+  host: db.example.com
+  port: 5433
+  name: ccs_db
+  user: ccs_user
+  password: ccs_pass
+  sslMode: require
+
+configServer:
+  enabled: true
+  port: 9090
+  readTimeout: 15
+  writeTimeout: 30
+  idleTimeout: 240
+  shutdownTimeout: 10
