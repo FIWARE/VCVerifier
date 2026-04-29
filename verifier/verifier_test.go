@@ -732,7 +732,7 @@ func TestInitVerifier(t *testing.T) {
 			verifier = nil
 			logging.Log().Info("TestInitVerifier +++++++++++++++++ Running test: ", tc.testName)
 
-			err := InitVerifier(&tc.testConfig)
+			err := InitVerifier(&tc.testConfig, nil)
 			if tc.expectedError != err {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
 			}
