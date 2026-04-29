@@ -1,5 +1,5 @@
 // Package database provides connection management for the integrated
-// Credentials Config Service database. It supports PostgreSQL and SQLite
+// Credentials Config Service database. It supports PostgreSQL and MySQL
 // backends, selected via the config.Database.Type field.
 package database
 
@@ -12,16 +12,16 @@ import (
 
 	// PostgreSQL driver registration
 	_ "github.com/jackc/pgx/v5/stdlib"
-	// Pure-Go SQLite driver registration (no CGO required)
-	_ "modernc.org/sqlite"
+	// MySQL driver registration
+	_ "github.com/go-sql-driver/mysql"
 )
 
 // Supported database driver type constants.
 const (
 	// DriverTypePostgres selects the PostgreSQL driver.
 	DriverTypePostgres = "postgres"
-	// DriverTypeSQLite selects the pure-Go SQLite driver.
-	DriverTypeSQLite = "sqlite"
+	// DriverTypeMySQL selects the MySQL/MariaDB driver.
+	DriverTypeMySQL = "mysql"
 )
 
 // driverName maps a config database type to the Go sql.Open driver name.
@@ -29,17 +29,17 @@ func driverName(dbType string) (string, error) {
 	switch dbType {
 	case DriverTypePostgres:
 		return "pgx", nil
-	case DriverTypeSQLite:
-		return "sqlite", nil
+	case DriverTypeMySQL:
+		return "mysql", nil
 	default:
 		return "", fmt.Errorf("unsupported database type: %q (must be %q or %q)",
-			dbType, DriverTypePostgres, DriverTypeSQLite)
+			dbType, DriverTypePostgres, DriverTypeMySQL)
 	}
 }
 
 // buildDSN constructs a data-source name from the provided configuration.
-// For PostgreSQL it returns a connection string; for SQLite it returns the
-// database name (file path or ":memory:").
+// For PostgreSQL it returns a libpq-style connection string; for MySQL it
+// returns a DSN in go-sql-driver/mysql format.
 func buildDSN(cfg config.Database) (string, error) {
 	switch cfg.Type {
 	case DriverTypePostgres:
@@ -47,11 +47,15 @@ func buildDSN(cfg config.Database) (string, error) {
 			"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
 			cfg.Host, cfg.Port, cfg.Name, cfg.User, cfg.Password, cfg.SSLMode,
 		), nil
-	case DriverTypeSQLite:
-		if cfg.Name == "" {
-			return ":memory:", nil
+	case DriverTypeMySQL:
+		// Format: user:password@tcp(host:port)/dbname?parseTime=true&tls=<sslMode>
+		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true",
+			cfg.User, cfg.Password, cfg.Host, cfg.Port, cfg.Name,
+		)
+		if cfg.SSLMode != "" {
+			dsn += fmt.Sprintf("&tls=%s", cfg.SSLMode)
 		}
-		return cfg.Name, nil
+		return dsn, nil
 	default:
 		return "", fmt.Errorf("unsupported database type: %q", cfg.Type)
 	}
