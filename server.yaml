@@ -22,3 +22,26 @@ verifier:
                     registryAddress: https://registry.gaia-x.fiware.dev/development/api/complianceIssuers
 ssiKit:
     auditorURL: http://my-auditor
+
+# configRepo defines the service configurations with their scopes and trust endpoints.
+# Each service under configRepo.services can optionally specify allowedOrigins to control
+# which origins are permitted for CORS requests. When omitted or empty, the default
+# behavior is to allow all origins (["*"]) for backward compatibility.
+#
+# configRepo:
+#   services:
+#     - id: my-service
+#       defaultOidcScope: defaultScope
+#       # allowedOrigins restricts CORS requests to the listed origins for this service.
+#       # Origins from all services are merged into a single deduplicated list.
+#       # If any service includes "*", all origins are allowed (wildcard).
+#       # If omitted or empty, defaults to ["*"] (allow all origins).
+#       allowedOrigins:
+#         - "https://my-app.example.com"
+#         - "https://admin.example.com"
+#       oidcScopes:
+#         defaultScope:
+#           credentials:
+#             - type: VerifiableCredential
+#               trustedIssuersLists:
+#                 - https://tir.example.com
