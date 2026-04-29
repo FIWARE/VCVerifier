@@ -52,6 +52,11 @@ type CredentialsConfig interface {
 	GetJwtInclusion(serviceIdentifier string, scope string, credentialType string) (jwtInclusion config.JwtInclusion, err error)
 	// If flatClaims should be used
 	GetFlatClaims(serviceIdentifier string, scope string) (flatClaims bool, err error)
+	// GetCredentialStatusConfig returns the per-credential revocation-list
+	// configuration for the given service, scope and credential type.
+	// Returns a zero-value config (Enabled == false) when nothing is configured
+	// or when the credential type is unknown.
+	GetCredentialStatusConfig(serviceIdentifier string, scope string, credentialType string) (credentialStatus config.CredentialStatus, err error)
 }
 
 type ServiceBackedCredentialsConfig struct {
@@ -278,6 +283,28 @@ func (cc ServiceBackedCredentialsConfig) GetJwtInclusion(serviceIdentifier strin
 	}
 	logging.Log().Debugf("No jwt inclusion for %s - %s", serviceIdentifier, credentialType)
 	return jwtInclusion, nil
+}
+
+// GetCredentialStatusConfig returns the per-credential revocation-list
+// configuration for the given service, scope and credential type.
+//
+// When the service or credential type is unknown, or the credential entry has
+// no `credentialStatus` block, a zero-value `config.CredentialStatus` is
+// returned so that callers can treat "unknown" and "not configured" the same
+// way. No error is returned in those cases — a missing block is a valid
+// configuration meaning "feature off for this credential type".
+func (cc ServiceBackedCredentialsConfig) GetCredentialStatusConfig(serviceIdentifier string, scope string, credentialType string) (credentialStatus config.CredentialStatus, err error) {
+	logging.Log().Debugf("Get credential status config for %s - %s - %s.", serviceIdentifier, scope, credentialType)
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
+		if ok {
+			logging.Log().Debugf("Found credential status config for %s - %v", credentialType, credential.CredentialStatus.Enabled)
+			return credential.CredentialStatus, nil
+		}
+	}
+	logging.Log().Debugf("No credential status config for %s - %s", serviceIdentifier, credentialType)
+	return config.CredentialStatus{}, nil
 }
 
 func (cc ServiceBackedCredentialsConfig) GetHolderVerification(serviceIdentifier string, scope string, credentialType string) (isEnabled bool, holderClaim string, err error) {

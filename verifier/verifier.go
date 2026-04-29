@@ -322,6 +322,16 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 	trustedParticipantVerificationService := TrustedParticipantValidationService{tirClient: tirClient, gaiaXClient: gaiaXClient}
 	trustedIssuerVerificationService := TrustedIssuerValidationService{tirClient: tirClient}
 
+	// Construct the shared status-list credential client and the
+	// CredentialStatusValidationService. The service is always appended to
+	// the validation chain. When no credential has
+	// CredentialStatus.Enabled == true, the service's ValidateVC is a no-op
+	// so there is no performance impact for deployments that do not opt in.
+	statusListHttpTimeout := time.Duration(verifierConfig.StatusListHttpTimeout) * time.Second
+	statusListCacheExpiry := time.Duration(verifierConfig.StatusListCacheExpiry) * time.Second
+	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry)
+	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, clock)
+
 	key, err := initPrivateKey(verifierConfig.KeyAlgorithm, verifierConfig.GenerateKey, verifierConfig.KeyPath)
 
 	kid := verifierConfig.ClientIdentification.Id
@@ -362,6 +372,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 			&externalGaiaXValidator,
 			&trustedParticipantVerificationService,
 			&trustedIssuerVerificationService,
+			&credentialStatusVerificationService,
 		},
 		verifierConfig.KeyAlgorithm,
 		verifierConfig.SupportedModes,
@@ -580,6 +591,11 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 			logging.Log().Warnf("Was not able to create a valid verification context. Credential will be rejected. Err: %v", err)
 			return 0, "", ErrorVerficationContextSetup
 		}
+		statusValidationContext, err := v.getCredentialStatusValidationContext(clientId, scope, credentialTypes)
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the credential-status validation context. Credential will be rejected. Err: %v", err)
+			return 0, "", ErrorVerficationContextSetup
+		}
 		credentialsNeededForScope := getCredentialsNeededForScope(verificationContext, credentialsByType)
 
 		for _, credential := range credentialsNeededForScope {
@@ -601,7 +617,8 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 				}
 			}
 			for _, verificationService := range v.validationServices {
-				result, err := verificationService.ValidateVC(credential, verificationContext)
+				ctx := selectValidationContext(verificationService, verificationContext, statusValidationContext)
+				result, err := verificationService.ValidateVC(credential, ctx)
 				if err != nil {
 					logging.Log().Warnf("Failed to verify credential %s. Err: %v", logging.PrettyPrintObject(credential), err)
 					return 0, "", err
@@ -848,6 +865,11 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			logging.Log().Warnf("Was not able to create a valid verification context. Credential will be rejected. Err: %v", err)
 			return sameDevice, ErrorVerficationContextSetup
 		}
+		statusValidationContext, err := v.getCredentialStatusValidationContext(loginSession.clientId, loginSession.scope, credential.Contents().Types)
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the credential-status validation context. Credential will be rejected. Err: %v", err)
+			return sameDevice, ErrorVerficationContextSetup
+		}
 		//FIXME make it an error if no policy was checked at all( possible misconfiguration)
 		for _, verificationService := range v.validationServices {
 			if trustedChain {
@@ -861,7 +883,8 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			}
 
 			logging.Log().Debugf("Validate with context %v", verificationContext)
-			result, err := verificationService.ValidateVC(credential, verificationContext)
+			ctx := selectValidationContext(verificationService, verificationContext, statusValidationContext)
+			result, err := verificationService.ValidateVC(credential, ctx)
 			if err != nil {
 				logging.Log().Warnf("Failed to verify credential %s. Err: %v", logging.PrettyPrintObject(credential), err)
 				return sameDevice, err
@@ -1019,6 +1042,48 @@ func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string
 	}
 	context := TrustRegistriesValidationContext{trustedIssuersLists: trustedIssuersLists, trustedParticipantsRegistries: trustedParticipantsRegistries}
 	return context, err
+}
+
+// getCredentialStatusValidationContext assembles a
+// CredentialStatusValidationContext for the given service / scope and the
+// set of credential types observed in the incoming presentation.
+//
+// For each type, the per-credential CredentialStatus config (from Step 2's
+// GetCredentialStatusConfig) is looked up and placed in the returned
+// context's PerType map. Unknown types yield a zero-value entry, which
+// the validation service treats as "feature off" — no network call is
+// issued for credentials whose types are not opted in.
+func (v *CredentialVerifier) getCredentialStatusValidationContext(clientId string, scope string, credentialTypes []string) (CredentialStatusValidationContext, error) {
+	logging.Log().Debugf("Create credential-status validation context for client '%s', scope '%s' and credential types %s", clientId, scope, credentialTypes)
+	perType := map[string]configModel.CredentialStatus{}
+	for _, credentialType := range credentialTypes {
+		statusConfig, err := v.credentialsConfig.GetCredentialStatusConfig(clientId, scope, credentialType)
+		if err != nil {
+			logging.Log().Warnf("Was not able to get credential-status config for client %s, scope %s and type %s. Err: %v", clientId, scope, credentialType, err)
+			return CredentialStatusValidationContext{}, err
+		}
+		perType[credentialType] = statusConfig
+	}
+	return CredentialStatusValidationContext{PerType: perType}, nil
+}
+
+// selectValidationContext picks the ValidationContext that the given
+// ValidationService expects. The verifier keeps a heterogeneous slice of
+// services but each service consumes exactly one context shape, so we
+// dispatch at call time rather than burden the ValidationService
+// interface with a generic context type.
+//
+// The default branch returns trustContext so the pre-existing services
+// (CredentialValidator, GaiaXRegistryValidationService,
+// TrustedParticipantValidationService, TrustedIssuerValidationService)
+// keep the exact behaviour they had before Step 6.
+func selectValidationContext(service ValidationService, trustContext TrustRegistriesValidationContext, statusContext CredentialStatusValidationContext) ValidationContext {
+	switch service.(type) {
+	case *CredentialStatusValidationService:
+		return statusContext
+	default:
+		return trustContext
+	}
 }
 
 func (v *CredentialVerifier) getTrustRegistriesValidationContextFromScope(clientId string, scope string, credentialTypes []string) (verificationContext TrustRegistriesValidationContext, err error) {
