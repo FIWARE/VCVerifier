@@ -20,45 +20,9 @@ func init() {
 	logging.Configure(LOGGING_CONFIG)
 }
 
-func TestNewConnection_SQLiteInMemory(t *testing.T) {
-	cfg := config.Database{
-		Type: DriverTypeSQLite,
-		Name: ":memory:",
-	}
-
-	db, err := NewConnection(cfg)
-	require.NoError(t, err, "should open in-memory SQLite without error")
-	require.NotNil(t, db, "returned *sql.DB must not be nil")
-
-	// Verify the connection is usable.
-	err = db.Ping()
-	assert.NoError(t, err, "ping should succeed on open connection")
-
-	Close(db)
-
-	// After close, ping should fail.
-	err = db.Ping()
-	assert.Error(t, err, "ping should fail after close")
-}
-
-func TestNewConnection_SQLiteEmptyName(t *testing.T) {
-	cfg := config.Database{
-		Type: DriverTypeSQLite,
-		Name: "",
-	}
-
-	db, err := NewConnection(cfg)
-	require.NoError(t, err, "empty name should default to :memory:")
-	require.NotNil(t, db)
-	defer Close(db)
-
-	err = db.Ping()
-	assert.NoError(t, err)
-}
-
 func TestNewConnection_UnsupportedType(t *testing.T) {
 	cfg := config.Database{
-		Type: "mysql",
+		Type: "sqlite",
 	}
 
 	db, err := NewConnection(cfg)
@@ -100,21 +64,31 @@ func TestBuildDSN(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "sqlite with file path",
+			name: "mysql DSN with TLS",
 			cfg: config.Database{
-				Type: DriverTypeSQLite,
-				Name: "/tmp/test.db",
+				Type:     DriverTypeMySQL,
+				Host:     "mysql.example.com",
+				Port:     3306,
+				Name:     "credentials",
+				User:     "root",
+				Password: "secret",
+				SSLMode:  "true",
 			},
-			want:    "/tmp/test.db",
+			want:    "root:secret@tcp(mysql.example.com:3306)/credentials?parseTime=true&tls=true",
 			wantErr: false,
 		},
 		{
-			name: "sqlite with empty name defaults to memory",
+			name: "mysql DSN without TLS",
 			cfg: config.Database{
-				Type: DriverTypeSQLite,
-				Name: "",
+				Type:     DriverTypeMySQL,
+				Host:     "localhost",
+				Port:     3306,
+				Name:     "testdb",
+				User:     "user",
+				Password: "pass",
+				SSLMode:  "",
 			},
-			want:    ":memory:",
+			want:    "user:pass@tcp(localhost:3306)/testdb?parseTime=true",
 			wantErr: false,
 		},
 		{
@@ -154,9 +128,9 @@ func TestDriverName(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "sqlite maps to sqlite",
-			dbType:  DriverTypeSQLite,
-			want:    "sqlite",
+			name:    "mysql maps to mysql",
+			dbType:  DriverTypeMySQL,
+			want:    "mysql",
 			wantErr: false,
 		},
 		{
@@ -185,27 +159,4 @@ func TestClose_NilDB(t *testing.T) {
 	assert.NotPanics(t, func() {
 		Close(nil)
 	})
-}
-
-func TestNewConnection_SQLiteExecuteQuery(t *testing.T) {
-	cfg := config.Database{
-		Type: DriverTypeSQLite,
-		Name: ":memory:",
-	}
-
-	db, err := NewConnection(cfg)
-	require.NoError(t, err)
-	defer Close(db)
-
-	// Verify the connection works for real SQL operations.
-	_, err = db.Exec("CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT)")
-	require.NoError(t, err, "should be able to create a table")
-
-	_, err = db.Exec("INSERT INTO test_table (id, name) VALUES (1, 'hello')")
-	require.NoError(t, err, "should be able to insert a row")
-
-	var name string
-	err = db.QueryRow("SELECT name FROM test_table WHERE id = 1").Scan(&name)
-	require.NoError(t, err)
-	assert.Equal(t, "hello", name)
 }

@@ -17,21 +17,21 @@ type Configuration struct {
 }
 
 // Database holds the configuration for the database connection used by the
-// integrated Credentials Config Service. Supports "postgres" and "sqlite" types.
+// integrated Credentials Config Service. Supports "postgres" and "mysql" types.
 type Database struct {
-	// Type of database: "postgres" or "sqlite"
+	// Type of database: "postgres" or "mysql"
 	Type string `mapstructure:"type"`
-	// Host of the database server (postgres only)
+	// Host of the database server
 	Host string `mapstructure:"host" default:"localhost"`
-	// Port of the database server (postgres only)
+	// Port of the database server
 	Port int `mapstructure:"port" default:"5432"`
-	// Name of the database (postgres) or file path (sqlite)
+	// Name of the database
 	Name string `mapstructure:"name"`
-	// User for database authentication (postgres only)
+	// User for database authentication
 	User string `mapstructure:"user"`
-	// Password for database authentication (postgres only)
+	// Password for database authentication
 	Password string `mapstructure:"password"`
-	// SSLMode for the postgres connection
+	// SSLMode for the postgres connection (for mysql, use "true", "false", "skip-verify", or "preferred")
 	SSLMode string `mapstructure:"sslMode" default:"disable"`
 }
 
