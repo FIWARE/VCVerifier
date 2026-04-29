@@ -45,6 +45,13 @@ configRepo:
                   url: https://tir-pdc.ebsi.fiware.dev
               trustedIssuersLists:
                 - https://til-pdc.ebsi.fiware.dev
+              # Per-credential W3C Bitstring Status List / StatusList2021 check.
+              # When omitted or `enabled: false`, no status-list lookup is done.
+              # credentialStatus:
+              #   enabled: true
+              #   acceptedPurposes:
+              #     - revocation
+              #   requireStatus: false
           presentationDefinition:
             id: my-pd
             input_descriptors:

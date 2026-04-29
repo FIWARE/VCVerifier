@@ -140,6 +140,14 @@ verifier:
     generateKey: true
     # path to the private key(in PEM format) for jwt signatures
     keyPath:
+    # TTL (in seconds) for entries in the cache of fetched status-list credentials.
+    # Used by the shared status-list client. Does NOT enable the revocation-list
+    # check — that is configured per credential type (see below).
+    statusListCacheExpiry: 300
+    # Timeout (in seconds) for HTTP requests made by the shared status-list
+    # client when fetching a status-list credential. Does NOT enable the
+    # revocation-list check.
+    statusListHttpTimeout: 10
 
 # configuration of the service to retrieve configuration for
 configRepo:
@@ -180,6 +188,20 @@ configRepo:
                                 enabled: true
                                 # claim to retrieve the holder from
                                 claim: subject
+                            # Per-credential revocation-list (W3C Bitstring Status List /
+                            # StatusList2021) configuration. When omitted or `enabled: false`
+                            # no revocation-list check is performed for this credential type.
+                            # credentialStatus:
+                            #     # toggle the status-list check on for this credential type
+                            #     enabled: true
+                            #     # status purposes this credential enforces; defaults to
+                            #     # ["revocation"] when empty. Supported values:
+                            #     # "revocation" and "suspension".
+                            #     acceptedPurposes:
+                            #         - revocation
+                            #     # reject credentials of this type that do not carry a
+                            #     # credentialStatus entry (default: false)
+                            #     requireStatus: false
                     # credentials and claims to be requested
                     presentationDefinition:
                         id: my-presentation
@@ -354,6 +376,62 @@ configRepo:
                   url: https://tir-pdc.ebsi.fiware.dev
                 - type: gaia-x
                   url: https://registry.lab.gaia-x.eu
+```
+
+### Credential revocation list
+
+The verifier can check incoming credentials against a
+[W3C Bitstring Status List](https://www.w3.org/TR/vc-bitstring-status-list/)
+or the legacy
+[StatusList2021](https://www.w3.org/community/reports/credentials/CG-FINAL-vc-status-list-2021-20230102/)
+revocation list. When a credential carries a `credentialStatus` entry of type
+`BitstringStatusListEntry` or `StatusList2021Entry`, the verifier fetches the
+referenced status-list credential, decodes the bitstring, and rejects the
+credential when the bit at its `statusListIndex` is set.
+
+The check is configured **per credential type** — it is not a global switch —
+and is **off by default**. Credentials that do not opt in are validated
+exactly as before and no status-list requests are issued. The per-credential
+block sits next to `trustedParticipantsLists`, `trustedIssuersLists`,
+`holderVerification`, `requireCompliance`, and `jwtInclusion` inside each
+`credentials:` entry of a scope:
+
+```yaml
+configRepo:
+    services:
+        -   id: testService
+            defaultOidcScope: "default"
+            oidcScopes:
+                default:
+                    credentials:
+                        -   type: CustomerCredential
+                            # ... trustedParticipantsLists / trustedIssuersLists ...
+                            # Enable the revocation-list check for this credential type.
+                            credentialStatus:
+                                # When false (default) no status-list lookup is performed.
+                                enabled: true
+                                # Status purposes this credential enforces. When empty,
+                                # defaults to ["revocation"]. Valid values are
+                                # "revocation" and "suspension".
+                                acceptedPurposes:
+                                    - revocation
+                                # Reject credentials of this type that do not carry a
+                                # credentialStatus entry. Defaults to false.
+                                requireStatus: false
+```
+
+The shared HTTP client and in-memory cache used to fetch status-list
+credentials are parametrised globally on `verifier:`. These knobs do **not**
+enable the feature — they only tune the transport when at least one
+credential opts in:
+
+```yaml
+verifier:
+    # TTL in seconds for cached status-list credentials. Default: 300.
+    statusListCacheExpiry: 300
+    # Timeout in seconds for HTTP requests fetching a status-list credential.
+    # Default: 10.
+    statusListHttpTimeout: 10
 ```
 
 ### Request modes

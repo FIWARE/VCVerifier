@@ -70,6 +70,32 @@ type Credential struct {
 	RequireCompliance bool `json:"requireCompliance" mapstructure:"requireCompliance"`
 	// Configuration for the credential its inclusion into the JWT.
 	JwtInclusion JwtInclusion `json:"jwtInclusion" mapstructure:"jwtInclusion"`
+	// Per-credential configuration for the W3C Bitstring Status List /
+	// StatusList2021 revocation-list check. When omitted or disabled no
+	// revocation check is performed for credentials of this type, preserving
+	// prior behaviour for configurations that do not opt in.
+	CredentialStatus CredentialStatus `json:"credentialStatus,omitempty" mapstructure:"credentialStatus,omitempty"`
+}
+
+// CredentialStatus holds the per-credential-type configuration for the
+// status-list based revocation check. The zero-value disables the check, so
+// credentials that omit the block behave exactly as they did before the
+// feature was introduced.
+type CredentialStatus struct {
+	// Enabled toggles the revocation-list check for this credential type.
+	// When false (the default), no status-list lookup is performed for
+	// credentials of this type.
+	Enabled bool `json:"enabled" mapstructure:"enabled"`
+	// AcceptedPurposes lists the status purposes this credential type enforces
+	// (for example "revocation" or "suspension"). When empty callers should
+	// fall back to DefaultAcceptedStatusPurposes(). The field is intentionally
+	// left un-defaulted at mapstructure level so the YAML can distinguish
+	// "not set" from an explicit empty list.
+	AcceptedPurposes []string `json:"acceptedPurposes,omitempty" mapstructure:"acceptedPurposes,omitempty"`
+	// RequireStatus rejects credentials of this type that are missing a
+	// credentialStatus entry when set to true. Defaults to false so that
+	// credentials without status information are accepted.
+	RequireStatus bool `json:"requireStatus" mapstructure:"requireStatus"`
 }
 
 type JwtInclusion struct {
