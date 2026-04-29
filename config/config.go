@@ -4,14 +4,52 @@ import "github.com/fiware/VCVerifier/logging"
 
 // CONFIGURATION STRUCTURE FOR THE VERIFIER CONFIG
 
-// general structure of the configuration file
+// Configuration is the general structure of the configuration file.
 type Configuration struct {
-	Server     Server                `mapstructure:"server"`
-	Verifier   Verifier              `mapstructure:"verifier"`
-	Logging    logging.LoggingConfig `mapstructure:"logging"`
-	ConfigRepo ConfigRepo            `mapstructure:"configRepo"`
-	M2M        M2M                   `mapstructure:"m2m"`
-	Elsi       Elsi                  `mapstructure:"elsi"`
+	Server       Server                `mapstructure:"server"`
+	Verifier     Verifier              `mapstructure:"verifier"`
+	Logging      logging.LoggingConfig `mapstructure:"logging"`
+	ConfigRepo   ConfigRepo            `mapstructure:"configRepo"`
+	M2M          M2M                   `mapstructure:"m2m"`
+	Elsi         Elsi                  `mapstructure:"elsi"`
+	Database     Database              `mapstructure:"database"`
+	ConfigServer ConfigServer          `mapstructure:"configServer"`
+}
+
+// Database holds the configuration for the database connection used by the
+// integrated Credentials Config Service. Supports "postgres" and "sqlite" types.
+type Database struct {
+	// Type of database: "postgres" or "sqlite"
+	Type string `mapstructure:"type"`
+	// Host of the database server (postgres only)
+	Host string `mapstructure:"host" default:"localhost"`
+	// Port of the database server (postgres only)
+	Port int `mapstructure:"port" default:"5432"`
+	// Name of the database (postgres) or file path (sqlite)
+	Name string `mapstructure:"name"`
+	// User for database authentication (postgres only)
+	User string `mapstructure:"user"`
+	// Password for database authentication (postgres only)
+	Password string `mapstructure:"password"`
+	// SSLMode for the postgres connection
+	SSLMode string `mapstructure:"sslMode" default:"disable"`
+}
+
+// ConfigServer holds the configuration for the second HTTP server that serves
+// the Credentials Config Service (CCS) REST API.
+type ConfigServer struct {
+	// Whether the config server is enabled
+	Enabled bool `mapstructure:"enabled" default:"false"`
+	// Port to bind the config server
+	Port int `mapstructure:"port" default:"8090"`
+	// ReadTimeout is the maximum duration for reading the entire request (seconds)
+	ReadTimeout int `mapstructure:"readTimeout" default:"5"`
+	// WriteTimeout is the maximum duration before timing out writes of the response (seconds)
+	WriteTimeout int `mapstructure:"writeTimeout" default:"10"`
+	// IdleTimeout is the maximum amount of time to wait for the next request (seconds)
+	IdleTimeout int `mapstructure:"idleTimeout" default:"120"`
+	// ShutdownTimeout is the time allowed for active requests to finish during shutdown (seconds)
+	ShutdownTimeout int `mapstructure:"shutdownTimeout" default:"5"`
 }
 
 // general configuration to run the application
