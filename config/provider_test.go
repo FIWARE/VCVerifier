@@ -72,6 +72,7 @@ func Test_ReadConfig(t *testing.T) {
 						{
 							Id:               "testService",
 							DefaultOidcScope: "someScope",
+							AllowedOrigins:   []string{"https://example.com"},
 							ServiceScopes: map[string]ScopeEntry{
 								"someScope": {
 									Credentials: []Credential{
