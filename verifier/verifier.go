@@ -21,6 +21,7 @@ import (
 	"github.com/PaesslerAG/jsonpath"
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
+	"github.com/fiware/VCVerifier/database"
 	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/google/uuid"
@@ -273,10 +274,10 @@ func GetVerifier() Verifier {
 	return verifier
 }
 
-/**
-* Initialize the verifier and all its components from the configuration
-**/
-func InitVerifier(config *configModel.Configuration) (err error) {
+// InitVerifier initializes the verifier and all its components from the configuration.
+// When repo is non-nil, the verifier uses a database-backed credentials config;
+// otherwise it falls back to the HTTP-based or static config mode.
+func InitVerifier(config *configModel.Configuration, repo database.ServiceRepository) (err error) {
 
 	logging.Log().Info("Init verifeir")
 
@@ -294,7 +295,7 @@ func InitVerifier(config *configModel.Configuration) (err error) {
 
 	externalGaiaXValidator := InitGaiaXRegistryValidationService(verifierConfig)
 
-	credentialsConfig, err := InitServiceBackedCredentialsConfig(&config.ConfigRepo)
+	credentialsConfig, err := InitCredentialsConfig(&config.ConfigRepo, repo)
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate the credentials config. Err: %v", err)
 	}
