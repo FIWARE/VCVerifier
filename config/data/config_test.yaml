@@ -36,6 +36,7 @@ configRepo:
   services:
     - id: testService
       defaultOidcScope: someScope
+      allowedOrigins: ["https://example.com"]
       oidcScopes:
         someScope:
           credentials:
