@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -118,8 +119,8 @@ type Verifier interface {
 	// IsRefreshTokenEnabled reports whether the refresh token feature is active.
 	IsRefreshTokenEnabled() bool
 	// CreateRefreshToken generates a new opaque refresh token, stores the
-	// associated session data in the database, and returns the token string.
-	CreateRefreshToken(clientId, subject, audience string, scopes []string, credentials []map[string]interface{}, flatClaims bool, nonce string) (string, error)
+	// full signed JWT in the database, and returns the token string.
+	CreateRefreshToken(clientId string, signedJWT string) (string, error)
 }
 
 type ValidationService interface {
@@ -1584,9 +1585,9 @@ func (v *CredentialVerifier) generateRefreshToken() (string, error) {
 }
 
 // CreateRefreshToken generates a new opaque refresh token, stores the
-// associated session data in the database, and returns the token string.
+// full signed JWT in the database, and returns the token string.
 // Returns ErrorRefreshTokenDisabled when the feature is off.
-func (v *CredentialVerifier) CreateRefreshToken(clientId, subject, audience string, scopes []string, credentials []map[string]interface{}, flatClaims bool, nonce string) (string, error) {
+func (v *CredentialVerifier) CreateRefreshToken(clientId string, signedJWT string) (string, error) {
 	if !v.refreshTokenEnabled {
 		return "", ErrorRefreshTokenDisabled
 	}
@@ -1596,26 +1597,11 @@ func (v *CredentialVerifier) CreateRefreshToken(clientId, subject, audience stri
 		return "", err
 	}
 
-	marshaledScopes, err := database.MarshalScopes(scopes)
-	if err != nil {
-		return "", err
-	}
-
-	marshaledCreds, err := database.MarshalCredentials(credentials)
-	if err != nil {
-		return "", err
-	}
-
 	row := database.RefreshTokenRow{
-		Token:       token,
-		ClientID:    clientId,
-		Subject:     subject,
-		Audience:    audience,
-		Scopes:      marshaledScopes,
-		Credentials: marshaledCreds,
-		FlatClaims:  flatClaims,
-		Nonce:       nonce,
-		ExpiresAt:   v.clock.Now().Add(v.refreshTokenExpiration).Unix(),
+		Token:      token,
+		ClientID:   clientId,
+		JWTPayload: signedJWT,
+		ExpiresAt:  v.clock.Now().Add(v.refreshTokenExpiration).Unix(),
 	}
 
 	if err := v.refreshTokenRepo.StoreRefreshToken(context.Background(), row); err != nil {
@@ -1672,36 +1658,50 @@ func (v *CredentialVerifier) ExchangeRefreshToken(refreshToken string) (jwtStrin
 		return "", 0, "", ErrorRefreshTokenExpired
 	}
 
-	// Unmarshal the stored session data.
-	credentials, err := database.UnmarshalCredentials(row.Credentials)
+	// Parse the stored JWT to extract claims. We skip signature verification
+	// because we signed it ourselves and trust the database contents.
+	oldToken, err := jwt.Parse([]byte(row.JWTPayload), jwt.WithVerify(false), jwt.WithValidate(false))
 	if err != nil {
-		return "", 0, "", fmt.Errorf("unmarshal credentials: %w", err)
+		return "", 0, "", fmt.Errorf("parse stored jwt: %w", err)
 	}
 
-	scopes, err := database.UnmarshalScopes(row.Scopes)
+	// Build a new token from the stored claims, updating only the
+	// time-dependent fields (iat, exp).
+	now := v.clock.Now()
+	builder := jwt.NewBuilder().
+		IssuedAt(now).
+		Expiration(now.Add(v.jwtExpiration))
+
+	// Copy all claims from the stored token except iat and exp which we just set.
+	tokenJSON, err := json.Marshal(oldToken)
 	if err != nil {
-		return "", 0, "", fmt.Errorf("unmarshal scopes: %w", err)
+		return "", 0, "", fmt.Errorf("marshal stored jwt claims: %w", err)
+	}
+	var claimsMap map[string]interface{}
+	if err := json.Unmarshal(tokenJSON, &claimsMap); err != nil {
+		return "", 0, "", fmt.Errorf("extract claims: %w", err)
+	}
+	for key, val := range claimsMap {
+		if key == "iat" || key == "exp" {
+			continue
+		}
+		builder = builder.Claim(key, val)
 	}
 
-	// Generate a new access token JWT with the stored claims.
-	token, err := v.generateJWT(credentials, row.Subject, row.Audience, row.FlatClaims, row.Nonce)
+	newToken, err := builder.Build()
+	if err != nil {
+		return "", 0, "", fmt.Errorf("build refreshed token: %w", err)
+	}
+
+	jwtString, err = v.signToken(newToken)
 	if err != nil {
 		return "", 0, "", err
 	}
 
-	jwtString, err = v.signToken(token)
-	if err != nil {
-		return "", 0, "", err
-	}
+	expiration = now.Add(v.jwtExpiration).Unix() - now.Unix()
 
-	tokenExpiry, exists := token.Expiration()
-	if !exists {
-		return "", 0, "", ErrorNoExpiration
-	}
-	expiration = tokenExpiry.Unix() - v.clock.Now().Unix()
-
-	// Rotate: generate a new refresh token with the same session data.
-	newRefreshToken, err = v.CreateRefreshToken(row.ClientID, row.Subject, row.Audience, scopes, credentials, row.FlatClaims, row.Nonce)
+	// Rotate: generate a new refresh token storing the newly signed JWT.
+	newRefreshToken, err = v.CreateRefreshToken(row.ClientID, jwtString)
 	if err != nil {
 		return "", 0, "", fmt.Errorf("rotate refresh token: %w", err)
 	}

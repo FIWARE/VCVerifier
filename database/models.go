@@ -37,69 +37,22 @@ type ScopeEntryRow struct {
 }
 
 // RefreshTokenRow represents a row in the refresh_token table. Each row
-// captures the session data needed to re-issue an access token when the
-// refresh token is exchanged.
+// stores the full JWT claims payload so that access tokens can be re-issued
+// without re-applying credential inclusion configurations.
 type RefreshTokenRow struct {
 	// Token is the opaque refresh token string (primary key).
 	Token string
 	// ClientID identifies the relying party that requested the token.
 	ClientID string
-	// Subject is the end-user identifier (holder DID).
-	Subject string
-	// Audience is the intended audience of the access token.
-	Audience string
-	// Scopes is a JSON-encoded []string of requested OIDC scopes.
-	Scopes string
-	// Credentials is a JSON-encoded []map[string]interface{} of credential
-	// data to be included in the JWT.
-	Credentials string
-	// FlatClaims indicates whether credential claims should be flattened
-	// into the top-level JWT payload.
-	FlatClaims bool
-	// Nonce is the nonce value to include in the new access token.
-	Nonce string
+	// JWTPayload is the full signed JWT string (compact serialization)
+	// produced by the original token generation. On exchange, the stored
+	// token is parsed, the time-dependent fields (iat, exp) are refreshed,
+	// and a new access token is signed without re-applying credential
+	// inclusion configurations.
+	JWTPayload string
 	// ExpiresAt is the Unix timestamp (seconds) at which this refresh token
 	// expires.
 	ExpiresAt int64
-}
-
-// MarshalScopes converts a string slice into its JSON representation for
-// storage in the database scopes column.
-func MarshalScopes(scopes []string) (string, error) {
-	b, err := json.Marshal(scopes)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal scopes: %w", err)
-	}
-	return string(b), nil
-}
-
-// UnmarshalScopes parses a JSON string back into a string slice.
-func UnmarshalScopes(s string) ([]string, error) {
-	var scopes []string
-	if err := json.Unmarshal([]byte(s), &scopes); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal scopes: %w", err)
-	}
-	return scopes, nil
-}
-
-// MarshalCredentials converts a slice of credential maps into its JSON
-// representation for storage in the database credentials column.
-func MarshalCredentials(credentials []map[string]interface{}) (string, error) {
-	b, err := json.Marshal(credentials)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal credentials: %w", err)
-	}
-	return string(b), nil
-}
-
-// UnmarshalCredentials parses a JSON string back into a slice of
-// credential maps.
-func UnmarshalCredentials(s string) ([]map[string]interface{}, error) {
-	var credentials []map[string]interface{}
-	if err := json.Unmarshal([]byte(s), &credentials); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal credentials: %w", err)
-	}
-	return credentials, nil
 }
 
 // ServiceToRow converts a config.ConfiguredService into a ServiceRow.

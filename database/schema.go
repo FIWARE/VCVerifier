@@ -52,32 +52,13 @@ const createScopeEntryTableMySQL = `CREATE TABLE IF NOT EXISTS scope_entry (
 	FOREIGN KEY (service_id) REFERENCES service(id) ON DELETE CASCADE
 )`
 
-// DDL for the refresh_token table. The schema is identical across all
-// supported database types — no auto-increment column, the opaque token
-// string is the primary key.
+// DDL for the refresh_token table. The jwt_payload column stores the
+// complete JWT claims JSON so that access tokens can be re-issued without
+// re-applying credential inclusion configurations.
 const createRefreshTokenTable = `CREATE TABLE IF NOT EXISTS refresh_token (
 	token VARCHAR(255) NOT NULL PRIMARY KEY,
 	client_id VARCHAR(255) NOT NULL,
-	subject VARCHAR(255) NOT NULL,
-	audience VARCHAR(255) NOT NULL,
-	scopes TEXT NOT NULL,
-	credentials TEXT NOT NULL,
-	flat_claims BOOLEAN NOT NULL DEFAULT FALSE,
-	nonce VARCHAR(255) NOT NULL,
-	expires_at BIGINT NOT NULL
-)`
-
-// SQLite variant of the refresh_token DDL — uses 0 instead of FALSE for
-// the BOOLEAN default to match SQLite conventions.
-const createRefreshTokenTableSQLite = `CREATE TABLE IF NOT EXISTS refresh_token (
-	token VARCHAR(255) NOT NULL PRIMARY KEY,
-	client_id VARCHAR(255) NOT NULL,
-	subject VARCHAR(255) NOT NULL,
-	audience VARCHAR(255) NOT NULL,
-	scopes TEXT NOT NULL,
-	credentials TEXT NOT NULL,
-	flat_claims BOOLEAN NOT NULL DEFAULT 0,
-	nonce VARCHAR(255) NOT NULL,
+	jwt_payload TEXT NOT NULL,
 	expires_at BIGINT NOT NULL
 )`
 
@@ -101,14 +82,12 @@ func scopeEntryDDL(dbType string) (string, error) {
 }
 
 // refreshTokenDDL returns the CREATE TABLE statement for refresh_token that
-// matches the given database type. SQLite uses 0/1 for BOOLEAN defaults;
-// PostgreSQL and MySQL both accept FALSE.
+// matches the given database type. The schema is identical across all
+// supported types (no BOOLEAN columns requiring per-driver defaults).
 func refreshTokenDDL(dbType string) (string, error) {
 	switch dbType {
-	case DriverTypePostgres, DriverTypeMySQL:
+	case DriverTypePostgres, DriverTypeMySQL, DriverTypeSQLite:
 		return createRefreshTokenTable, nil
-	case DriverTypeSQLite:
-		return createRefreshTokenTableSQLite, nil
 	default:
 		return "", fmt.Errorf("unsupported database type for schema init: %q", dbType)
 	}

@@ -582,15 +582,10 @@ func newTestRefreshRepo(t *testing.T) *SqlRefreshTokenRepository {
 // sampleRefreshToken builds a RefreshTokenRow for testing.
 func sampleRefreshToken(token string, expiresAt int64) RefreshTokenRow {
 	return RefreshTokenRow{
-		Token:       token,
-		ClientID:    "client-1",
-		Subject:     "did:key:holder123",
-		Audience:    "aud-1",
-		Scopes:      `["openid","profile"]`,
-		Credentials: `[{"role":"admin"}]`,
-		FlatClaims:  false,
-		Nonce:       "nonce-abc",
-		ExpiresAt:   expiresAt,
+		Token:      token,
+		ClientID:   "client-1",
+		JWTPayload: `{"iss":"https://verifier.example.com","sub":"did:key:holder123","aud":"aud-1"}`,
+		ExpiresAt:  expiresAt,
 	}
 }
 
@@ -626,12 +621,7 @@ func TestGetAndDeleteRefreshToken_Success(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, "tok-2", got.Token)
 	assert.Equal(t, "client-1", got.ClientID)
-	assert.Equal(t, "did:key:holder123", got.Subject)
-	assert.Equal(t, "aud-1", got.Audience)
-	assert.Equal(t, `["openid","profile"]`, got.Scopes)
-	assert.Equal(t, `[{"role":"admin"}]`, got.Credentials)
-	assert.False(t, got.FlatClaims)
-	assert.Equal(t, "nonce-abc", got.Nonce)
+	assert.Equal(t, `{"iss":"https://verifier.example.com","sub":"did:key:holder123","aud":"aud-1"}`, got.JWTPayload)
 	assert.Equal(t, int64(9999999999), got.ExpiresAt)
 
 	// Second retrieval must return not-found (single-use).
@@ -706,15 +696,3 @@ func TestRefreshTokenAdapt_SQLite(t *testing.T) {
 	assert.Equal(t, original, repo.adapt(original))
 }
 
-func TestRefreshTokenFlatClaims_True(t *testing.T) {
-	repo := newTestRefreshRepo(t)
-	ctx := context.Background()
-
-	row := sampleRefreshToken("tok-flat", 9999999999)
-	row.FlatClaims = true
-	require.NoError(t, repo.StoreRefreshToken(ctx, row))
-
-	got, err := repo.GetAndDeleteRefreshToken(ctx, "tok-flat")
-	require.NoError(t, err)
-	assert.True(t, got.FlatClaims, "FlatClaims should round-trip as true")
-}
