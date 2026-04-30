@@ -45,3 +45,20 @@ ssiKit:
 #             - type: VerifiableCredential
 #               trustedIssuersLists:
 #                 - https://tir.example.com
+
+# Integrated Credentials Config Service (CCS) database connection.
+# Uncomment to enable database-backed service configuration.
+# database:
+#   type: postgres
+#   host: localhost
+#   port: 5432
+#   name: ccs
+#   user: ccs
+#   password: ccs
+#   sslMode: disable
+
+# Second HTTP server for the CCS REST API.
+# Requires a valid 'database' section above.
+# configServer:
+#   enabled: true
+#   port: 8090

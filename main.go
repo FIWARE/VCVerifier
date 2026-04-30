@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fiware/VCVerifier/ccsapi"
 	configModel "github.com/fiware/VCVerifier/config"
+	"github.com/fiware/VCVerifier/database"
 	logging "github.com/fiware/VCVerifier/logging"
 	api "github.com/fiware/VCVerifier/openapi"
 	"github.com/fiware/VCVerifier/verifier"
@@ -24,9 +27,9 @@ import (
 // default config file location - can be overwritten by envvar
 var configFile string = "server.yaml"
 
-/**
-* Startup method to run the gin-server.
- */
+// main is the startup method that configures and runs the verifier HTTP server.
+// When the config server is enabled, it also starts a second HTTP server for the
+// Credentials Config Service (CCS) REST API on a separate port.
 func main() {
 
 	configuration, err := configModel.ReadConfig(configFile)
@@ -40,7 +43,21 @@ func main() {
 
 	logger.Infof("Configuration is: %s", logging.PrettyPrintObject(configuration))
 
-	verifier.InitVerifier(&configuration)
+	// --- Optional: Database and Config Server initialization ---
+	var db *sql.DB
+	var configSrv *http.Server
+	var repo database.ServiceRepository
+
+	if configuration.ConfigServer.Enabled {
+		db, configSrv, repo, err = initConfigServer(&configuration)
+		if err != nil {
+			logger.Errorf("Failed to initialize config server: %v", err)
+			panic(err)
+		}
+		defer database.Close(db)
+	}
+
+	verifier.InitVerifier(&configuration, repo)
 	verifier.InitPresentationParser(&configuration, Health())
 
 	router := getRouter()
@@ -87,30 +104,116 @@ func main() {
 		IdleTimeout:  time.Duration(configuration.Server.IdleTimeout) * time.Second,
 	}
 
-	// Start the server in a goroutine so it doesn't block
+	// Start the verifier server in a goroutine so it doesn't block
 	go func() {
-		logging.Log().Infof("Starting server on port %v", configuration.Server.Port)
+		logging.Log().Infof("Starting verifier server on port %v", configuration.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logging.Log().Errorf("Failed to start server: %v", err)
+			logging.Log().Errorf("Failed to start verifier server: %v", err)
 			os.Exit(1)
 		}
 	}()
+
+	// Start the config server if enabled
+	if configSrv != nil {
+		go func() {
+			logging.Log().Infof("Starting config server on port %v", configuration.ConfigServer.Port)
+			if err := configSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logging.Log().Errorf("Failed to start config server: %v", err)
+				os.Exit(1)
+			}
+		}()
+	}
 
 	// --- Graceful Shutdown Logic ---
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	<-quit
-	logging.Log().Info("Shutting down server...")
+	logging.Log().Info("Shutting down servers...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(configuration.Server.ShutdownTimeout)*time.Second)
+	shutdownTimeout := time.Duration(configuration.Server.ShutdownTimeout) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
-		logging.Log().Errorf("Server forced to shutdown: %v", err)
+	// Shut down the config server first (if running)
+	if configSrv != nil {
+		logging.Log().Info("Shutting down config server...")
+		if err := configSrv.Shutdown(ctx); err != nil {
+			logging.Log().Errorf("Config server forced to shutdown: %v", err)
+		}
+		logging.Log().Info("Config server stopped")
 	}
 
-	logging.Log().Info("Server exiting gracefully")
+	// Shut down the verifier server
+	if err := srv.Shutdown(ctx); err != nil {
+		logging.Log().Errorf("Verifier server forced to shutdown: %v", err)
+	}
+
+	logging.Log().Info("All servers exiting gracefully")
+}
+
+// initConfigServer opens a database connection, initializes the schema, creates
+// a service repository, and builds the CCS API HTTP server. Returns the database
+// connection (for deferred close), the config HTTP server (to be started by the
+// caller), the service repository (for verifier integration), or an error if
+// setup fails.
+func initConfigServer(configuration *configModel.Configuration) (*sql.DB, *http.Server, database.ServiceRepository, error) {
+	logger := logging.Log()
+
+	logger.Info("Initializing database connection for config server...")
+	db, err := database.NewConnection(configuration.Database)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to open database connection: %w", err)
+	}
+
+	logger.Info("Initializing database schema...")
+	if err := database.InitSchema(db, configuration.Database.Type); err != nil {
+		database.Close(db)
+		return nil, nil, nil, fmt.Errorf("failed to initialize database schema: %w", err)
+	}
+
+	repo := database.NewServiceRepository(db, configuration.Database.Type)
+
+	configRouter := getConfigRouter(db, repo)
+
+	cfgSrv := configuration.ConfigServer
+	srv := &http.Server{
+		Addr:         fmt.Sprintf("0.0.0.0:%v", cfgSrv.Port),
+		Handler:      configRouter,
+		ReadTimeout:  time.Duration(cfgSrv.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfgSrv.WriteTimeout) * time.Second,
+		IdleTimeout:  time.Duration(cfgSrv.IdleTimeout) * time.Second,
+	}
+
+	logger.Infof("Config server configured on port %v", cfgSrv.Port)
+	return db, srv, repo, nil
+}
+
+// getConfigRouter creates a Gin router for the CCS API with health check,
+// CORS middleware, and all CCS service routes registered.
+func getConfigRouter(db *sql.DB, repo database.ServiceRepository) *gin.Engine {
+	writer := logging.GetGinInternalWriter()
+	gin.DefaultWriter = writer
+	gin.DefaultErrorWriter = writer
+
+	router := gin.New()
+	router.Use(logging.GinHandlerFunc(), gin.Recovery())
+
+	// CORS - allow all origins for API compatibility; must be registered before routes
+	router.Use(cors.New(cors.Config{
+		AllowAllOrigins: true,
+		AllowMethods:    []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:    []string{"Origin", "Content-Type", "Authorization"},
+	}))
+
+	// Health check with database ping
+	configHealth := NewConfigServerHealth(db)
+	router.GET("/health", ConfigServerHealthReq(configHealth))
+
+	// Register CCS API routes
+	ccsapi.RegisterRoutes(router, repo)
+
+	return router
 }
 
 // initiate the router
