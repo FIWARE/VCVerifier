@@ -6,6 +6,10 @@ const TYPE_TOKEN_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 const TYPE_VP_TOKEN_SUBJECT = "urn:eu:oidf:vp_token"
 const TYPE_ACCESS_TOKEN = "urn:ietf:params:oauth:token-type:access_token"
 
+// TYPE_REFRESH_TOKEN is the OAuth2 grant type for exchanging a refresh token
+// for a new access token (RFC 6749 Section 1.5).
+const TYPE_REFRESH_TOKEN = "refresh_token"
+
 type OpenIDProviderMetadata struct {
 	Issuer                                 string   `json:"issuer"`
 	AuthorizationEndpoint                  string   `json:"authorization_endpoint"`
