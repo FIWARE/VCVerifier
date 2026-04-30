@@ -103,7 +103,7 @@ type Verifier interface {
 	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qrLoginInfo QRLoginInfo, err error)
 	StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error)
 	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
-	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error)
+	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error)
 	GetJWKS() jwk.Set
 	AuthenticationResponse(state string, verifiablePresentation *common.Presentation) (sameDevice Response, err error)
 	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *common.Presentation) (int64, string, error)
@@ -273,6 +273,8 @@ type loginSession struct {
 type tokenStore struct {
 	token        jwt.Token
 	redirect_uri string
+	// clientId identifies the relying party for refresh token generation.
+	clientId string
 }
 
 // Response structure for successful same-device authentications
@@ -523,15 +525,16 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 	}
 }
 
-/**
-*   Returns an already generated jwt from the cache to properly authorized requests. Every token will only be returend once.
-**/
-func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error) {
+// GetToken returns an already generated jwt from the cache to properly
+// authorized requests. Every token will only be returned once. When the
+// refresh token feature is enabled, a refresh token is generated and
+// returned alongside the access token; otherwise refreshToken is empty.
+func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
 
 	tokenSessionInterface, hit := v.tokenCache.Get(authorizationCode)
 	if !hit {
 		logging.Log().Infof("No such authorization code cached: %s.", authorizationCode)
-		return jwtString, expiration, ErrorNoSuchCode
+		return jwtString, expiration, "", ErrorNoSuchCode
 	}
 	// we do only allow retrieval once.
 	v.tokenCache.Delete(authorizationCode)
@@ -539,7 +542,7 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 	tokenSession := tokenSessionInterface.(tokenStore)
 	if !validated && tokenSession.redirect_uri != redirectUri {
 		logging.Log().Infof("Redirect uri does not match for authorization %s. Was %s but is expected %s.", authorizationCode, redirectUri, tokenSession.redirect_uri)
-		return jwtString, expiration, ErrorRedirectUriMismatch
+		return jwtString, expiration, "", ErrorRedirectUriMismatch
 	}
 
 	var signatureAlgorithm jwa.SignatureAlgorithm
@@ -554,18 +557,28 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 	jwtBytes, err := v.tokenSigner.Sign(tokenSession.token, jwt.WithKey(signatureAlgorithm, v.signingKey))
 	if err != nil {
 		logging.Log().Warnf("Was not able to sign the token. Err: %v", err)
-		return jwtString, expiration, err
+		return jwtString, expiration, "", err
 	}
 
 	tokenExpiry, exists := tokenSession.token.Expiration()
 	if !exists {
 		logging.Log().Warn("Token does not have an expiration.")
-		return jwtString, expiration, ErrorNoExpiration
+		return jwtString, expiration, "", ErrorNoExpiration
 	}
 
 	expiration = tokenExpiry.Unix() - v.clock.Now().Unix()
+	jwtString = string(jwtBytes)
 
-	return string(jwtBytes), expiration, err
+	// Generate a refresh token if the feature is enabled.
+	if v.refreshTokenEnabled {
+		refreshToken, err = v.CreateRefreshToken(tokenSession.clientId, jwtString)
+		if err != nil {
+			logging.Log().Warnf("Failed to create refresh token for authorization code %s: %v", authorizationCode, err)
+			return jwtString, expiration, "", err
+		}
+	}
+
+	return jwtString, expiration, refreshToken, nil
 }
 
 /**
@@ -956,7 +969,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		return sameDevice, err
 	}
 
-	tokenStore := tokenStore{token, loginSession.callback}
+	tokenStore := tokenStore{token, loginSession.callback, loginSession.clientId}
 	authorizationCode := v.nonceGenerator.GenerateNonce()
 	// store for retrieval by token endpoint
 	err = v.tokenCache.Add(authorizationCode, tokenStore, cache.DefaultExpiration)

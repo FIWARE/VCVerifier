@@ -35,16 +35,23 @@ var LOGGING_CONFIG = logging.LoggingConfig{
 }
 
 type mockVerifier struct {
-	mockJWTString         string
-	mockQR                string
-	mockConnectionString  string
-	mockAuthRequest       string
-	mockJWKS              jwk.Set
-	mockOpenIDConfig      common.OpenIDProviderMetadata
-	mockSameDevice        verifier.Response
-	mockExpiration        int64
-	mockError             error
-	mockAuthorizationType string
+	mockJWTString           string
+	mockQR                  string
+	mockConnectionString    string
+	mockAuthRequest         string
+	mockJWKS                jwk.Set
+	mockOpenIDConfig        common.OpenIDProviderMetadata
+	mockSameDevice          verifier.Response
+	mockExpiration          int64
+	mockError               error
+	mockAuthorizationType   string
+	mockRefreshTokenEnabled bool
+	mockRefreshToken        string
+	mockRefreshTokenError   error
+	mockExchangeJWT         string
+	mockExchangeExpiration  int64
+	mockExchangeRefresh     string
+	mockExchangeError       error
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
@@ -59,8 +66,8 @@ func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback str
 func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestType string, scope string, requestProtocol string) (authenticationRequest string, err error) {
 	return mV.mockAuthRequest, mV.mockError
 }
-func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error) {
-	return mV.mockJWTString, mV.mockExpiration, mV.mockError
+func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
+	return mV.mockJWTString, mV.mockExpiration, mV.mockRefreshToken, mV.mockError
 }
 func (mV *mockVerifier) GetJWKS() jwk.Set {
 	return mV.mockJWKS
@@ -93,15 +100,15 @@ func (mV *mockVerifier) GenerateToken(clientId, subject, audience string, scope 
 }
 
 func (mV *mockVerifier) ExchangeRefreshToken(refreshToken string) (string, int64, string, error) {
-	return mV.mockJWTString, mV.mockExpiration, "", mV.mockError
+	return mV.mockExchangeJWT, mV.mockExchangeExpiration, mV.mockExchangeRefresh, mV.mockExchangeError
 }
 
 func (mV *mockVerifier) IsRefreshTokenEnabled() bool {
-	return false
+	return mV.mockRefreshTokenEnabled
 }
 
 func (mV *mockVerifier) CreateRefreshToken(clientId string, signedJWT string) (string, error) {
-	return "", nil
+	return mV.mockRefreshToken, mV.mockRefreshTokenError
 }
 
 func TestGetToken(t *testing.T) {
@@ -114,6 +121,7 @@ func TestGetToken(t *testing.T) {
 		testGrantType          string
 		testCode               string
 		testRedirectUri        string
+		testRefreshToken       string
 		testVPToken            string
 		testScope              string
 		testResource           string
@@ -122,6 +130,13 @@ func TestGetToken(t *testing.T) {
 		mockJWTString          string
 		mockExpiration         int64
 		mockError              error
+		mockRefreshEnabled     bool
+		mockRefreshToken       string
+		mockRefreshTokenError  error
+		mockExchangeJWT        string
+		mockExchangeExpiration int64
+		mockExchangeRefresh    string
+		mockExchangeError      error
 		expectedStatusCode     int
 		expectedResponse       TokenResponse
 		expectedError          ErrorMessage
@@ -145,6 +160,16 @@ func TestGetToken(t *testing.T) {
 		{testName: "If a token-exchange request is received with invalid requested_token_type, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", testRequestedTokenType: "invalid_type", expectedStatusCode: 400, expectedError: ErrorMessageInvalidRequestedTokenType},
 		{testName: "If a token-exchange request is received without subject_token, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
 		{testName: "If a token-exchange request is received without scope, the default scope should be used.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 200},
+		// refresh_token grant type
+		{testName: "If a valid refresh_token request is received, new tokens should be returned.", testGrantType: "refresh_token", testRefreshToken: "valid-refresh-token", mockExchangeJWT: "newJWT", mockExchangeExpiration: 300, mockExchangeRefresh: "rotated-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 300, AccessToken: "newJWT", IdToken: "newJWT", RefreshToken: "rotated-refresh-token"}},
+		{testName: "If no refresh_token is provided in a refresh_token request, a 400 should be returned.", testGrantType: "refresh_token", expectedStatusCode: 400, expectedError: ErrorMessageNoRefreshToken},
+		{testName: "If an invalid refresh_token is provided, a 403 should be returned.", testGrantType: "refresh_token", testRefreshToken: "invalid-token", mockExchangeError: errors.New("token not found"), expectedStatusCode: 403, expectedError: ErrorMessageInvalidRefreshToken},
+		// authorization_code with refresh token enabled
+		{testName: "If refresh tokens are enabled, authorization_code response includes refresh_token.", testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshToken: "new-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", RefreshToken: "new-refresh-token"}},
+		// vp_token with refresh token enabled
+		{testName: "If refresh tokens are enabled, vp_token response includes refresh_token.", testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshToken: "new-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT", RefreshToken: "new-refresh-token"}},
+		// token-exchange with refresh token enabled
+		{testName: "If refresh tokens are enabled, token-exchange response includes refresh_token.", testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshToken: "new-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, RefreshToken: "new-refresh-token"}},
 	}
 
 	for _, tc := range tests {
@@ -161,7 +186,18 @@ func TestGetToken(t *testing.T) {
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
-			apiVerifier = &mockVerifier{mockJWTString: tc.mockJWTString, mockExpiration: tc.mockExpiration, mockError: tc.mockError}
+			apiVerifier = &mockVerifier{
+				mockJWTString:          tc.mockJWTString,
+				mockExpiration:         tc.mockExpiration,
+				mockError:              tc.mockError,
+				mockRefreshTokenEnabled: tc.mockRefreshEnabled,
+				mockRefreshToken:       tc.mockRefreshToken,
+				mockRefreshTokenError:  tc.mockRefreshTokenError,
+				mockExchangeJWT:        tc.mockExchangeJWT,
+				mockExchangeExpiration: tc.mockExchangeExpiration,
+				mockExchangeRefresh:    tc.mockExchangeRefresh,
+				mockExchangeError:      tc.mockExchangeError,
+			}
 
 			formArray := []string{}
 
@@ -175,6 +211,9 @@ func TestGetToken(t *testing.T) {
 				formArray = append(formArray, "redirect_uri="+tc.testRedirectUri)
 			}
 
+			if tc.testRefreshToken != "" {
+				formArray = append(formArray, "refresh_token="+tc.testRefreshToken)
+			}
 			if tc.testScope != "" {
 				formArray = append(formArray, "scope="+tc.testScope)
 			}
@@ -209,7 +248,7 @@ func TestGetToken(t *testing.T) {
 				return
 			}
 
-			if tc.expectedStatusCode == 400 {
+			if tc.expectedStatusCode == 400 || (tc.expectedStatusCode == 403 && tc.expectedError != (ErrorMessage{})) {
 				errorBody, _ := io.ReadAll(recorder.Body)
 				errorMessage := ErrorMessage{}
 				json.Unmarshal(errorBody, &errorMessage)

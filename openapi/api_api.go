@@ -64,6 +64,8 @@ var ErrorMessageInvalidClientAssertion = ErrorMessage{"invalid_client_assertion"
 var ErrorMessageInvalidTokenRequest = ErrorMessage{"invalid_token_request", "Token request has no redirect_uri and no valid client assertion."}
 var ErrorMessageInvalidSubjectTokenType = ErrorMessage{"invalid_subject_token_type", "Token exchange is only supported for token type urn:eu:oidf:vp_token."}
 var ErrorMessageInvalidRequestedTokenType = ErrorMessage{"invalid_requested_token_type", "Token exchange is only supported for requesting tokens of type urn:ietf:params:oauth:token-type:access_token."}
+var ErrorMessageNoRefreshToken = ErrorMessage{"no_refresh_token_provided", "Refresh token requests require a refresh_token."}
+var ErrorMessageInvalidRefreshToken = ErrorMessage{"invalid_refresh_token", "The provided refresh token is invalid or expired."}
 
 func getApiVerifier() verifier.Verifier {
 	if apiVerifier == nil {
@@ -116,6 +118,8 @@ func GetToken(c *gin.Context) {
 			return
 		}
 		handleTokenTypeTokenExchange(c, resource)
+	case common.TYPE_REFRESH_TOKEN:
+		handleTokenTypeRefreshToken(c)
 	default:
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnsupportedGrantType)
 	}
@@ -252,6 +256,8 @@ func GetTokenForService(c *gin.Context) {
 		handleTokenTypeVPToken(c, c.Param("service_id"))
 	case common.TYPE_TOKEN_EXCHANGE:
 		handleTokenTypeTokenExchange(c, c.Param("service_id"))
+	case common.TYPE_REFRESH_TOKEN:
+		handleTokenTypeRefreshToken(c)
 	default:
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnsupportedGrantType)
 	}
@@ -322,9 +328,46 @@ func verifiyVPToken(c *gin.Context, vpToken string, clientId string, scopes []st
 		c.AbortWithStatusJSON(http.StatusBadRequest, err)
 		return
 	}
-	response := TokenResponse{TokenType: "Bearer", IssuedTokenType: common.TYPE_ACCESS_TOKEN, ExpiresIn: float32(expiration), IdToken: signedToken, AccessToken: signedToken, Scope: strings.Join(scopes, ",")}
+
+	var refreshToken string
+	if getApiVerifier().IsRefreshTokenEnabled() {
+		refreshToken, err = getApiVerifier().CreateRefreshToken(clientId, signedToken)
+		if err != nil {
+			logging.Log().Warnf("Failed to create refresh token: %v", err)
+			// Non-fatal: return the access token without a refresh token.
+		}
+	}
+
+	response := TokenResponse{TokenType: "Bearer", IssuedTokenType: common.TYPE_ACCESS_TOKEN, ExpiresIn: float32(expiration), IdToken: signedToken, AccessToken: signedToken, Scope: strings.Join(scopes, ","), RefreshToken: refreshToken}
 	logging.Log().Infof("Generated and signed token: %v", response)
 	c.JSON(http.StatusOK, response)
+}
+
+// handleTokenTypeRefreshToken handles the grant_type=refresh_token flow.
+// It exchanges a valid refresh token for a new access token and a rotated
+// refresh token.
+func handleTokenTypeRefreshToken(c *gin.Context) {
+	refreshToken, refreshTokenExists := c.GetPostForm("refresh_token")
+	if !refreshTokenExists {
+		logging.Log().Debug("No refresh_token present in the request.")
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoRefreshToken)
+		return
+	}
+
+	jwtString, expiration, newRefreshToken, err := getApiVerifier().ExchangeRefreshToken(refreshToken)
+	if err != nil {
+		logging.Log().Warnf("Failed to exchange refresh token: %v", err)
+		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessageInvalidRefreshToken)
+		return
+	}
+
+	c.JSON(http.StatusOK, TokenResponse{
+		TokenType:    "Bearer",
+		ExpiresIn:    float32(expiration),
+		AccessToken:  jwtString,
+		IdToken:      jwtString,
+		RefreshToken: newRefreshToken,
+	})
 }
 
 func handleTokenTypeCode(c *gin.Context) {
@@ -339,12 +382,12 @@ func handleTokenTypeCode(c *gin.Context) {
 	assertionType, assertionTypeExists := c.GetPostForm("client_assertion_type")
 	redirectUri, redirectUriExists := c.GetPostForm("redirect_uri")
 	if redirectUriExists {
-		jwt, expiration, err := getApiVerifier().GetToken(code, redirectUri, false)
+		jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, redirectUri, false)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt})
+		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken})
 		return
 	}
 	if assertionTypeExists {
@@ -434,12 +477,12 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 		return
 	}
 
-	jwt, expiration, err := getApiVerifier().GetToken(code, "", true)
+	jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, "", true)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt})
+	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken})
 }
 
 // StartSIOPSameDevice - Starts the siop flow for credentials hold by the same device
