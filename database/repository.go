@@ -7,17 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/logging"
 )
 
-// Sentinel errors returned by ServiceRepository methods.
+// Sentinel errors returned by repository methods.
 var (
 	// ErrServiceNotFound is returned when a service ID does not exist.
 	ErrServiceNotFound = errors.New("service not found")
 	// ErrServiceAlreadyExists is returned on a duplicate service ID insert.
 	ErrServiceAlreadyExists = errors.New("service already exists")
+	// ErrRefreshTokenNotFound is returned when a refresh token does not
+	// exist in the database or has already been consumed.
+	ErrRefreshTokenNotFound = errors.New("refresh token not found")
 )
 
 // ServiceRepository defines the data-access operations for CCS services
@@ -440,4 +444,129 @@ func rollbackOnError(tx *sql.Tx) {
 	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 		logging.Log().Warnf("rollback failed: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// RefreshTokenRepository — database-backed refresh token storage
+// ---------------------------------------------------------------------------
+
+// RefreshTokenRepository defines the data-access operations for OAuth2
+// refresh tokens. Implementations must be safe for concurrent use.
+type RefreshTokenRepository interface {
+	// StoreRefreshToken persists a new refresh token row.
+	StoreRefreshToken(ctx context.Context, row RefreshTokenRow) error
+
+	// GetAndDeleteRefreshToken atomically retrieves and deletes a refresh
+	// token (single-use). Returns ErrRefreshTokenNotFound if the token does
+	// not exist.
+	GetAndDeleteRefreshToken(ctx context.Context, token string) (*RefreshTokenRow, error)
+
+	// DeleteExpiredTokens removes all refresh token rows whose expires_at
+	// is in the past. Returns the number of rows deleted.
+	DeleteExpiredTokens(ctx context.Context) (int64, error)
+}
+
+// SqlRefreshTokenRepository is a RefreshTokenRepository backed by database/sql.
+type SqlRefreshTokenRepository struct {
+	db     *sql.DB
+	dbType string
+}
+
+// NewRefreshTokenRepository creates a new SqlRefreshTokenRepository for the
+// provided database connection and driver type.
+func NewRefreshTokenRepository(db *sql.DB, dbType string) *SqlRefreshTokenRepository {
+	return &SqlRefreshTokenRepository{db: db, dbType: dbType}
+}
+
+// SQL query constants for refresh token operations (written with ?
+// placeholders; adapted at runtime for PostgreSQL).
+const (
+	sqlInsertRefreshToken = `INSERT INTO refresh_token (token, client_id, jwt_payload, expires_at) VALUES (?, ?, ?, ?)`
+
+	sqlSelectRefreshToken = `SELECT token, client_id, jwt_payload, expires_at FROM refresh_token WHERE token = ?`
+
+	sqlDeleteRefreshToken = `DELETE FROM refresh_token WHERE token = ?`
+
+	sqlDeleteExpiredRefreshTokens = `DELETE FROM refresh_token WHERE expires_at < ?`
+)
+
+// StoreRefreshToken persists a new refresh token row in the database.
+func (r *SqlRefreshTokenRepository) StoreRefreshToken(ctx context.Context, row RefreshTokenRow) error {
+	_, err := r.db.ExecContext(ctx, r.adapt(sqlInsertRefreshToken),
+		row.Token, row.ClientID, row.JWTPayload, row.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("insert refresh token: %w", err)
+	}
+	logging.Log().Debugf("Stored refresh token (expires_at=%d)", row.ExpiresAt)
+	return nil
+}
+
+// GetAndDeleteRefreshToken atomically retrieves and deletes a refresh token
+// within a transaction, ensuring single-use semantics. Returns
+// ErrRefreshTokenNotFound if the token does not exist.
+func (r *SqlRefreshTokenRepository) GetAndDeleteRefreshToken(ctx context.Context, token string) (*RefreshTokenRow, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer rollbackOnError(tx)
+
+	var row RefreshTokenRow
+	err = tx.QueryRowContext(ctx, r.adapt(sqlSelectRefreshToken), token).Scan(
+		&row.Token, &row.ClientID, &row.JWTPayload, &row.ExpiresAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrRefreshTokenNotFound
+		}
+		return nil, fmt.Errorf("select refresh token: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, r.adapt(sqlDeleteRefreshToken), token); err != nil {
+		return nil, fmt.Errorf("delete refresh token: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	logging.Log().Debugf("Retrieved and deleted refresh token")
+	return &row, nil
+}
+
+// DeleteExpiredTokens removes all refresh token rows whose expiration time
+// has passed. Returns the number of rows deleted.
+func (r *SqlRefreshTokenRepository) DeleteExpiredTokens(ctx context.Context) (int64, error) {
+	now := time.Now().Unix()
+	result, err := r.db.ExecContext(ctx, r.adapt(sqlDeleteExpiredRefreshTokens), now)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired refresh tokens: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	if n > 0 {
+		logging.Log().Infof("Cleaned up %d expired refresh token(s)", n)
+	}
+	return n, nil
+}
+
+// adapt replaces ? placeholders with $N for PostgreSQL. For MySQL and SQLite
+// the query is returned unchanged.
+func (r *SqlRefreshTokenRepository) adapt(query string) string {
+	if r.dbType != DriverTypePostgres {
+		return query
+	}
+	var b strings.Builder
+	b.Grow(len(query))
+	n := 1
+	for i := 0; i < len(query); i++ {
+		if query[i] == '?' {
+			fmt.Fprintf(&b, "$%d", n)
+			n++
+		} else {
+			b.WriteByte(query[i])
+		}
+	}
+	return b.String()
 }

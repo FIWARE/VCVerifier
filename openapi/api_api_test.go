@@ -92,6 +92,18 @@ func (mV *mockVerifier) GenerateToken(clientId, subject, audience string, scope 
 	return mV.mockExpiration, mV.mockJWTString, mV.mockError
 }
 
+func (mV *mockVerifier) ExchangeRefreshToken(refreshToken string) (string, int64, string, error) {
+	return mV.mockJWTString, mV.mockExpiration, "", mV.mockError
+}
+
+func (mV *mockVerifier) IsRefreshTokenEnabled() bool {
+	return false
+}
+
+func (mV *mockVerifier) CreateRefreshToken(clientId string, signedJWT string) (string, error) {
+	return "", nil
+}
+
 func TestGetToken(t *testing.T) {
 
 	logging.Configure(LOGGING_CONFIG)

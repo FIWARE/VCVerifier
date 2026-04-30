@@ -35,6 +35,25 @@ type ScopeEntryRow struct {
 	DcqlQuery *string
 }
 
+// RefreshTokenRow represents a row in the refresh_token table. Each row
+// stores the full JWT claims payload so that access tokens can be re-issued
+// without re-applying credential inclusion configurations.
+type RefreshTokenRow struct {
+	// Token is the opaque refresh token string (primary key).
+	Token string
+	// ClientID identifies the relying party that requested the token.
+	ClientID string
+	// JWTPayload is the full signed JWT string (compact serialization)
+	// produced by the original token generation. On exchange, the stored
+	// token is parsed, the time-dependent fields (iat, exp) are refreshed,
+	// and a new access token is signed without re-applying credential
+	// inclusion configurations.
+	JWTPayload string
+	// ExpiresAt is the Unix timestamp (seconds) at which this refresh token
+	// expires.
+	ExpiresAt int64
+}
+
 // ServiceToRow converts a config.ConfiguredService into a ServiceRow.
 // The scope entries are handled separately via ScopeEntryToRows.
 func ServiceToRow(service config.ConfiguredService) ServiceRow {
