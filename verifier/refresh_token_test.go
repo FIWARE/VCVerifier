@@ -2,6 +2,8 @@ package verifier
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"errors"
 	"testing"
 	"time"
@@ -12,6 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testRSAKeyBits is the RSA key size used in tests.
+const testRSAKeyBits = 2048
 
 // ---------------------------------------------------------------------------
 // mockRefreshTokenRepository — in-memory mock implementing
@@ -390,6 +395,328 @@ func TestSetRefreshTokenRepo_NilVerifier(t *testing.T) {
 	verifier = nil
 	// Should not panic.
 	SetRefreshTokenRepo(newMockRefreshTokenRepo())
+}
+
+// ---------------------------------------------------------------------------
+// Tests: ExchangeRefreshToken — table-driven (comprehensive)
+// ---------------------------------------------------------------------------
+
+// TestExchangeRefreshToken_TableDriven is a table-driven consolidation of all
+// ExchangeRefreshToken scenarios, covering the plan's requirement for
+// parameterized enabled/disabled cases and error paths.
+func TestExchangeRefreshToken_TableDriven(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type testCase struct {
+		name            string
+		enabled         bool
+		seedTokens      map[string]database.RefreshTokenRow
+		repoGetErr      error
+		inputToken      string
+		expectErr       error
+		expectErrSubstr string
+		expectJWT       bool
+		expectRotation  bool
+	}
+
+	// Build a signed JWT to use as stored payload.
+	helperVerifier := newRefreshTokenVerifier(t, true, newMockRefreshTokenRepo())
+	validJWT := buildTestJWT(t, helperVerifier)
+
+	tests := []testCase{
+		{
+			name:           "successful exchange returns new JWT and rotated token",
+			enabled:        true,
+			seedTokens:     map[string]database.RefreshTokenRow{"tok-ok": {Token: "tok-ok", ClientID: "client-1", JWTPayload: validJWT, ExpiresAt: 9999999999}},
+			inputToken:     "tok-ok",
+			expectJWT:      true,
+			expectRotation: true,
+		},
+		{
+			name:       "disabled feature returns ErrorRefreshTokenDisabled",
+			enabled:    false,
+			inputToken: "anything",
+			expectErr:  ErrorRefreshTokenDisabled,
+		},
+		{
+			name:       "missing token returns ErrorRefreshTokenNotFound",
+			enabled:    true,
+			seedTokens: map[string]database.RefreshTokenRow{},
+			inputToken: "nonexistent",
+			expectErr:  ErrorRefreshTokenNotFound,
+		},
+		{
+			name:       "expired token returns ErrorRefreshTokenExpired",
+			enabled:    true,
+			seedTokens: map[string]database.RefreshTokenRow{"tok-exp": {Token: "tok-exp", ClientID: "c1", JWTPayload: "irrelevant", ExpiresAt: -1}},
+			inputToken: "tok-exp",
+			expectErr:  ErrorRefreshTokenExpired,
+		},
+		{
+			name:            "repository error propagates directly",
+			enabled:         true,
+			repoGetErr:      errors.New("database unavailable"),
+			inputToken:      "any-token",
+			expectErrSubstr: "database unavailable",
+		},
+		{
+			name:            "invalid stored JWT causes parse error",
+			enabled:         true,
+			seedTokens:      map[string]database.RefreshTokenRow{"tok-bad-jwt": {Token: "tok-bad-jwt", ClientID: "c1", JWTPayload: "not-a-valid-jwt", ExpiresAt: 9999999999}},
+			inputToken:      "tok-bad-jwt",
+			expectErrSubstr: "parse stored jwt",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockRefreshTokenRepo()
+			if tc.repoGetErr != nil {
+				repo.getErr = tc.repoGetErr
+			}
+			for k, v := range tc.seedTokens {
+				repo.tokens[k] = v
+			}
+
+			v := newRefreshTokenVerifier(t, tc.enabled, repo)
+
+			jwtString, expiration, newToken, err := v.ExchangeRefreshToken(tc.inputToken)
+
+			if tc.expectErr != nil {
+				assert.ErrorIs(t, err, tc.expectErr)
+				return
+			}
+			if tc.expectErrSubstr != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tc.expectErrSubstr)
+				return
+			}
+
+			require.NoError(t, err)
+			if tc.expectJWT {
+				assert.NotEmpty(t, jwtString, "should return a signed JWT")
+				assert.Greater(t, expiration, int64(0), "expiration should be positive")
+			}
+			if tc.expectRotation {
+				assert.NotEmpty(t, newToken, "should return a rotated refresh token")
+				assert.NotEqual(t, tc.inputToken, newToken, "rotated token must differ from original")
+				// Original consumed.
+				_, ok := repo.tokens[tc.inputToken]
+				assert.False(t, ok, "original token must be deleted")
+				// New token stored.
+				_, ok = repo.tokens[newToken]
+				assert.True(t, ok, "rotated token must be stored")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: ExchangeRefreshToken — multi-chain rotation
+// ---------------------------------------------------------------------------
+
+// TestExchangeRefreshToken_MultiChainRotation exercises a sequence of four
+// successive refresh token exchanges, verifying that each rotation consumes
+// the previous token, produces a distinct new one, and remains valid.
+func TestExchangeRefreshToken_MultiChainRotation(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	repo := newMockRefreshTokenRepo()
+	v := newRefreshTokenVerifier(t, true, repo)
+
+	signedJWT := buildTestJWT(t, v)
+	repo.tokens["seed-token"] = database.RefreshTokenRow{
+		Token:      "seed-token",
+		ClientID:   "client-chain",
+		JWTPayload: signedJWT,
+		ExpiresAt:  9999999999,
+	}
+
+	// chainLength is the number of successive rotations to perform.
+	const chainLength = 4
+	currentToken := "seed-token"
+	seenTokens := map[string]bool{currentToken: true}
+
+	for i := 0; i < chainLength; i++ {
+		jwtStr, exp, nextToken, err := v.ExchangeRefreshToken(currentToken)
+		require.NoError(t, err, "rotation %d failed", i)
+		assert.NotEmpty(t, jwtStr, "rotation %d should return JWT", i)
+		assert.Greater(t, exp, int64(0), "rotation %d expiration", i)
+		assert.False(t, seenTokens[nextToken], "rotation %d produced duplicate token", i)
+
+		// Previous token consumed.
+		_, _, _, err = v.ExchangeRefreshToken(currentToken)
+		assert.ErrorIs(t, err, ErrorRefreshTokenNotFound, "rotation %d: old token should be consumed", i)
+
+		seenTokens[nextToken] = true
+		currentToken = nextToken
+	}
+
+	// Final token should still be valid for one more exchange.
+	_, _, finalNext, err := v.ExchangeRefreshToken(currentToken)
+	require.NoError(t, err, "final exchange should succeed")
+	assert.NotEmpty(t, finalNext)
+}
+
+// ---------------------------------------------------------------------------
+// Tests: CreateRefreshToken — expiration timestamp
+// ---------------------------------------------------------------------------
+
+// TestCreateRefreshToken_ExpirationTimestamp verifies that the stored refresh
+// token's ExpiresAt field is computed as now + refreshTokenExpiration.
+func TestCreateRefreshToken_ExpirationTimestamp(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	repo := newMockRefreshTokenRepo()
+	// refreshTokenExpiration is set to 24h in newRefreshTokenVerifier.
+	v := newRefreshTokenVerifier(t, true, repo)
+
+	token, err := v.CreateRefreshToken("client-ts", "jwt-payload-string")
+	require.NoError(t, err)
+
+	stored, ok := repo.tokens[token]
+	require.True(t, ok, "token should be stored in repo")
+
+	// mockClock.Now() returns time.Unix(0, 0); refreshTokenExpiration = 24h.
+	expectedExpiresAt := time.Unix(0, 0).Add(24 * time.Hour).Unix()
+	assert.Equal(t, expectedExpiresAt, stored.ExpiresAt,
+		"ExpiresAt should be mockClock.Now() + refreshTokenExpiration")
+}
+
+// ---------------------------------------------------------------------------
+// Tests: CreateRefreshToken — table-driven with enabled/disabled
+// ---------------------------------------------------------------------------
+
+// TestCreateRefreshToken_TableDriven consolidates enabled/disabled and error
+// scenarios in a single table-driven test.
+func TestCreateRefreshToken_TableDriven(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type testCase struct {
+		name      string
+		enabled   bool
+		storeErr  error
+		expectErr error
+		expectOk  bool
+	}
+
+	tests := []testCase{
+		{
+			name:     "success when enabled",
+			enabled:  true,
+			expectOk: true,
+		},
+		{
+			name:      "disabled returns ErrorRefreshTokenDisabled",
+			enabled:   false,
+			expectErr: ErrorRefreshTokenDisabled,
+		},
+		{
+			name:     "store error propagates",
+			enabled:  true,
+			storeErr: errors.New("disk full"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockRefreshTokenRepo()
+			if tc.storeErr != nil {
+				repo.storeErr = tc.storeErr
+			}
+			v := newRefreshTokenVerifier(t, tc.enabled, repo)
+
+			token, err := v.CreateRefreshToken("client-1", "jwt-payload")
+
+			if tc.expectErr != nil {
+				assert.ErrorIs(t, err, tc.expectErr)
+				assert.Empty(t, token)
+				return
+			}
+			if tc.storeErr != nil {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tc.storeErr.Error())
+				assert.Empty(t, token)
+				return
+			}
+			require.NoError(t, err)
+			assert.NotEmpty(t, token)
+			assert.Len(t, repo.tokens, 1, "exactly one token stored")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: signToken with RS256 algorithm
+// ---------------------------------------------------------------------------
+
+// TestSignToken_RS256 verifies that signToken works correctly with the RS256
+// algorithm, covering the RS256 branch in the signToken switch statement.
+func TestSignToken_RS256(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	// Generate an RSA key for RS256 signing.
+	rsaKey, err := rsa.GenerateKey(rand.Reader, testRSAKeyBits)
+	require.NoError(t, err)
+	jwkKey, err := jwk.Import(rsaKey)
+	require.NoError(t, err)
+
+	v := &CredentialVerifier{
+		signingKey:       jwkKey,
+		signingAlgorithm: "RS256",
+		clock:            mockClock{},
+		tokenSigner:      mockTokenSigner{},
+		host:             "https://verifier.example.com",
+		jwtExpiration:    time.Hour,
+	}
+
+	tok, err := v.generateJWT(
+		[]map[string]interface{}{{"role": "admin"}},
+		"did:key:holder", "aud-1", false, "nonce-1",
+	)
+	require.NoError(t, err)
+
+	signed, err := v.signToken(tok)
+	require.NoError(t, err)
+	assert.NotEmpty(t, signed)
+
+	// Verify it has 3 parts (header.payload.signature).
+	parts := 0
+	for _, c := range signed {
+		if c == '.' {
+			parts++
+		}
+	}
+	assert.Equal(t, 2, parts, "signed JWT should have 3 parts (2 dots)")
+}
+
+// ---------------------------------------------------------------------------
+// Tests: ExchangeRefreshToken — rotation store failure
+// ---------------------------------------------------------------------------
+
+// TestExchangeRefreshToken_RotationStoreFailure covers the case where the
+// initial exchange succeeds but creating the rotated refresh token fails.
+func TestExchangeRefreshToken_RotationStoreFailure(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	repo := newMockRefreshTokenRepo()
+	v := newRefreshTokenVerifier(t, true, repo)
+
+	signedJWT := buildTestJWT(t, v)
+	repo.tokens["tok-rot-fail"] = database.RefreshTokenRow{
+		Token:      "tok-rot-fail",
+		ClientID:   "client-1",
+		JWTPayload: signedJWT,
+		ExpiresAt:  9999999999,
+	}
+
+	// After the first get-and-delete succeeds, make subsequent stores fail so
+	// the rotation step in ExchangeRefreshToken fails.
+	repo.storeErr = errors.New("rotation store failed")
+
+	_, _, _, err := v.ExchangeRefreshToken("tok-rot-fail")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "rotate refresh token")
 }
 
 // ---------------------------------------------------------------------------

@@ -696,3 +696,170 @@ func TestRefreshTokenAdapt_SQLite(t *testing.T) {
 	assert.Equal(t, original, repo.adapt(original))
 }
 
+// TestRefreshTokenAdapt_MySQL verifies that MySQL queries are unchanged
+// (MySQL uses ? placeholders like SQLite).
+func TestRefreshTokenAdapt_MySQL(t *testing.T) {
+	repo := &SqlRefreshTokenRepository{dbType: DriverTypeMySQL}
+	original := "INSERT INTO t (a, b) VALUES (?, ?)"
+	assert.Equal(t, original, repo.adapt(original))
+}
+
+// ---------------------------------------------------------------------------
+// Additional refresh token repository tests
+// ---------------------------------------------------------------------------
+
+// TestStoreRefreshToken_FieldRoundTrip stores a token with specific field
+// values and verifies every field survives the database round-trip.
+func TestStoreRefreshToken_FieldRoundTrip(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	jwtPayload := `eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciIsInN1YiI6ImRpZDprZXk6aG9sZGVyIiwiYXVkIjoiYXVkLTEifQ.sig`
+	row := RefreshTokenRow{
+		Token:      "field-roundtrip-tok",
+		ClientID:   "client-roundtrip",
+		JWTPayload: jwtPayload,
+		ExpiresAt:  1893456000, // 2030-01-01
+	}
+	require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "field-roundtrip-tok")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "field-roundtrip-tok", got.Token)
+	assert.Equal(t, "client-roundtrip", got.ClientID)
+	assert.Equal(t, jwtPayload, got.JWTPayload)
+	assert.Equal(t, int64(1893456000), got.ExpiresAt)
+}
+
+// TestRefreshTokenIsolation verifies that storing and retrieving multiple
+// tokens with different client IDs does not cause cross-contamination.
+func TestRefreshTokenIsolation(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	// Store two tokens for different clients.
+	row1 := RefreshTokenRow{
+		Token:      "iso-tok-1",
+		ClientID:   "client-alpha",
+		JWTPayload: `{"client":"alpha"}`,
+		ExpiresAt:  9999999999,
+	}
+	row2 := RefreshTokenRow{
+		Token:      "iso-tok-2",
+		ClientID:   "client-beta",
+		JWTPayload: `{"client":"beta"}`,
+		ExpiresAt:  9999999999,
+	}
+	require.NoError(t, repo.StoreRefreshToken(ctx, row1))
+	require.NoError(t, repo.StoreRefreshToken(ctx, row2))
+
+	// Retrieve token 1 — should get client-alpha data.
+	got1, err := repo.GetAndDeleteRefreshToken(ctx, "iso-tok-1")
+	require.NoError(t, err)
+	assert.Equal(t, "client-alpha", got1.ClientID)
+	assert.Equal(t, `{"client":"alpha"}`, got1.JWTPayload)
+
+	// Token 1 consumed — should be gone.
+	_, err = repo.GetAndDeleteRefreshToken(ctx, "iso-tok-1")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
+
+	// Token 2 should still be available and correct.
+	got2, err := repo.GetAndDeleteRefreshToken(ctx, "iso-tok-2")
+	require.NoError(t, err)
+	assert.Equal(t, "client-beta", got2.ClientID)
+	assert.Equal(t, `{"client":"beta"}`, got2.JWTPayload)
+}
+
+// TestDeleteExpiredTokens_MixedExpiry verifies that only tokens past their
+// expiry are removed, leaving tokens with future expiry untouched.
+func TestDeleteExpiredTokens_MixedExpiry(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	// Store three tokens: two expired (in the past) and one far in the future.
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("expired-a", 100)))
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("expired-b", 200)))
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("valid-a", 9999999999)))
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("valid-b", 9999999998)))
+
+	n, err := repo.DeleteExpiredTokens(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n, "should delete exactly 2 expired tokens")
+
+	// Valid tokens remain.
+	gotA, err := repo.GetAndDeleteRefreshToken(ctx, "valid-a")
+	require.NoError(t, err)
+	assert.Equal(t, "valid-a", gotA.Token)
+
+	gotB, err := repo.GetAndDeleteRefreshToken(ctx, "valid-b")
+	require.NoError(t, err)
+	assert.Equal(t, "valid-b", gotB.Token)
+
+	// Expired tokens gone.
+	_, err = repo.GetAndDeleteRefreshToken(ctx, "expired-a")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
+
+	_, err = repo.GetAndDeleteRefreshToken(ctx, "expired-b")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
+}
+
+// TestRefreshTokenRepository_TableDriven is a table-driven test that covers
+// the core store → retrieve → verify pattern for multiple scenarios.
+func TestRefreshTokenRepository_TableDriven(t *testing.T) {
+	type testCase struct {
+		name      string
+		token     string
+		clientID  string
+		payload   string
+		expiresAt int64
+	}
+
+	tests := []testCase{
+		{
+			name:      "standard token",
+			token:     "td-standard",
+			clientID:  "client-std",
+			payload:   `{"iss":"verifier","sub":"holder"}`,
+			expiresAt: 9999999999,
+		},
+		{
+			name:      "token with long JWT payload",
+			token:     "td-long-payload",
+			clientID:  "client-long",
+			payload:   `{"iss":"verifier","sub":"holder","verifiableCredential":[{"type":"VerifiableCredential","credentialSubject":{"firstName":"Test","lastName":"User","roles":["GOLD_CUSTOMER","STANDARD_CUSTOMER"]}}]}`,
+			expiresAt: 1893456000,
+		},
+		{
+			name:      "token with minimal fields",
+			token:     "td-minimal",
+			clientID:  "c",
+			payload:   `{}`,
+			expiresAt: 1,
+		},
+	}
+
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			row := RefreshTokenRow{
+				Token:      tc.token,
+				ClientID:   tc.clientID,
+				JWTPayload: tc.payload,
+				ExpiresAt:  tc.expiresAt,
+			}
+			require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+			got, err := repo.GetAndDeleteRefreshToken(ctx, tc.token)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tc.token, got.Token)
+			assert.Equal(t, tc.clientID, got.ClientID)
+			assert.Equal(t, tc.payload, got.JWTPayload)
+			assert.Equal(t, tc.expiresAt, got.ExpiresAt)
+		})
+	}
+}
+
