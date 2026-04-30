@@ -143,11 +143,7 @@ func TestCreateRefreshToken_Success(t *testing.T) {
 	repo := newMockRefreshTokenRepo()
 	v := newRefreshTokenVerifier(t, true, repo)
 
-	token, err := v.CreateRefreshToken(
-		"client-1", "did:key:holder", "aud-1",
-		[]string{"openid"}, []map[string]interface{}{{"role": "admin"}},
-		false, "nonce-1",
-	)
+	token, err := v.CreateRefreshToken("client-1", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciJ9.sig")
 	require.NoError(t, err)
 	assert.NotEmpty(t, token)
 
@@ -156,20 +152,14 @@ func TestCreateRefreshToken_Success(t *testing.T) {
 	stored, ok := repo.tokens[token]
 	require.True(t, ok)
 	assert.Equal(t, "client-1", stored.ClientID)
-	assert.Equal(t, "did:key:holder", stored.Subject)
-	assert.Equal(t, "aud-1", stored.Audience)
-	assert.False(t, stored.FlatClaims)
-	assert.Equal(t, "nonce-1", stored.Nonce)
+	assert.Equal(t, "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciJ9.sig", stored.JWTPayload)
 }
 
 func TestCreateRefreshToken_Disabled(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	v := newRefreshTokenVerifier(t, false, nil)
-	_, err := v.CreateRefreshToken(
-		"client-1", "sub", "aud",
-		[]string{}, []map[string]interface{}{}, false, "",
-	)
+	_, err := v.CreateRefreshToken("client-1", "some-jwt")
 	assert.ErrorIs(t, err, ErrorRefreshTokenDisabled)
 }
 
@@ -180,12 +170,27 @@ func TestCreateRefreshToken_StoreError(t *testing.T) {
 	repo.storeErr = errors.New("db connection lost")
 	v := newRefreshTokenVerifier(t, true, repo)
 
-	_, err := v.CreateRefreshToken(
-		"client-1", "sub", "aud",
-		[]string{"openid"}, []map[string]interface{}{}, false, "",
-	)
+	_, err := v.CreateRefreshToken("client-1", "some-jwt")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "db connection lost")
+}
+
+// ---------------------------------------------------------------------------
+// Helper: build a signed JWT to use as stored JWTPayload in tests.
+// ---------------------------------------------------------------------------
+
+// buildTestJWT generates a signed JWT string using the test verifier's key
+// and signer, suitable for storing as a RefreshTokenRow.JWTPayload.
+func buildTestJWT(t *testing.T, v *CredentialVerifier) string {
+	t.Helper()
+	tok, err := v.generateJWT(
+		[]map[string]interface{}{{"role": "admin"}},
+		"did:key:holder", "aud-1", false, "nonce-1",
+	)
+	require.NoError(t, err)
+	signed, err := v.signToken(tok)
+	require.NoError(t, err)
+	return signed
 }
 
 // ---------------------------------------------------------------------------
@@ -198,19 +203,14 @@ func TestExchangeRefreshToken_Success(t *testing.T) {
 	repo := newMockRefreshTokenRepo()
 	v := newRefreshTokenVerifier(t, true, repo)
 
-	// Pre-populate a valid token in the repo.
-	scopesJSON, _ := database.MarshalScopes([]string{"openid"})
-	credsJSON, _ := database.MarshalCredentials([]map[string]interface{}{{"role": "admin"}})
+	// Build a real signed JWT to store as the payload.
+	signedJWT := buildTestJWT(t, v)
+
 	repo.tokens["original-token"] = database.RefreshTokenRow{
-		Token:       "original-token",
-		ClientID:    "client-1",
-		Subject:     "did:key:holder",
-		Audience:    "aud-1",
-		Scopes:      scopesJSON,
-		Credentials: credsJSON,
-		FlatClaims:  false,
-		Nonce:       "nonce-1",
-		ExpiresAt:   9999999999, // far future
+		Token:      "original-token",
+		ClientID:   "client-1",
+		JWTPayload: signedJWT,
+		ExpiresAt:  9999999999, // far future
 	}
 
 	jwtString, expiration, newToken, err := v.ExchangeRefreshToken("original-token")
@@ -255,16 +255,11 @@ func TestExchangeRefreshToken_Expired(t *testing.T) {
 
 	// mockClock.Now() returns time.Unix(0, 0), so any expires_at < 0 is
 	// expired. Use -1 to be safely in the past.
-	scopesJSON, _ := database.MarshalScopes([]string{})
-	credsJSON, _ := database.MarshalCredentials([]map[string]interface{}{})
 	repo.tokens["expired-token"] = database.RefreshTokenRow{
-		Token:       "expired-token",
-		ClientID:    "client-1",
-		Subject:     "sub",
-		Audience:    "aud",
-		Scopes:      scopesJSON,
-		Credentials: credsJSON,
-		ExpiresAt:   -1, // before epoch — mockClock returns 0
+		Token:      "expired-token",
+		ClientID:   "client-1",
+		JWTPayload: "irrelevant-for-expiry-check",
+		ExpiresAt:  -1, // before epoch — mockClock returns 0
 	}
 
 	_, _, _, err := v.ExchangeRefreshToken("expired-token")
@@ -277,17 +272,12 @@ func TestExchangeRefreshToken_Rotation_OldTokenInvalid(t *testing.T) {
 	repo := newMockRefreshTokenRepo()
 	v := newRefreshTokenVerifier(t, true, repo)
 
-	scopesJSON, _ := database.MarshalScopes([]string{"openid"})
-	credsJSON, _ := database.MarshalCredentials([]map[string]interface{}{{"role": "user"}})
+	signedJWT := buildTestJWT(t, v)
 	repo.tokens["tok-A"] = database.RefreshTokenRow{
-		Token:       "tok-A",
-		ClientID:    "client-1",
-		Subject:     "did:key:holder",
-		Audience:    "aud-1",
-		Scopes:      scopesJSON,
-		Credentials: credsJSON,
-		Nonce:       "n1",
-		ExpiresAt:   9999999999,
+		Token:      "tok-A",
+		ClientID:   "client-1",
+		JWTPayload: signedJWT,
+		ExpiresAt:  9999999999,
 	}
 
 	// Exchange tok-A → get tok-B.

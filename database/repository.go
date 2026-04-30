@@ -481,9 +481,9 @@ func NewRefreshTokenRepository(db *sql.DB, dbType string) *SqlRefreshTokenReposi
 // SQL query constants for refresh token operations (written with ?
 // placeholders; adapted at runtime for PostgreSQL).
 const (
-	sqlInsertRefreshToken = `INSERT INTO refresh_token (token, client_id, subject, audience, scopes, credentials, flat_claims, nonce, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	sqlInsertRefreshToken = `INSERT INTO refresh_token (token, client_id, jwt_payload, expires_at) VALUES (?, ?, ?, ?)`
 
-	sqlSelectRefreshToken = `SELECT token, client_id, subject, audience, scopes, credentials, flat_claims, nonce, expires_at FROM refresh_token WHERE token = ?`
+	sqlSelectRefreshToken = `SELECT token, client_id, jwt_payload, expires_at FROM refresh_token WHERE token = ?`
 
 	sqlDeleteRefreshToken = `DELETE FROM refresh_token WHERE token = ?`
 
@@ -493,8 +493,7 @@ const (
 // StoreRefreshToken persists a new refresh token row in the database.
 func (r *SqlRefreshTokenRepository) StoreRefreshToken(ctx context.Context, row RefreshTokenRow) error {
 	_, err := r.db.ExecContext(ctx, r.adapt(sqlInsertRefreshToken),
-		row.Token, row.ClientID, row.Subject, row.Audience,
-		row.Scopes, row.Credentials, row.FlatClaims, row.Nonce, row.ExpiresAt)
+		row.Token, row.ClientID, row.JWTPayload, row.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("insert refresh token: %w", err)
 	}
@@ -514,8 +513,7 @@ func (r *SqlRefreshTokenRepository) GetAndDeleteRefreshToken(ctx context.Context
 
 	var row RefreshTokenRow
 	err = tx.QueryRowContext(ctx, r.adapt(sqlSelectRefreshToken), token).Scan(
-		&row.Token, &row.ClientID, &row.Subject, &row.Audience,
-		&row.Scopes, &row.Credentials, &row.FlatClaims, &row.Nonce, &row.ExpiresAt)
+		&row.Token, &row.ClientID, &row.JWTPayload, &row.ExpiresAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRefreshTokenNotFound

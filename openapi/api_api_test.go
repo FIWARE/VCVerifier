@@ -100,7 +100,7 @@ func (mV *mockVerifier) IsRefreshTokenEnabled() bool {
 	return false
 }
 
-func (mV *mockVerifier) CreateRefreshToken(clientId, subject, audience string, scopes []string, credentials []map[string]interface{}, flatClaims bool, nonce string) (string, error) {
+func (mV *mockVerifier) CreateRefreshToken(clientId string, signedJWT string) (string, error) {
 	return "", nil
 }
 
