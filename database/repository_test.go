@@ -564,3 +564,157 @@ func TestPh_SQLite(t *testing.T) {
 	assert.Equal(t, "?", repo.ph(1))
 	assert.Equal(t, "?", repo.ph(99))
 }
+
+// ---------------------------------------------------------------------------
+// RefreshTokenRepository tests
+// ---------------------------------------------------------------------------
+
+// newTestRefreshRepo creates a fresh SQLite-backed RefreshTokenRepository
+// for a test.
+func newTestRefreshRepo(t *testing.T) *SqlRefreshTokenRepository {
+	t.Helper()
+	db := openTestDB(t)
+	err := InitSchema(db, DriverTypeSQLite)
+	require.NoError(t, err)
+	return NewRefreshTokenRepository(db, DriverTypeSQLite)
+}
+
+// sampleRefreshToken builds a RefreshTokenRow for testing.
+func sampleRefreshToken(token string, expiresAt int64) RefreshTokenRow {
+	return RefreshTokenRow{
+		Token:       token,
+		ClientID:    "client-1",
+		Subject:     "did:key:holder123",
+		Audience:    "aud-1",
+		Scopes:      `["openid","profile"]`,
+		Credentials: `[{"role":"admin"}]`,
+		FlatClaims:  false,
+		Nonce:       "nonce-abc",
+		ExpiresAt:   expiresAt,
+	}
+}
+
+func TestStoreRefreshToken_Success(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	row := sampleRefreshToken("tok-1", 9999999999)
+	err := repo.StoreRefreshToken(ctx, row)
+	require.NoError(t, err)
+}
+
+func TestStoreRefreshToken_DuplicateToken(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	row := sampleRefreshToken("tok-dup", 9999999999)
+	require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+	err := repo.StoreRefreshToken(ctx, row)
+	assert.Error(t, err, "inserting duplicate token should fail")
+}
+
+func TestGetAndDeleteRefreshToken_Success(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	row := sampleRefreshToken("tok-2", 9999999999)
+	require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "tok-2")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "tok-2", got.Token)
+	assert.Equal(t, "client-1", got.ClientID)
+	assert.Equal(t, "did:key:holder123", got.Subject)
+	assert.Equal(t, "aud-1", got.Audience)
+	assert.Equal(t, `["openid","profile"]`, got.Scopes)
+	assert.Equal(t, `[{"role":"admin"}]`, got.Credentials)
+	assert.False(t, got.FlatClaims)
+	assert.Equal(t, "nonce-abc", got.Nonce)
+	assert.Equal(t, int64(9999999999), got.ExpiresAt)
+
+	// Second retrieval must return not-found (single-use).
+	_, err = repo.GetAndDeleteRefreshToken(ctx, "tok-2")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
+}
+
+func TestGetAndDeleteRefreshToken_NotFound(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetAndDeleteRefreshToken(ctx, "nonexistent")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
+}
+
+func TestGetAndDeleteRefreshToken_SingleUse(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	row := sampleRefreshToken("tok-single", 9999999999)
+	require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+	// First get-and-delete succeeds.
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "tok-single")
+	require.NoError(t, err)
+	assert.Equal(t, "tok-single", got.Token)
+
+	// Subsequent attempts must fail.
+	_, err = repo.GetAndDeleteRefreshToken(ctx, "tok-single")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
+}
+
+func TestDeleteExpiredTokens(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	// Store two expired and one valid token.
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("expired-1", 1)))
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("expired-2", 2)))
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("valid-1", 9999999999)))
+
+	n, err := repo.DeleteExpiredTokens(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+
+	// The valid token should still be retrievable.
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "valid-1")
+	require.NoError(t, err)
+	assert.Equal(t, "valid-1", got.Token)
+}
+
+func TestDeleteExpiredTokens_NoneExpired(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("future-tok", 9999999999)))
+
+	n, err := repo.DeleteExpiredTokens(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+}
+
+func TestRefreshTokenAdapt_Postgres(t *testing.T) {
+	repo := &SqlRefreshTokenRepository{dbType: DriverTypePostgres}
+	adapted := repo.adapt("INSERT INTO t (a, b) VALUES (?, ?)")
+	assert.Equal(t, "INSERT INTO t (a, b) VALUES ($1, $2)", adapted)
+}
+
+func TestRefreshTokenAdapt_SQLite(t *testing.T) {
+	repo := &SqlRefreshTokenRepository{dbType: DriverTypeSQLite}
+	original := "INSERT INTO t (a, b) VALUES (?, ?)"
+	assert.Equal(t, original, repo.adapt(original))
+}
+
+func TestRefreshTokenFlatClaims_True(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	row := sampleRefreshToken("tok-flat", 9999999999)
+	row.FlatClaims = true
+	require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "tok-flat")
+	require.NoError(t, err)
+	assert.True(t, got.FlatClaims, "FlatClaims should round-trip as true")
+}
