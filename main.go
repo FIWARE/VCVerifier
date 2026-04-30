@@ -48,9 +48,11 @@ func main() {
 	// health check
 	router.GET("/health", HealthReq)
 
+	allowedOrigins := ResolveAllowedOrigins(configuration.ConfigRepo.Services)
+	logger.Infof("CORS allowed origins: %v", allowedOrigins)
+
 	router.Use(cors.New(cors.Config{
-		// we need to allow all, since we do not know the potential origin of a wallet
-		AllowOrigins:     []string{"*"},
+		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"POST", "GET"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		AllowCredentials: true,
@@ -137,4 +139,40 @@ func init() {
 		configFile = configFileEnv
 	}
 	logging.Log().Infof("Will read config from %s", configFile)
+}
+
+// wildcardOrigin is the CORS origin value that permits requests from any origin.
+const wildcardOrigin = "*"
+
+// ResolveAllowedOrigins aggregates the AllowedOrigins from all configured
+// services into a deduplicated list of CORS origins. The rules are:
+//
+//   - If no services are provided, or none of them specify any AllowedOrigins,
+//     the function returns ["*"] (wildcard) for backward compatibility.
+//   - If any service includes "*" in its AllowedOrigins, the function returns
+//     ["*"] because the wildcard takes precedence over specific origins.
+//   - Otherwise the function returns the deduplicated union of all origins.
+func ResolveAllowedOrigins(services []configModel.ConfiguredService) []string {
+	seen := make(map[string]struct{})
+	var origins []string
+
+	for _, svc := range services {
+		for _, origin := range svc.AllowedOrigins {
+			if origin == wildcardOrigin {
+				// Wildcard takes precedence — no need to collect further.
+				return []string{wildcardOrigin}
+			}
+			if _, exists := seen[origin]; !exists {
+				seen[origin] = struct{}{}
+				origins = append(origins, origin)
+			}
+		}
+	}
+
+	// No origins configured at all — default to wildcard for backward compatibility.
+	if len(origins) == 0 {
+		return []string{wildcardOrigin}
+	}
+
+	return origins
 }

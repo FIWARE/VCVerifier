@@ -44,6 +44,11 @@ type ConfiguredService struct {
 	Id                string                `json:"id" mapstructure:"id"`
 	AuthorizationType string                `json:"authorizationType,omitempty" mapstructure:"authorizationType,omitempty"`
 	AuthorizationPath string                `json:"authorizationPath,omitempty" mapstructure:"authorizationPath,omitempty"`
+	// AllowedOrigins specifies the list of origins permitted for CORS requests
+	// to this service. When empty or nil, no service-specific restriction is
+	// applied and the verifier falls back to the global default (wildcard).
+	// Set to ["*"] to explicitly allow all origins for this service.
+	AllowedOrigins []string `json:"allowedOrigins,omitempty" mapstructure:"allowedOrigins,omitempty"`
 }
 
 type ScopeEntry struct {
