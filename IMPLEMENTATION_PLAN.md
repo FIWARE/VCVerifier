@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add OAuth2 refresh token support (per [RFC 6749 Section 1.5](https://datatracker.ietf.org/doc/html/rfc6749#section-1.5)) to VCVerifier's token endpoint. Currently, the `/token` endpoint returns only `access_token`, `token_type`, `issued_token_type`, and `expires_in`. This plan adds refresh token generation, a dedicated refresh token store, a `grant_type=refresh_token` exchange flow, and token rotation on refresh. The refresh token feature is opt-in via configuration so existing deployments are unaffected.
+Add OAuth2 refresh token support (per [RFC 6749 Section 1.5](https://datatracker.ietf.org/doc/html/rfc6749#section-1.5)) to VCVerifier's token endpoint. Currently, the `/token` endpoint returns only `access_token`, `token_type`, `issued_token_type`, and `expires_in`. This plan adds refresh token generation, a database-backed refresh token store (surviving restarts and supporting horizontal scaling), a `grant_type=refresh_token` exchange flow, and token rotation on refresh. The refresh token feature is opt-in via configuration so existing deployments are unaffected. The database storage follows the existing `ServiceRepository` / `SqlServiceRepository` pattern, supporting PostgreSQL, MySQL, and SQLite.
 
 ## Steps
 
@@ -22,34 +22,68 @@ Add the configuration knobs and shared constants needed by subsequent steps.
 - New config fields are documented with Go comments following the existing style.
 - Add a unit test in `config/config_test.go` that verifies the new defaults are applied when the fields are absent from the YAML input.
 
-### Step 2: Add refresh token store and generation logic in the verifier
+### Step 2: Add database-backed refresh token store and generation logic
 
-Create the infrastructure for generating, storing, and retrieving refresh tokens.
+Create the infrastructure for generating, storing, and retrieving refresh tokens using a database-backed storage layer. This ensures tokens survive restarts and work correctly with horizontal scaling (multiple replicas sharing the same database). Follows the existing `ServiceRepository` / `SqlServiceRepository` pattern in `database/`.
 
 **Files to modify:**
-- `verifier/verifier.go`:
-  - Add a `refreshTokenStore` struct to hold the data needed to reissue an access token on refresh: `clientId`, `subject`, `audience`, `scopes []string`, `credentials []map[string]interface{}`, `flatClaims bool`, and `nonce string`.
-  - Add a new `refreshTokenCache` field (type `common.Cache`) to `CredentialVerifier`, initialized in `InitVerifier` with TTL derived from `RefreshTokenExpiration`. Only create the cache when `RefreshTokenEnabled` is `true`.
-  - Add a `refreshTokenEnabled` bool field and `refreshTokenExpiration` `time.Duration` field to `CredentialVerifier`.
-  - Add a helper method `generateRefreshToken() string` that generates a cryptographically random opaque token (base64url-encoded, 32 bytes) using `crypto/rand`.
-  - Add a method `StoreRefreshToken(refreshToken string, store refreshTokenStore)` that stores the refresh token data in the cache.
-  - Add a method `ExchangeRefreshToken(refreshToken string) (jwtString string, expiration int64, newRefreshToken string, err error)` that:
-    1. Retrieves and deletes the refresh token from cache (one-time use, same pattern as authorization code).
-    2. Calls `generateJWT` with the stored claims to create a new access token.
-    3. Signs the new access token.
-    4. Generates a new refresh token (rotation) and stores it in the cache with the same session data.
-    5. Returns the new access token, its expiration, and the new refresh token.
-  - Add `ExchangeRefreshToken` to the `Verifier` interface.
+- `database/schema.go`:
+  - Add a `refresh_token` table to `InitSchema()` with columns:
+    - `token` (`VARCHAR(255)` PRIMARY KEY) — the opaque refresh token string.
+    - `client_id` (`VARCHAR(255)` NOT NULL).
+    - `subject` (`VARCHAR(255)` NOT NULL).
+    - `audience` (`VARCHAR(255)` NOT NULL).
+    - `scopes` (`TEXT` NOT NULL) — JSON-serialized `[]string`.
+    - `credentials` (`TEXT` NOT NULL) — JSON-serialized `[]map[string]interface{}`.
+    - `flat_claims` (`BOOLEAN` NOT NULL DEFAULT FALSE).
+    - `nonce` (`VARCHAR(255)` NOT NULL).
+    - `expires_at` (`BIGINT` NOT NULL) — Unix timestamp for expiration.
+  - Use `CREATE TABLE IF NOT EXISTS` (idempotent, same pattern as existing tables).
+  - Adapt DDL per database driver (PostgreSQL, MySQL, SQLite) following the existing multi-driver pattern.
 
-**Files to create:** None.
+- `database/models.go`:
+  - Add a `RefreshTokenRow` struct mapping to the `refresh_token` table columns, with JSON serialization helpers for `scopes` and `credentials` (similar to `ScopeEntryRow`).
+
+- `database/repository.go`:
+  - Add a `RefreshTokenRepository` interface:
+    - `StoreRefreshToken(row RefreshTokenRow) error` — inserts a new refresh token row.
+    - `GetAndDeleteRefreshToken(token string) (*RefreshTokenRow, error)` — atomically retrieves and deletes the token (single-use, same get-then-delete pattern as authorization codes). Returns `ErrRefreshTokenNotFound` if missing or expired.
+    - `DeleteExpiredTokens() (int64, error)` — removes rows where `expires_at < now()` (housekeeping).
+  - Add `SqlRefreshTokenRepository` struct implementing `RefreshTokenRepository`, with `*sql.DB` and `dbType` fields (same pattern as `SqlServiceRepository`).
+  - Add sentinel error `ErrRefreshTokenNotFound`.
+
+- `verifier/verifier.go`:
+  - Add a `refreshTokenEnabled` bool field and `refreshTokenExpiration` `time.Duration` field to `CredentialVerifier`.
+  - Add a `refreshTokenRepo` field (type `database.RefreshTokenRepository`) to `CredentialVerifier`, initialized in `InitVerifier` when `RefreshTokenEnabled` is `true` and a database connection is available.
+  - Add a helper method `generateRefreshToken() string` that generates a cryptographically random opaque token (base64url-encoded, 32 bytes) using `crypto/rand`.
+  - Add a method `StoreRefreshToken(...)` that builds a `RefreshTokenRow` (computing `expires_at` from current time + `refreshTokenExpiration`) and calls `refreshTokenRepo.StoreRefreshToken()`.
+  - Add a method `ExchangeRefreshToken(refreshToken string) (jwtString string, expiration int64, newRefreshToken string, err error)` that:
+    1. Calls `refreshTokenRepo.GetAndDeleteRefreshToken(refreshToken)` to atomically retrieve and delete (single-use).
+    2. Checks `expires_at` against current time (defense in depth beyond the housekeeping query).
+    3. Calls `generateJWT` with the stored claims to create a new access token.
+    4. Signs the new access token.
+    5. Generates a new refresh token (rotation) and stores it via the repository with the same session data.
+    6. Returns the new access token, its expiration, and the new refresh token.
+  - Add `ExchangeRefreshToken` to the `Verifier` interface.
+  - Optionally start a background goroutine (or use the existing `chrono` scheduler) to periodically call `DeleteExpiredTokens()` for housekeeping.
+
+- `main.go` (or `InitVerifier`):
+  - When `RefreshTokenEnabled` is `true`, ensure a database connection is available (reuse the existing `database.NewConnection` call) and pass the `RefreshTokenRepository` to the verifier.
+  - If `RefreshTokenEnabled` is `true` but no database is configured, log a clear error and fail fast at startup.
+
+**Files to create:** None (all changes go in existing files following established patterns).
 
 **Acceptance criteria:**
 - Refresh token is a 32-byte cryptographically random base64url string.
-- Refresh tokens are single-use (deleted after retrieval, rotated on each exchange).
+- Refresh tokens are persisted in the database and survive process restarts.
+- Multiple verifier replicas sharing the same database can issue and exchange each other's refresh tokens (horizontal scaling).
+- Refresh tokens are single-use (atomically deleted on retrieval, rotated on each exchange).
 - `ExchangeRefreshToken` returns a new access token JWT and a new refresh token.
-- When `RefreshTokenEnabled` is `false`, the `refreshTokenCache` is `nil` and `ExchangeRefreshToken` returns an appropriate error.
+- When `RefreshTokenEnabled` is `false`, `ExchangeRefreshToken` returns an appropriate error.
+- Expired tokens are cleaned up (either on access or via periodic housekeeping).
 - Unit tests cover: successful exchange, expired/missing token, rotation (old token invalid after use), disabled feature.
-- Follow existing mock patterns (`mockRefreshTokenCache`) in the test file.
+- Repository tests use an in-memory SQLite database (same pattern as existing `database/` tests).
+- Follow existing mock patterns (`mockRefreshTokenRepository`) in verifier test files.
 
 ### Step 3: Update token response model and OpenAPI spec
 
@@ -87,7 +121,7 @@ Connect the refresh token generation and exchange to the HTTP layer.
   - Implement `IsRefreshTokenEnabled()` and `CreateRefreshToken(...)` on `CredentialVerifier`.
   - Refactor `GenerateToken` to return the credential inclusion data (credentials list, flatClaims flag) alongside the signed JWT, so the openapi layer can pass them to `CreateRefreshToken`. Alternatively, have `GenerateToken` itself call `CreateRefreshToken` internally and return the refresh token as an additional return value. Choose the approach that minimizes interface changes — extending `GenerateToken` to return `(int64, string, string, error)` where the third string is the refresh token (empty when disabled) is cleanest.
 
-**Note on `GetToken` (authorization_code flow):** This flow retrieves a pre-built JWT from the token cache. The claims data needed for refresh token storage must be captured at the time the token is stored (in `AuthenticationResponse`). Modify `tokenStore` to also hold the refresh-relevant session data (`clientId`, `subject`, `audience`, `scopes`, `credentials`, `flatClaims`, `nonce`), and after `GetToken` succeeds, generate and store the refresh token if enabled.
+**Note on `GetToken` (authorization_code flow):** This flow retrieves a pre-built JWT from the token cache. The claims data needed for refresh token storage must be captured at the time the token is stored (in `AuthenticationResponse`). Modify `tokenStore` to also hold the refresh-relevant session data (`clientId`, `subject`, `audience`, `scopes`, `credentials`, `flatClaims`, `nonce`), and after `GetToken` succeeds, generate and store the refresh token in the database via the `RefreshTokenRepository` if enabled.
 
 **Acceptance criteria:**
 - `POST /token` with `grant_type=refresh_token&refresh_token=<token>` returns 200 with new access + refresh tokens.
@@ -114,15 +148,22 @@ Add end-to-end and unit tests covering all refresh token scenarios.
     - Existing grant types NOT returning `refresh_token` when disabled.
 
 - `verifier/verifier_test.go`:
-  - Add `mockRefreshTokenCache` implementing `common.Cache`.
+  - Add `mockRefreshTokenRepository` implementing `database.RefreshTokenRepository`.
   - Add `TestExchangeRefreshToken` with table-driven cases:
     - Successful exchange returns new access + refresh tokens.
     - Missing/expired refresh token returns error.
     - Old refresh token is invalid after rotation (single-use).
     - Feature disabled returns error.
-  - Add `TestCreateRefreshToken` verifying token generation and cache storage.
+  - Add `TestCreateRefreshToken` verifying token generation and database storage.
   - Add `TestGenerateRefreshToken` verifying token format (base64url, 32 bytes).
   - Update existing `TestGenerateToken` cases to verify refresh token is returned when enabled and absent when disabled.
+
+- `database/repository_test.go`:
+  - Add `TestStoreRefreshToken` verifying token insertion and retrieval from SQLite.
+  - Add `TestGetAndDeleteRefreshToken` verifying atomic get-and-delete (single-use).
+  - Add `TestGetAndDeleteRefreshToken_NotFound` verifying error on missing token.
+  - Add `TestDeleteExpiredTokens` verifying expired rows are removed.
+  - Use in-memory SQLite database (same pattern as existing repository tests).
 
 **Acceptance criteria:**
 - All new tests pass.
