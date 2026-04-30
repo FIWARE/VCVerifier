@@ -1,0 +1,16 @@
+server:
+  port: 3000
+  staticDir: "views/static"
+  templateDir: "views/"
+logging:
+  level: "DEBUG"
+  jsonLogging: true
+  logRequests: true
+verifier:
+  did: "did:key:somekey"
+  tirAddress: "https://test.dev/trusted_issuer/v3/issuers/"
+  sessionExpiry: 30
+  refreshTokenEnabled: true
+  refreshTokenExpiration: 1440
+m2m:
+  authEnabled: false

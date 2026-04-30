@@ -6,6 +6,7 @@ import (
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/google/go-cmp/cmp"
 	"github.com/gookit/config/v2"
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_ReadConfig(t *testing.T) {
@@ -50,14 +51,15 @@ func Test_ReadConfig(t *testing.T) {
 							},
 						},
 					},
-					AuthorizationEndpoint: "/api/v2/loginQR",
-					ValidationMode:        "none",
-					KeyAlgorithm:          "RS256",
-					GenerateKey:           true,
-					SupportedModes:        []string{"urlEncoded"},
-					JwtExpiration:         30,
-					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
-					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
+					AuthorizationEndpoint:  "/api/v2/loginQR",
+					ValidationMode:         "none",
+					KeyAlgorithm:           "RS256",
+					GenerateKey:            true,
+					SupportedModes:         []string{"urlEncoded"},
+					JwtExpiration:          30,
+					StatusListCacheExpiry:  DefaultStatusCacheExpirySeconds,
+					StatusListHttpTimeout:  DefaultStatusHttpTimeoutSeconds,
+					RefreshTokenExpiration: DefaultRefreshTokenExpirationMinutes,
 				},
 				Logging: logging.LoggingConfig{
 					Level:         "DEBUG",
@@ -134,17 +136,18 @@ func Test_ReadConfig(t *testing.T) {
 					ShutdownTimeout: 5,
 				},
 				Verifier: Verifier{Did: "",
-					TirAddress:            "",
-					TirCacheExpiry:        30,
-					TilCacheExpiry:        30,
-					SessionExpiry:         30,
-					ValidationMode:        "none",
-					KeyAlgorithm:          "RS256",
-					GenerateKey:           true,
-					SupportedModes:        []string{"urlEncoded"},
-					JwtExpiration:         30,
-					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
-					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
+					TirAddress:             "",
+					TirCacheExpiry:         30,
+					TilCacheExpiry:         30,
+					SessionExpiry:          30,
+					ValidationMode:         "none",
+					KeyAlgorithm:           "RS256",
+					GenerateKey:            true,
+					SupportedModes:         []string{"urlEncoded"},
+					JwtExpiration:          30,
+					StatusListCacheExpiry:  DefaultStatusCacheExpirySeconds,
+					StatusListHttpTimeout:  DefaultStatusHttpTimeoutSeconds,
+					RefreshTokenExpiration: DefaultRefreshTokenExpirationMinutes,
 				},
 				Logging: logging.LoggingConfig{
 					Level:         "INFO",
@@ -184,18 +187,19 @@ func Test_ReadConfig(t *testing.T) {
 					ShutdownTimeout: 5,
 				},
 				Verifier: Verifier{
-					Did:                   "did:key:somekey",
-					TirAddress:            "https://test.dev/trusted_issuer/v3/issuers/",
-					TirCacheExpiry:        30,
-					TilCacheExpiry:        30,
-					SessionExpiry:         30,
-					ValidationMode:        "none",
-					KeyAlgorithm:          "RS256",
-					GenerateKey:           true,
-					SupportedModes:        []string{"urlEncoded"},
-					JwtExpiration:         30,
-					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
-					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
+					Did:                    "did:key:somekey",
+					TirAddress:             "https://test.dev/trusted_issuer/v3/issuers/",
+					TirCacheExpiry:         30,
+					TilCacheExpiry:         30,
+					SessionExpiry:          30,
+					ValidationMode:         "none",
+					KeyAlgorithm:           "RS256",
+					GenerateKey:            true,
+					SupportedModes:         []string{"urlEncoded"},
+					JwtExpiration:          30,
+					StatusListCacheExpiry:  DefaultStatusCacheExpirySeconds,
+					StatusListHttpTimeout:  DefaultStatusHttpTimeoutSeconds,
+					RefreshTokenExpiration: DefaultRefreshTokenExpirationMinutes,
 				},
 				Logging: logging.LoggingConfig{
 					Level:       "DEBUG",
@@ -239,6 +243,42 @@ func Test_ReadConfig(t *testing.T) {
 			if diff := cmp.Diff(gotConfiguration, tt.wantConfiguration); diff != "" {
 				t.Errorf("Unexpected configuration: %s", diff)
 			}
+		})
+	}
+}
+
+// TestRefreshTokenConfigDefaults verifies that the refresh token configuration
+// fields receive correct default values when absent from the YAML input and
+// are correctly parsed when explicitly set.
+func TestRefreshTokenConfigDefaults(t *testing.T) {
+	tests := []struct {
+		name                       string
+		configFile                 string
+		wantRefreshTokenEnabled    bool
+		wantRefreshTokenExpiration int
+	}{
+		{
+			name:                       "Defaults applied when fields are absent",
+			configFile:                 "data/empty_test.yaml",
+			wantRefreshTokenEnabled:    false,
+			wantRefreshTokenExpiration: DefaultRefreshTokenExpirationMinutes,
+		},
+		{
+			name:                       "Explicit values parsed from YAML",
+			configFile:                 "data/refresh_token_test.yaml",
+			wantRefreshTokenEnabled:    true,
+			wantRefreshTokenExpiration: 1440,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config.Reset()
+			gotConfig, err := ReadConfig(tt.configFile)
+			assert.NoError(t, err, "ReadConfig should not return an error")
+			assert.Equal(t, tt.wantRefreshTokenEnabled, gotConfig.Verifier.RefreshTokenEnabled,
+				"RefreshTokenEnabled mismatch")
+			assert.Equal(t, tt.wantRefreshTokenExpiration, gotConfig.Verifier.RefreshTokenExpiration,
+				"RefreshTokenExpiration mismatch")
 		})
 	}
 }
