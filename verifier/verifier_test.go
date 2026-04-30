@@ -1598,7 +1598,7 @@ func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 				Verifier:   baseVerifierConfig,
 				ConfigRepo: configModel.ConfigRepo{Services: tc.services},
 			}
-			if err := InitVerifier(&cfg); err != nil {
+			if err := InitVerifier(&cfg, nil); err != nil {
 				t.Fatalf("%s - InitVerifier returned unexpected error: %v", tc.testName, err)
 			}
 			if GetVerifier() == nil {
