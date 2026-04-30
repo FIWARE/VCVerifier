@@ -85,6 +85,25 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
 - Test fixtures in `config/data/` (YAML files)
 - Logging is initialized in tests with a shared `LOGGING_CONFIG` variable
 
+## Important Files
+
+- **`main.go`** — Entry point; reads config, initializes verifier, sets up Gin router.
+- **`config/config.go`** — All configuration structs (`Configuration`, `Verifier`, `Server`, etc.) with `mapstructure` tags and defaults.
+- **`common/metadata.go`** — OAuth2 grant type and token type constants (`TYPE_CODE`, `TYPE_VP_TOKEN`, `TYPE_TOKEN_EXCHANGE`, `TYPE_ACCESS_TOKEN`).
+- **`common/cache.go`** — `Cache` interface wrapping `patrickmn/go-cache` (Get/Set/Add/Delete/GetWithExpiration).
+- **`common/tokenSigner.go`** — `TokenSigner` interface (Sign method using lestrrat-go/jwx).
+- **`verifier/verifier.go`** — `Verifier` interface (lines 92-106) and `CredentialVerifier` implementation. Key methods: `GetToken` (authorization_code exchange, line 490), `GenerateToken` (VP token exchange, line 580), `AuthenticationResponse` (stores JWT in tokenCache, line 846), `generateJWT` (builds JWT with claims, line 1230).
+- **`openapi/api_api.go`** — HTTP handlers: `GetToken` (line 97, routes by grant_type), `handleTokenTypeCode` (line 330), `handleTokenTypeVPToken` (line 290), `handleTokenTypeTokenExchange` (line 260), `verifiyVPToken` (line 309).
+- **`openapi/model_token_response.go`** — `TokenResponse` struct with JSON tags.
+- **`api/api.yaml`** — OpenAPI spec: `TokenRequest` schema (line 636), `TokenResponse` schema (line 676), `/token` endpoint (line 179).
+
+### Token Flow Details
+
+- **tokenStore** (verifier.go:248): Holds `jwt.Token` + `redirect_uri`, keyed by authorization code (random nonce) in `tokenCache`.
+- **tokenCache**: Uses `patrickmn/go-cache` with `SessionExpiry`-based TTL. Tokens are **deleted after single retrieval** (get-then-delete pattern, line 498).
+- **JWT signing**: RS256 or ES256 via `tokenSigner.Sign()` with `v.signingKey` (jwk.Key). Claims include issuer, audience, expiration (`jwtExpiration` duration), issuedAt, optional subject/nonce, and credential data.
+- **Three grant types**: `authorization_code` (exchanges code for cached JWT), `vp_token` (direct VP token validation + JWT generation), `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693 token exchange via VP token).
+
 ## Key Dependencies
 
 - **trustbloc/vc-go, did-go, kms-go** — VC verification, DID resolution, key management
