@@ -18,6 +18,9 @@ type TokenResponse struct {
 
 	AccessToken string `json:"access_token,omitempty"`
 
+	// Refresh token to obtain new access tokens. Only present when refresh tokens are enabled.
+	RefreshToken string `json:"refresh_token,omitempty"`
+
 	// The scope of the access token
 	Scope string `json:"scope,omitempty"`
 	// ID Token value associated with the authenticated session. Presents client's identity. ID Token is issued in a JWS format. See also the \"ID Token\" schema definition.
