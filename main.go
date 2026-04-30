@@ -60,6 +60,30 @@ func main() {
 	verifier.InitVerifier(&configuration, repo)
 	verifier.InitPresentationParser(&configuration, Health())
 
+	// Wire up the database-backed refresh token repository when enabled.
+	if configuration.Verifier.RefreshTokenEnabled {
+		var refreshDB *sql.DB
+		if db != nil {
+			// Reuse the existing database connection from the config server.
+			refreshDB = db
+		} else {
+			// Open a dedicated connection when there is no config server.
+			refreshDB, err = database.NewConnection(configuration.Database)
+			if err != nil {
+				logger.Errorf("Refresh tokens enabled but database connection failed: %v", err)
+				panic(err)
+			}
+			if err := database.InitSchema(refreshDB, configuration.Database.Type); err != nil {
+				logger.Errorf("Failed to initialize database schema for refresh tokens: %v", err)
+				panic(err)
+			}
+			defer database.Close(refreshDB)
+		}
+		refreshTokenRepo := database.NewRefreshTokenRepository(refreshDB, configuration.Database.Type)
+		verifier.SetRefreshTokenRepo(refreshTokenRepo)
+		logger.Info("Refresh token support enabled")
+	}
+
 	router := getRouter()
 
 	// health check
