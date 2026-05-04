@@ -17,6 +17,9 @@ type RefreshToken struct {
 	// Expiration is the lifetime of issued refresh tokens, in minutes.
 	// Defaults to 2880 (48 hours). Only meaningful when Enabled is true.
 	Expiration int `mapstructure:"expiration" default:"2880"`
+	// CleanupInterval is how often (in seconds) expired refresh token rows are
+	// purged from the database. 0 or negative disables cleanup.
+	CleanupInterval int `mapstructure:"cleanupInterval"`
 }
 
 // CONFIGURATION STRUCTURE FOR THE VERIFIER CONFIG

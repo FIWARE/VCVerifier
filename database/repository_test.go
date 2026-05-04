@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/fiware/VCVerifier/config"
 	"github.com/stretchr/testify/assert"
@@ -862,4 +863,107 @@ func TestRefreshTokenRepository_TableDriven(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SetCleanupInterval tests
+// ---------------------------------------------------------------------------
+
+func TestSetCleanupInterval_DeletesExpiredTokens(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("expired", -1)))
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("active", 9999999999)))
+
+	repo.SetCleanupInterval(ctx, time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+
+	_, err := repo.GetAndDeleteRefreshToken(ctx, "expired")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound, "expired token should have been removed by cleanup")
+
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "active")
+	require.NoError(t, err)
+	assert.Equal(t, "active", got.Token, "active token must not be removed")
+}
+
+func TestSetCleanupInterval_ZeroOrNegativeDoesNotStart(t *testing.T) {
+	for _, interval := range []time.Duration{0, -1, -time.Minute} {
+		t.Run(interval.String(), func(t *testing.T) {
+			repo := newTestRefreshRepo(t)
+			ctx := context.Background()
+
+			require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("expired", -1)))
+
+			repo.SetCleanupInterval(ctx, interval)
+			time.Sleep(20 * time.Millisecond)
+
+			// Token must still be present — no cleanup goroutine was started.
+			got, err := repo.GetAndDeleteRefreshToken(ctx, "expired")
+			require.NoError(t, err)
+			assert.Equal(t, "expired", got.Token)
+		})
+	}
+}
+
+func TestSetCleanupInterval_StopsOnContextCancel(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	repo.SetCleanupInterval(ctx, time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+
+	cancel()
+	time.Sleep(10 * time.Millisecond) // let goroutine exit
+
+	// Store expired token with a fresh context after the goroutine stopped.
+	bg := context.Background()
+	require.NoError(t, repo.StoreRefreshToken(bg, sampleRefreshToken("after-cancel", -1)))
+	time.Sleep(20 * time.Millisecond)
+
+	got, err := repo.GetAndDeleteRefreshToken(bg, "after-cancel")
+	require.NoError(t, err, "cleanup goroutine should have stopped; token must still exist")
+	assert.Equal(t, "after-cancel", got.Token)
+}
+
+func TestSetCleanupInterval_SetToZeroCancelsRunning(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	// Start cleanup, let it run at least once.
+	repo.SetCleanupInterval(ctx, time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+
+	// Stop cleanup.
+	repo.SetCleanupInterval(ctx, 0)
+	time.Sleep(10 * time.Millisecond) // let goroutine exit
+
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("after-stop", -1)))
+	time.Sleep(20 * time.Millisecond)
+
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "after-stop")
+	require.NoError(t, err, "cleanup should have stopped; token must still exist")
+	assert.Equal(t, "after-stop", got.Token)
+}
+
+func TestSetCleanupInterval_ReconfigureReplacesRunning(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	ctx := context.Background()
+
+	// Start with a short interval, then replace with a very long one.
+	repo.SetCleanupInterval(ctx, time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	repo.SetCleanupInterval(ctx, time.Hour)
+	time.Sleep(10 * time.Millisecond) // let old goroutine exit
+
+	require.NoError(t, repo.StoreRefreshToken(ctx, sampleRefreshToken("after-reconfig", -1)))
+	time.Sleep(20 * time.Millisecond)
+
+	// With a 1-hour interval the new goroutine won't tick; token must still exist.
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "after-reconfig")
+	require.NoError(t, err, "long interval should not have cleaned up yet")
+	assert.Equal(t, "after-reconfig", got.Token)
+}
+
+// Compile-time check: SqlRefreshTokenRepository satisfies RefreshTokenRepository.
+var _ RefreshTokenRepository = (*SqlRefreshTokenRepository)(nil)
 

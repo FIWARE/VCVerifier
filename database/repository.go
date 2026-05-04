@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fiware/VCVerifier/config"
@@ -464,12 +465,21 @@ type RefreshTokenRepository interface {
 	// DeleteExpiredTokens removes all refresh token rows whose expires_at
 	// is in the past. Returns the number of rows deleted.
 	DeleteExpiredTokens(ctx context.Context) (int64, error)
+
+	// SetCleanupInterval starts a background goroutine that periodically calls
+	// DeleteExpiredTokens at the given interval. If interval is zero or
+	// negative, any running cleanup goroutine is cancelled and no new one is
+	// started. Calling again with a new interval replaces the previous one.
+	// The goroutine stops when ctx is cancelled.
+	SetCleanupInterval(ctx context.Context, interval time.Duration)
 }
 
 // SqlRefreshTokenRepository is a RefreshTokenRepository backed by database/sql.
 type SqlRefreshTokenRepository struct {
-	db     *sql.DB
-	dbType string
+	db            *sql.DB
+	dbType        string
+	mu            sync.Mutex
+	cancelCleanup context.CancelFunc
 }
 
 // NewRefreshTokenRepository creates a new SqlRefreshTokenRepository for the
@@ -549,6 +559,42 @@ func (r *SqlRefreshTokenRepository) DeleteExpiredTokens(ctx context.Context) (in
 		logging.Log().Infof("Cleaned up %d expired refresh token(s)", n)
 	}
 	return n, nil
+}
+
+// SetCleanupInterval starts a background goroutine that periodically deletes
+// expired refresh token rows. If interval is zero or negative, any running
+// cleanup goroutine is cancelled and no new one is started. Calling again
+// replaces the previous interval. The goroutine stops when ctx is cancelled.
+func (r *SqlRefreshTokenRepository) SetCleanupInterval(ctx context.Context, interval time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.cancelCleanup != nil {
+		r.cancelCleanup()
+		r.cancelCleanup = nil
+	}
+
+	if interval <= 0 {
+		return
+	}
+
+	cleanupCtx, cancel := context.WithCancel(ctx)
+	r.cancelCleanup = cancel
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if _, err := r.DeleteExpiredTokens(cleanupCtx); err != nil && cleanupCtx.Err() == nil {
+					logging.Log().Warnf("Refresh token cleanup failed: %v", err)
+				}
+			case <-cleanupCtx.Done():
+				return
+			}
+		}
+	}()
 }
 
 // adapt replaces ? placeholders with $N for PostgreSQL. For MySQL and SQLite

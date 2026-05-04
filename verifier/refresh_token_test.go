@@ -71,6 +71,8 @@ func (m *mockRefreshTokenRepository) DeleteExpiredTokens(_ context.Context) (int
 	return count, nil
 }
 
+func (m *mockRefreshTokenRepository) SetCleanupInterval(_ context.Context, _ time.Duration) {}
+
 // ---------------------------------------------------------------------------
 // Helper: build a CredentialVerifier wired for refresh-token testing.
 // ---------------------------------------------------------------------------
