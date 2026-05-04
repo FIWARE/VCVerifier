@@ -462,11 +462,11 @@ func TestExchangeRefreshToken_TableDriven(t *testing.T) {
 			expectErrSubstr: "database unavailable",
 		},
 		{
-			name:            "invalid stored JWT causes parse error",
-			enabled:         true,
-			seedTokens:      map[string]database.RefreshTokenRow{"tok-bad-jwt": {Token: "tok-bad-jwt", ClientID: "c1", JWTPayload: "not-a-valid-jwt", ExpiresAt: 9999999999}},
-			inputToken:      "tok-bad-jwt",
-			expectErrSubstr: "parse stored jwt",
+			name:       "invalid stored JWT causes signature verification error",
+			enabled:    true,
+			seedTokens: map[string]database.RefreshTokenRow{"tok-bad-jwt": {Token: "tok-bad-jwt", ClientID: "c1", JWTPayload: "not-a-valid-jwt", ExpiresAt: 9999999999}},
+			inputToken: "tok-bad-jwt",
+			expectErr:  ErrorRefreshTokenInvalidSignature,
 		},
 	}
 
