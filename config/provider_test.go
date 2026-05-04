@@ -51,15 +51,15 @@ func Test_ReadConfig(t *testing.T) {
 							},
 						},
 					},
-					AuthorizationEndpoint:  "/api/v2/loginQR",
-					ValidationMode:         "none",
-					KeyAlgorithm:           "RS256",
-					GenerateKey:            true,
-					SupportedModes:         []string{"urlEncoded"},
-					JwtExpiration:          30,
-					StatusListCacheExpiry:  DefaultStatusCacheExpirySeconds,
-					StatusListHttpTimeout:  DefaultStatusHttpTimeoutSeconds,
-					RefreshTokenExpiration: DefaultRefreshTokenExpirationMinutes,
+					AuthorizationEndpoint: "/api/v2/loginQR",
+					ValidationMode:        "none",
+					KeyAlgorithm:          "RS256",
+					GenerateKey:           true,
+					SupportedModes:        []string{"urlEncoded"},
+					JwtExpiration:         30,
+					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
+					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
+					RefreshToken:          RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes},
 				},
 				Logging: logging.LoggingConfig{
 					Level:         "DEBUG",
@@ -136,18 +136,18 @@ func Test_ReadConfig(t *testing.T) {
 					ShutdownTimeout: 5,
 				},
 				Verifier: Verifier{Did: "",
-					TirAddress:             "",
-					TirCacheExpiry:         30,
-					TilCacheExpiry:         30,
-					SessionExpiry:          30,
-					ValidationMode:         "none",
-					KeyAlgorithm:           "RS256",
-					GenerateKey:            true,
-					SupportedModes:         []string{"urlEncoded"},
-					JwtExpiration:          30,
-					StatusListCacheExpiry:  DefaultStatusCacheExpirySeconds,
-					StatusListHttpTimeout:  DefaultStatusHttpTimeoutSeconds,
-					RefreshTokenExpiration: DefaultRefreshTokenExpirationMinutes,
+					TirAddress:            "",
+					TirCacheExpiry:        30,
+					TilCacheExpiry:        30,
+					SessionExpiry:         30,
+					ValidationMode:        "none",
+					KeyAlgorithm:          "RS256",
+					GenerateKey:           true,
+					SupportedModes:        []string{"urlEncoded"},
+					JwtExpiration:         30,
+					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
+					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
+					RefreshToken:          RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes},
 				},
 				Logging: logging.LoggingConfig{
 					Level:         "INFO",
@@ -187,19 +187,19 @@ func Test_ReadConfig(t *testing.T) {
 					ShutdownTimeout: 5,
 				},
 				Verifier: Verifier{
-					Did:                    "did:key:somekey",
-					TirAddress:             "https://test.dev/trusted_issuer/v3/issuers/",
-					TirCacheExpiry:         30,
-					TilCacheExpiry:         30,
-					SessionExpiry:          30,
-					ValidationMode:         "none",
-					KeyAlgorithm:           "RS256",
-					GenerateKey:            true,
-					SupportedModes:         []string{"urlEncoded"},
-					JwtExpiration:          30,
-					StatusListCacheExpiry:  DefaultStatusCacheExpirySeconds,
-					StatusListHttpTimeout:  DefaultStatusHttpTimeoutSeconds,
-					RefreshTokenExpiration: DefaultRefreshTokenExpirationMinutes,
+					Did:                   "did:key:somekey",
+					TirAddress:            "https://test.dev/trusted_issuer/v3/issuers/",
+					TirCacheExpiry:        30,
+					TilCacheExpiry:        30,
+					SessionExpiry:         30,
+					ValidationMode:        "none",
+					KeyAlgorithm:          "RS256",
+					GenerateKey:           true,
+					SupportedModes:        []string{"urlEncoded"},
+					JwtExpiration:         30,
+					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
+					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
+					RefreshToken:          RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes},
 				},
 				Logging: logging.LoggingConfig{
 					Level:       "DEBUG",
@@ -252,22 +252,22 @@ func Test_ReadConfig(t *testing.T) {
 // are correctly parsed when explicitly set.
 func TestRefreshTokenConfigDefaults(t *testing.T) {
 	tests := []struct {
-		name                       string
-		configFile                 string
-		wantRefreshTokenEnabled    bool
-		wantRefreshTokenExpiration int
+		name        string
+		configFile  string
+		wantEnabled bool
+		wantExpiry  int
 	}{
 		{
-			name:                       "Defaults applied when fields are absent",
-			configFile:                 "data/empty_test.yaml",
-			wantRefreshTokenEnabled:    false,
-			wantRefreshTokenExpiration: DefaultRefreshTokenExpirationMinutes,
+			name:        "Defaults applied when refreshToken block is absent",
+			configFile:  "data/empty_test.yaml",
+			wantEnabled: false,
+			wantExpiry:  DefaultRefreshTokenExpirationMinutes,
 		},
 		{
-			name:                       "Explicit values parsed from YAML",
-			configFile:                 "data/refresh_token_test.yaml",
-			wantRefreshTokenEnabled:    true,
-			wantRefreshTokenExpiration: 1440,
+			name:        "Explicit values parsed from YAML",
+			configFile:  "data/refresh_token_test.yaml",
+			wantEnabled: true,
+			wantExpiry:  1440,
 		},
 	}
 	for _, tt := range tests {
@@ -275,10 +275,10 @@ func TestRefreshTokenConfigDefaults(t *testing.T) {
 			config.Reset()
 			gotConfig, err := ReadConfig(tt.configFile)
 			assert.NoError(t, err, "ReadConfig should not return an error")
-			assert.Equal(t, tt.wantRefreshTokenEnabled, gotConfig.Verifier.RefreshTokenEnabled,
-				"RefreshTokenEnabled mismatch")
-			assert.Equal(t, tt.wantRefreshTokenExpiration, gotConfig.Verifier.RefreshTokenExpiration,
-				"RefreshTokenExpiration mismatch")
+			assert.Equal(t, tt.wantEnabled, gotConfig.Verifier.RefreshToken.Enabled,
+				"RefreshToken.Enabled mismatch")
+			assert.Equal(t, tt.wantExpiry, gotConfig.Verifier.RefreshToken.Expiration,
+				"RefreshToken.Expiration mismatch")
 		})
 	}
 }

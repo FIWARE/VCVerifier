@@ -409,12 +409,15 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		*verifierConfig,
 		time.Duration(verifierConfig.JwtExpiration) * time.Minute,
 		time.Duration(verifierConfig.SessionExpiry),
-		verifierConfig.RefreshTokenEnabled,
-		time.Duration(verifierConfig.RefreshTokenExpiration) * time.Minute,
+		verifierConfig.RefreshToken.Enabled,
+		time.Duration(verifierConfig.RefreshToken.Expiration) * time.Minute,
 		nil, // refreshTokenRepo — set below when enabled
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
+	if verifierConfig.RefreshToken.Enabled {
+		logging.Log().Infof("Refresh tokens enabled (expiration: %d minutes)", verifierConfig.RefreshToken.Expiration)
+	}
 	return
 }
 

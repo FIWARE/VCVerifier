@@ -10,7 +10,8 @@ verifier:
   did: "did:key:somekey"
   tirAddress: "https://test.dev/trusted_issuer/v3/issuers/"
   sessionExpiry: 30
-  refreshTokenEnabled: true
-  refreshTokenExpiration: 1440
+  refreshToken:
+    enabled: true
+    expiration: 1440
 m2m:
   authEnabled: false
