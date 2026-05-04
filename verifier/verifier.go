@@ -82,6 +82,7 @@ var ErrorInvalidNonce = errors.New("invalid_nonce")
 var ErrorRefreshTokenDisabled = errors.New("refresh_token_not_enabled")
 var ErrorRefreshTokenExpired = errors.New("refresh_token_expired")
 var ErrorRefreshTokenNotFound = errors.New("refresh_token_not_found")
+var ErrorRefreshTokenInvalidSignature = errors.New("refresh_token_invalid_signature")
 
 // refreshTokenByteLength is the number of random bytes used to generate
 // an opaque refresh token. 32 bytes → 43-character base64url string.
@@ -1674,11 +1675,26 @@ func (v *CredentialVerifier) ExchangeRefreshToken(refreshToken string) (jwtStrin
 		return "", 0, "", ErrorRefreshTokenExpired
 	}
 
-	// Parse the stored JWT to extract claims. We skip signature verification
-	// because we signed it ourselves and trust the database contents.
-	oldToken, err := jwt.Parse([]byte(row.JWTPayload), jwt.WithVerify(false), jwt.WithValidate(false))
+	// Parse the stored JWT to extract claims, verifying the signature to
+	// detect any tampering of the stored payload. Time-based validation is
+	// intentionally skipped: the stored access token will have expired by the
+	// time the refresh token is exchanged, but its claims are still valid for
+	// re-issuance.
+	pubKey, err := v.signingKey.PublicKey()
 	if err != nil {
-		return "", 0, "", fmt.Errorf("parse stored jwt: %w", err)
+		return "", 0, "", fmt.Errorf("get public key for stored jwt verification: %w", err)
+	}
+	var storedJWTAlg jwa.SignatureAlgorithm
+	switch v.signingAlgorithm {
+	case "RS256":
+		storedJWTAlg = jwa.RS256()
+	case "ES256":
+		storedJWTAlg = jwa.ES256()
+	}
+	oldToken, err := jwt.Parse([]byte(row.JWTPayload), jwt.WithKey(storedJWTAlg, pubKey), jwt.WithValidate(false))
+	if err != nil {
+		logging.Log().Warnf("Stored JWT signature verification failed for refresh token (suffix=%s): %v", row.TokenSuffix, err)
+		return "", 0, "", ErrorRefreshTokenInvalidSignature
 	}
 
 	// Build a new token from the stored claims, updating only the

@@ -12,6 +12,7 @@ package openapi
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -356,8 +357,13 @@ func handleTokenTypeRefreshToken(c *gin.Context) {
 
 	jwtString, expiration, newRefreshToken, err := getApiVerifier().ExchangeRefreshToken(refreshToken)
 	if err != nil {
-		logging.Log().Warnf("Failed to exchange refresh token: %v", err)
-		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessageInvalidRefreshToken)
+		if errors.Is(err, verifier.ErrorRefreshTokenInvalidSignature) {
+			logging.Log().Warn("Refresh token exchange rejected: stored JWT signature mismatch")
+			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessageInvalidRefreshToken)
+		} else {
+			logging.Log().Warnf("Failed to exchange refresh token: %v", err)
+			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessageInvalidRefreshToken)
+		}
 		return
 	}
 
