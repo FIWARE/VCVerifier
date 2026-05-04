@@ -57,6 +57,7 @@ const createScopeEntryTableMySQL = `CREATE TABLE IF NOT EXISTS scope_entry (
 // re-applying credential inclusion configurations.
 const createRefreshTokenTable = `CREATE TABLE IF NOT EXISTS refresh_token (
 	token VARCHAR(255) NOT NULL PRIMARY KEY,
+	token_suffix VARCHAR(5) NOT NULL DEFAULT '',
 	client_id VARCHAR(255) NOT NULL,
 	jwt_payload TEXT NOT NULL,
 	expires_at BIGINT NOT NULL

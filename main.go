@@ -83,6 +83,21 @@ func main() {
 			defer database.Close(refreshDB)
 		}
 		refreshTokenRepo := database.NewRefreshTokenRepository(refreshDB, configuration.Database.Type)
+
+		var salt []byte
+		if s := configuration.Verifier.RefreshToken.HashSalt; s != "" {
+			salt = []byte(s)
+			logger.Info("Refresh token hashing using configured salt")
+		} else {
+			salt, err = database.GenerateSalt()
+			if err != nil {
+				logger.Errorf("Failed to generate refresh token salt: %v", err)
+				panic(err)
+			}
+			logger.Debug("Refresh token hashing using ephemeral salt (tokens invalidated on restart)")
+		}
+		refreshTokenRepo.ConfigureHashing(salt)
+
 		verifier.SetRefreshTokenRepo(refreshTokenRepo)
 		logger.Info("Refresh token support enabled")
 

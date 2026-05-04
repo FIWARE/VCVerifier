@@ -39,8 +39,12 @@ type ScopeEntryRow struct {
 // stores the full JWT claims payload so that access tokens can be re-issued
 // without re-applying credential inclusion configurations.
 type RefreshTokenRow struct {
-	// Token is the opaque refresh token string (primary key).
+	// Token is the primary key: the raw token when hashing is disabled, or the
+	// HMAC-SHA256 hex digest when hashing is enabled.
 	Token string
+	// TokenSuffix holds the last 5 characters of the original plaintext token,
+	// always stored regardless of hashing, for operational identification.
+	TokenSuffix string
 	// ClientID identifies the relying party that requested the token.
 	ClientID string
 	// JWTPayload is the full signed JWT string (compact serialization)
