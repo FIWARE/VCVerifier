@@ -61,7 +61,7 @@ func main() {
 	verifier.InitPresentationParser(&configuration, Health())
 
 	// Wire up the database-backed refresh token repository when enabled.
-	if configuration.Verifier.RefreshTokenEnabled {
+	if configuration.Verifier.RefreshToken.Enabled {
 		var refreshDB *sql.DB
 		if db != nil {
 			// Reuse the existing database connection from the config server.

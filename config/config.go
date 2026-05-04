@@ -8,6 +8,17 @@ const (
 	DefaultRefreshTokenExpirationMinutes = 2880
 )
 
+// RefreshToken holds all configuration related to the refresh token feature.
+type RefreshToken struct {
+	// Enabled controls whether the verifier issues refresh tokens alongside
+	// access tokens. When false (the default), no refresh tokens are generated
+	// and the refresh_token grant type is rejected.
+	Enabled bool `mapstructure:"enabled" default:"false"`
+	// Expiration is the lifetime of issued refresh tokens, in minutes.
+	// Defaults to 2880 (48 hours). Only meaningful when Enabled is true.
+	Expiration int `mapstructure:"expiration" default:"2880"`
+}
+
 // CONFIGURATION STRUCTURE FOR THE VERIFIER CONFIG
 
 // Configuration is the general structure of the configuration file.
@@ -142,14 +153,8 @@ type Verifier struct {
 	// revocation check — it only parametrises the HTTP client used when at
 	// least one credential opts in.
 	StatusListHttpTimeout int `mapstructure:"statusListHttpTimeout" default:"10"`
-	// RefreshTokenEnabled controls whether the verifier issues refresh tokens
-	// alongside access tokens. When false (the default), no refresh tokens are
-	// generated and the refresh_token grant type is rejected.
-	RefreshTokenEnabled bool `mapstructure:"refreshTokenEnabled" default:"false"`
-	// RefreshTokenExpiration is the lifetime of issued refresh tokens, in
-	// minutes. Defaults to 2880 (48 hours). Only used when RefreshTokenEnabled
-	// is true.
-	RefreshTokenExpiration int `mapstructure:"refreshTokenExpiration" default:"2880"`
+	// RefreshToken groups all refresh token configuration.
+	RefreshToken RefreshToken `mapstructure:"refreshToken"`
 }
 
 type ClientIdentification struct {
