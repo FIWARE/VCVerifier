@@ -641,6 +641,10 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	var credentialsToBeIncluded []map[string]interface{}
 	flatClaims := false
 
+	if err := v.verifyVPSignatureIfRequired(clientId, scopes, credentialTypes, verifiablePresentation); err != nil {
+		return 0, "", err
+	}
+
 	// Go through all requested scopes and create a verification context
 	for _, scope := range scopes {
 		verificationContext, err := v.getTrustRegistriesValidationContextFromScope(clientId, scope, credentialTypes)
@@ -1060,6 +1064,43 @@ func (v *CredentialVerifier) GetRequestObject(state string) (jwt string, err err
 	}
 
 	return loginSession.requestObject, err
+}
+
+// verifyVPSignatureIfRequired verifies the VP JWT signature only when the service config
+// requires holder binding for at least one credential type in the presentation.
+// It is a no-op when the presentation carries no raw token (non-SD-JWT VP path).
+func (v *CredentialVerifier) verifyVPSignatureIfRequired(clientId string, scopes []string, credentialTypes []string, presentation *common.Presentation) error {
+	rawToken := presentation.RawToken()
+	if rawToken == nil {
+		return nil
+	}
+
+	holderRequired := false
+outer:
+	for _, scope := range scopes {
+		for _, credentialType := range credentialTypes {
+			isEnabled, _, err := v.credentialsConfig.GetHolderVerification(clientId, scope, credentialType)
+			if err != nil {
+				logging.Log().Warnf("Could not read holder verification config for client %s, scope %s, type %s: %v", clientId, scope, credentialType, err)
+				return ErrorVerficationContextSetup
+			}
+			if isEnabled {
+				holderRequired = true
+				break outer
+			}
+		}
+	}
+
+	if !holderRequired {
+		return nil
+	}
+
+	_, _, err := GetProofChecker().VerifyJWTAndReturnKey(rawToken)
+	if err != nil {
+		logging.Log().Warnf("VP JWT holder binding verification failed: %v", err)
+		return ErrorInvalidVCHolder
+	}
+	return nil
 }
 
 func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope string, credentialTypes []string, holder string) (validationContext []HolderValidationContext, err error) {
