@@ -89,6 +89,15 @@ func getSdJwtParser() verifier.SdJwtParser {
 	return sdJwtParser
 }
 
+// refreshTokenExpiresIn returns the configured refresh token lifetime in seconds
+// when a refresh token was issued, or 0 (omitted in JSON) when it was not.
+func refreshTokenExpiresIn(refreshToken string) int64 {
+	if refreshToken == "" {
+		return 0
+	}
+	return getApiVerifier().RefreshTokenExpiresIn()
+}
+
 func getKeyResolver() verifier.KeyResolver {
 	if keyResolver == nil {
 		keyResolver = &verifier.VdrKeyResolver{Vdr: []did.VDR{did.NewKeyVDR(), did.NewJWKVDR(), did.NewWebVDR()}}
@@ -339,7 +348,7 @@ func verifiyVPToken(c *gin.Context, vpToken string, clientId string, scopes []st
 		}
 	}
 
-	response := TokenResponse{TokenType: "Bearer", IssuedTokenType: common.TYPE_ACCESS_TOKEN, ExpiresIn: float32(expiration), IdToken: signedToken, AccessToken: signedToken, Scope: strings.Join(scopes, ","), RefreshToken: refreshToken}
+	response := TokenResponse{TokenType: "Bearer", IssuedTokenType: common.TYPE_ACCESS_TOKEN, ExpiresIn: float32(expiration), IdToken: signedToken, AccessToken: signedToken, Scope: strings.Join(scopes, ","), RefreshToken: refreshToken, RefreshTokenExpiresIn: refreshTokenExpiresIn(refreshToken)}
 	logging.Log().Infof("Generated and signed token: %v", response)
 	c.JSON(http.StatusOK, response)
 }
@@ -368,11 +377,12 @@ func handleTokenTypeRefreshToken(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, TokenResponse{
-		TokenType:    "Bearer",
-		ExpiresIn:    float32(expiration),
-		AccessToken:  jwtString,
-		IdToken:      jwtString,
-		RefreshToken: newRefreshToken,
+		TokenType:             "Bearer",
+		ExpiresIn:             float32(expiration),
+		AccessToken:           jwtString,
+		IdToken:               jwtString,
+		RefreshToken:          newRefreshToken,
+		RefreshTokenExpiresIn: refreshTokenExpiresIn(newRefreshToken),
 	})
 }
 
@@ -393,7 +403,7 @@ func handleTokenTypeCode(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken})
+		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken, RefreshTokenExpiresIn: refreshTokenExpiresIn(refreshToken)})
 		return
 	}
 	if assertionTypeExists {
@@ -488,7 +498,7 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken})
+	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken, RefreshTokenExpiresIn: refreshTokenExpiresIn(refreshToken)})
 }
 
 // StartSIOPSameDevice - Starts the siop flow for credentials hold by the same device

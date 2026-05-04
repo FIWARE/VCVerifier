@@ -119,6 +119,8 @@ type Verifier interface {
 	ExchangeRefreshToken(refreshToken string) (jwtString string, expiration int64, newRefreshToken string, err error)
 	// IsRefreshTokenEnabled reports whether the refresh token feature is active.
 	IsRefreshTokenEnabled() bool
+	// RefreshTokenExpiresIn returns the configured refresh token lifetime in seconds.
+	RefreshTokenExpiresIn() int64
 	// CreateRefreshToken generates a new opaque refresh token, stores the
 	// full signed JWT in the database, and returns the token string.
 	CreateRefreshToken(clientId string, signedJWT string) (string, error)
@@ -1629,6 +1631,11 @@ func (v *CredentialVerifier) GetHost() string {
 // IsRefreshTokenEnabled reports whether the refresh token feature is active.
 func (v *CredentialVerifier) IsRefreshTokenEnabled() bool {
 	return v.refreshTokenEnabled
+}
+
+// RefreshTokenExpiresIn returns the configured refresh token lifetime in seconds.
+func (v *CredentialVerifier) RefreshTokenExpiresIn() int64 {
+	return int64(v.refreshTokenExpiration.Seconds())
 }
 
 // generateRefreshToken creates a cryptographically random opaque token
