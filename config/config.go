@@ -20,6 +20,13 @@ type RefreshToken struct {
 	// CleanupInterval is how often (in seconds) expired refresh token rows are
 	// purged from the database. 0 or negative disables cleanup.
 	CleanupInterval int `mapstructure:"cleanupInterval"`
+	// HashSalt is the HMAC-SHA256 key used when hashing refresh tokens before
+	// storage. Tokens are always hashed; this field controls whether the key
+	// is stable across restarts. When empty a random salt is generated at
+	// startup, meaning all issued tokens are invalidated when the server
+	// restarts. Provide a fixed secret string to preserve tokens across
+	// restarts.
+	HashSalt string `mapstructure:"hashSalt"`
 }
 
 // CONFIGURATION STRUCTURE FOR THE VERIFIER CONFIG

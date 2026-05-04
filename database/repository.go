@@ -2,7 +2,11 @@ package database
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -480,6 +484,8 @@ type SqlRefreshTokenRepository struct {
 	dbType        string
 	mu            sync.Mutex
 	cancelCleanup context.CancelFunc
+	hashEnabled   bool
+	salt          []byte
 }
 
 // NewRefreshTokenRepository creates a new SqlRefreshTokenRepository for the
@@ -488,12 +494,51 @@ func NewRefreshTokenRepository(db *sql.DB, dbType string) *SqlRefreshTokenReposi
 	return &SqlRefreshTokenRepository{db: db, dbType: dbType}
 }
 
+// GenerateSalt returns 32 cryptographically random bytes suitable for use
+// with ConfigureHashing.
+func GenerateSalt() ([]byte, error) {
+	salt := make([]byte, 32)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("generate refresh token salt: %w", err)
+	}
+	return salt, nil
+}
+
+// ConfigureHashing enables HMAC-SHA256 hashing of tokens before storage.
+// Must be called before any tokens are stored or retrieved. The salt must
+// not be empty.
+func (r *SqlRefreshTokenRepository) ConfigureHashing(salt []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.salt = salt
+	r.hashEnabled = true
+}
+
+// tokenKey returns the value used as the DB primary key for rawToken:
+// the HMAC-SHA256 hex digest when hashing is enabled, or rawToken as-is.
+func (r *SqlRefreshTokenRepository) tokenKey(rawToken string) string {
+	if !r.hashEnabled {
+		return rawToken
+	}
+	mac := hmac.New(sha256.New, r.salt)
+	mac.Write([]byte(rawToken))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// rawTokenSuffix returns the last 5 characters of token for storage.
+func rawTokenSuffix(token string) string {
+	if len(token) <= 5 {
+		return token
+	}
+	return token[len(token)-5:]
+}
+
 // SQL query constants for refresh token operations (written with ?
 // placeholders; adapted at runtime for PostgreSQL).
 const (
-	sqlInsertRefreshToken = `INSERT INTO refresh_token (token, client_id, jwt_payload, expires_at) VALUES (?, ?, ?, ?)`
+	sqlInsertRefreshToken = `INSERT INTO refresh_token (token, token_suffix, client_id, jwt_payload, expires_at) VALUES (?, ?, ?, ?, ?)`
 
-	sqlSelectRefreshToken = `SELECT token, client_id, jwt_payload, expires_at FROM refresh_token WHERE token = ?`
+	sqlSelectRefreshToken = `SELECT token, token_suffix, client_id, jwt_payload, expires_at FROM refresh_token WHERE token = ?`
 
 	sqlDeleteRefreshToken = `DELETE FROM refresh_token WHERE token = ?`
 
@@ -501,9 +546,11 @@ const (
 )
 
 // StoreRefreshToken persists a new refresh token row in the database.
+// The token primary key is hashed when hashing is configured; the last 5
+// characters of the raw token are always stored in token_suffix.
 func (r *SqlRefreshTokenRepository) StoreRefreshToken(ctx context.Context, row RefreshTokenRow) error {
 	_, err := r.db.ExecContext(ctx, r.adapt(sqlInsertRefreshToken),
-		row.Token, row.ClientID, row.JWTPayload, row.ExpiresAt)
+		r.tokenKey(row.Token), rawTokenSuffix(row.Token), row.ClientID, row.JWTPayload, row.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("insert refresh token: %w", err)
 	}
@@ -522,8 +569,8 @@ func (r *SqlRefreshTokenRepository) GetAndDeleteRefreshToken(ctx context.Context
 	defer rollbackOnError(tx)
 
 	var row RefreshTokenRow
-	err = tx.QueryRowContext(ctx, r.adapt(sqlSelectRefreshToken), token).Scan(
-		&row.Token, &row.ClientID, &row.JWTPayload, &row.ExpiresAt)
+	err = tx.QueryRowContext(ctx, r.adapt(sqlSelectRefreshToken), r.tokenKey(token)).Scan(
+		&row.Token, &row.TokenSuffix, &row.ClientID, &row.JWTPayload, &row.ExpiresAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRefreshTokenNotFound
@@ -531,7 +578,7 @@ func (r *SqlRefreshTokenRepository) GetAndDeleteRefreshToken(ctx context.Context
 		return nil, fmt.Errorf("select refresh token: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, r.adapt(sqlDeleteRefreshToken), token); err != nil {
+	if _, err := tx.ExecContext(ctx, r.adapt(sqlDeleteRefreshToken), r.tokenKey(token)); err != nil {
 		return nil, fmt.Errorf("delete refresh token: %w", err)
 	}
 

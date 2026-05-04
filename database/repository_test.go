@@ -621,6 +621,7 @@ func TestGetAndDeleteRefreshToken_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "tok-2", got.Token)
+	assert.Equal(t, "tok-2", got.TokenSuffix) // len("tok-2") == 5, so suffix equals the token itself
 	assert.Equal(t, "client-1", got.ClientID)
 	assert.Equal(t, `{"iss":"https://verifier.example.com","sub":"did:key:holder123","aud":"aud-1"}`, got.JWTPayload)
 	assert.Equal(t, int64(9999999999), got.ExpiresAt)
@@ -728,6 +729,7 @@ func TestStoreRefreshToken_FieldRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "field-roundtrip-tok", got.Token)
+	assert.Equal(t, "p-tok", got.TokenSuffix) // last 5 chars of "field-roundtrip-tok"
 	assert.Equal(t, "client-roundtrip", got.ClientID)
 	assert.Equal(t, jwtPayload, got.JWTPayload)
 	assert.Equal(t, int64(1893456000), got.ExpiresAt)
@@ -809,34 +811,38 @@ func TestDeleteExpiredTokens_MixedExpiry(t *testing.T) {
 // the core store → retrieve → verify pattern for multiple scenarios.
 func TestRefreshTokenRepository_TableDriven(t *testing.T) {
 	type testCase struct {
-		name      string
-		token     string
-		clientID  string
-		payload   string
-		expiresAt int64
+		name       string
+		token      string
+		wantSuffix string
+		clientID   string
+		payload    string
+		expiresAt  int64
 	}
 
 	tests := []testCase{
 		{
-			name:      "standard token",
-			token:     "td-standard",
-			clientID:  "client-std",
-			payload:   `{"iss":"verifier","sub":"holder"}`,
-			expiresAt: 9999999999,
+			name:       "standard token",
+			token:      "td-standard",
+			wantSuffix: "ndard", // last 5 of "td-standard"
+			clientID:   "client-std",
+			payload:    `{"iss":"verifier","sub":"holder"}`,
+			expiresAt:  9999999999,
 		},
 		{
-			name:      "token with long JWT payload",
-			token:     "td-long-payload",
-			clientID:  "client-long",
-			payload:   `{"iss":"verifier","sub":"holder","verifiableCredential":[{"type":"VerifiableCredential","credentialSubject":{"firstName":"Test","lastName":"User","roles":["GOLD_CUSTOMER","STANDARD_CUSTOMER"]}}]}`,
-			expiresAt: 1893456000,
+			name:       "token with long JWT payload",
+			token:      "td-long-payload",
+			wantSuffix: "yload", // last 5 of "td-long-payload"
+			clientID:   "client-long",
+			payload:    `{"iss":"verifier","sub":"holder","verifiableCredential":[{"type":"VerifiableCredential","credentialSubject":{"firstName":"Test","lastName":"User","roles":["GOLD_CUSTOMER","STANDARD_CUSTOMER"]}}]}`,
+			expiresAt:  1893456000,
 		},
 		{
-			name:      "token with minimal fields",
-			token:     "td-minimal",
-			clientID:  "c",
-			payload:   `{}`,
-			expiresAt: 1,
+			name:       "token with minimal fields",
+			token:      "td-minimal",
+			wantSuffix: "nimal", // last 5 of "td-minimal"
+			clientID:   "c",
+			payload:    `{}`,
+			expiresAt:  1,
 		},
 	}
 
@@ -857,6 +863,7 @@ func TestRefreshTokenRepository_TableDriven(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, got)
 			assert.Equal(t, tc.token, got.Token)
+			assert.Equal(t, tc.wantSuffix, got.TokenSuffix)
 			assert.Equal(t, tc.clientID, got.ClientID)
 			assert.Equal(t, tc.payload, got.JWTPayload)
 			assert.Equal(t, tc.expiresAt, got.ExpiresAt)
@@ -966,4 +973,78 @@ func TestSetCleanupInterval_ReconfigureReplacesRunning(t *testing.T) {
 
 // Compile-time check: SqlRefreshTokenRepository satisfies RefreshTokenRepository.
 var _ RefreshTokenRepository = (*SqlRefreshTokenRepository)(nil)
+
+// ---------------------------------------------------------------------------
+// ConfigureHashing tests
+// ---------------------------------------------------------------------------
+
+// TestConfigureHashing_TokenRetrievableByRawToken verifies that when hashing is
+// enabled, the raw token string is still used for retrieval (the lookup hashes
+// it too), but the value stored in the DB is the HMAC digest.
+func TestConfigureHashing_TokenRetrievableByRawToken(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	salt, err := GenerateSalt()
+	require.NoError(t, err)
+	repo.ConfigureHashing(salt)
+
+	ctx := context.Background()
+	row := sampleRefreshToken("hash-test-token", 9999999999)
+	require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "hash-test-token")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	// The primary key stored in DB is the HMAC hex digest, not the raw token.
+	assert.NotEqual(t, "hash-test-token", got.Token)
+	assert.Len(t, got.Token, 64) // HMAC-SHA256 hex = 64 chars
+}
+
+// TestConfigureHashing_SuffixAlwaysFromRawToken verifies that token_suffix is
+// always derived from the raw plaintext token, even when hashing is enabled.
+func TestConfigureHashing_SuffixAlwaysFromRawToken(t *testing.T) {
+	repo := newTestRefreshRepo(t)
+	salt, err := GenerateSalt()
+	require.NoError(t, err)
+	repo.ConfigureHashing(salt)
+
+	ctx := context.Background()
+	row := sampleRefreshToken("abc12345xyz", 9999999999)
+	require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "abc12345xyz")
+	require.NoError(t, err)
+	// Suffix is the last 5 chars of the raw token, regardless of hashing.
+	assert.Equal(t, "45xyz", got.TokenSuffix)
+}
+
+// TestConfigureHashing_DifferentSaltsProduceDifferentKeys stores a token using
+// one salt and verifies that a second repository configured with a different salt
+// cannot find it (the two HMAC digests differ).
+func TestConfigureHashing_DifferentSaltsProduceDifferentKeys(t *testing.T) {
+	db := openTestDB(t)
+	require.NoError(t, InitSchema(db, DriverTypeSQLite))
+
+	repo1 := NewRefreshTokenRepository(db, DriverTypeSQLite)
+	salt1, err := GenerateSalt()
+	require.NoError(t, err)
+	repo1.ConfigureHashing(salt1)
+
+	repo2 := NewRefreshTokenRepository(db, DriverTypeSQLite)
+	salt2, err := GenerateSalt()
+	require.NoError(t, err)
+	repo2.ConfigureHashing(salt2)
+
+	ctx := context.Background()
+	row := sampleRefreshToken("shared-secret-token", 9999999999)
+	require.NoError(t, repo1.StoreRefreshToken(ctx, row))
+
+	// repo2 computes a different hash → different primary key → not found.
+	_, err = repo2.GetAndDeleteRefreshToken(ctx, "shared-secret-token")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
+
+	// The token was not consumed by repo2, so repo1 can still retrieve it.
+	got, err := repo1.GetAndDeleteRefreshToken(ctx, "shared-secret-token")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+}
 
