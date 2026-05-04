@@ -60,6 +60,9 @@ func main() {
 	verifier.InitVerifier(&configuration, repo)
 	verifier.InitPresentationParser(&configuration, Health())
 
+	// bgCtx is cancelled before graceful shutdown to stop background tasks.
+	bgCtx, cancelBg := context.WithCancel(context.Background())
+
 	// Wire up the database-backed refresh token repository when enabled.
 	if configuration.Verifier.RefreshToken.Enabled {
 		var refreshDB *sql.DB
@@ -82,6 +85,11 @@ func main() {
 		refreshTokenRepo := database.NewRefreshTokenRepository(refreshDB, configuration.Database.Type)
 		verifier.SetRefreshTokenRepo(refreshTokenRepo)
 		logger.Info("Refresh token support enabled")
+
+		if interval := configuration.Verifier.RefreshToken.CleanupInterval; interval > 0 {
+			refreshTokenRepo.SetCleanupInterval(bgCtx, time.Duration(interval)*time.Second)
+			logger.Infof("Refresh token cleanup enabled (interval: %d seconds)", interval)
+		}
 	}
 
 	router := getRouter()
@@ -153,6 +161,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	<-quit
+	cancelBg()
 	logging.Log().Info("Shutting down servers...")
 
 	shutdownTimeout := time.Duration(configuration.Server.ShutdownTimeout) * time.Second
