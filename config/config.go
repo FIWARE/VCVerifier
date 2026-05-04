@@ -1,12 +1,30 @@
 package config
 
-import "github.com/fiware/VCVerifier/logging"
+import (
+	"encoding/json"
+
+	"github.com/fiware/VCVerifier/logging"
+)
 
 const (
 	// DefaultRefreshTokenExpirationMinutes is the default lifetime for refresh
 	// tokens, expressed in minutes. 2880 minutes equals 48 hours.
 	DefaultRefreshTokenExpirationMinutes = 2880
 )
+
+// MaskedString is a string type for sensitive configuration values (passwords,
+// secrets, HMAC keys). It marshals to "***" in JSON so that sensitive data
+// never appears in logs or serialized output. The underlying string value is
+// preserved and accessible normally in Go code (e.g. fmt.Sprintf, direct
+// comparison), so no type conversion is needed at call sites
+type MaskedString string
+
+func (m MaskedString) MarshalJSON() ([]byte, error) {
+	if m == "" {
+		return json.Marshal("")
+	}
+	return json.Marshal("***")
+}
 
 // RefreshToken holds all configuration related to the refresh token feature.
 type RefreshToken struct {
@@ -26,7 +44,7 @@ type RefreshToken struct {
 	// startup, meaning all issued tokens are invalidated when the server
 	// restarts. Provide a fixed secret string to preserve tokens across
 	// restarts.
-	HashSalt string `mapstructure:"hashSalt"`
+	HashSalt MaskedString `mapstructure:"hashSalt"`
 }
 
 // CONFIGURATION STRUCTURE FOR THE VERIFIER CONFIG
@@ -57,7 +75,7 @@ type Database struct {
 	// User for database authentication
 	User string `mapstructure:"user"`
 	// Password for database authentication
-	Password string `mapstructure:"password"`
+	Password MaskedString `mapstructure:"password"`
 	// SSLMode for the postgres connection (for mysql, use "true", "false", "skip-verify", or "preferred")
 	SSLMode string `mapstructure:"sslMode" default:"disable"`
 }

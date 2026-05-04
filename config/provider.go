@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/gookit/config/v2"
 	"github.com/gookit/config/v2/yaml"
 )
@@ -13,6 +16,8 @@ func ReadConfig(configFile string) (configuration Configuration, err error) {
 		opt.TagName = "mapstructure"
 	})
 	config.AddDriver(yaml.Driver)
+	usuario := os.Getenv("DB_USER")
+	fmt.Println("Usuario:", usuario)
 
 	if err = config.LoadFiles(configFile); err != nil {
 		return
