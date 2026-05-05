@@ -55,6 +55,7 @@ func main() {
 			panic(err)
 		}
 		defer database.Close(db)
+		RegisterDBHealth(db)
 	}
 
 	verifier.InitVerifier(&configuration, repo)
@@ -81,6 +82,7 @@ func main() {
 				panic(err)
 			}
 			defer database.Close(refreshDB)
+			RegisterDBHealth(refreshDB)
 		}
 		refreshTokenRepo := database.NewRefreshTokenRepository(refreshDB, configuration.Database.Type)
 
