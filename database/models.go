@@ -35,6 +35,32 @@ type ScopeEntryRow struct {
 	DcqlQuery *string
 }
 
+// RefreshTokenRow represents a row in the refresh_token table. Each row
+// stores the raw JWT claims so that access tokens can be re-issued without
+// re-applying credential inclusion configurations.
+type RefreshTokenRow struct {
+	// Token is the primary key: the raw token when hashing is disabled, or the
+	// HMAC-SHA256 hex digest when hashing is enabled.
+	Token string
+	// TokenSuffix holds the last 5 characters of the original plaintext token,
+	// always stored regardless of hashing, for operational identification.
+	TokenSuffix string
+	// ClientID identifies the relying party that requested the token.
+	ClientID string
+	// Claims is the JSON payload extracted from the original access token JWT
+	// (base64url-decoded middle segment). On exchange these claims are used to
+	// re-issue a new access token without re-applying credential inclusion
+	// configurations.
+	Claims string
+	// Integrity is the HMAC-SHA256 hex digest over the raw refresh token,
+	// client ID, and claims. It is computed and verified by the repository;
+	// callers of StoreRefreshToken do not need to set this field.
+	Integrity string
+	// ExpiresAt is the Unix timestamp (seconds) at which this refresh token
+	// expires.
+	ExpiresAt int64
+}
+
 // ServiceToRow converts a config.ConfiguredService into a ServiceRow.
 // The scope entries are handled separately via ScopeEntryToRows.
 func ServiceToRow(service config.ConfiguredService) ServiceRow {

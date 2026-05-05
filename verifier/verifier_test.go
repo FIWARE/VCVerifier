@@ -24,6 +24,7 @@ import (
 
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
+	"github.com/fiware/VCVerifier/database"
 	logging "github.com/fiware/VCVerifier/logging"
 	"github.com/google/go-cmp/cmp"
 	"github.com/lestrrat-go/jwx/v3/jwk"
@@ -94,6 +95,7 @@ type mockTokenCache struct {
 	tokens       map[string]tokenStore
 	errorToThrow error
 }
+
 type mockCredentialConfig struct {
 
 	// ServiceId->Scope->CredentialType-> TIR/TIL URLs
@@ -876,7 +878,7 @@ func TestGetToken(t *testing.T) {
 
 			tokenCache := mockTokenCache{tokens: tc.tokenSession}
 			verifier := CredentialVerifier{tokenCache: &tokenCache, signingKey: testKey, clock: mockClock{}, tokenSigner: mockTokenSigner{tc.signingError}, signingAlgorithm: "ES256"}
-			jwtString, expiration, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false)
+			jwtString, expiration, _, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false)
 
 			if err != tc.expectedError {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
@@ -900,6 +902,103 @@ func TestGetToken(t *testing.T) {
 			if expiration != tc.expectedExpiration {
 				t.Errorf("%s - Expected expiration %v but was %v.", tc.testName, tc.expectedExpiration, expiration)
 				return
+			}
+		})
+	}
+}
+
+// TestGetTokenWithRefreshToken tests the GetToken method when the refresh
+// token feature is enabled, verifying that a refresh token is generated and
+// returned alongside the access token, and that failures in refresh token
+// creation propagate correctly.
+func TestGetTokenWithRefreshToken(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	testKey := getECDSAKey()
+	repoErr := errors.New("repo_store_failure")
+
+	// refreshTokenExpirationMinutes is the lifetime used for the mock verifier.
+	const refreshTokenExpirationMinutes = 60
+
+	type test struct {
+		testName              string
+		testCode              string
+		testRedirectUri       string
+		tokenSession          map[string]tokenStore
+		refreshTokenEnabled   bool
+		refreshTokenRepo      *mockRefreshTokenRepository
+		expectedRefreshToken  bool
+		expectedError         error
+		repoStoreErr          error
+	}
+
+	tests := []test{
+		{
+			testName:             "When refresh tokens are enabled and store succeeds, a refresh token is returned.",
+			testCode:             "my-auth-code",
+			testRedirectUri:      "https://myhost.org/redirect",
+			tokenSession:         map[string]tokenStore{"my-auth-code": {token: getToken(), redirect_uri: "https://myhost.org/redirect", clientId: "test-client"}},
+			refreshTokenEnabled:  true,
+			refreshTokenRepo:     newMockRefreshTokenRepo(),
+			expectedRefreshToken: true,
+			expectedError:        nil,
+		},
+		{
+			testName:             "When refresh tokens are disabled, no refresh token is returned.",
+			testCode:             "my-auth-code",
+			testRedirectUri:      "https://myhost.org/redirect",
+			tokenSession:         map[string]tokenStore{"my-auth-code": {token: getToken(), redirect_uri: "https://myhost.org/redirect", clientId: "test-client"}},
+			refreshTokenEnabled:  false,
+			refreshTokenRepo:     newMockRefreshTokenRepo(),
+			expectedRefreshToken: false,
+			expectedError:        nil,
+		},
+		{
+			testName:             "When refresh token store fails, an error is returned.",
+			testCode:             "my-auth-code",
+			testRedirectUri:      "https://myhost.org/redirect",
+			tokenSession:         map[string]tokenStore{"my-auth-code": {token: getToken(), redirect_uri: "https://myhost.org/redirect", clientId: "test-client"}},
+			refreshTokenEnabled:  true,
+			refreshTokenRepo:     &mockRefreshTokenRepository{tokens: make(map[string]database.RefreshTokenRow), storeErr: repoErr},
+			expectedRefreshToken: false,
+			expectedError:        repoErr,
+			repoStoreErr:         repoErr,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			logging.Log().Info("TestGetTokenWithRefreshToken +++++++++++++++++ Running test: ", tc.testName)
+
+			tokenCache := mockTokenCache{tokens: tc.tokenSession}
+			verifier := CredentialVerifier{
+				tokenCache:             &tokenCache,
+				signingKey:             testKey,
+				clock:                  mockClock{},
+				tokenSigner:            mockTokenSigner{},
+				signingAlgorithm:       "ES256",
+				refreshTokenEnabled:    tc.refreshTokenEnabled,
+				refreshTokenExpiration: refreshTokenExpirationMinutes * time.Minute,
+				refreshTokenRepo:       tc.refreshTokenRepo,
+			}
+			jwtString, expiration, refreshToken, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false)
+
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError)
+				return
+			}
+			assert.NoError(t, err)
+
+			// Access token must always be present on success.
+			assert.NotEmpty(t, jwtString)
+			assert.Greater(t, expiration, int64(0))
+
+			if tc.expectedRefreshToken {
+				assert.NotEmpty(t, refreshToken, "Expected a refresh token to be returned")
+				// Verify the token was stored in the repository.
+				assert.Len(t, tc.refreshTokenRepo.tokens, 1, "Exactly one refresh token should be stored")
+			} else {
+				assert.Empty(t, refreshToken, "Expected no refresh token to be returned")
 			}
 		})
 	}

@@ -52,6 +52,20 @@ const createScopeEntryTableMySQL = `CREATE TABLE IF NOT EXISTS scope_entry (
 	FOREIGN KEY (service_id) REFERENCES service(id) ON DELETE CASCADE
 )`
 
+// DDL for the refresh_token table. The claims column stores the raw JSON
+// payload extracted from the original access token JWT so that access tokens
+// can be re-issued without re-applying credential inclusion configurations.
+// The integrity column stores an HMAC-SHA256 digest that binds the raw
+// refresh token value to its stored claims, detecting database-level tampering.
+const createRefreshTokenTable = `CREATE TABLE IF NOT EXISTS refresh_token (
+	token VARCHAR(255) NOT NULL PRIMARY KEY,
+	token_suffix VARCHAR(5) NOT NULL DEFAULT '',
+	client_id VARCHAR(255) NOT NULL,
+	claims TEXT NOT NULL,
+	integrity VARCHAR(64) NOT NULL DEFAULT '',
+	expires_at BIGINT NOT NULL
+)`
+
 // SQLite pragma to enable foreign-key enforcement. SQLite disables foreign
 // keys by default; this must be executed on every connection.
 const sqliteForeignKeysPragma = `PRAGMA foreign_keys = ON`
@@ -66,6 +80,18 @@ func scopeEntryDDL(dbType string) (string, error) {
 		return createScopeEntryTableSQLite, nil
 	case DriverTypeMySQL:
 		return createScopeEntryTableMySQL, nil
+	default:
+		return "", fmt.Errorf("unsupported database type for schema init: %q", dbType)
+	}
+}
+
+// refreshTokenDDL returns the CREATE TABLE statement for refresh_token that
+// matches the given database type. The schema is identical across all
+// supported types (no BOOLEAN columns requiring per-driver defaults).
+func refreshTokenDDL(dbType string) (string, error) {
+	switch dbType {
+	case DriverTypePostgres, DriverTypeMySQL, DriverTypeSQLite:
+		return createRefreshTokenTable, nil
 	default:
 		return "", fmt.Errorf("unsupported database type for schema init: %q", dbType)
 	}
@@ -97,6 +123,15 @@ func InitSchema(db *sql.DB, dbType string) error {
 
 	if _, err := db.Exec(scopeSQL); err != nil {
 		return fmt.Errorf("failed to create scope_entry table: %w", err)
+	}
+
+	refreshSQL, err := refreshTokenDDL(dbType)
+	if err != nil {
+		return err
+	}
+
+	if _, err := db.Exec(refreshSQL); err != nil {
+		return fmt.Errorf("failed to create refresh_token table: %w", err)
 	}
 
 	logging.Log().Info("Database schema initialized successfully")

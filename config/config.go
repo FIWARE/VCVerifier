@@ -1,6 +1,51 @@
 package config
 
-import "github.com/fiware/VCVerifier/logging"
+import (
+	"encoding/json"
+
+	"github.com/fiware/VCVerifier/logging"
+)
+
+const (
+	// DefaultRefreshTokenExpirationMinutes is the default lifetime for refresh
+	// tokens, expressed in minutes. 2880 minutes equals 48 hours.
+	DefaultRefreshTokenExpirationMinutes = 2880
+)
+
+// MaskedString is a string type for sensitive configuration values (passwords,
+// secrets, HMAC keys). It marshals to "***" in JSON so that sensitive data
+// never appears in logs or serialized output. The underlying string value is
+// preserved and accessible normally in Go code (e.g. fmt.Sprintf, direct
+// comparison), so no type conversion is needed at call sites
+type MaskedString string
+
+func (m MaskedString) MarshalJSON() ([]byte, error) {
+	if m == "" {
+		return json.Marshal("")
+	}
+	return json.Marshal("***")
+}
+
+// RefreshToken holds all configuration related to the refresh token feature.
+type RefreshToken struct {
+	// Enabled controls whether the verifier issues refresh tokens alongside
+	// access tokens. When false (the default), no refresh tokens are generated
+	// and the refresh_token grant type is rejected.
+	Enabled bool `mapstructure:"enabled" default:"false"`
+	// Expiration is the lifetime of issued refresh tokens, in minutes.
+	// Defaults to 2880 (48 hours). Only meaningful when Enabled is true.
+	Expiration int `mapstructure:"expiration" default:"2880"`
+	// CleanupInterval is how often (in seconds) expired refresh token rows are
+	// purged from the database. 0 or negative disables cleanup.
+	CleanupInterval int `mapstructure:"cleanupInterval" default:"60"`
+	// HashSalt is the HMAC-SHA256 key used when hashing refresh tokens before
+	// storage. Tokens are always hashed; this field controls whether the key
+	// is stable across restarts. When empty a random salt is generated at
+	// startup, meaning all issued tokens are invalidated when the server
+	// restarts. Provide a fixed secret string to preserve tokens across
+	// restarts.
+	HashSalt MaskedString `mapstructure:"hashSalt"`
+}
 
 // CONFIGURATION STRUCTURE FOR THE VERIFIER CONFIG
 
@@ -30,7 +75,7 @@ type Database struct {
 	// User for database authentication
 	User string `mapstructure:"user"`
 	// Password for database authentication
-	Password string `mapstructure:"password"`
+	Password MaskedString `mapstructure:"password"`
 	// SSLMode for the postgres connection (for mysql, use "true", "false", "skip-verify", or "preferred")
 	SSLMode string `mapstructure:"sslMode" default:"disable"`
 }
@@ -136,6 +181,8 @@ type Verifier struct {
 	// revocation check — it only parametrises the HTTP client used when at
 	// least one credential opts in.
 	StatusListHttpTimeout int `mapstructure:"statusListHttpTimeout" default:"10"`
+	// RefreshToken groups all refresh token configuration.
+	RefreshToken RefreshToken `mapstructure:"refreshToken"`
 }
 
 type ClientIdentification struct {
