@@ -1649,9 +1649,9 @@ func (v *CredentialVerifier) generateRefreshToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// CreateRefreshToken generates a new opaque refresh token, stores the
-// full signed JWT in the database, and returns the token string.
-// Returns ErrorRefreshTokenDisabled when the feature is off.
+// CreateRefreshToken generates a new opaque refresh token, stores the raw
+// JWT claims (not the signed access token) in the database, and returns
+// the token string. Returns ErrorRefreshTokenDisabled when the feature is off.
 func (v *CredentialVerifier) CreateRefreshToken(clientId string, signedJWT string) (string, error) {
 	if !v.refreshTokenEnabled {
 		return "", ErrorRefreshTokenDisabled
@@ -1662,11 +1662,23 @@ func (v *CredentialVerifier) CreateRefreshToken(clientId string, signedJWT strin
 		return "", err
 	}
 
+	// Extract the raw JSON claims from the JWT payload segment (base64url-encoded
+	// middle part of the compact serialization). Storing only the claims avoids
+	// persisting a usable bearer token in the database.
+	parts := strings.SplitN(signedJWT, ".", 3)
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid JWT format: expected 3 dot-separated segments")
+	}
+	rawClaims, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("decode JWT claims segment: %w", err)
+	}
+
 	row := database.RefreshTokenRow{
-		Token:      token,
-		ClientID:   clientId,
-		JWTPayload: signedJWT,
-		ExpiresAt:  v.clock.Now().Add(v.refreshTokenExpiration).Unix(),
+		Token:     token,
+		ClientID:  clientId,
+		Claims:    string(rawClaims),
+		ExpiresAt: v.clock.Now().Add(v.refreshTokenExpiration).Unix(),
 	}
 
 	if err := v.refreshTokenRepo.StoreRefreshToken(context.Background(), row); err != nil {
@@ -1708,11 +1720,15 @@ func (v *CredentialVerifier) ExchangeRefreshToken(refreshToken string) (jwtStrin
 		return "", 0, "", ErrorRefreshTokenDisabled
 	}
 
-	// Atomically retrieve and delete (single-use).
+	// Atomically retrieve and delete (single-use). The repository verifies the
+	// stored HMAC integrity and returns ErrRefreshTokenInvalidIntegrity on mismatch.
 	row, err := v.refreshTokenRepo.GetAndDeleteRefreshToken(context.Background(), refreshToken)
 	if err != nil {
 		if errors.Is(err, database.ErrRefreshTokenNotFound) {
 			return "", 0, "", ErrorRefreshTokenNotFound
+		}
+		if errors.Is(err, database.ErrRefreshTokenInvalidIntegrity) {
+			return "", 0, "", ErrorRefreshTokenInvalidSignature
 		}
 		return "", 0, "", err
 	}
@@ -1723,28 +1739,6 @@ func (v *CredentialVerifier) ExchangeRefreshToken(refreshToken string) (jwtStrin
 		return "", 0, "", ErrorRefreshTokenExpired
 	}
 
-	// Parse the stored JWT to extract claims, verifying the signature to
-	// detect any tampering of the stored payload. Time-based validation is
-	// intentionally skipped: the stored access token will have expired by the
-	// time the refresh token is exchanged, but its claims are still valid for
-	// re-issuance.
-	pubKey, err := v.signingKey.PublicKey()
-	if err != nil {
-		return "", 0, "", fmt.Errorf("get public key for stored jwt verification: %w", err)
-	}
-	var storedJWTAlg jwa.SignatureAlgorithm
-	switch v.signingAlgorithm {
-	case "RS256":
-		storedJWTAlg = jwa.RS256()
-	case "ES256":
-		storedJWTAlg = jwa.ES256()
-	}
-	oldToken, err := jwt.Parse([]byte(row.JWTPayload), jwt.WithKey(storedJWTAlg, pubKey), jwt.WithValidate(false))
-	if err != nil {
-		logging.Log().Warnf("Stored JWT signature verification failed for refresh token (suffix=%s): %v", row.TokenSuffix, err)
-		return "", 0, "", ErrorRefreshTokenInvalidSignature
-	}
-
 	// Build a new token from the stored claims, updating only the
 	// time-dependent fields (iat, exp).
 	now := v.clock.Now()
@@ -1752,14 +1746,9 @@ func (v *CredentialVerifier) ExchangeRefreshToken(refreshToken string) (jwtStrin
 		IssuedAt(now).
 		Expiration(now.Add(v.jwtExpiration))
 
-	// Copy all claims from the stored token except iat and exp which we just set.
-	tokenJSON, err := json.Marshal(oldToken)
-	if err != nil {
-		return "", 0, "", fmt.Errorf("marshal stored jwt claims: %w", err)
-	}
 	var claimsMap map[string]interface{}
-	if err := json.Unmarshal(tokenJSON, &claimsMap); err != nil {
-		return "", 0, "", fmt.Errorf("extract claims: %w", err)
+	if err := json.Unmarshal([]byte(row.Claims), &claimsMap); err != nil {
+		return "", 0, "", fmt.Errorf("parse stored claims: %w", err)
 	}
 	for key, val := range claimsMap {
 		if key == "iat" || key == "exp" {

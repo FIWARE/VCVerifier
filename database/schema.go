@@ -52,14 +52,17 @@ const createScopeEntryTableMySQL = `CREATE TABLE IF NOT EXISTS scope_entry (
 	FOREIGN KEY (service_id) REFERENCES service(id) ON DELETE CASCADE
 )`
 
-// DDL for the refresh_token table. The jwt_payload column stores the
-// complete JWT claims JSON so that access tokens can be re-issued without
-// re-applying credential inclusion configurations.
+// DDL for the refresh_token table. The claims column stores the raw JSON
+// payload extracted from the original access token JWT so that access tokens
+// can be re-issued without re-applying credential inclusion configurations.
+// The integrity column stores an HMAC-SHA256 digest that binds the raw
+// refresh token value to its stored claims, detecting database-level tampering.
 const createRefreshTokenTable = `CREATE TABLE IF NOT EXISTS refresh_token (
 	token VARCHAR(255) NOT NULL PRIMARY KEY,
 	token_suffix VARCHAR(5) NOT NULL DEFAULT '',
 	client_id VARCHAR(255) NOT NULL,
-	jwt_payload TEXT NOT NULL,
+	claims TEXT NOT NULL,
+	integrity VARCHAR(64) NOT NULL DEFAULT '',
 	expires_at BIGINT NOT NULL
 )`
 
