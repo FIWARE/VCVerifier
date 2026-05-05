@@ -291,7 +291,11 @@ func (cc cacheBasedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifier s
 		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
 		if ok {
 			logging.Log().Debugf("Found trusted issuers for %s for %s - %s", credential.TrustedIssuersLists, serviceIdentifier, credentialType)
-			return credential.TrustedIssuersLists, nil
+			issuerList := make([]string, len(credential.TrustedIssuersLists))
+			for _, issuer := range credential.TrustedIssuersLists {
+				issuerList = append(issuerList, issuer.Endpoint)
+			}
+			return issuerList, nil
 		}
 	}
 	logging.Log().Debugf("No trusted issuers for %s - %s", serviceIdentifier, credentialType)
