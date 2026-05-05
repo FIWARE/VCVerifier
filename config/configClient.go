@@ -138,28 +138,14 @@ type PresentationDefinition struct {
 	Id string `json:"id" mapstructure:"id"`
 
 	// List of requested inputs
-	InputDescriptors []InputDescriptor `json:"input_descriptors" mapstructure:"input_descriptors"`
+	InputDescriptors []InputDescriptor `json:"inputDescriptors" mapstructure:"inputDescriptors"`
 	// Format of the credential to be requested
 	Format []FormatObject `json:"format" mapstructure:"format"`
 }
 
-func (pd PresentationDefinition) MarshalJSON() ([]byte, error) {
-	type FormatObjectVO struct {
-		Alg       []string `json:"alg"`
-		ProofType []string `json:"proofType,omitempty"`
-	}
-	type Alias PresentationDefinition
-	formatMap := make(map[string]FormatObjectVO, len(pd.Format))
-	for _, f := range pd.Format {
-		formatMap[f.FormatKey] = FormatObjectVO{Alg: f.Alg, ProofType: f.ProofType}
-	}
-	return json.Marshal(struct {
-		Alias
-		Format map[string]FormatObjectVO `json:"format,omitempty"`
-	}{
-		Alias:  Alias(pd),
-		Format: formatMap,
-	})
+type FormatObjectVO struct {
+	Alg       []string `json:"alg"`
+	ProofType []string `json:"proofType,omitempty"`
 }
 
 type FormatObject struct {
@@ -170,13 +156,47 @@ type FormatObject struct {
 	ProofType []string `json:"proofType,omitempty" mapstructure:"proofType"`
 }
 
+func (f FormatObject) VO() FormatObjectVO {
+	return FormatObjectVO{Alg: f.Alg, ProofType: f.ProofType}
+}
+
+func toFormatVOMap(formats []FormatObject) map[string]FormatObjectVO {
+	m := make(map[string]FormatObjectVO, len(formats))
+	for _, f := range formats {
+		m[f.FormatKey] = f.VO()
+	}
+	return m
+}
+
+func (pd PresentationDefinition) MarshalJSON() ([]byte, error) {
+	type Alias PresentationDefinition
+	return json.Marshal(struct {
+		Alias
+		Format map[string]FormatObjectVO `json:"format,omitempty"`
+	}{
+		Alias:  Alias(pd),
+		Format: toFormatVOMap(pd.Format),
+	})
+}
+
 type InputDescriptor struct {
 	// Id of the descriptor
 	Id string `json:"id" mapstructure:"id"`
 	// defines the infromation to be requested
 	Constraints Constraints `json:"constraints" mapstructure:"constraints"`
 	// Format of the credential to be requested
-	Format map[string]FormatObject `json:"format" mapstructure:"format"`
+	Format []FormatObject `json:"format" mapstructure:"format"`
+}
+
+func (id InputDescriptor) MarshalJSON() ([]byte, error) {
+	type Alias InputDescriptor
+	return json.Marshal(struct {
+		Alias
+		Format map[string]FormatObjectVO `json:"format,omitempty"`
+	}{
+		Alias:  Alias(id),
+		Format: toFormatVOMap(id.Format),
+	})
 }
 
 type Constraints struct {
