@@ -136,15 +136,38 @@ type HolderVerification struct {
 type PresentationDefinition struct {
 	// Id of the definition
 	Id string `json:"id" mapstructure:"id"`
+
 	// List of requested inputs
 	InputDescriptors []InputDescriptor `json:"input_descriptors" mapstructure:"input_descriptors"`
 	// Format of the credential to be requested
-	Format map[string]FormatObject `json:"format" mapstructure:"format"`
+	Format []FormatObject `json:"format" mapstructure:"format"`
+}
+
+func (pd PresentationDefinition) MarshalJSON() ([]byte, error) {
+	type FormatObjectVO struct {
+		Alg       []string `json:"alg"`
+		ProofType []string `json:"proofType,omitempty"`
+	}
+	type Alias PresentationDefinition
+	formatMap := make(map[string]FormatObjectVO, len(pd.Format))
+	for _, f := range pd.Format {
+		formatMap[f.FormatKey] = FormatObjectVO{Alg: f.Alg, ProofType: f.ProofType}
+	}
+	return json.Marshal(struct {
+		Alias
+		Format map[string]FormatObjectVO `json:"format,omitempty"`
+	}{
+		Alias:  Alias(pd),
+		Format: formatMap,
+	})
 }
 
 type FormatObject struct {
+	// format of the key
+	FormatKey string `json:"formatKey" mapstructure:"formatKey"`
 	// list of algorithms to be requested for credential - f.e. ES256
-	Alg []string `json:"alg" mapstructure:"alg"`
+	Alg       []string `json:"alg" mapstructure:"alg"`
+	ProofType []string `json:"proofType,omitempty" mapstructure:"proofType"`
 }
 
 type InputDescriptor struct {
