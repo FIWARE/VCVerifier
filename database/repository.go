@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -551,7 +552,7 @@ const (
 // computeIntegrity returns HMAC-SHA256(salt, rawToken|"|"|clientId|"|"|claims)
 // as a lowercase hex string. Returns empty string when salt is not configured,
 // in which case integrity verification is skipped on retrieval.
-func computeIntegrity(salt []byte, rawToken, clientId, claims string) string {
+func computeIntegrity(salt []byte, rawToken, clientId, claims string, expiresAt int64) string {
 	if len(salt) == 0 {
 		return ""
 	}
@@ -561,6 +562,8 @@ func computeIntegrity(salt []byte, rawToken, clientId, claims string) string {
 	mac.Write([]byte(clientId))
 	mac.Write([]byte("|"))
 	mac.Write([]byte(claims))
+	mac.Write([]byte("|"))
+	mac.Write([]byte(strconv.FormatInt(expiresAt, 10)))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -569,7 +572,7 @@ func computeIntegrity(salt []byte, rawToken, clientId, claims string) string {
 // characters of the raw token are always stored in token_suffix. The integrity
 // HMAC is computed from the configured salt and stored alongside the claims.
 func (r *SqlRefreshTokenRepository) StoreRefreshToken(ctx context.Context, row RefreshTokenRow) error {
-	integrity := computeIntegrity(r.salt, row.Token, row.ClientID, row.Claims)
+	integrity := computeIntegrity(r.salt, row.Token, row.ClientID, row.Claims, row.ExpiresAt)
 	_, err := r.db.ExecContext(ctx, r.adapt(sqlInsertRefreshToken),
 		r.tokenKey(row.Token), rawTokenSuffix(row.Token), row.ClientID, row.Claims, integrity, row.ExpiresAt)
 	if err != nil {
@@ -613,7 +616,7 @@ func (r *SqlRefreshTokenRepository) GetAndDeleteRefreshToken(ctx context.Context
 	// Verify integrity after committing so the token is consumed even on failure,
 	// preventing repeated use of a tampered row.
 	if len(r.salt) > 0 {
-		expected := computeIntegrity(r.salt, token, row.ClientID, row.Claims)
+		expected := computeIntegrity(r.salt, token, row.ClientID, row.Claims, row.ExpiresAt)
 		if !hmac.Equal([]byte(expected), []byte(row.Integrity)) {
 			logging.Log().Warnf("Refresh token integrity check failed (suffix=%s): possible database-level tampering", row.TokenSuffix)
 			return nil, ErrRefreshTokenInvalidIntegrity
@@ -663,14 +666,19 @@ func (r *SqlRefreshTokenRepository) SetCleanupInterval(ctx context.Context, inte
 	r.cancelCleanup = cancel
 
 	go func() {
+		runCleanup := func() {
+			logging.Log().Debug("Running refresh token cleanup")
+			if _, err := r.DeleteExpiredTokens(cleanupCtx); err != nil && cleanupCtx.Err() == nil {
+				logging.Log().Warnf("Refresh token cleanup failed: %v", err)
+			}
+		}
+		runCleanup()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				if _, err := r.DeleteExpiredTokens(cleanupCtx); err != nil && cleanupCtx.Err() == nil {
-					logging.Log().Warnf("Refresh token cleanup failed: %v", err)
-				}
+				runCleanup()
 			case <-cleanupCtx.Done():
 				return
 			}
