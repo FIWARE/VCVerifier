@@ -59,7 +59,7 @@ func Test_ReadConfig(t *testing.T) {
 					JwtExpiration:          30,
 					StatusListCacheExpiry:  DefaultStatusCacheExpirySeconds,
 					StatusListHttpTimeout:  DefaultStatusHttpTimeoutSeconds,
-					RefreshToken: RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes},
+					RefreshToken: RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes, CleanupInterval: 60},
 				},
 				Logging: logging.LoggingConfig{
 					Level:         "DEBUG",
@@ -147,7 +147,7 @@ func Test_ReadConfig(t *testing.T) {
 					JwtExpiration:         30,
 					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
 					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
-					RefreshToken: RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes},
+					RefreshToken: RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes, CleanupInterval: 60},
 				},
 				Logging: logging.LoggingConfig{
 					Level:         "INFO",
@@ -199,7 +199,7 @@ func Test_ReadConfig(t *testing.T) {
 					JwtExpiration:          30,
 					StatusListCacheExpiry:  DefaultStatusCacheExpirySeconds,
 					StatusListHttpTimeout:  DefaultStatusHttpTimeoutSeconds,
-					RefreshToken: RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes},
+					RefreshToken: RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes, CleanupInterval: 60},
 				},
 				Logging: logging.LoggingConfig{
 					Level:       "DEBUG",

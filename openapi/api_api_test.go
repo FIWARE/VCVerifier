@@ -107,6 +107,10 @@ func (mV *mockVerifier) IsRefreshTokenEnabled() bool {
 	return mV.mockRefreshTokenEnabled
 }
 
+func (mV *mockVerifier) RefreshTokenExpiresIn() int64 {
+	return 0
+}
+
 func (mV *mockVerifier) CreateRefreshToken(clientId string, signedJWT string) (string, error) {
 	return mV.mockRefreshToken, mV.mockRefreshTokenError
 }
