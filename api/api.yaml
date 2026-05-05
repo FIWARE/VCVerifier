@@ -693,3 +693,7 @@ components:
         refresh_token:
           type: string
           description: Refresh token to obtain new access tokens. Only present when refresh tokens are enabled.
+        refresh_token_expires_in:
+          type: integer
+          description: Lifetime of the refresh token in seconds. Only present when refresh tokens are enabled.
+          example: 172800
