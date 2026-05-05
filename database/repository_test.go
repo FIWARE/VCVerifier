@@ -581,7 +581,7 @@ func sampleRefreshToken(token string, expiresAt int64) RefreshTokenRow {
 	return RefreshTokenRow{
 		Token:      token,
 		ClientID:   "client-1",
-		JWTPayload: `{"iss":"https://verifier.example.com","sub":"did:key:holder123","aud":"aud-1"}`,
+		Claims: `{"iss":"https://verifier.example.com","sub":"did:key:holder123","aud":"aud-1"}`,
 		ExpiresAt:  expiresAt,
 	}
 }
@@ -619,7 +619,7 @@ func TestGetAndDeleteRefreshToken_Success(t *testing.T) {
 	assert.Equal(t, "tok-2", got.Token)
 	assert.Equal(t, "tok-2", got.TokenSuffix) // len("tok-2") == 5, so suffix equals the token itself
 	assert.Equal(t, "client-1", got.ClientID)
-	assert.Equal(t, `{"iss":"https://verifier.example.com","sub":"did:key:holder123","aud":"aud-1"}`, got.JWTPayload)
+	assert.Equal(t, `{"iss":"https://verifier.example.com","sub":"did:key:holder123","aud":"aud-1"}`, got.Claims)
 	assert.Equal(t, int64(9999999999), got.ExpiresAt)
 
 	// Second retrieval must return not-found (single-use).
@@ -712,11 +712,11 @@ func TestStoreRefreshToken_FieldRoundTrip(t *testing.T) {
 	repo := newTestRefreshRepo(t)
 	ctx := context.Background()
 
-	jwtPayload := `eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciIsInN1YiI6ImRpZDprZXk6aG9sZGVyIiwiYXVkIjoiYXVkLTEifQ.sig`
+	claimsJSON := `eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciIsInN1YiI6ImRpZDprZXk6aG9sZGVyIiwiYXVkIjoiYXVkLTEifQ.sig`
 	row := RefreshTokenRow{
 		Token:      "field-roundtrip-tok",
 		ClientID:   "client-roundtrip",
-		JWTPayload: jwtPayload,
+		Claims: claimsJSON,
 		ExpiresAt:  1893456000, // 2030-01-01
 	}
 	require.NoError(t, repo.StoreRefreshToken(ctx, row))
@@ -727,7 +727,7 @@ func TestStoreRefreshToken_FieldRoundTrip(t *testing.T) {
 	assert.Equal(t, "field-roundtrip-tok", got.Token)
 	assert.Equal(t, "p-tok", got.TokenSuffix) // last 5 chars of "field-roundtrip-tok"
 	assert.Equal(t, "client-roundtrip", got.ClientID)
-	assert.Equal(t, jwtPayload, got.JWTPayload)
+	assert.Equal(t, claimsJSON, got.Claims)
 	assert.Equal(t, int64(1893456000), got.ExpiresAt)
 }
 
@@ -741,13 +741,13 @@ func TestRefreshTokenIsolation(t *testing.T) {
 	row1 := RefreshTokenRow{
 		Token:      "iso-tok-1",
 		ClientID:   "client-alpha",
-		JWTPayload: `{"client":"alpha"}`,
+		Claims: `{"client":"alpha"}`,
 		ExpiresAt:  9999999999,
 	}
 	row2 := RefreshTokenRow{
 		Token:      "iso-tok-2",
 		ClientID:   "client-beta",
-		JWTPayload: `{"client":"beta"}`,
+		Claims: `{"client":"beta"}`,
 		ExpiresAt:  9999999999,
 	}
 	require.NoError(t, repo.StoreRefreshToken(ctx, row1))
@@ -757,7 +757,7 @@ func TestRefreshTokenIsolation(t *testing.T) {
 	got1, err := repo.GetAndDeleteRefreshToken(ctx, "iso-tok-1")
 	require.NoError(t, err)
 	assert.Equal(t, "client-alpha", got1.ClientID)
-	assert.Equal(t, `{"client":"alpha"}`, got1.JWTPayload)
+	assert.Equal(t, `{"client":"alpha"}`, got1.Claims)
 
 	// Token 1 consumed — should be gone.
 	_, err = repo.GetAndDeleteRefreshToken(ctx, "iso-tok-1")
@@ -767,7 +767,7 @@ func TestRefreshTokenIsolation(t *testing.T) {
 	got2, err := repo.GetAndDeleteRefreshToken(ctx, "iso-tok-2")
 	require.NoError(t, err)
 	assert.Equal(t, "client-beta", got2.ClientID)
-	assert.Equal(t, `{"client":"beta"}`, got2.JWTPayload)
+	assert.Equal(t, `{"client":"beta"}`, got2.Claims)
 }
 
 // TestDeleteExpiredTokens_MixedExpiry verifies that only tokens past their
@@ -850,7 +850,7 @@ func TestRefreshTokenRepository_TableDriven(t *testing.T) {
 			row := RefreshTokenRow{
 				Token:      tc.token,
 				ClientID:   tc.clientID,
-				JWTPayload: tc.payload,
+				Claims: tc.payload,
 				ExpiresAt:  tc.expiresAt,
 			}
 			require.NoError(t, repo.StoreRefreshToken(ctx, row))
@@ -861,10 +861,66 @@ func TestRefreshTokenRepository_TableDriven(t *testing.T) {
 			assert.Equal(t, tc.token, got.Token)
 			assert.Equal(t, tc.wantSuffix, got.TokenSuffix)
 			assert.Equal(t, tc.clientID, got.ClientID)
-			assert.Equal(t, tc.payload, got.JWTPayload)
+			assert.Equal(t, tc.payload, got.Claims)
 			assert.Equal(t, tc.expiresAt, got.ExpiresAt)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Integrity tests
+// ---------------------------------------------------------------------------
+
+// TestRefreshTokenIntegrity_TamperingDetected verifies that modifying the
+// stored claims after insertion causes GetAndDeleteRefreshToken to return
+// ErrRefreshTokenInvalidIntegrity.
+func TestRefreshTokenIntegrity_TamperingDetected(t *testing.T) {
+	db := openTestDB(t)
+	err := InitSchema(db, DriverTypeSQLite)
+	require.NoError(t, err)
+
+	repo := NewRefreshTokenRepository(db, DriverTypeSQLite)
+	repo.ConfigureHashing([]byte("test-integrity-salt"))
+
+	ctx := context.Background()
+	row := RefreshTokenRow{
+		Token:     "integrity-tok",
+		ClientID:  "client-1",
+		Claims:    `{"iss":"verifier","sub":"holder"}`,
+		ExpiresAt: 9999999999,
+	}
+	require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+	// Directly overwrite the claims column to simulate database-level tampering.
+	_, err = db.ExecContext(ctx, `UPDATE refresh_token SET claims = '{"iss":"attacker","sub":"elevated"}' WHERE token_suffix = 'y-tok'`)
+	require.NoError(t, err)
+
+	_, err = repo.GetAndDeleteRefreshToken(ctx, "integrity-tok")
+	assert.ErrorIs(t, err, ErrRefreshTokenInvalidIntegrity)
+}
+
+// TestRefreshTokenIntegrity_ValidRoundTrip verifies that a normally stored
+// token passes the integrity check on retrieval when a salt is configured.
+func TestRefreshTokenIntegrity_ValidRoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	err := InitSchema(db, DriverTypeSQLite)
+	require.NoError(t, err)
+
+	repo := NewRefreshTokenRepository(db, DriverTypeSQLite)
+	repo.ConfigureHashing([]byte("test-integrity-salt"))
+
+	ctx := context.Background()
+	row := RefreshTokenRow{
+		Token:     "valid-integrity-tok",
+		ClientID:  "client-1",
+		Claims:    `{"iss":"verifier","sub":"holder"}`,
+		ExpiresAt: 9999999999,
+	}
+	require.NoError(t, repo.StoreRefreshToken(ctx, row))
+
+	got, err := repo.GetAndDeleteRefreshToken(ctx, "valid-integrity-tok")
+	require.NoError(t, err)
+	assert.Equal(t, `{"iss":"verifier","sub":"holder"}`, got.Claims)
 }
 
 // ---------------------------------------------------------------------------

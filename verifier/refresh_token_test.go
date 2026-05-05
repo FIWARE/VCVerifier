@@ -150,16 +150,17 @@ func TestCreateRefreshToken_Success(t *testing.T) {
 	repo := newMockRefreshTokenRepo()
 	v := newRefreshTokenVerifier(t, true, repo)
 
+	// eyJpc3MiOiJ2ZXJpZmllciJ9 base64url-decodes to {"iss":"verifier"}
 	token, err := v.CreateRefreshToken("client-1", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciJ9.sig")
 	require.NoError(t, err)
 	assert.NotEmpty(t, token)
 
-	// Verify it was stored in the mock repo.
+	// Verify it was stored with raw claims, not the full signed JWT.
 	assert.Len(t, repo.tokens, 1)
 	stored, ok := repo.tokens[token]
 	require.True(t, ok)
 	assert.Equal(t, "client-1", stored.ClientID)
-	assert.Equal(t, "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciJ9.sig", stored.JWTPayload)
+	assert.Equal(t, `{"iss":"verifier"}`, stored.Claims)
 }
 
 func TestCreateRefreshToken_Disabled(t *testing.T) {
@@ -177,7 +178,8 @@ func TestCreateRefreshToken_StoreError(t *testing.T) {
 	repo.storeErr = errors.New("db connection lost")
 	v := newRefreshTokenVerifier(t, true, repo)
 
-	_, err := v.CreateRefreshToken("client-1", "some-jwt")
+	signedJWT := buildTestJWT(t, v)
+	_, err := v.CreateRefreshToken("client-1", signedJWT)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "db connection lost")
 }
@@ -210,25 +212,19 @@ func TestExchangeRefreshToken_Success(t *testing.T) {
 	repo := newMockRefreshTokenRepo()
 	v := newRefreshTokenVerifier(t, true, repo)
 
-	// Build a real signed JWT to store as the payload.
 	signedJWT := buildTestJWT(t, v)
+	seedToken, err := v.CreateRefreshToken("client-1", signedJWT)
+	require.NoError(t, err)
 
-	repo.tokens["original-token"] = database.RefreshTokenRow{
-		Token:      "original-token",
-		ClientID:   "client-1",
-		JWTPayload: signedJWT,
-		ExpiresAt:  9999999999, // far future
-	}
-
-	jwtString, expiration, newToken, err := v.ExchangeRefreshToken("original-token")
+	jwtString, expiration, newToken, err := v.ExchangeRefreshToken(seedToken)
 	require.NoError(t, err)
 	assert.NotEmpty(t, jwtString, "should return a signed JWT")
 	assert.Greater(t, expiration, int64(0), "expiration should be positive")
 	assert.NotEmpty(t, newToken, "should return a rotated refresh token")
-	assert.NotEqual(t, "original-token", newToken, "rotated token must differ")
+	assert.NotEqual(t, seedToken, newToken, "rotated token must differ")
 
 	// The original token must have been consumed (single-use).
-	_, ok := repo.tokens["original-token"]
+	_, ok := repo.tokens[seedToken]
 	assert.False(t, ok, "original token must be deleted after exchange")
 
 	// The new rotated token should be stored.
@@ -263,10 +259,10 @@ func TestExchangeRefreshToken_Expired(t *testing.T) {
 	// mockClock.Now() returns time.Unix(0, 0), so any expires_at < 0 is
 	// expired. Use -1 to be safely in the past.
 	repo.tokens["expired-token"] = database.RefreshTokenRow{
-		Token:      "expired-token",
-		ClientID:   "client-1",
-		JWTPayload: "irrelevant-for-expiry-check",
-		ExpiresAt:  -1, // before epoch — mockClock returns 0
+		Token:     "expired-token",
+		ClientID:  "client-1",
+		Claims:    "{}",
+		ExpiresAt: -1, // before epoch — mockClock returns 0
 	}
 
 	_, _, _, err := v.ExchangeRefreshToken("expired-token")
@@ -280,19 +276,15 @@ func TestExchangeRefreshToken_Rotation_OldTokenInvalid(t *testing.T) {
 	v := newRefreshTokenVerifier(t, true, repo)
 
 	signedJWT := buildTestJWT(t, v)
-	repo.tokens["tok-A"] = database.RefreshTokenRow{
-		Token:      "tok-A",
-		ClientID:   "client-1",
-		JWTPayload: signedJWT,
-		ExpiresAt:  9999999999,
-	}
+	tokA, err := v.CreateRefreshToken("client-1", signedJWT)
+	require.NoError(t, err)
 
 	// Exchange tok-A → get tok-B.
-	_, _, tokB, err := v.ExchangeRefreshToken("tok-A")
+	_, _, tokB, err := v.ExchangeRefreshToken(tokA)
 	require.NoError(t, err)
 
 	// tok-A is now invalid.
-	_, _, _, err = v.ExchangeRefreshToken("tok-A")
+	_, _, _, err = v.ExchangeRefreshToken(tokA)
 	assert.ErrorIs(t, err, ErrorRefreshTokenNotFound)
 
 	// tok-B is valid and can be exchanged.
@@ -412,61 +404,70 @@ func TestExchangeRefreshToken_TableDriven(t *testing.T) {
 	type testCase struct {
 		name            string
 		enabled         bool
-		seedTokens      map[string]database.RefreshTokenRow
+		// seedFunc seeds the repo after verifier creation and returns the input token.
+		// When nil, staticInputToken is used and no seeding occurs.
+		seedFunc        func(v *CredentialVerifier, repo *mockRefreshTokenRepository) string
+		staticInputToken string
 		repoGetErr      error
-		inputToken      string
 		expectErr       error
 		expectErrSubstr string
 		expectJWT       bool
 		expectRotation  bool
 	}
 
-	// Build a signed JWT to use as stored payload.
 	helperVerifier := newRefreshTokenVerifier(t, true, newMockRefreshTokenRepo())
 	validJWT := buildTestJWT(t, helperVerifier)
 
 	tests := []testCase{
 		{
-			name:           "successful exchange returns new JWT and rotated token",
-			enabled:        true,
-			seedTokens:     map[string]database.RefreshTokenRow{"tok-ok": {Token: "tok-ok", ClientID: "client-1", JWTPayload: validJWT, ExpiresAt: 9999999999}},
-			inputToken:     "tok-ok",
+			name:    "successful exchange returns new JWT and rotated token",
+			enabled: true,
+			seedFunc: func(v *CredentialVerifier, repo *mockRefreshTokenRepository) string {
+				tok, err := v.CreateRefreshToken("client-1", validJWT)
+				if err != nil {
+					t.Fatalf("seed CreateRefreshToken: %v", err)
+				}
+				return tok
+			},
 			expectJWT:      true,
 			expectRotation: true,
 		},
 		{
-			name:       "disabled feature returns ErrorRefreshTokenDisabled",
-			enabled:    false,
-			inputToken: "anything",
-			expectErr:  ErrorRefreshTokenDisabled,
+			name:             "disabled feature returns ErrorRefreshTokenDisabled",
+			enabled:          false,
+			staticInputToken: "anything",
+			expectErr:        ErrorRefreshTokenDisabled,
 		},
 		{
-			name:       "missing token returns ErrorRefreshTokenNotFound",
-			enabled:    true,
-			seedTokens: map[string]database.RefreshTokenRow{},
-			inputToken: "nonexistent",
-			expectErr:  ErrorRefreshTokenNotFound,
+			name:             "missing token returns ErrorRefreshTokenNotFound",
+			enabled:          true,
+			staticInputToken: "nonexistent",
+			expectErr:        ErrorRefreshTokenNotFound,
 		},
 		{
-			name:       "expired token returns ErrorRefreshTokenExpired",
-			enabled:    true,
-			seedTokens: map[string]database.RefreshTokenRow{"tok-exp": {Token: "tok-exp", ClientID: "c1", JWTPayload: "irrelevant", ExpiresAt: -1}},
-			inputToken: "tok-exp",
-			expectErr:  ErrorRefreshTokenExpired,
+			name:    "expired token returns ErrorRefreshTokenExpired",
+			enabled: true,
+			seedFunc: func(_ *CredentialVerifier, repo *mockRefreshTokenRepository) string {
+				repo.tokens["tok-exp"] = database.RefreshTokenRow{
+					Token: "tok-exp", ClientID: "c1", Claims: "{}", ExpiresAt: -1,
+				}
+				return "tok-exp"
+			},
+			expectErr: ErrorRefreshTokenExpired,
 		},
 		{
-			name:            "repository error propagates directly",
-			enabled:         true,
-			repoGetErr:      errors.New("database unavailable"),
-			inputToken:      "any-token",
-			expectErrSubstr: "database unavailable",
+			name:             "repository error propagates directly",
+			enabled:          true,
+			repoGetErr:       errors.New("database unavailable"),
+			staticInputToken: "any-token",
+			expectErrSubstr:  "database unavailable",
 		},
 		{
-			name:       "invalid stored JWT causes signature verification error",
-			enabled:    true,
-			seedTokens: map[string]database.RefreshTokenRow{"tok-bad-jwt": {Token: "tok-bad-jwt", ClientID: "c1", JWTPayload: "not-a-valid-jwt", ExpiresAt: 9999999999}},
-			inputToken: "tok-bad-jwt",
-			expectErr:  ErrorRefreshTokenInvalidSignature,
+			name:             "integrity failure causes ErrorRefreshTokenInvalidSignature",
+			enabled:          true,
+			repoGetErr:       database.ErrRefreshTokenInvalidIntegrity,
+			staticInputToken: "tok-tampered",
+			expectErr:        ErrorRefreshTokenInvalidSignature,
 		},
 	}
 
@@ -476,13 +477,15 @@ func TestExchangeRefreshToken_TableDriven(t *testing.T) {
 			if tc.repoGetErr != nil {
 				repo.getErr = tc.repoGetErr
 			}
-			for k, v := range tc.seedTokens {
-				repo.tokens[k] = v
-			}
 
 			v := newRefreshTokenVerifier(t, tc.enabled, repo)
 
-			jwtString, expiration, newToken, err := v.ExchangeRefreshToken(tc.inputToken)
+			inputToken := tc.staticInputToken
+			if tc.seedFunc != nil {
+				inputToken = tc.seedFunc(v, repo)
+			}
+
+			jwtString, expiration, newToken, err := v.ExchangeRefreshToken(inputToken)
 
 			if tc.expectErr != nil {
 				assert.ErrorIs(t, err, tc.expectErr)
@@ -501,9 +504,9 @@ func TestExchangeRefreshToken_TableDriven(t *testing.T) {
 			}
 			if tc.expectRotation {
 				assert.NotEmpty(t, newToken, "should return a rotated refresh token")
-				assert.NotEqual(t, tc.inputToken, newToken, "rotated token must differ from original")
+				assert.NotEqual(t, inputToken, newToken, "rotated token must differ from original")
 				// Original consumed.
-				_, ok := repo.tokens[tc.inputToken]
+				_, ok := repo.tokens[inputToken]
 				assert.False(t, ok, "original token must be deleted")
 				// New token stored.
 				_, ok = repo.tokens[newToken]
@@ -527,16 +530,11 @@ func TestExchangeRefreshToken_MultiChainRotation(t *testing.T) {
 	v := newRefreshTokenVerifier(t, true, repo)
 
 	signedJWT := buildTestJWT(t, v)
-	repo.tokens["seed-token"] = database.RefreshTokenRow{
-		Token:      "seed-token",
-		ClientID:   "client-chain",
-		JWTPayload: signedJWT,
-		ExpiresAt:  9999999999,
-	}
+	currentToken, err := v.CreateRefreshToken("client-chain", signedJWT)
+	require.NoError(t, err)
 
 	// chainLength is the number of successive rotations to perform.
 	const chainLength = 4
-	currentToken := "seed-token"
 	seenTokens := map[string]bool{currentToken: true}
 
 	for i := 0; i < chainLength; i++ {
@@ -573,7 +571,8 @@ func TestCreateRefreshToken_ExpirationTimestamp(t *testing.T) {
 	// refreshTokenExpiration is set to 24h in newRefreshTokenVerifier.
 	v := newRefreshTokenVerifier(t, true, repo)
 
-	token, err := v.CreateRefreshToken("client-ts", "jwt-payload-string")
+	signedJWT := buildTestJWT(t, v)
+	token, err := v.CreateRefreshToken("client-ts", signedJWT)
 	require.NoError(t, err)
 
 	stored, ok := repo.tokens[token]
@@ -628,7 +627,9 @@ func TestCreateRefreshToken_TableDriven(t *testing.T) {
 			}
 			v := newRefreshTokenVerifier(t, tc.enabled, repo)
 
-			token, err := v.CreateRefreshToken("client-1", "jwt-payload")
+			helperV := newRefreshTokenVerifier(t, true, newMockRefreshTokenRepo())
+			jwt := buildTestJWT(t, helperV)
+			token, err := v.CreateRefreshToken("client-1", jwt)
 
 			if tc.expectErr != nil {
 				assert.ErrorIs(t, err, tc.expectErr)
@@ -705,18 +706,14 @@ func TestExchangeRefreshToken_RotationStoreFailure(t *testing.T) {
 	v := newRefreshTokenVerifier(t, true, repo)
 
 	signedJWT := buildTestJWT(t, v)
-	repo.tokens["tok-rot-fail"] = database.RefreshTokenRow{
-		Token:      "tok-rot-fail",
-		ClientID:   "client-1",
-		JWTPayload: signedJWT,
-		ExpiresAt:  9999999999,
-	}
+	seedToken, err := v.CreateRefreshToken("client-1", signedJWT)
+	require.NoError(t, err)
 
-	// After the first get-and-delete succeeds, make subsequent stores fail so
+	// After the seed succeeds, make subsequent stores fail so
 	// the rotation step in ExchangeRefreshToken fails.
 	repo.storeErr = errors.New("rotation store failed")
 
-	_, _, _, err := v.ExchangeRefreshToken("tok-rot-fail")
+	_, _, _, err = v.ExchangeRefreshToken(seedToken)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "rotate refresh token")
 }
