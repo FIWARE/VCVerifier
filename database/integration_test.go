@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/fiware/VCVerifier/ccsapi"
@@ -57,7 +58,7 @@ func resetGlobalCache() {
 }
 
 // buildServiceJSON creates a JSON body for the CCS API POST/PUT endpoints with the given parameters.
-func buildServiceJSON(id, defaultScope, authType string, scopes map[string]config.ScopeEntry) ([]byte, error) {
+func buildServiceJSON(id, defaultScope, authType string, scopes map[string]config.ScopeEntryVO) ([]byte, error) {
 	req := ccsapi.ServiceRequest{
 		ID:                id,
 		DefaultOidcScope:  defaultScope,
@@ -77,9 +78,9 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 
 	// --- Step 1: Create a service via CCS API ---
 	serviceID := "integration-service"
-	scopes := map[string]config.ScopeEntry{
+	scopes := map[string]config.ScopeEntryVO{
 		"defaultScope": {
-			Credentials: []config.Credential{
+			Credentials: []config.CredentialVo{
 				{
 					Type:                "VerifiableCredential",
 					TrustedIssuersLists: []string{"https://tir.example.com"},
@@ -94,9 +95,9 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 					},
 				},
 			},
-			PresentationDefinition: &config.PresentationDefinition{
+			PresentationDefinition: &config.PresentationDefinitionVO{
 				Id: "pd-1",
-				InputDescriptors: []config.InputDescriptor{
+				InputDescriptors: []config.InputDescriptorVO{
 					{
 						Id: "id-1",
 						Constraints: config.Constraints{
@@ -107,8 +108,8 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 					},
 				},
 			},
-			DCQL: &config.DCQL{
-				Credentials: []config.CredentialQuery{
+			DCQL: &config.DCQLVO{
+				Credentials: []config.CredentialQueryVO{
 					{Id: "cred-1", Format: "jwt_vp"},
 				},
 			},
@@ -212,9 +213,9 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 	assert.Equal(t, []string{"https://tir.example.com"}, issuersLists)
 
 	// --- Step 4: Update the service → verify changes propagate ---
-	updatedScopes := map[string]config.ScopeEntry{
+	updatedScopes := map[string]config.ScopeEntryVO{
 		"updatedScope": {
-			Credentials: []config.Credential{
+			Credentials: []config.CredentialVo{
 				{
 					Type:                "UpdatedCredential",
 					TrustedIssuersLists: []string{"https://tir-updated.example.com"},
@@ -282,9 +283,9 @@ func TestIntegration_PaginationWithMultipleServices(t *testing.T) {
 
 	// Create multiple services
 	for i := 0; i < totalServices; i++ {
-		scopes := map[string]config.ScopeEntry{
+		scopes := map[string]config.ScopeEntryVO{
 			"scope": {
-				Credentials: []config.Credential{
+				Credentials: []config.CredentialVo{
 					{Type: fmt.Sprintf("Cred%d", i)},
 				},
 			},
@@ -360,12 +361,12 @@ func TestIntegration_DbBackedCacheIncludesStaticServices(t *testing.T) {
 
 	resetGlobalCache()
 
-	staticService := config.ConfiguredService{
+	staticService := config.ConfiguredServiceVO{
 		Id:               "static-svc",
 		DefaultOidcScope: "staticScope",
-		ServiceScopes: map[string]config.ScopeEntry{
+		ServiceScopes: map[string]config.ScopeEntryVO{
 			"staticScope": {
-				Credentials: []config.Credential{
+				Credentials: []config.CredentialVo{
 					{Type: "StaticCredential"},
 				},
 			},
@@ -373,7 +374,7 @@ func TestIntegration_DbBackedCacheIncludesStaticServices(t *testing.T) {
 	}
 
 	repoConfig := &config.ConfigRepo{
-		Services:       []config.ConfiguredService{staticService},
+		Services:       []config.ConfiguredServiceVO{staticService},
 		UpdateInterval: 300,
 	}
 
@@ -427,9 +428,9 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 
 	// Create a service with rich configuration via CCS API
 	serviceID := "lookup-test-svc"
-	scopes := map[string]config.ScopeEntry{
+	scopes := map[string]config.ScopeEntryVO{
 		"scopeA": {
-			Credentials: []config.Credential{
+			Credentials: []config.CredentialVo{
 				{
 					Type:                     "CredTypeA",
 					TrustedIssuersLists:      []string{"https://til-a.example.com"},
@@ -445,15 +446,15 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 					JwtInclusion:        config.JwtInclusion{Enabled: false},
 				},
 			},
-			PresentationDefinition: &config.PresentationDefinition{
+			PresentationDefinition: &config.PresentationDefinitionVO{
 				Id: "pd-lookup",
-				InputDescriptors: []config.InputDescriptor{
+				InputDescriptors: []config.InputDescriptorVO{
 					{Id: "desc-1", Constraints: config.Constraints{Fields: []config.Fields{{Id: "f1", Path: []string{"$.type"}}}}},
 				},
-				Format: map[string]config.FormatObject{"jwt_vp": {Alg: []string{"ES256"}}},
+				Format: map[string]config.FormatObjectVO{"jwt_vp": {Alg: []string{"ES256"}}},
 			},
-			DCQL: &config.DCQL{
-				Credentials: []config.CredentialQuery{
+			DCQL: &config.DCQLVO{
+				Credentials: []config.CredentialQueryVO{
 					{Id: "dcql-cred-1", Format: "jwt_vp", Multiple: true},
 				},
 				CredentialSets: []config.CredentialSetQuery{
@@ -463,7 +464,7 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 			FlatClaims: true,
 		},
 		"scopeB": {
-			Credentials: []config.Credential{
+			Credentials: []config.CredentialVo{
 				{Type: "CredTypeC"},
 			},
 			FlatClaims: false,
@@ -505,8 +506,11 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 	assert.Equal(t, "pd-lookup", pd.Id)
 	assert.Len(t, pd.InputDescriptors, 1)
 	assert.Equal(t, "desc-1", pd.InputDescriptors[0].Id)
-	require.Contains(t, pd.Format, "jwt_vp")
-	assert.Equal(t, []string{"ES256"}, pd.Format["jwt_vp"].Alg)
+	idx := slices.IndexFunc(pd.Format, func(format config.FormatObject) bool {
+		return format.FormatKey == "jwt_vp"
+	})
+	assert.Greater(t, idx, -1)
+	assert.Equal(t, []string{"ES256"}, pd.Format[idx].Alg)
 
 	// DCQL for scopeA
 	dcql, err := credConfig.GetDcqlQuery(serviceID, "scopeA")
@@ -581,15 +585,15 @@ func TestIntegration_ServiceScopeEndpoint(t *testing.T) {
 
 	// Create a service with multiple scopes
 	serviceID := "scope-endpoint-svc"
-	scopes := map[string]config.ScopeEntry{
+	scopes := map[string]config.ScopeEntryVO{
 		"alpha": {
-			Credentials: []config.Credential{
+			Credentials: []config.CredentialVo{
 				{Type: "AlphaCredential"},
 				{Type: "AlphaCredential2"},
 			},
 		},
 		"beta": {
-			Credentials: []config.Credential{
+			Credentials: []config.CredentialVo{
 				{Type: "BetaCredential"},
 			},
 		},
@@ -645,8 +649,8 @@ func TestIntegration_ConflictOnDuplicateCreate(t *testing.T) {
 	router, _, cleanup := setupIntegrationEnv(t)
 	defer cleanup()
 
-	scopes := map[string]config.ScopeEntry{
-		"s": {Credentials: []config.Credential{{Type: "T"}}},
+	scopes := map[string]config.ScopeEntryVO{
+		"s": {Credentials: []config.CredentialVo{{Type: "T"}}},
 	}
 	body, err := buildServiceJSON("dup-svc", "s", "", scopes)
 	require.NoError(t, err)

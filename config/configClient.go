@@ -12,6 +12,8 @@ import (
 
 type EndpointType int
 
+const DEFAULT_LIST_TYPE = "ebsi"
+
 const (
 	Unknown EndpointType = iota
 	TrustedIssuers
@@ -71,10 +73,10 @@ type HttpConfigClient struct {
 }
 
 type ServicesResponse struct {
-	Total      int                 `json:"total"`
-	PageNumber int                 `json:"pageNumber"`
-	PageSize   int                 `json:"pageSize"`
-	Services   []ConfiguredService `json:"services"`
+	Total      int                   `json:"total"`
+	PageNumber int                   `json:"pageNumber"`
+	PageSize   int                   `json:"pageSize"`
+	Services   []ConfiguredServiceVO `json:"services"`
 }
 
 type ConfiguredService struct {
@@ -91,6 +93,31 @@ type ConfiguredService struct {
 	AllowedOrigins []string `json:"allowedOrigins,omitempty" mapstructure:"allowedOrigins,omitempty"`
 }
 
+type ConfiguredServiceVO struct {
+	DefaultOidcScope  string                  `json:"defaultOidcScope" mapstructure:"defaultOidcScope"`
+	ServiceScopes     map[string]ScopeEntryVO `json:"oidcScopes" mapstructure:"oidcScopes"`
+	Id                string                  `json:"id" mapstructure:"id"`
+	AuthorizationType string                  `json:"authorizationType,omitempty" mapstructure:"authorizationType,omitempty"`
+	AuthorizationPath string                  `json:"authorizationPath,omitempty" mapstructure:"authorizationPath,omitempty"`
+	AllowedOrigins    []string                `json:"allowedOrigins,omitempty" mapstructure:"allowedOrigins,omitempty"`
+}
+
+func (cs ConfiguredService) FromVO(vo ConfiguredServiceVO) ConfiguredService {
+
+	cs.DefaultOidcScope = vo.DefaultOidcScope
+	cs.Id = vo.Id
+	cs.AuthorizationType = vo.AuthorizationType
+	cs.AuthorizationPath = vo.AuthorizationPath
+	cs.AllowedOrigins = vo.AllowedOrigins
+	if vo.ServiceScopes != nil {
+		cs.ServiceScopes = make(map[string]ScopeEntry, len(vo.ServiceScopes))
+		for key, value := range vo.ServiceScopes {
+			cs.ServiceScopes[key] = ScopeEntry{}.FromVO(value)
+		}
+	}
+	return cs
+}
+
 type ScopeEntry struct {
 	// credential types with their trust configuration
 	Credentials []Credential `json:"credentials" mapstructure:"credentials"`
@@ -103,10 +130,30 @@ type ScopeEntry struct {
 }
 
 type ScopeEntryVO struct {
-	Credentials            []CredentialVo            `json:"credentials"`
-	PresentationDefinition *PresentationDefinitionVO `json:"presentationDefinition,omitempty"`
-	DCQL                   *DCQLVO                   `json:"dcql,omitempty"`
-	FlatClaims             bool                      `json:"flatClaims"`
+	Credentials            []CredentialVo            `json:"credentials" mapstructure:"credentials"`
+	PresentationDefinition *PresentationDefinitionVO `json:"presentationDefinition,omitempty" mapstructure:"presentationDefinition,omitempty"`
+	DCQL                   *DCQLVO                   `json:"dcql,omitempty" mapstructure:"dcql,omitempty"`
+	FlatClaims             bool                      `json:"flatClaims" mapstructure:"flatClaims"`
+}
+
+func (se ScopeEntry) FromVO(seVO ScopeEntryVO) ScopeEntry {
+	creds := make([]Credential, 0, len(seVO.Credentials))
+	for _, credVO := range seVO.Credentials {
+		creds = append(creds, Credential{}.FromVO(credVO))
+	}
+	model := ScopeEntry{
+		Credentials: creds,
+		FlatClaims:  seVO.FlatClaims,
+	}
+	if seVO.DCQL != nil {
+		dcql := DCQL{}.FromVO(*seVO.DCQL)
+		model.DCQL = &dcql
+	}
+	if seVO.PresentationDefinition != nil {
+		pd := PresentationDefinition{}.FromVO(*seVO.PresentationDefinition)
+		model.PresentationDefinition = &pd
+	}
+	return model
 }
 
 func (se ScopeEntry) VO() ScopeEntryVO {
@@ -134,8 +181,6 @@ type Credential struct {
 	Type string `json:"credentialType" mapstructure:"credentialType"`
 	// Set if the holder id should be verified
 	VerifyHolder bool `json:"verifyHolder" mapstructure:"verifyHolder"`
-	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted participants from.
-	TrustedParticipantsLists []TrustedParticipantsList `json:"trustedParticipantsLists,omitempty" mapstructure:"trustedParticipantsLists,omitempty"`
 	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted issuers from. The attributes need to be formated to comply with the verifiers requirements.
 	TrustedIssuersLists []EndpointEntry `json:"trustedLists,omitempty" mapstructure:"trustedLists,omitempty"`
 	// Configuration of Holder Verfification
@@ -156,8 +201,12 @@ func (cred Credential) VO() CredentialVo {
 	trustedParticipantsList := make([]TrustedParticipantsList, 0, len(cred.TrustedIssuersLists))
 	for _, trustedIssuer := range cred.TrustedIssuersLists {
 		if trustedIssuer.Type == TrustedParticipants {
+			listType := trustedIssuer.ListType
+			if listType == "" {
+				listType = DEFAULT_LIST_TYPE
+			}
 			trustedParticipantsList = append(trustedParticipantsList, TrustedParticipantsList{
-				Type: trustedIssuer.ListType,
+				Type: listType,
 				Url:  trustedIssuer.Endpoint,
 			})
 		} else if trustedIssuer.Type == TrustedIssuers {
@@ -173,6 +222,36 @@ func (cred Credential) VO() CredentialVo {
 		RequireCompliance:        cred.RequireCompliance,
 		JwtInclusion:             cred.JwtInclusion,
 		CredentialStatus:         cred.CredentialStatus,
+	}
+}
+
+func (c Credential) FromVO(cv CredentialVo) Credential {
+	trustedLists := make([]EndpointEntry, 0, len(cv.TrustedParticipantsLists)+len(cv.TrustedIssuersLists))
+	for _, tp := range cv.TrustedParticipantsLists {
+		listType := tp.Type
+		if listType == "" {
+			listType = DEFAULT_LIST_TYPE
+		}
+		trustedLists = append(trustedLists, EndpointEntry{
+			Type:     TrustedParticipants,
+			ListType: tp.Type,
+			Endpoint: tp.Url,
+		})
+	}
+	for _, endpoint := range cv.TrustedIssuersLists {
+		trustedLists = append(trustedLists, EndpointEntry{
+			Type:     TrustedIssuers,
+			ListType: DEFAULT_LIST_TYPE,
+			Endpoint: endpoint,
+		})
+	}
+	return Credential{
+		Type:                cv.Type,
+		TrustedIssuersLists: trustedLists,
+		HolderVerification:  cv.HolderVerification,
+		RequireCompliance:   cv.RequireCompliance,
+		JwtInclusion:        cv.JwtInclusion,
+		CredentialStatus:    cv.CredentialStatus,
 	}
 }
 
@@ -260,7 +339,27 @@ type PresentationDefinition struct {
 }
 
 func (pd PresentationDefinition) VO() PresentationDefinitionVO {
-	return PresentationDefinitionVO{Id: pd.Id, InputDescriptors: pd.InputDescriptors, Format: toFormatVOMap(pd.Format)}
+	inputDescs := make([]InputDescriptorVO, 0, len(pd.InputDescriptors))
+	for _, id := range pd.InputDescriptors {
+		inputDescs = append(inputDescs, id.VO())
+	}
+	return PresentationDefinitionVO{
+		Id:               pd.Id,
+		InputDescriptors: inputDescs,
+		Format:           toFormatVOMap(pd.Format),
+	}
+}
+
+func (pd PresentationDefinition) FromVO(pdVO PresentationDefinitionVO) PresentationDefinition {
+	inputDescs := make([]InputDescriptor, 0, len(pdVO.InputDescriptors))
+	for _, idVO := range pdVO.InputDescriptors {
+		inputDescs = append(inputDescs, InputDescriptor{}.FromVO(idVO))
+	}
+	return PresentationDefinition{
+		Id:               pdVO.Id,
+		InputDescriptors: inputDescs,
+		Format:           fromFormatVOMap(pdVO.Format),
+	}
 }
 
 func toFormatVOMap(formats []FormatObject) map[string]FormatObjectVO {
@@ -271,16 +370,24 @@ func toFormatVOMap(formats []FormatObject) map[string]FormatObjectVO {
 	return m
 }
 
+func fromFormatVOMap(m map[string]FormatObjectVO) []FormatObject {
+	formats := make([]FormatObject, 0, len(m))
+	for key, fVO := range m {
+		formats = append(formats, FormatObject{FormatKey: key, Alg: fVO.Alg, ProofType: fVO.ProofType})
+	}
+	return formats
+}
+
 type PresentationDefinitionVO struct {
 	Id string `json:"id"`
 	// List of requested inputs
-	InputDescriptors []InputDescriptor `json:"input_descriptors"`
+	InputDescriptors []InputDescriptorVO `json:"input_descriptors" mapstructure:"input_descriptors"`
 	// Format of the credential to be requested
-	Format map[string]FormatObjectVO `json:"format"`
+	Format map[string]FormatObjectVO `json:"format" mapstructure:"format"`
 }
 type FormatObjectVO struct {
-	Alg       []string `json:"alg"`
-	ProofType []string `json:"proofType,omitempty"`
+	Alg       []string `json:"alg" mapstructure:"alg"`
+	ProofType []string `json:"proofType,omitempty" mapstructure:"proofType,omitempty"`
 }
 
 type FormatObject struct {
@@ -295,37 +402,35 @@ func (f FormatObject) VO() FormatObjectVO {
 	return FormatObjectVO{Alg: f.Alg, ProofType: f.ProofType}
 }
 
-func (pd PresentationDefinition) MarshalJSON() ([]byte, error) {
-	type Alias PresentationDefinition
-	return json.Marshal(struct {
-		Alias
-		InputDescriptors []InputDescriptor         `json:"input_descriptors"`
-		Format           map[string]FormatObjectVO `json:"format,omitempty"`
-	}{
-		Alias:            Alias(pd),
-		InputDescriptors: pd.InputDescriptors,
-		Format:           toFormatVOMap(pd.Format),
-	})
-}
-
 type InputDescriptor struct {
 	// Id of the descriptor
 	Id string `json:"id" mapstructure:"id"`
-	// defines the infromation to be requested
+	// defines the information to be requested
 	Constraints Constraints `json:"constraints" mapstructure:"constraints"`
 	// Format of the credential to be requested
 	Format []FormatObject `json:"format" mapstructure:"format"`
 }
 
-func (id InputDescriptor) MarshalJSON() ([]byte, error) {
-	type Alias InputDescriptor
-	return json.Marshal(struct {
-		Alias
-		Format map[string]FormatObjectVO `json:"format,omitempty"`
-	}{
-		Alias:  Alias(id),
-		Format: toFormatVOMap(id.Format),
-	})
+type InputDescriptorVO struct {
+	Id          string                    `json:"id" mapstructure:"id"`
+	Constraints Constraints               `json:"constraints" mapstructure:"constraints"`
+	Format      map[string]FormatObjectVO `json:"format,omitempty" mapstructure:"format,omitempty"`
+}
+
+func (id InputDescriptor) VO() InputDescriptorVO {
+	return InputDescriptorVO{
+		Id:          id.Id,
+		Constraints: id.Constraints,
+		Format:      toFormatVOMap(id.Format),
+	}
+}
+
+func (id InputDescriptor) FromVO(idVO InputDescriptorVO) InputDescriptor {
+	return InputDescriptor{
+		Id:          idVO.Id,
+		Constraints: idVO.Constraints,
+		Format:      fromFormatVOMap(idVO.Format),
+	}
 }
 
 type Constraints struct {
@@ -341,7 +446,7 @@ type Fields struct {
 	// Does it need to be included?
 	Optional bool `json:"optional" mapstructure:"optional" default:"true"`
 	// a custom filter to be applied on the fields, f.e. restrict to certain values
-	Filter interface{} `json:"filter" mapstructure:"filter"`
+	Filter interface{} `json:"filter,omitempty" mapstructure:"filter"`
 }
 
 // DCQL defines a JSON encoded query to request the credentials to be included in the presentation
@@ -363,9 +468,20 @@ func (dcql DCQL) VO() DCQLVO {
 	}
 }
 
+func (d DCQL) FromVO(dVO DCQLVO) DCQL {
+	creds := make([]CredentialQuery, 0, len(dVO.Credentials))
+	for _, cqVO := range dVO.Credentials {
+		creds = append(creds, CredentialQuery{}.FromVO(cqVO))
+	}
+	return DCQL{
+		Credentials:    creds,
+		CredentialSets: dVO.CredentialSets,
+	}
+}
+
 type DCQLVO struct {
-	Credentials    []CredentialQueryVO  `json:"credentials"`
-	CredentialSets []CredentialSetQuery `json:"credential_sets"`
+	Credentials    []CredentialQueryVO  `json:"credentials" mapstructure:"credentials"`
+	CredentialSets []CredentialSetQuery `json:"credential_sets" mapstructure:"credential_sets"`
 }
 
 // CredentialQuery is an object representing a request for a presentation of one or more matching Credentials
@@ -408,15 +524,28 @@ func (cq CredentialQuery) VO() CredentialQueryVO {
 	return vo
 }
 
+func (cq CredentialQuery) FromVO(cqVO CredentialQueryVO) CredentialQuery {
+	return CredentialQuery{
+		Id:                                cqVO.Id,
+		Format:                            strings.ToUpper(cqVO.Format),
+		Multiple:                          cqVO.Multiple,
+		Claims:                            cqVO.Claims,
+		Meta:                              cqVO.Meta,
+		RequireCryptographicHolderBinding: cqVO.RequireCryptographicHolderBinding,
+		ClaimSets:                         cqVO.ClaimSets,
+		TrustedAuthorities:                cqVO.TrustedAuthorities,
+	}
+}
+
 type CredentialQueryVO struct {
-	Id                                string                  `json:"id,omitempty"`
-	Format                            string                  `json:"format,omitempty"`
-	Multiple                          bool                    `json:"multiple"`
-	Claims                            []ClaimsQuery           `json:"claims"`
-	Meta                              *MetaDataQuery          `json:"meta,omitempty"`
-	RequireCryptographicHolderBinding bool                    `json:"require_cryptographic_holder_binding"`
-	ClaimSets                         [][]string              `json:"claim_sets,omitempty"`
-	TrustedAuthorities                []TrustedAuthorityQuery `json:"trusted_authorities"`
+	Id                                string                  `json:"id,omitempty" mapstructure:"id,omitempty"`
+	Format                            string                  `json:"format,omitempty" mapstructure:"format,omitempty"`
+	Multiple                          bool                    `json:"multiple" mapstructure:"multiple"`
+	Claims                            []ClaimsQuery           `json:"claims" mapstructure:"claims"`
+	Meta                              *MetaDataQuery          `json:"meta,omitempty" mapstructure:"meta,omitempty"`
+	RequireCryptographicHolderBinding bool                    `json:"require_cryptographic_holder_binding" mapstructure:"require_cryptographic_holder_binding"`
+	ClaimSets                         [][]string              `json:"claim_sets,omitempty" mapstructure:"claim_sets,omitempty"`
+	TrustedAuthorities                []TrustedAuthorityQuery `json:"trusted_authorities" mapstructure:"trusted_authorities"`
 }
 
 // ClaimsQuery is a query to specifies claims in the requested Credential.
@@ -540,9 +669,11 @@ func (hcc HttpConfigClient) GetServices() (services []ConfiguredService, err err
 			logging.Log().Warnf("Failed to receive services page %v with size %v. Err: %v", currentPage, pageSize, err)
 			return nil, err
 		}
-		services = append(services, servicesResponse.Services...)
-		// we check both, since its possible that druing the iterration new services where added to old pages(total != len(services)).
-		// those will be retrieved on next iterration, thus can be ignored
+		for _, svcVO := range servicesResponse.Services {
+			services = append(services, ConfiguredService{}.FromVO(svcVO))
+		}
+		// we check both, since its possible that during the iteration new services where added to old pages(total != len(services)).
+		// those will be retrieved on next iteration, thus can be ignored
 		if servicesResponse.Total == 0 || len(servicesResponse.Services) < pageSize || servicesResponse.Total == len(services) {
 			finished = true
 		}

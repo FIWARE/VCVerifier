@@ -24,7 +24,7 @@ type ServiceRequest struct {
 	// DefaultOidcScope is the default OIDC scope name to use when none is specified.
 	DefaultOidcScope string `json:"defaultOidcScope"`
 	// OidcScopes maps scope names to their credential requirements.
-	OidcScopes map[string]config.ScopeEntry `json:"oidcScopes"`
+	OidcScopes map[string]config.ScopeEntryVO `json:"oidcScopes"`
 	// AuthorizationType describes the authorization mode (e.g., "oidc").
 	AuthorizationType string `json:"authorizationType,omitempty"`
 }
@@ -71,10 +71,15 @@ type ProblemDetails struct {
 // ServiceRequestToConfiguredService converts a ServiceRequest into a
 // config.ConfiguredService for persistence via the repository layer.
 func ServiceRequestToConfiguredService(req ServiceRequest, id string) config.ConfiguredService {
+
+	scopes := make(map[string]config.ScopeEntry, len(req.OidcScopes))
+	for key, value := range req.OidcScopes {
+		scopes[key] = (config.ScopeEntry{}).FromVO(value)
+	}
 	return config.ConfiguredService{
 		Id:                id,
 		DefaultOidcScope:  req.DefaultOidcScope,
-		ServiceScopes:     req.OidcScopes,
+		ServiceScopes:     scopes,
 		AuthorizationType: req.AuthorizationType,
 	}
 }

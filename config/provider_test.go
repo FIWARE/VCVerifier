@@ -1,10 +1,10 @@
 package config
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/fiware/VCVerifier/logging"
+	"github.com/google/go-cmp/cmp"
 	"github.com/gookit/config/v2"
 )
 
@@ -68,14 +68,14 @@ func Test_ReadConfig(t *testing.T) {
 				},
 				ConfigRepo: ConfigRepo{
 					ConfigEndpoint: "",
-					Services: []ConfiguredService{
+					Services: []ConfiguredServiceVO{
 						{
 							Id:               "testService",
 							DefaultOidcScope: "someScope",
 							AllowedOrigins:   []string{"https://example.com"},
-							ServiceScopes: map[string]ScopeEntry{
+							ServiceScopes: map[string]ScopeEntryVO{
 								"someScope": {
-									Credentials: []Credential{
+									Credentials: []CredentialVo{
 
 										{
 											Type:                     "VerifiableCredential",
@@ -83,9 +83,9 @@ func Test_ReadConfig(t *testing.T) {
 											TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
 										},
 									},
-									PresentationDefinition: &PresentationDefinition{
+									PresentationDefinition: &PresentationDefinitionVO{
 										Id: "my-pd",
-										InputDescriptors: []InputDescriptor{
+										InputDescriptors: []InputDescriptorVO{
 											{
 												Id: "my-descriptor",
 												Constraints: Constraints{
@@ -184,18 +184,18 @@ func Test_ReadConfig(t *testing.T) {
 					ShutdownTimeout: 5,
 				},
 				Verifier: Verifier{
-					Did:                    "did:key:somekey",
-					TirAddress:             "https://test.dev/trusted_issuer/v3/issuers/",
-					TirCacheExpiry:         30,
-					TilCacheExpiry:         30,
-					SessionExpiry:          30,
-					ValidationMode:         "none",
-					KeyAlgorithm:           "RS256",
-					GenerateKey:            true,
-					SupportedModes:         []string{"urlEncoded"},
-					JwtExpiration:          30,
-					StatusListCacheExpiry:  DefaultStatusCacheExpirySeconds,
-					StatusListHttpTimeout:  DefaultStatusHttpTimeoutSeconds,
+					Did:                   "did:key:somekey",
+					TirAddress:            "https://test.dev/trusted_issuer/v3/issuers/",
+					TirCacheExpiry:        30,
+					TilCacheExpiry:        30,
+					SessionExpiry:         30,
+					ValidationMode:        "none",
+					KeyAlgorithm:          "RS256",
+					GenerateKey:           true,
+					SupportedModes:        []string{"urlEncoded"},
+					JwtExpiration:         30,
+					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
+					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
 				},
 				Logging: logging.LoggingConfig{
 					Level:       "DEBUG",
@@ -235,8 +235,9 @@ func Test_ReadConfig(t *testing.T) {
 				t.Errorf("readConfig() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !reflect.DeepEqual(gotConfiguration, tt.wantConfiguration) {
-				t.Errorf("readConfig() = %v, want %v", logging.PrettyPrintObject(gotConfiguration), logging.PrettyPrintObject(tt.wantConfiguration))
+
+			if diff := cmp.Diff(gotConfiguration, tt.wantConfiguration); diff != "" {
+				t.Errorf("Unexpected configuration: %s", diff)
 			}
 		})
 	}

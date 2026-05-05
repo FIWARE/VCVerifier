@@ -175,8 +175,8 @@ type ConfigRepo struct {
 	// url of the configuration service to be used
 	ConfigEndpoint string `mapstructure:"configEndpoint"`
 	// statically configured services with their trust anchors and scopes.
-	Services       []ConfiguredService `mapstructure:"services"`
-	UpdateInterval int64               `mapstructure:"updateInterval" default:"30"`
+	Services       []ConfiguredServiceVO `mapstructure:"services"`
+	UpdateInterval int64                 `mapstructure:"updateInterval" default:"30"`
 }
 
 type PolicyMap map[string]PolicyConfigParameters

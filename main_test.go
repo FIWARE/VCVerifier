@@ -421,7 +421,7 @@ func TestGetConfigRouter_HealthEndpointIncludesDBCheck(t *testing.T) {
 func TestResolveAllowedOrigins(t *testing.T) {
 	tests := []struct {
 		name     string
-		services []config.ConfiguredService
+		services []config.ConfiguredServiceVO
 		want     []string
 	}{
 		{
@@ -431,12 +431,12 @@ func TestResolveAllowedOrigins(t *testing.T) {
 		},
 		{
 			name:     "empty services slice returns wildcard",
-			services: []config.ConfiguredService{},
+			services: []config.ConfiguredServiceVO{},
 			want:     []string{"*"},
 		},
 		{
 			name: "services with no allowedOrigins returns wildcard",
-			services: []config.ConfiguredService{
+			services: []config.ConfiguredServiceVO{
 				{Id: "svc1"},
 				{Id: "svc2"},
 			},
@@ -444,21 +444,21 @@ func TestResolveAllowedOrigins(t *testing.T) {
 		},
 		{
 			name: "services with empty allowedOrigins returns wildcard",
-			services: []config.ConfiguredService{
+			services: []config.ConfiguredServiceVO{
 				{Id: "svc1", AllowedOrigins: []string{}},
 			},
 			want: []string{"*"},
 		},
 		{
 			name: "single service with specific origins",
-			services: []config.ConfiguredService{
+			services: []config.ConfiguredServiceVO{
 				{Id: "svc1", AllowedOrigins: []string{"https://example.com", "https://app.example.com"}},
 			},
 			want: []string{"https://example.com", "https://app.example.com"},
 		},
 		{
 			name: "multiple services with different origins returns deduplicated union",
-			services: []config.ConfiguredService{
+			services: []config.ConfiguredServiceVO{
 				{Id: "svc1", AllowedOrigins: []string{"https://alpha.com"}},
 				{Id: "svc2", AllowedOrigins: []string{"https://beta.com"}},
 			},
@@ -466,7 +466,7 @@ func TestResolveAllowedOrigins(t *testing.T) {
 		},
 		{
 			name: "duplicate origins across services are deduplicated",
-			services: []config.ConfiguredService{
+			services: []config.ConfiguredServiceVO{
 				{Id: "svc1", AllowedOrigins: []string{"https://shared.com", "https://alpha.com"}},
 				{Id: "svc2", AllowedOrigins: []string{"https://shared.com", "https://beta.com"}},
 			},
@@ -474,7 +474,7 @@ func TestResolveAllowedOrigins(t *testing.T) {
 		},
 		{
 			name: "any service with wildcard returns wildcard only",
-			services: []config.ConfiguredService{
+			services: []config.ConfiguredServiceVO{
 				{Id: "svc1", AllowedOrigins: []string{"https://example.com"}},
 				{Id: "svc2", AllowedOrigins: []string{"*"}},
 			},
@@ -482,7 +482,7 @@ func TestResolveAllowedOrigins(t *testing.T) {
 		},
 		{
 			name: "first service with wildcard short-circuits",
-			services: []config.ConfiguredService{
+			services: []config.ConfiguredServiceVO{
 				{Id: "svc1", AllowedOrigins: []string{"*"}},
 				{Id: "svc2", AllowedOrigins: []string{"https://example.com"}},
 			},
@@ -490,14 +490,14 @@ func TestResolveAllowedOrigins(t *testing.T) {
 		},
 		{
 			name: "wildcard mixed within origins of a single service",
-			services: []config.ConfiguredService{
+			services: []config.ConfiguredServiceVO{
 				{Id: "svc1", AllowedOrigins: []string{"https://example.com", "*", "https://other.com"}},
 			},
 			want: []string{"*"},
 		},
 		{
 			name: "mix of configured and unconfigured services",
-			services: []config.ConfiguredService{
+			services: []config.ConfiguredServiceVO{
 				{Id: "svc1"},
 				{Id: "svc2", AllowedOrigins: []string{"https://example.com"}},
 				{Id: "svc3", AllowedOrigins: []string{}},

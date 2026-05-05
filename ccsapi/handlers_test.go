@@ -725,9 +725,9 @@ func TestServiceRequestToConfiguredService(t *testing.T) {
 		ID:                "svc-1",
 		DefaultOidcScope:  "scope-a",
 		AuthorizationType: "oidc",
-		OidcScopes: map[string]config.ScopeEntry{
+		OidcScopes: map[string]config.ScopeEntryVO{
 			"scope-a": {
-				Credentials: []config.Credential{{Type: "TypeA"}},
+				Credentials: []config.CredentialVo{{Type: "TypeA"}},
 				FlatClaims:  true,
 			},
 		},
@@ -833,8 +833,8 @@ func TestValidateServiceRequest(t *testing.T) {
 			req: ServiceRequest{
 				ID:               "svc",
 				DefaultOidcScope: "default",
-				OidcScopes: map[string]config.ScopeEntry{
-					"default": {Credentials: []config.Credential{{Type: "VC"}}},
+				OidcScopes: map[string]config.ScopeEntryVO{
+					"default": {Credentials: []config.CredentialVo{{Type: "VC"}}},
 				},
 			},
 			requireID: true,
@@ -844,8 +844,8 @@ func TestValidateServiceRequest(t *testing.T) {
 			name: "valid without ID requirement",
 			req: ServiceRequest{
 				DefaultOidcScope: "default",
-				OidcScopes: map[string]config.ScopeEntry{
-					"default": {Credentials: []config.Credential{{Type: "VC"}}},
+				OidcScopes: map[string]config.ScopeEntryVO{
+					"default": {Credentials: []config.CredentialVo{{Type: "VC"}}},
 				},
 			},
 			requireID: false,
@@ -855,8 +855,8 @@ func TestValidateServiceRequest(t *testing.T) {
 			name: "missing ID when required",
 			req: ServiceRequest{
 				DefaultOidcScope: "default",
-				OidcScopes: map[string]config.ScopeEntry{
-					"default": {Credentials: []config.Credential{{Type: "VC"}}},
+				OidcScopes: map[string]config.ScopeEntryVO{
+					"default": {Credentials: []config.CredentialVo{{Type: "VC"}}},
 				},
 			},
 			requireID: true,
@@ -867,8 +867,8 @@ func TestValidateServiceRequest(t *testing.T) {
 			name: "missing defaultOidcScope",
 			req: ServiceRequest{
 				ID: "svc",
-				OidcScopes: map[string]config.ScopeEntry{
-					"default": {Credentials: []config.Credential{{Type: "VC"}}},
+				OidcScopes: map[string]config.ScopeEntryVO{
+					"default": {Credentials: []config.CredentialVo{{Type: "VC"}}},
 				},
 			},
 			requireID: true,
@@ -886,17 +886,43 @@ func TestValidateServiceRequest(t *testing.T) {
 			errMsg:    "'oidcScopes' is required",
 		},
 		{
+			name: "default scope not in oidcScopes",
+			req: ServiceRequest{
+				ID:               "svc",
+				DefaultOidcScope: "missing",
+				OidcScopes: map[string]config.ScopeEntryVO{
+					"other": {Credentials: []config.CredentialVo{{Type: "VC"}}},
+				},
+			},
+			requireID: true,
+			wantErr:   true,
+			errMsg:    `"missing" must exist in OIDC scopes list`,
+		},
+		{
 			name: "scope with empty credentials",
 			req: ServiceRequest{
 				ID:               "svc",
 				DefaultOidcScope: "default",
-				OidcScopes: map[string]config.ScopeEntry{
-					"default": {Credentials: []config.Credential{}},
+				OidcScopes: map[string]config.ScopeEntryVO{
+					"default": {Credentials: []config.CredentialVo{}},
 				},
 			},
 			requireID: true,
 			wantErr:   true,
 			errMsg:    "at least one credential",
+		},
+		{
+			name: "credential with empty type",
+			req: ServiceRequest{
+				ID:               "svc",
+				DefaultOidcScope: "default",
+				OidcScopes: map[string]config.ScopeEntryVO{
+					"default": {Credentials: []config.CredentialVo{{Type: ""}}},
+				},
+			},
+			requireID: true,
+			wantErr:   true,
+			errMsg:    "cannot be null",
 		},
 	}
 
