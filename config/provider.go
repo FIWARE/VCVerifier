@@ -37,6 +37,10 @@ func ReadConfig(configFile string) (configuration Configuration, err error) {
 		return
 	}
 
+	if err = ApplyEnvOverrides(&configuration); err != nil {
+		return
+	}
+
 	return
 }
 
