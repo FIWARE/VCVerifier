@@ -110,7 +110,7 @@ func (dbc DbBackedCredentialsConfig) fetchAllServices(ctx context.Context) ([]co
 	for _, staticSvc := range dbc.initialConfig.Services {
 		if !dbServiceIDs[staticSvc.Id] {
 			// Re-add static service to cache so it remains available.
-			common.GlobalCache.ServiceCache.Set(staticSvc.Id, config.ConfiguredService{}.FromVO(staticSvc), cache.DefaultExpiration)
+			common.GlobalCache.ServiceCache.Set(staticSvc.Id, staticSvc, cache.DefaultExpiration)
 		}
 	}
 

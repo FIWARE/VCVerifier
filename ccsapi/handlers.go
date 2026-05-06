@@ -60,7 +60,7 @@ func CreateService(repo database.ServiceRepository) gin.HandlerFunc {
 
 		location := fmt.Sprintf("/service/%s", req.ID)
 		c.Header("Location", location)
-		c.JSON(http.StatusCreated, ConfiguredServiceToResponse(svc))
+		c.JSON(http.StatusCreated, svc)
 	}
 }
 

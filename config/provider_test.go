@@ -68,14 +68,14 @@ func Test_ReadConfig(t *testing.T) {
 				},
 				ConfigRepo: ConfigRepo{
 					ConfigEndpoint: "",
-					Services: []ConfiguredServiceVO{
+					Services: []ConfiguredService{
 						{
 							Id:               "testService",
 							DefaultOidcScope: "someScope",
 							AllowedOrigins:   []string{"https://example.com"},
-							ServiceScopes: map[string]ScopeEntryVO{
+							ServiceScopes: map[string]ScopeEntry{
 								"someScope": {
-									Credentials: []CredentialVo{
+									Credentials: []Credential{
 
 										{
 											Type:                     "VerifiableCredential",
@@ -83,9 +83,9 @@ func Test_ReadConfig(t *testing.T) {
 											TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
 										},
 									},
-									PresentationDefinition: &PresentationDefinitionVO{
+									PresentationDefinition: &PresentationDefinition{
 										Id: "my-pd",
-										InputDescriptors: []InputDescriptorVO{
+										InputDescriptors: []InputDescriptor{
 											{
 												Id: "my-descriptor",
 												Constraints: Constraints{

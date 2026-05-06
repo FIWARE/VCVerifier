@@ -211,14 +211,11 @@ func Test_getServices(t *testing.T) {
 	assert.Equal(t, "service_all", svc.Id)
 	assert.Equal(t, "did_write", svc.DefaultOidcScope)
 
-	scopesVO := make(map[string]ScopeEntryVO, len(svc.ServiceScopes))
-	for k, v := range svc.ServiceScopes {
-		scopesVO[k] = v.VO()
-	}
+	scopesVO := svc.ServiceScopes
 
-	expectedScopesVO := map[string]ScopeEntryVO{
+	expectedScopesVO := map[string]ScopeEntry{
 		"did_write": {
-			Credentials: []CredentialVo{
+			Credentials: []Credential{
 				{
 					Type:                     "VerifiableCredential",
 					TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
@@ -226,9 +223,9 @@ func Test_getServices(t *testing.T) {
 					HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
 				},
 			},
-			PresentationDefinition: &PresentationDefinitionVO{
+			PresentationDefinition: &PresentationDefinition{
 				Id: "my-pd",
-				InputDescriptors: []InputDescriptorVO{
+				InputDescriptors: []InputDescriptor{
 					{
 						Id: "my-descriptor",
 						Constraints: Constraints{
@@ -239,18 +236,15 @@ func Test_getServices(t *testing.T) {
 								},
 							},
 						},
-						Format: map[string]FormatObjectVO{},
 					},
 				},
-				Format: map[string]FormatObjectVO{},
 			},
-			DCQL: &DCQLVO{
-				Credentials: []CredentialQueryVO{
+			DCQL: &DCQL{
+				Credentials: []CredentialQuery{
 					{
-						Id:                 "my-credential-query-id",
-						Format:             "jwt_vc_json",
-						Claims:             []ClaimsQuery{{Path: []interface{}{"$.vc.credentialSubject.familyName"}, IntentToRetain: true}},
-						TrustedAuthorities: []TrustedAuthorityQuery{},
+						Id:     "my-credential-query-id",
+						Format: "jwt_vc_json",
+						Claims: []ClaimsQuery{{Path: []interface{}{"$.vc.credentialSubject.familyName"}, IntentToRetain: true}},
 					},
 				},
 				CredentialSets: []CredentialSetQuery{

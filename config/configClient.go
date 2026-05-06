@@ -73,10 +73,10 @@ type HttpConfigClient struct {
 }
 
 type ServicesResponse struct {
-	Total      int                   `json:"total"`
-	PageNumber int                   `json:"pageNumber"`
-	PageSize   int                   `json:"pageSize"`
-	Services   []ConfiguredServiceVO `json:"services"`
+	Total      int                 `json:"total"`
+	PageNumber int                 `json:"pageNumber"`
+	PageSize   int                 `json:"pageSize"`
+	Services   []ConfiguredService `json:"services"`
 }
 
 type ConfiguredService struct {
@@ -93,75 +93,50 @@ type ConfiguredService struct {
 	AllowedOrigins []string `json:"allowedOrigins,omitempty" mapstructure:"allowedOrigins,omitempty"`
 }
 
-type ConfiguredServiceVO struct {
-	DefaultOidcScope  string                  `json:"defaultOidcScope" mapstructure:"defaultOidcScope"`
-	ServiceScopes     map[string]ScopeEntryVO `json:"oidcScopes" mapstructure:"oidcScopes"`
-	Id                string                  `json:"id" mapstructure:"id"`
-	AuthorizationType string                  `json:"authorizationType,omitempty" mapstructure:"authorizationType,omitempty"`
-	AuthorizationPath string                  `json:"authorizationPath,omitempty" mapstructure:"authorizationPath,omitempty"`
-	AllowedOrigins    []string                `json:"allowedOrigins,omitempty" mapstructure:"allowedOrigins,omitempty"`
-}
-
-func (cs ConfiguredService) FromVO(vo ConfiguredServiceVO) ConfiguredService {
-
-	cs.DefaultOidcScope = vo.DefaultOidcScope
-	cs.Id = vo.Id
-	cs.AuthorizationType = vo.AuthorizationType
-	cs.AuthorizationPath = vo.AuthorizationPath
-	cs.AllowedOrigins = vo.AllowedOrigins
-	if vo.ServiceScopes != nil {
-		cs.ServiceScopes = make(map[string]ScopeEntry, len(vo.ServiceScopes))
-		for key, value := range vo.ServiceScopes {
-			cs.ServiceScopes[key] = ScopeEntry{}.FromVO(value)
-		}
-	}
-	return cs
-}
-
-type ScopeEntry struct {
+type ScopeEntryDB struct {
 	// credential types with their trust configuration
-	Credentials []Credential `json:"credentials" mapstructure:"credentials"`
+	Credentials []CredentialDB `json:"credentials" mapstructure:"credentials"`
 	// 	Proofs to be requested - see https://identity.foundation/presentation-exchange/#presentation-definition
-	PresentationDefinition *PresentationDefinition `json:"presentationDefinition" mapstructure:"presentationDefinition"`
+	PresentationDefinition *PresentationDefinitionDB `json:"presentationDefinition" mapstructure:"presentationDefinition"`
 	// JSON encoded query to request the credentials to be included in the presentation
-	DCQL *DCQL `json:"dcql" mapstructure:"dcql"`
+	DCQL *DCQLDB `json:"dcql" mapstructure:"dcql"`
 	// When set, the claim are flatten to plain JWT-claims before beeing included, instead of keeping the credential/presentation structure, where the claims are under the key vc or vp
 	FlatClaims bool `json:"flatClaims" mapstructure:"flatClaims"`
 }
 
-type ScopeEntryVO struct {
-	Credentials            []CredentialVo            `json:"credentials" mapstructure:"credentials"`
-	PresentationDefinition *PresentationDefinitionVO `json:"presentationDefinition,omitempty" mapstructure:"presentationDefinition,omitempty"`
-	DCQL                   *DCQLVO                   `json:"dcql,omitempty" mapstructure:"dcql,omitempty"`
-	FlatClaims             bool                      `json:"flatClaims" mapstructure:"flatClaims"`
+type ScopeEntry struct {
+	Credentials            []Credential            `json:"credentials" mapstructure:"credentials"`
+	PresentationDefinition *PresentationDefinition `json:"presentationDefinition,omitempty" mapstructure:"presentationDefinition,omitempty"`
+	DCQL                   *DCQL                   `json:"dcql,omitempty" mapstructure:"dcql,omitempty"`
+	FlatClaims             bool                    `json:"flatClaims" mapstructure:"flatClaims"`
 }
 
-func (se ScopeEntry) FromVO(seVO ScopeEntryVO) ScopeEntry {
-	creds := make([]Credential, 0, len(seVO.Credentials))
+func (se ScopeEntryDB) FromVO(seVO ScopeEntry) ScopeEntryDB {
+	creds := make([]CredentialDB, 0, len(seVO.Credentials))
 	for _, credVO := range seVO.Credentials {
-		creds = append(creds, Credential{}.FromVO(credVO))
+		creds = append(creds, CredentialDB{}.FromVO(credVO))
 	}
-	model := ScopeEntry{
+	model := ScopeEntryDB{
 		Credentials: creds,
 		FlatClaims:  seVO.FlatClaims,
 	}
 	if seVO.DCQL != nil {
-		dcql := DCQL{}.FromVO(*seVO.DCQL)
+		dcql := DCQLDB{}.FromVO(*seVO.DCQL)
 		model.DCQL = &dcql
 	}
 	if seVO.PresentationDefinition != nil {
-		pd := PresentationDefinition{}.FromVO(*seVO.PresentationDefinition)
+		pd := PresentationDefinitionDB{}.FromVO(*seVO.PresentationDefinition)
 		model.PresentationDefinition = &pd
 	}
 	return model
 }
 
-func (se ScopeEntry) VO() ScopeEntryVO {
-	creds := make([]CredentialVo, 0, len(se.Credentials))
+func (se ScopeEntryDB) VO() ScopeEntry {
+	creds := make([]Credential, 0, len(se.Credentials))
 	for _, cred := range se.Credentials {
 		creds = append(creds, cred.VO())
 	}
-	vo := ScopeEntryVO{
+	vo := ScopeEntry{
 		Credentials: creds,
 		FlatClaims:  se.FlatClaims,
 	}
@@ -176,7 +151,7 @@ func (se ScopeEntry) VO() ScopeEntryVO {
 	return vo
 }
 
-type Credential struct {
+type CredentialDB struct {
 	// Type of the credential
 	Type string `json:"credentialType" mapstructure:"credentialType"`
 	// Set if the holder id should be verified
@@ -196,7 +171,7 @@ type Credential struct {
 	CredentialStatus CredentialStatus `json:"credentialStatus,omitempty" mapstructure:"credentialStatus,omitempty"`
 }
 
-func (cred Credential) VO() CredentialVo {
+func (cred CredentialDB) VO() Credential {
 	trustedIssuerList := make([]string, 0, len(cred.TrustedIssuersLists))
 	trustedParticipantsList := make([]TrustedParticipantsList, 0, len(cred.TrustedIssuersLists))
 	for _, trustedIssuer := range cred.TrustedIssuersLists {
@@ -214,7 +189,7 @@ func (cred Credential) VO() CredentialVo {
 		}
 	}
 
-	return CredentialVo{
+	return Credential{
 		Type:                     cred.Type,
 		TrustedParticipantsLists: trustedParticipantsList,
 		TrustedIssuersLists:      trustedIssuerList,
@@ -225,7 +200,7 @@ func (cred Credential) VO() CredentialVo {
 	}
 }
 
-func (c Credential) FromVO(cv CredentialVo) Credential {
+func (c CredentialDB) FromVO(cv Credential) CredentialDB {
 	trustedLists := make([]EndpointEntry, 0, len(cv.TrustedParticipantsLists)+len(cv.TrustedIssuersLists))
 	for _, tp := range cv.TrustedParticipantsLists {
 		listType := tp.Type
@@ -245,7 +220,7 @@ func (c Credential) FromVO(cv CredentialVo) Credential {
 			Endpoint: endpoint,
 		})
 	}
-	return Credential{
+	return CredentialDB{
 		Type:                cv.Type,
 		TrustedIssuersLists: trustedLists,
 		HolderVerification:  cv.HolderVerification,
@@ -255,7 +230,7 @@ func (c Credential) FromVO(cv CredentialVo) Credential {
 	}
 }
 
-type CredentialVo struct {
+type Credential struct {
 	Type string `json:"type"`
 
 	TrustedParticipantsLists []TrustedParticipantsList `json:"trustedParticipantsLists,omitempty"`
@@ -328,69 +303,69 @@ type HolderVerification struct {
 	Claim string `json:"claim" mapstructure:"claim"`
 }
 
-type PresentationDefinition struct {
+type PresentationDefinitionDB struct {
 	// Id of the definition
 	Id string `json:"id" mapstructure:"id"`
 
 	// List of requested inputs
-	InputDescriptors []InputDescriptor `json:"inputDescriptors" mapstructure:"inputDescriptors"`
+	InputDescriptors []InputDescriptorDB `json:"inputDescriptors" mapstructure:"inputDescriptors"`
 	// Format of the credential to be requested
-	Format []FormatObject `json:"format" mapstructure:"format"`
+	Format []FormatObjectDB `json:"format" mapstructure:"format"`
 }
 
-func (pd PresentationDefinition) VO() PresentationDefinitionVO {
-	inputDescs := make([]InputDescriptorVO, 0, len(pd.InputDescriptors))
+func (pd PresentationDefinitionDB) VO() PresentationDefinition {
+	inputDescs := make([]InputDescriptor, 0, len(pd.InputDescriptors))
 	for _, id := range pd.InputDescriptors {
 		inputDescs = append(inputDescs, id.VO())
 	}
-	return PresentationDefinitionVO{
+	return PresentationDefinition{
 		Id:               pd.Id,
 		InputDescriptors: inputDescs,
 		Format:           toFormatVOMap(pd.Format),
 	}
 }
 
-func (pd PresentationDefinition) FromVO(pdVO PresentationDefinitionVO) PresentationDefinition {
-	inputDescs := make([]InputDescriptor, 0, len(pdVO.InputDescriptors))
+func (pd PresentationDefinitionDB) FromVO(pdVO PresentationDefinition) PresentationDefinitionDB {
+	inputDescs := make([]InputDescriptorDB, 0, len(pdVO.InputDescriptors))
 	for _, idVO := range pdVO.InputDescriptors {
-		inputDescs = append(inputDescs, InputDescriptor{}.FromVO(idVO))
+		inputDescs = append(inputDescs, InputDescriptorDB{}.FromVO(idVO))
 	}
-	return PresentationDefinition{
+	return PresentationDefinitionDB{
 		Id:               pdVO.Id,
 		InputDescriptors: inputDescs,
 		Format:           fromFormatVOMap(pdVO.Format),
 	}
 }
 
-func toFormatVOMap(formats []FormatObject) map[string]FormatObjectVO {
-	m := make(map[string]FormatObjectVO, len(formats))
+func toFormatVOMap(formats []FormatObjectDB) map[string]FormatObject {
+	m := make(map[string]FormatObject, len(formats))
 	for _, f := range formats {
 		m[f.FormatKey] = f.VO()
 	}
 	return m
 }
 
-func fromFormatVOMap(m map[string]FormatObjectVO) []FormatObject {
-	formats := make([]FormatObject, 0, len(m))
+func fromFormatVOMap(m map[string]FormatObject) []FormatObjectDB {
+	formats := make([]FormatObjectDB, 0, len(m))
 	for key, fVO := range m {
-		formats = append(formats, FormatObject{FormatKey: key, Alg: fVO.Alg, ProofType: fVO.ProofType})
+		formats = append(formats, FormatObjectDB{FormatKey: key, Alg: fVO.Alg, ProofType: fVO.ProofType})
 	}
 	return formats
 }
 
-type PresentationDefinitionVO struct {
+type PresentationDefinition struct {
 	Id string `json:"id"`
 	// List of requested inputs
-	InputDescriptors []InputDescriptorVO `json:"input_descriptors" mapstructure:"input_descriptors"`
+	InputDescriptors []InputDescriptor `json:"input_descriptors" mapstructure:"input_descriptors"`
 	// Format of the credential to be requested
-	Format map[string]FormatObjectVO `json:"format" mapstructure:"format"`
+	Format map[string]FormatObject `json:"format" mapstructure:"format"`
 }
-type FormatObjectVO struct {
+type FormatObject struct {
 	Alg       []string `json:"alg" mapstructure:"alg"`
 	ProofType []string `json:"proofType,omitempty" mapstructure:"proofType,omitempty"`
 }
 
-type FormatObject struct {
+type FormatObjectDB struct {
 	// format of the key
 	FormatKey string `json:"formatKey" mapstructure:"formatKey"`
 	// list of algorithms to be requested for credential - f.e. ES256
@@ -398,35 +373,35 @@ type FormatObject struct {
 	ProofType []string `json:"proofType,omitempty" mapstructure:"proofType"`
 }
 
-func (f FormatObject) VO() FormatObjectVO {
-	return FormatObjectVO{Alg: f.Alg, ProofType: f.ProofType}
+func (f FormatObjectDB) VO() FormatObject {
+	return FormatObject{Alg: f.Alg, ProofType: f.ProofType}
 }
 
-type InputDescriptor struct {
+type InputDescriptorDB struct {
 	// Id of the descriptor
 	Id string `json:"id" mapstructure:"id"`
 	// defines the information to be requested
 	Constraints Constraints `json:"constraints" mapstructure:"constraints"`
 	// Format of the credential to be requested
-	Format []FormatObject `json:"format" mapstructure:"format"`
+	Format []FormatObjectDB `json:"format" mapstructure:"format"`
 }
 
-type InputDescriptorVO struct {
-	Id          string                    `json:"id" mapstructure:"id"`
-	Constraints Constraints               `json:"constraints" mapstructure:"constraints"`
-	Format      map[string]FormatObjectVO `json:"format,omitempty" mapstructure:"format,omitempty"`
+type InputDescriptor struct {
+	Id          string                  `json:"id" mapstructure:"id"`
+	Constraints Constraints             `json:"constraints" mapstructure:"constraints"`
+	Format      map[string]FormatObject `json:"format,omitempty" mapstructure:"format,omitempty"`
 }
 
-func (id InputDescriptor) VO() InputDescriptorVO {
-	return InputDescriptorVO{
+func (id InputDescriptorDB) VO() InputDescriptor {
+	return InputDescriptor{
 		Id:          id.Id,
 		Constraints: id.Constraints,
 		Format:      toFormatVOMap(id.Format),
 	}
 }
 
-func (id InputDescriptor) FromVO(idVO InputDescriptorVO) InputDescriptor {
-	return InputDescriptor{
+func (id InputDescriptorDB) FromVO(idVO InputDescriptor) InputDescriptorDB {
+	return InputDescriptorDB{
 		Id:          idVO.Id,
 		Constraints: idVO.Constraints,
 		Format:      fromFormatVOMap(idVO.Format),
@@ -449,43 +424,43 @@ type Fields struct {
 	Filter interface{} `json:"filter,omitempty" mapstructure:"filter"`
 }
 
-// DCQL defines a JSON encoded query to request the credentials to be included in the presentation
-type DCQL struct {
+// DCQLDB defines a JSON encoded query to request the credentials to be included in the presentation
+type DCQLDB struct {
 	// A non-empty array of Credential Queries that specify the requested Credentials.
-	Credentials []CredentialQuery `json:"credentials" mapstructure:"credentials"`
+	Credentials []CredentialQueryDB `json:"credentials" mapstructure:"credentials"`
 	// A non-empty array of Credential Set Queries that specifies additional constraints on which of the requested Credentials to return.
 	CredentialSets []CredentialSetQuery `json:"credential_sets,omitempty" mapstructure:"credential_sets,omitempty"`
 }
 
-func (dcql DCQL) VO() DCQLVO {
-	creds := make([]CredentialQueryVO, 0, len(dcql.Credentials))
+func (dcql DCQLDB) VO() DCQL {
+	creds := make([]CredentialQuery, 0, len(dcql.Credentials))
 	for _, cred := range dcql.Credentials {
 		creds = append(creds, cred.VO())
 	}
-	return DCQLVO{
+	return DCQL{
 		Credentials:    creds,
 		CredentialSets: dcql.CredentialSets,
 	}
 }
 
-func (d DCQL) FromVO(dVO DCQLVO) DCQL {
-	creds := make([]CredentialQuery, 0, len(dVO.Credentials))
+func (d DCQLDB) FromVO(dVO DCQL) DCQLDB {
+	creds := make([]CredentialQueryDB, 0, len(dVO.Credentials))
 	for _, cqVO := range dVO.Credentials {
-		creds = append(creds, CredentialQuery{}.FromVO(cqVO))
+		creds = append(creds, CredentialQueryDB{}.FromVO(cqVO))
 	}
-	return DCQL{
+	return DCQLDB{
 		Credentials:    creds,
 		CredentialSets: dVO.CredentialSets,
 	}
 }
 
-type DCQLVO struct {
-	Credentials    []CredentialQueryVO  `json:"credentials" mapstructure:"credentials"`
+type DCQL struct {
+	Credentials    []CredentialQuery    `json:"credentials" mapstructure:"credentials"`
 	CredentialSets []CredentialSetQuery `json:"credential_sets" mapstructure:"credential_sets"`
 }
 
-// CredentialQuery is an object representing a request for a presentation of one or more matching Credentials
-type CredentialQuery struct {
+// CredentialQueryDB is an object representing a request for a presentation of one or more matching Credentials
+type CredentialQueryDB struct {
 	// A string identifying the Credential in the response and, if provided, the constraints in credential_sets. The value MUST be a non-empty string consisting of alphanumeric, underscore (_), or hyphen (-) characters. Within the Authorization Request, the same id MUST NOT be present more than once.
 	Id string `json:"id,omitempty" mapstructure:"id,omitempty"`
 	// A string that specifies the format of the requested Credential.
@@ -504,8 +479,8 @@ type CredentialQuery struct {
 	TrustedAuthorities []TrustedAuthorityQuery `json:"trusted_authorities" mapstructure:"trusted_authorities" default:"[]"`
 }
 
-func (cq CredentialQuery) VO() CredentialQueryVO {
-	vo := CredentialQueryVO{
+func (cq CredentialQueryDB) VO() CredentialQuery {
+	vo := CredentialQuery{
 		Id:                                cq.Id,
 		Format:                            strings.ToLower(cq.Format),
 		Multiple:                          cq.Multiple,
@@ -524,8 +499,8 @@ func (cq CredentialQuery) VO() CredentialQueryVO {
 	return vo
 }
 
-func (cq CredentialQuery) FromVO(cqVO CredentialQueryVO) CredentialQuery {
-	return CredentialQuery{
+func (cq CredentialQueryDB) FromVO(cqVO CredentialQuery) CredentialQueryDB {
+	return CredentialQueryDB{
 		Id:                                cqVO.Id,
 		Format:                            strings.ToUpper(cqVO.Format),
 		Multiple:                          cqVO.Multiple,
@@ -537,7 +512,7 @@ func (cq CredentialQuery) FromVO(cqVO CredentialQueryVO) CredentialQuery {
 	}
 }
 
-type CredentialQueryVO struct {
+type CredentialQuery struct {
 	Id                                string                  `json:"id,omitempty" mapstructure:"id,omitempty"`
 	Format                            string                  `json:"format,omitempty" mapstructure:"format,omitempty"`
 	Multiple                          bool                    `json:"multiple" mapstructure:"multiple"`
@@ -669,8 +644,8 @@ func (hcc HttpConfigClient) GetServices() (services []ConfiguredService, err err
 			logging.Log().Warnf("Failed to receive services page %v with size %v. Err: %v", currentPage, pageSize, err)
 			return nil, err
 		}
-		for _, svcVO := range servicesResponse.Services {
-			services = append(services, ConfiguredService{}.FromVO(svcVO))
+		for _, svc := range servicesResponse.Services {
+			services = append(services, svc)
 		}
 		// we check both, since its possible that during the iteration new services where added to old pages(total != len(services)).
 		// those will be retrieved on next iteration, thus can be ignored

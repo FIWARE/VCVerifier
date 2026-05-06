@@ -24,7 +24,7 @@ type ServiceRequest struct {
 	// DefaultOidcScope is the default OIDC scope name to use when none is specified.
 	DefaultOidcScope string `json:"defaultOidcScope"`
 	// OidcScopes maps scope names to their credential requirements.
-	OidcScopes map[string]config.ScopeEntryVO `json:"oidcScopes"`
+	OidcScopes map[string]config.ScopeEntry `json:"oidcScopes"`
 	// AuthorizationType describes the authorization mode (e.g., "oidc").
 	AuthorizationType string `json:"authorizationType,omitempty"`
 }
@@ -36,7 +36,7 @@ type ServiceResponse struct {
 	// DefaultOidcScope is the default OIDC scope name.
 	DefaultOidcScope string `json:"defaultOidcScope"`
 	// OidcScopes maps scope names to their credential requirements.
-	OidcScopes map[string]config.ScopeEntryVO `json:"oidcScopes"`
+	OidcScopes map[string]config.ScopeEntry `json:"oidcScopes"`
 	// AuthorizationType describes the authorization mode.
 	AuthorizationType string `json:"authorizationType,omitempty"`
 }
@@ -72,14 +72,10 @@ type ProblemDetails struct {
 // config.ConfiguredService for persistence via the repository layer.
 func ServiceRequestToConfiguredService(req ServiceRequest, id string) config.ConfiguredService {
 
-	scopes := make(map[string]config.ScopeEntry, len(req.OidcScopes))
-	for key, value := range req.OidcScopes {
-		scopes[key] = (config.ScopeEntry{}).FromVO(value)
-	}
 	return config.ConfiguredService{
 		Id:                id,
 		DefaultOidcScope:  req.DefaultOidcScope,
-		ServiceScopes:     scopes,
+		ServiceScopes:     req.OidcScopes,
 		AuthorizationType: req.AuthorizationType,
 	}
 }
@@ -87,14 +83,11 @@ func ServiceRequestToConfiguredService(req ServiceRequest, id string) config.Con
 // ConfiguredServiceToResponse converts a config.ConfiguredService into a
 // ServiceResponse for the API response body.
 func ConfiguredServiceToResponse(svc config.ConfiguredService) ServiceResponse {
-	scopes := make(map[string]config.ScopeEntryVO, len(svc.ServiceScopes))
-	for k, v := range svc.ServiceScopes {
-		scopes[k] = v.VO()
-	}
+
 	return ServiceResponse{
 		ID:                svc.Id,
 		DefaultOidcScope:  svc.DefaultOidcScope,
-		OidcScopes:        scopes,
+		OidcScopes:        svc.ServiceScopes,
 		AuthorizationType: svc.AuthorizationType,
 	}
 }

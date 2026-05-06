@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"slices"
 	"testing"
 
 	"github.com/fiware/VCVerifier/config"
@@ -92,20 +91,16 @@ func TestMigrationCompat_CCSJavaFormatRoundTrip(t *testing.T) {
 	require.Len(t, scope.Credentials, 1)
 	cred := scope.Credentials[0]
 	assert.Equal(t, "PacketDeliveryService", cred.Type)
-	require.Len(t, cred.TrustedIssuersLists, 2)
 
-	participantIdx := slices.IndexFunc(cred.TrustedIssuersLists, func(e config.EndpointEntry) bool {
-		return e.Type == config.TrustedParticipants
-	})
-	require.GreaterOrEqual(t, participantIdx, 0)
-	assert.Equal(t, "ebsi", cred.TrustedIssuersLists[participantIdx].ListType)
-	assert.Equal(t, "https://tir.dsba.fiware.dev/v4/issuers", cred.TrustedIssuersLists[participantIdx].Endpoint)
+	require.Len(t, cred.TrustedIssuersLists, 1)
+	require.Len(t, cred.TrustedParticipantsLists, 1)
 
-	issuerIdx := slices.IndexFunc(cred.TrustedIssuersLists, func(e config.EndpointEntry) bool {
-		return e.Type == config.TrustedIssuers
-	})
-	require.GreaterOrEqual(t, issuerIdx, 0)
-	assert.Equal(t, "https://tir.dsba.fiware.dev/v3/issuers", cred.TrustedIssuersLists[issuerIdx].Endpoint)
+	assert.Equal(t, "ebsi", cred.TrustedParticipantsLists[0].Type)
+	assert.Equal(t, "https://tir.dsba.fiware.dev/v4/issuers", cred.TrustedParticipantsLists[0].Url)
+
+	require.Len(t, cred.TrustedIssuersLists, 1)
+
+	assert.Equal(t, "https://tir.dsba.fiware.dev/v3/issuers", cred.TrustedIssuersLists[0])
 
 	assert.True(t, cred.HolderVerification.Enabled)
 	assert.Equal(t, "sub", cred.HolderVerification.Claim)
@@ -122,12 +117,8 @@ func TestMigrationCompat_CCSJavaFormatRoundTrip(t *testing.T) {
 	assert.Equal(t, "pd-1", pd.Id)
 	require.Len(t, pd.InputDescriptors, 1)
 	assert.Equal(t, "desc-1", pd.InputDescriptors[0].Id)
-
-	idx := slices.IndexFunc(pd.Format, func(format config.FormatObject) bool {
-		return format.FormatKey == "jwt_vp"
-	})
-	assert.Greater(t, idx, -1)
-	assert.Equal(t, []string{"ES256"}, pd.Format[idx].Alg)
+	require.Contains(t, pd.Format, "jwt_vp")
+	assert.Equal(t, []string{"ES256"}, pd.Format["jwt_vp"].Alg)
 
 	// Verify DCQL
 	require.NotNil(t, scope.DCQL)
@@ -160,13 +151,11 @@ func TestMigrationCompat_GoWriteCCSRead(t *testing.T) {
 			"myScope": {
 				Credentials: []config.Credential{
 					{
-						Type: "VerifiableCredential",
-						TrustedIssuersLists: []config.EndpointEntry{
-							{Endpoint: "https://til.example.com", ListType: "esbi", Type: config.TrustedIssuers},
-							{ListType: "gaia-x", Endpoint: "https://tpl.example.com", Type: config.TrustedParticipants},
-						},
-						HolderVerification: config.HolderVerification{Enabled: false, Claim: ""},
-						RequireCompliance:  true,
+						Type:                     "VerifiableCredential",
+						TrustedIssuersLists:      []string{"https://til.example.com"},
+						TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "gaia-x", Url: "https://tpl.example.com"}},
+						HolderVerification:       config.HolderVerification{Enabled: false, Claim: ""},
+						RequireCompliance:        true,
 						JwtInclusion: config.JwtInclusion{
 							Enabled:       true,
 							FullInclusion: true,

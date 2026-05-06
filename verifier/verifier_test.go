@@ -103,12 +103,10 @@ type mockCredentialConfig struct {
 
 func createMockCredentials(serviceId, scope, credentialType, url, holderClaim string, holderVerfication bool) map[string]map[string]configModel.ScopeEntry {
 	credential := configModel.Credential{
-		Type: credentialType,
-		TrustedIssuersLists: []configModel.EndpointEntry{
-			{Type: configModel.TrustedIssuers, Endpoint: url},
-			{Type: configModel.TrustedParticipants, ListType: "ebsi", Endpoint: url},
-		},
-		HolderVerification: configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim},
+		Type:                     credentialType,
+		TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: url}},
+		TrustedIssuersLists:      []string{url},
+		HolderVerification:       configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim},
 	}
 
 	entry := configModel.ScopeEntry{Credentials: []configModel.Credential{credential}}
@@ -148,16 +146,7 @@ func (mcc mockCredentialConfig) GetTrustedParticipantLists(serviceIdentifier str
 	}
 	for _, credential := range mcc.mockScopes[serviceIdentifier][scope].Credentials {
 		if credential.Type == credentialType {
-			list := make([]configModel.TrustedParticipantsList, len(credential.TrustedIssuersLists))
-			for _, issuer := range credential.TrustedIssuersLists {
-				if issuer.Type == configModel.TrustedParticipants {
-					list = append(list, configModel.TrustedParticipantsList{
-						Type: issuer.ListType,
-						Url:  issuer.Endpoint,
-					})
-				}
-			}
-			return list, err
+			return credential.TrustedParticipantsLists, err
 		}
 	}
 	return trustedIssuersRegistryUrl, err
@@ -169,11 +158,7 @@ func (mcc mockCredentialConfig) GetTrustedIssuersLists(serviceIdentifier string,
 
 	for _, credential := range mcc.mockScopes[serviceIdentifier][scope].Credentials {
 		if credential.Type == credentialType {
-			urls := make([]string, 0, len(credential.TrustedIssuersLists))
-			for _, e := range credential.TrustedIssuersLists {
-				urls = append(urls, e.Endpoint)
-			}
-			return urls, err
+			return credential.TrustedIssuersLists, err
 		}
 	}
 	return trustedIssuersRegistryUrl, err
@@ -1565,19 +1550,19 @@ func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 
 	type test struct {
 		testName               string
-		services               []configModel.ConfiguredServiceVO
+		services               []configModel.ConfiguredService
 		expectedPerTypeEnabled bool
 	}
 
 	tests := []test{
 		{
 			testName: "Case A: no credential opts in so the status service is appended and its PerType entry is disabled.",
-			services: []configModel.ConfiguredServiceVO{
+			services: []configModel.ConfiguredService{
 				{
 					Id: testStatusWiringServiceID,
-					ServiceScopes: map[string]configModel.ScopeEntryVO{
+					ServiceScopes: map[string]configModel.ScopeEntry{
 						testStatusWiringScope: {
-							Credentials: []configModel.CredentialVo{
+							Credentials: []configModel.Credential{
 								{Type: testStatusWiringCredentialType},
 							},
 						},
@@ -1588,12 +1573,12 @@ func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 		},
 		{
 			testName: "Case B: at least one credential has CredentialStatus.Enabled=true so PerType reflects the opt-in.",
-			services: []configModel.ConfiguredServiceVO{
+			services: []configModel.ConfiguredService{
 				{
 					Id: testStatusWiringServiceID,
-					ServiceScopes: map[string]configModel.ScopeEntryVO{
+					ServiceScopes: map[string]configModel.ScopeEntry{
 						testStatusWiringScope: {
-							Credentials: []configModel.CredentialVo{
+							Credentials: []configModel.Credential{
 								{
 									Type:             testStatusWiringCredentialType,
 									CredentialStatus: configModel.CredentialStatus{Enabled: true},

@@ -255,7 +255,7 @@ const wildcardOrigin = "*"
 //   - If any service includes "*" in its AllowedOrigins, the function returns
 //     ["*"] because the wildcard takes precedence over specific origins.
 //   - Otherwise the function returns the deduplicated union of all origins.
-func ResolveAllowedOrigins(services []configModel.ConfiguredServiceVO) []string {
+func ResolveAllowedOrigins(services []configModel.ConfiguredService) []string {
 	seen := make(map[string]struct{})
 	var origins []string
 

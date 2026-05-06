@@ -107,14 +107,12 @@ func testService(id, scopeName, credentialType string) config.ConfiguredService 
 			scopeName: {
 				Credentials: []config.Credential{
 					{
-						Type: credentialType,
-						TrustedIssuersLists: []config.EndpointEntry{
-							{Type: config.TrustedIssuers, Endpoint: "https://tir.example.com", ListType: "ebsi"},
-							{Type: config.TrustedParticipants, ListType: "ebsi", Endpoint: "https://tpl.example.com"},
-						},
-						HolderVerification: config.HolderVerification{Enabled: true, Claim: "sub"},
-						RequireCompliance:  true,
-						JwtInclusion:       config.JwtInclusion{Enabled: true, FullInclusion: false},
+						Type:                     credentialType,
+						TrustedIssuersLists:      []string{"https://tir.example.com"},
+						TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "ebsi", Url: "https://tpl.example.com"}},
+						HolderVerification:       config.HolderVerification{Enabled: true, Claim: "sub"},
+						RequireCompliance:        true,
+						JwtInclusion:             config.JwtInclusion{Enabled: true, FullInclusion: false},
 					},
 				},
 				FlatClaims: true,
@@ -124,13 +122,13 @@ func testService(id, scopeName, credentialType string) config.ConfiguredService 
 	}
 }
 
-func testServiceVO(id, scopeName, credentialType string) config.ConfiguredServiceVO {
-	return config.ConfiguredServiceVO{
+func testServiceVO(id, scopeName, credentialType string) config.ConfiguredService {
+	return config.ConfiguredService{
 		Id:               id,
 		DefaultOidcScope: scopeName,
-		ServiceScopes: map[string]config.ScopeEntryVO{
+		ServiceScopes: map[string]config.ScopeEntry{
 			scopeName: {
-				Credentials: []config.CredentialVo{
+				Credentials: []config.Credential{
 					{
 						Type:                     credentialType,
 						TrustedIssuersLists:      []string{"https://tir.example.com"},
@@ -301,7 +299,7 @@ func TestDbBackedCredentialsConfig_FallbackToStaticConfig(t *testing.T) {
 	}
 
 	repoConfig := &config.ConfigRepo{
-		Services:       []config.ConfiguredServiceVO{staticSvc},
+		Services:       []config.ConfiguredService{staticSvc},
 		UpdateInterval: 30,
 	}
 
@@ -321,10 +319,10 @@ func TestDbBackedCredentialsConfig_FallbackToStaticConfig(t *testing.T) {
 func TestDbBackedCredentialsConfig_DBOverridesStaticConfig(t *testing.T) {
 	resetGlobalCache()
 
-	staticSvc := config.ConfiguredServiceVO{
+	staticSvc := config.ConfiguredService{
 		Id:               "shared-svc",
 		DefaultOidcScope: "oldScope",
-		ServiceScopes:    map[string]config.ScopeEntryVO{"oldScope": {Credentials: []config.CredentialVo{{Type: "OldCred"}}}},
+		ServiceScopes:    map[string]config.ScopeEntry{"oldScope": {Credentials: []config.Credential{{Type: "OldCred"}}}},
 	}
 
 	dbSvc := config.ConfiguredService{
@@ -338,7 +336,7 @@ func TestDbBackedCredentialsConfig_DBOverridesStaticConfig(t *testing.T) {
 	}
 
 	repoConfig := &config.ConfigRepo{
-		Services:       []config.ConfiguredServiceVO{staticSvc},
+		Services:       []config.ConfiguredService{staticSvc},
 		UpdateInterval: 30,
 	}
 
@@ -528,7 +526,7 @@ func TestInitCredentialsConfig_SelectsStaticWhenNoRepoNoEndpoint(t *testing.T) {
 
 	staticSvc := testServiceVO("static-only", "scope", "Cred")
 	repoConfig := &config.ConfigRepo{
-		Services:       []config.ConfiguredServiceVO{staticSvc},
+		Services:       []config.ConfiguredService{staticSvc},
 		UpdateInterval: 30,
 	}
 
@@ -596,7 +594,7 @@ func TestDbBackedCredentialsConfig_StaticServicePreservedWhenNotInDB(t *testing.
 	}
 
 	repoConfig := &config.ConfigRepo{
-		Services:       []config.ConfiguredServiceVO{staticSvc},
+		Services:       []config.ConfiguredService{staticSvc},
 		UpdateInterval: 30,
 	}
 

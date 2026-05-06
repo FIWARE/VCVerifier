@@ -54,7 +54,7 @@ func ServiceToRow(service config.ConfiguredService) ServiceRow {
 func ScopeEntryToRows(serviceID string, scopes map[string]config.ScopeEntry) ([]ScopeEntryRow, error) {
 	rows := make([]ScopeEntryRow, 0, len(scopes))
 	for key, entry := range scopes {
-		row, err := scopeEntryToRow(serviceID, key, entry)
+		row, err := scopeEntryToRow(serviceID, key, config.ScopeEntryDB{}.FromVO(entry))
 		if err != nil {
 			return nil, fmt.Errorf("scope %q: %w", key, err)
 		}
@@ -66,7 +66,7 @@ func ScopeEntryToRows(serviceID string, scopes map[string]config.ScopeEntry) ([]
 // scopeEntryToRow converts a single scope key + ScopeEntry pair into a
 // ScopeEntryRow, marshalling credentials, presentationDefinition, and dcql
 // to JSON text columns.
-func scopeEntryToRow(serviceID, scopeKey string, entry config.ScopeEntry) (ScopeEntryRow, error) {
+func scopeEntryToRow(serviceID, scopeKey string, entry config.ScopeEntryDB) (ScopeEntryRow, error) {
 	credJSON, err := json.Marshal(entry.Credentials)
 	if err != nil {
 		return ScopeEntryRow{}, fmt.Errorf("failed to marshal credentials: %w", err)
@@ -120,15 +120,15 @@ func RowToService(row ServiceRow, scopeRows []ScopeEntryRow) (config.ConfiguredS
 		if err != nil {
 			return svc, fmt.Errorf("scope_entry id=%d: %w", sr.ID, err)
 		}
-		svc.ServiceScopes[scopeKey] = entry
+		svc.ServiceScopes[scopeKey] = entry.VO()
 	}
 	return svc, nil
 }
 
 // rowToScopeEntry converts a single ScopeEntryRow back into a scope key
 // and config.ScopeEntry, unmarshalling JSON text columns.
-func rowToScopeEntry(row ScopeEntryRow) (string, config.ScopeEntry, error) {
-	var entry config.ScopeEntry
+func rowToScopeEntry(row ScopeEntryRow) (string, config.ScopeEntryDB, error) {
+	var entry config.ScopeEntryDB
 
 	if err := json.Unmarshal([]byte(row.Credentials), &entry.Credentials); err != nil {
 		return "", entry, fmt.Errorf("failed to unmarshal credentials: %w", err)
@@ -137,7 +137,7 @@ func rowToScopeEntry(row ScopeEntryRow) (string, config.ScopeEntry, error) {
 	entry.FlatClaims = row.FlatClaims
 
 	if row.PresentationDefinition != nil {
-		var pd config.PresentationDefinition
+		var pd config.PresentationDefinitionDB
 		if err := json.Unmarshal([]byte(*row.PresentationDefinition), &pd); err != nil {
 			return "", entry, fmt.Errorf("failed to unmarshal presentationDefinition: %w", err)
 		}
@@ -145,7 +145,7 @@ func rowToScopeEntry(row ScopeEntryRow) (string, config.ScopeEntry, error) {
 	}
 
 	if row.DcqlQuery != nil {
-		var dcql config.DCQL
+		var dcql config.DCQLDB
 		if err := json.Unmarshal([]byte(*row.DcqlQuery), &dcql); err != nil {
 			return "", entry, fmt.Errorf("failed to unmarshal dcql: %w", err)
 		}

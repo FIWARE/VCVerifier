@@ -144,7 +144,7 @@ func fillStaticValues(repoConfig *config.ConfigRepo, static bool) error {
 	}
 	for _, configuredService := range repoConfig.Services {
 		logging.Log().Debugf("Add service %s to cache.", logging.PrettyPrintObject(configuredService))
-		common.GlobalCache.ServiceCache.Set(configuredService.Id, config.ConfiguredService{}.FromVO(configuredService), exipiration)
+		common.GlobalCache.ServiceCache.Set(configuredService.Id, configuredService, exipiration)
 	}
 	return nil
 }
@@ -275,14 +275,8 @@ func (cc cacheBasedCredentialsConfig) GetTrustedParticipantLists(serviceIdentifi
 	if hit {
 		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
 		if ok {
-			trustedParticipantList := make([]config.TrustedParticipantsList, 0, len(credential.TrustedIssuersLists))
-			for _, issuer := range credential.TrustedIssuersLists {
-				if issuer.Type == config.TrustedParticipants {
-					trustedParticipantList = append(trustedParticipantList, config.TrustedParticipantsList{Type: issuer.ListType, Url: issuer.Endpoint})
-				}
-			}
-			logging.Log().Debugf("Found trusted participants %s for %s - %s", trustedParticipantList, serviceIdentifier, credentialType)
-			return trustedParticipantList, nil
+			logging.Log().Debugf("Found trusted participants %s for %s - %s", credential.TrustedParticipantsLists, serviceIdentifier, credentialType)
+			return credential.TrustedParticipantsLists, nil
 		}
 	}
 	logging.Log().Debugf("No trusted participants for %s - %s", serviceIdentifier, credentialType)
@@ -297,13 +291,7 @@ func (cc cacheBasedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifier s
 		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
 		if ok {
 			logging.Log().Debugf("Found trusted issuers for %s for %s - %s", credential.TrustedIssuersLists, serviceIdentifier, credentialType)
-			issuerList := make([]string, 0, len(credential.TrustedIssuersLists))
-			for _, issuer := range credential.TrustedIssuersLists {
-				if issuer.Type == config.TrustedIssuers {
-					issuerList = append(issuerList, issuer.Endpoint)
-				}
-			}
-			return issuerList, nil
+			return credential.TrustedIssuersLists, nil
 		}
 	}
 	logging.Log().Debugf("No trusted issuers for %s - %s", serviceIdentifier, credentialType)
