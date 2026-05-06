@@ -212,7 +212,7 @@ func Test_getServices(t *testing.T) {
 	assert.Equal(t, "did_write", svc.DefaultOidcScope)
 
 	scopesVO := svc.ServiceScopes
-
+	expectedOptionalField := true
 	expectedScopesVO := map[string]ScopeEntry{
 		"did_write": {
 			Credentials: []Credential{
@@ -231,8 +231,9 @@ func Test_getServices(t *testing.T) {
 						Constraints: Constraints{
 							Fields: []Fields{
 								{
-									Id:   "my-field",
-									Path: []string{"$.vc.my.claim"},
+									Id:       "my-field",
+									Path:     []string{"$.vc.my.claim"},
+									Optional: &expectedOptionalField,
 								},
 							},
 						},

@@ -201,10 +201,46 @@ type Fields struct {
 	Id string `json:"id" mapstructure:"id"`
 	// A list of JsonPaths for the requested claim
 	Path []string `json:"path" mapstructure:"path"`
-	// Does it need to be included?
-	Optional bool `json:"optional" mapstructure:"optional" default:"true"`
+	// Does it need to be included? Defaults to true when absent.
+	Optional *bool `json:"optional,omitempty" mapstructure:"optional,omitempty"`
 	// a custom filter to be applied on the fields, f.e. restrict to certain values
 	Filter interface{} `json:"filter,omitempty" mapstructure:"filter"`
+}
+
+// set Optional as true if missing
+func (f *Fields) UnmarshalJSON(data []byte) error {
+	type Alias Fields
+	aux := &struct {
+		Optional *bool `json:"optional"`
+		*Alias
+	}{
+		Alias: (*Alias)(f),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if aux.Optional == nil {
+		t := true
+		f.Optional = &t
+	} else {
+		f.Optional = aux.Optional
+	}
+	return nil
+}
+
+func (f Fields) MarshalJSON() ([]byte, error) {
+	type Alias Fields
+	optVal := true
+	if f.Optional != nil {
+		optVal = *f.Optional
+	}
+	return json.Marshal(&struct {
+		Optional bool `json:"optional"`
+		Alias
+	}{
+		Optional: optVal,
+		Alias:    (Alias)(f),
+	})
 }
 
 // DCQL defines a JSON encoded query to request the credentials to be included in the presentation

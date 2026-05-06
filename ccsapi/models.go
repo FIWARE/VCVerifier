@@ -71,7 +71,6 @@ type ProblemDetails struct {
 // ServiceRequestToConfiguredService converts a ServiceRequest into a
 // config.ConfiguredService for persistence via the repository layer.
 func ServiceRequestToConfiguredService(req ServiceRequest, id string) config.ConfiguredService {
-
 	return config.ConfiguredService{
 		Id:                id,
 		DefaultOidcScope:  req.DefaultOidcScope,
@@ -83,7 +82,6 @@ func ServiceRequestToConfiguredService(req ServiceRequest, id string) config.Con
 // ConfiguredServiceToResponse converts a config.ConfiguredService into a
 // ServiceResponse for the API response body.
 func ConfiguredServiceToResponse(svc config.ConfiguredService) ServiceResponse {
-
 	return ServiceResponse{
 		ID:                svc.Id,
 		DefaultOidcScope:  svc.DefaultOidcScope,

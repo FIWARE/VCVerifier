@@ -42,6 +42,7 @@ func sampleService(id string) config.ConfiguredService {
 // sampleServiceWithPD builds a ConfiguredService that includes a
 // PresentationDefinition and a DCQL query for round-trip testing.
 func sampleServiceWithPD(id string) config.ConfiguredService {
+	falseOption := false
 	return config.ConfiguredService{
 		Id:               id,
 		DefaultOidcScope: "pd-scope",
@@ -69,7 +70,7 @@ func sampleServiceWithPD(id string) config.ConfiguredService {
 							Id: "desc-1",
 							Constraints: config.Constraints{
 								Fields: []config.Fields{
-									{Id: "f1", Path: []string{"$.type"}, Optional: false},
+									{Id: "f1", Path: []string{"$.type"}, Optional: &falseOption},
 								},
 							},
 						},
