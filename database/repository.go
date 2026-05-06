@@ -280,7 +280,7 @@ func (r *SqlServiceRepository) GetServiceScopes(ctx context.Context, id string, 
 		return nil, fmt.Errorf("query scope entry: %w", err)
 	}
 
-	var credentials []config.CredentialDB
+	var credentials []CredentialDB
 	if err := json.Unmarshal([]byte(credJSON), &credentials); err != nil {
 		return nil, fmt.Errorf("unmarshal credentials: %w", err)
 	}

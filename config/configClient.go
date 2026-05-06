@@ -93,141 +93,11 @@ type ConfiguredService struct {
 	AllowedOrigins []string `json:"allowedOrigins,omitempty" mapstructure:"allowedOrigins,omitempty"`
 }
 
-type ScopeEntryDB struct {
-	// credential types with their trust configuration
-	Credentials []CredentialDB `json:"credentials" mapstructure:"credentials"`
-	// 	Proofs to be requested - see https://identity.foundation/presentation-exchange/#presentation-definition
-	PresentationDefinition *PresentationDefinitionDB `json:"presentationDefinition" mapstructure:"presentationDefinition"`
-	// JSON encoded query to request the credentials to be included in the presentation
-	DCQL *DCQLDB `json:"dcql" mapstructure:"dcql"`
-	// When set, the claim are flatten to plain JWT-claims before beeing included, instead of keeping the credential/presentation structure, where the claims are under the key vc or vp
-	FlatClaims bool `json:"flatClaims" mapstructure:"flatClaims"`
-}
-
 type ScopeEntry struct {
 	Credentials            []Credential            `json:"credentials" mapstructure:"credentials"`
 	PresentationDefinition *PresentationDefinition `json:"presentationDefinition,omitempty" mapstructure:"presentationDefinition,omitempty"`
 	DCQL                   *DCQL                   `json:"dcql,omitempty" mapstructure:"dcql,omitempty"`
 	FlatClaims             bool                    `json:"flatClaims" mapstructure:"flatClaims"`
-}
-
-func (se ScopeEntryDB) FromVO(seVO ScopeEntry) ScopeEntryDB {
-	creds := make([]CredentialDB, 0, len(seVO.Credentials))
-	for _, credVO := range seVO.Credentials {
-		creds = append(creds, CredentialDB{}.FromVO(credVO))
-	}
-	model := ScopeEntryDB{
-		Credentials: creds,
-		FlatClaims:  seVO.FlatClaims,
-	}
-	if seVO.DCQL != nil {
-		dcql := DCQLDB{}.FromVO(*seVO.DCQL)
-		model.DCQL = &dcql
-	}
-	if seVO.PresentationDefinition != nil {
-		pd := PresentationDefinitionDB{}.FromVO(*seVO.PresentationDefinition)
-		model.PresentationDefinition = &pd
-	}
-	return model
-}
-
-func (se ScopeEntryDB) VO() ScopeEntry {
-	creds := make([]Credential, 0, len(se.Credentials))
-	for _, cred := range se.Credentials {
-		creds = append(creds, cred.VO())
-	}
-	vo := ScopeEntry{
-		Credentials: creds,
-		FlatClaims:  se.FlatClaims,
-	}
-	if se.DCQL != nil {
-		dcql := se.DCQL.VO()
-		vo.DCQL = &dcql
-	}
-	if se.PresentationDefinition != nil {
-		pdVO := se.PresentationDefinition.VO()
-		vo.PresentationDefinition = &pdVO
-	}
-	return vo
-}
-
-type CredentialDB struct {
-	// Type of the credential
-	Type string `json:"credentialType" mapstructure:"credentialType"`
-	// Set if the holder id should be verified
-	VerifyHolder bool `json:"verifyHolder" mapstructure:"verifyHolder"`
-	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted issuers from. The attributes need to be formated to comply with the verifiers requirements.
-	TrustedIssuersLists []EndpointEntry `json:"trustedLists,omitempty" mapstructure:"trustedLists,omitempty"`
-	// Configuration of Holder Verfification
-	HolderVerification HolderVerification `json:"holderVerification" mapstructure:"holderVerification"`
-	// Does the given credential require a compliancy credential
-	RequireCompliance bool `json:"requireCompliance" mapstructure:"requireCompliance"`
-	// Configuration for the credential its inclusion into the JWT.
-	JwtInclusion JwtInclusion `json:"jwtInclusion" mapstructure:"jwtInclusion"`
-	// Per-credential configuration for the W3C Bitstring Status List /
-	// StatusList2021 revocation-list check. When omitted or disabled no
-	// revocation check is performed for credentials of this type, preserving
-	// prior behaviour for configurations that do not opt in.
-	CredentialStatus CredentialStatus `json:"credentialStatus,omitempty" mapstructure:"credentialStatus,omitempty"`
-}
-
-func (cred CredentialDB) VO() Credential {
-	trustedIssuerList := make([]string, 0, len(cred.TrustedIssuersLists))
-	trustedParticipantsList := make([]TrustedParticipantsList, 0, len(cred.TrustedIssuersLists))
-	for _, trustedIssuer := range cred.TrustedIssuersLists {
-		if trustedIssuer.Type == TrustedParticipants {
-			listType := trustedIssuer.ListType
-			if listType == "" {
-				listType = DEFAULT_LIST_TYPE
-			}
-			trustedParticipantsList = append(trustedParticipantsList, TrustedParticipantsList{
-				Type: listType,
-				Url:  trustedIssuer.Endpoint,
-			})
-		} else if trustedIssuer.Type == TrustedIssuers {
-			trustedIssuerList = append(trustedIssuerList, trustedIssuer.Endpoint)
-		}
-	}
-
-	return Credential{
-		Type:                     cred.Type,
-		TrustedParticipantsLists: trustedParticipantsList,
-		TrustedIssuersLists:      trustedIssuerList,
-		HolderVerification:       cred.HolderVerification,
-		RequireCompliance:        cred.RequireCompliance,
-		JwtInclusion:             cred.JwtInclusion,
-		CredentialStatus:         cred.CredentialStatus,
-	}
-}
-
-func (c CredentialDB) FromVO(cv Credential) CredentialDB {
-	trustedLists := make([]EndpointEntry, 0, len(cv.TrustedParticipantsLists)+len(cv.TrustedIssuersLists))
-	for _, tp := range cv.TrustedParticipantsLists {
-		listType := tp.Type
-		if listType == "" {
-			listType = DEFAULT_LIST_TYPE
-		}
-		trustedLists = append(trustedLists, EndpointEntry{
-			Type:     TrustedParticipants,
-			ListType: tp.Type,
-			Endpoint: tp.Url,
-		})
-	}
-	for _, endpoint := range cv.TrustedIssuersLists {
-		trustedLists = append(trustedLists, EndpointEntry{
-			Type:     TrustedIssuers,
-			ListType: DEFAULT_LIST_TYPE,
-			Endpoint: endpoint,
-		})
-	}
-	return CredentialDB{
-		Type:                cv.Type,
-		TrustedIssuersLists: trustedLists,
-		HolderVerification:  cv.HolderVerification,
-		RequireCompliance:   cv.RequireCompliance,
-		JwtInclusion:        cv.JwtInclusion,
-		CredentialStatus:    cv.CredentialStatus,
-	}
 }
 
 type Credential struct {
@@ -303,56 +173,6 @@ type HolderVerification struct {
 	Claim string `json:"claim" mapstructure:"claim"`
 }
 
-type PresentationDefinitionDB struct {
-	// Id of the definition
-	Id string `json:"id" mapstructure:"id"`
-
-	// List of requested inputs
-	InputDescriptors []InputDescriptorDB `json:"inputDescriptors" mapstructure:"inputDescriptors"`
-	// Format of the credential to be requested
-	Format []FormatObjectDB `json:"format" mapstructure:"format"`
-}
-
-func (pd PresentationDefinitionDB) VO() PresentationDefinition {
-	inputDescs := make([]InputDescriptor, 0, len(pd.InputDescriptors))
-	for _, id := range pd.InputDescriptors {
-		inputDescs = append(inputDescs, id.VO())
-	}
-	return PresentationDefinition{
-		Id:               pd.Id,
-		InputDescriptors: inputDescs,
-		Format:           toFormatVOMap(pd.Format),
-	}
-}
-
-func (pd PresentationDefinitionDB) FromVO(pdVO PresentationDefinition) PresentationDefinitionDB {
-	inputDescs := make([]InputDescriptorDB, 0, len(pdVO.InputDescriptors))
-	for _, idVO := range pdVO.InputDescriptors {
-		inputDescs = append(inputDescs, InputDescriptorDB{}.FromVO(idVO))
-	}
-	return PresentationDefinitionDB{
-		Id:               pdVO.Id,
-		InputDescriptors: inputDescs,
-		Format:           fromFormatVOMap(pdVO.Format),
-	}
-}
-
-func toFormatVOMap(formats []FormatObjectDB) map[string]FormatObject {
-	m := make(map[string]FormatObject, len(formats))
-	for _, f := range formats {
-		m[f.FormatKey] = f.VO()
-	}
-	return m
-}
-
-func fromFormatVOMap(m map[string]FormatObject) []FormatObjectDB {
-	formats := make([]FormatObjectDB, 0, len(m))
-	for key, fVO := range m {
-		formats = append(formats, FormatObjectDB{FormatKey: key, Alg: fVO.Alg, ProofType: fVO.ProofType})
-	}
-	return formats
-}
-
 type PresentationDefinition struct {
 	Id string `json:"id"`
 	// List of requested inputs
@@ -365,47 +185,10 @@ type FormatObject struct {
 	ProofType []string `json:"proofType,omitempty" mapstructure:"proofType,omitempty"`
 }
 
-type FormatObjectDB struct {
-	// format of the key
-	FormatKey string `json:"formatKey" mapstructure:"formatKey"`
-	// list of algorithms to be requested for credential - f.e. ES256
-	Alg       []string `json:"alg" mapstructure:"alg"`
-	ProofType []string `json:"proofType,omitempty" mapstructure:"proofType"`
-}
-
-func (f FormatObjectDB) VO() FormatObject {
-	return FormatObject{Alg: f.Alg, ProofType: f.ProofType}
-}
-
-type InputDescriptorDB struct {
-	// Id of the descriptor
-	Id string `json:"id" mapstructure:"id"`
-	// defines the information to be requested
-	Constraints Constraints `json:"constraints" mapstructure:"constraints"`
-	// Format of the credential to be requested
-	Format []FormatObjectDB `json:"format" mapstructure:"format"`
-}
-
 type InputDescriptor struct {
 	Id          string                  `json:"id" mapstructure:"id"`
 	Constraints Constraints             `json:"constraints" mapstructure:"constraints"`
 	Format      map[string]FormatObject `json:"format,omitempty" mapstructure:"format,omitempty"`
-}
-
-func (id InputDescriptorDB) VO() InputDescriptor {
-	return InputDescriptor{
-		Id:          id.Id,
-		Constraints: id.Constraints,
-		Format:      toFormatVOMap(id.Format),
-	}
-}
-
-func (id InputDescriptorDB) FromVO(idVO InputDescriptor) InputDescriptorDB {
-	return InputDescriptorDB{
-		Id:          idVO.Id,
-		Constraints: idVO.Constraints,
-		Format:      fromFormatVOMap(idVO.Format),
-	}
 }
 
 type Constraints struct {
@@ -424,94 +207,14 @@ type Fields struct {
 	Filter interface{} `json:"filter,omitempty" mapstructure:"filter"`
 }
 
-// DCQLDB defines a JSON encoded query to request the credentials to be included in the presentation
-type DCQLDB struct {
-	// A non-empty array of Credential Queries that specify the requested Credentials.
-	Credentials []CredentialQueryDB `json:"credentials" mapstructure:"credentials"`
-	// A non-empty array of Credential Set Queries that specifies additional constraints on which of the requested Credentials to return.
-	CredentialSets []CredentialSetQuery `json:"credential_sets,omitempty" mapstructure:"credential_sets,omitempty"`
-}
-
-func (dcql DCQLDB) VO() DCQL {
-	creds := make([]CredentialQuery, 0, len(dcql.Credentials))
-	for _, cred := range dcql.Credentials {
-		creds = append(creds, cred.VO())
-	}
-	return DCQL{
-		Credentials:    creds,
-		CredentialSets: dcql.CredentialSets,
-	}
-}
-
-func (d DCQLDB) FromVO(dVO DCQL) DCQLDB {
-	creds := make([]CredentialQueryDB, 0, len(dVO.Credentials))
-	for _, cqVO := range dVO.Credentials {
-		creds = append(creds, CredentialQueryDB{}.FromVO(cqVO))
-	}
-	return DCQLDB{
-		Credentials:    creds,
-		CredentialSets: dVO.CredentialSets,
-	}
-}
+// DCQL defines a JSON encoded query to request the credentials to be included in the presentation
 
 type DCQL struct {
 	Credentials    []CredentialQuery    `json:"credentials" mapstructure:"credentials"`
 	CredentialSets []CredentialSetQuery `json:"credential_sets" mapstructure:"credential_sets"`
 }
 
-// CredentialQueryDB is an object representing a request for a presentation of one or more matching Credentials
-type CredentialQueryDB struct {
-	// A string identifying the Credential in the response and, if provided, the constraints in credential_sets. The value MUST be a non-empty string consisting of alphanumeric, underscore (_), or hyphen (-) characters. Within the Authorization Request, the same id MUST NOT be present more than once.
-	Id string `json:"id,omitempty" mapstructure:"id,omitempty"`
-	// A string that specifies the format of the requested Credential.
-	Format string `json:"format,omitempty" mapstructure:"format,omitempty"`
-	// A boolean which indicates whether multiple Credentials can be returned for this Credential Query. If omitted, the default value is false.
-	Multiple bool `json:"multiple" mapstructure:"multiple" default:"false"`
-	// A non-empty array of objects  that specifies claims in the requested Credential. Verifiers MUST NOT point to the same claim more than once in a single query. Wallets SHOULD ignore such duplicate claim queries.
-	Claims []ClaimsQuery `json:"claims" mapstructure:"claims"`
-	// Defines additional properties requested by the Verifier that apply to the metadata and validity data of the Credential. The properties of this object are defined per Credential Format. If empty, no specific constraints are placed on the metadata or validity of the requested Credential.
-	Meta *MetaDataQuery `json:"meta,omitempty" mapstructure:"meta,omitempty"`
-	// A boolean which indicates whether the Verifier requires a Cryptographic Holder Binding proof. The default value is true, i.e., a Verifiable Presentation with Cryptographic Holder Binding is required. If set to false, the Verifier accepts a Credential without Cryptographic Holder Binding proof.
-	RequireCryptographicHolderBinding bool `json:"requireCryptographicHolderBinding,omitempty" mapstructure:"requireCryptographicHolderBinding,omitempty" default:"false"`
-	// A non-empty array containing arrays of identifiers for elements in claims that specifies which combinations of claims for the Credential are requested.
-	ClaimSets [][]string `json:"claim_sets,omitempty" mapstructure:"claim_sets,omitempty"`
-	// A non-empty array of objects  that specifies expected authorities or trust frameworks that certify Issuers, that the Verifier will accept. Every Credential returned by the Wallet SHOULD match at least one of the conditions present in the corresponding trusted_authorities array if present.
-	TrustedAuthorities []TrustedAuthorityQuery `json:"trusted_authorities" mapstructure:"trusted_authorities" default:"[]"`
-}
-
-func (cq CredentialQueryDB) VO() CredentialQuery {
-	vo := CredentialQuery{
-		Id:                                cq.Id,
-		Format:                            strings.ToLower(cq.Format),
-		Multiple:                          cq.Multiple,
-		Claims:                            cq.Claims,
-		Meta:                              cq.Meta,
-		RequireCryptographicHolderBinding: cq.RequireCryptographicHolderBinding,
-		ClaimSets:                         cq.ClaimSets,
-		TrustedAuthorities:                cq.TrustedAuthorities,
-	}
-	if vo.Claims == nil {
-		vo.Claims = make([]ClaimsQuery, 0)
-	}
-	if vo.TrustedAuthorities == nil {
-		vo.TrustedAuthorities = make([]TrustedAuthorityQuery, 0)
-	}
-	return vo
-}
-
-func (cq CredentialQueryDB) FromVO(cqVO CredentialQuery) CredentialQueryDB {
-	return CredentialQueryDB{
-		Id:                                cqVO.Id,
-		Format:                            strings.ToUpper(cqVO.Format),
-		Multiple:                          cqVO.Multiple,
-		Claims:                            cqVO.Claims,
-		Meta:                              cqVO.Meta,
-		RequireCryptographicHolderBinding: cqVO.RequireCryptographicHolderBinding,
-		ClaimSets:                         cqVO.ClaimSets,
-		TrustedAuthorities:                cqVO.TrustedAuthorities,
-	}
-}
-
+// CredentialQuery is an object representing a request for a presentation of one or more matching Credentials
 type CredentialQuery struct {
 	Id                                string                  `json:"id,omitempty" mapstructure:"id,omitempty"`
 	Format                            string                  `json:"format,omitempty" mapstructure:"format,omitempty"`
