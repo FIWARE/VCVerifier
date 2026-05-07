@@ -429,7 +429,7 @@ func (cq CredentialQueryDB) VO() config.CredentialQuery {
 		Multiple:                          cq.Multiple,
 		Claims:                            cq.Claims,
 		Meta:                              cq.Meta,
-		RequireCryptographicHolderBinding: cq.RequireCryptographicHolderBinding,
+		RequireCryptographicHolderBinding: &cq.RequireCryptographicHolderBinding,
 		ClaimSets:                         cq.ClaimSets,
 		TrustedAuthorities:                cq.TrustedAuthorities,
 	}
@@ -449,7 +449,7 @@ func (cq CredentialQueryDB) FromVO(cqVO config.CredentialQuery) CredentialQueryD
 		Multiple:                          cqVO.Multiple,
 		Claims:                            cqVO.Claims,
 		Meta:                              cqVO.Meta,
-		RequireCryptographicHolderBinding: cqVO.RequireCryptographicHolderBinding,
+		RequireCryptographicHolderBinding: cqVO.RequiresCryptographicHolderBinding(),
 		ClaimSets:                         cqVO.ClaimSets,
 		TrustedAuthorities:                cqVO.TrustedAuthorities,
 	}

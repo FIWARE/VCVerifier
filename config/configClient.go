@@ -82,7 +82,7 @@ type ServicesResponse struct {
 type ConfiguredService struct {
 	// Default OIDC scope to be used if none is specified
 	DefaultOidcScope  string                `json:"defaultOidcScope" mapstructure:"defaultOidcScope"`
-	ServiceScopes     map[string]ScopeEntry `json:"oidcScopes" mapstructure:"oidcScopes"`
+	ServiceScopes     map[string]ScopeEntry `json:"oidcScopes,omitempty" mapstructure:"oidcScopes"`
 	Id                string                `json:"id" mapstructure:"id"`
 	AuthorizationType string                `json:"authorizationType,omitempty" mapstructure:"authorizationType,omitempty"`
 	AuthorizationPath string                `json:"authorizationPath,omitempty" mapstructure:"authorizationPath,omitempty"`
@@ -100,7 +100,7 @@ type ScopeEntry struct {
 	PresentationDefinition *PresentationDefinition `json:"presentationDefinition,omitempty" mapstructure:"presentationDefinition,omitempty"`
 	// Query to request the credentials to be included in the presentation
 	DCQL *DCQL `json:"dcql,omitempty" mapstructure:"dcql,omitempty"`
-	// When set, the claim are flatten to plain JWT-claims before beeing included, instead of keeping the credential/presentation structure, where the claims are under the key vc or vp
+	// When set, the claim are flatten to plain JWT-claims before being included, instead of keeping the credential/presentation structure, where the claims are under the key vc or vp
 	FlatClaims bool `json:"flatClaims" mapstructure:"flatClaims"`
 }
 
@@ -109,7 +109,7 @@ type Credential struct {
 	Type string `json:"type" mapstructure:"type"`
 	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted participants from.
 	TrustedParticipantsLists []TrustedParticipantsList `json:"trustedParticipantsLists,omitempty" mapstructure:"trustedParticipantsLists,omitempty"`
-	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted issuers from. The attributes need to be formated to comply with the verifiers requirements.
+	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted issuers from. The attributes need to be formatted to comply with the verifiers requirements.
 	TrustedIssuersLists []string `json:"trustedIssuersLists,omitempty" mapstructure:"trustedIssuersLists,omitempty"`
 	// Configuration of Holder Verfification
 	HolderVerification HolderVerification `json:"holderVerification" mapstructure:"holderVerification"`
@@ -121,7 +121,7 @@ type Credential struct {
 	// StatusList2021 revocation-list check. When omitted or disabled no
 	// revocation check is performed for credentials of this type, preserving
 	// prior behaviour for configurations that do not opt in.
-	CredentialStatus CredentialStatus `json:"credentialStatus,omitempty" mapstructure:"credentialStatus,omitempty"`
+	CredentialStatus CredentialStatus `json:"credentialStatus" mapstructure:"credentialStatus"`
 }
 
 // CredentialStatus holds the per-credential-type configuration for the
@@ -146,12 +146,45 @@ type CredentialStatus struct {
 }
 
 type JwtInclusion struct {
-	// Should the given credential be included into the generated JWT
-	Enabled bool `json:"enabled" mapstructure:"enabled"`
+	// Should the given credential be included into the generated JWT; defaults to true when absent.
+	Enabled *bool `json:"enabled,omitempty" mapstructure:"enabled"`
 	// Should the complete credential be embedded
 	FullInclusion bool `json:"fullInclusion" mapstructure:"fullInclusion"`
-	// Claims to be included
-	ClaimsToInclude []ClaimInclusion `json:"claimsToInclude" mapstructure:"claimsToInclude" default:"[]"`
+	// Claims to be included. Default empty list
+	ClaimsToInclude []ClaimInclusion `json:"claimsToInclude" mapstructure:"claimsToInclude"`
+}
+
+// IsEnabled returns true when Enabled is nil (absent) or explicitly true.
+func (j *JwtInclusion) IsEnabled() bool {
+	return j.Enabled == nil || *j.Enabled
+}
+
+func (j *JwtInclusion) UnmarshalJSON(data []byte) error {
+	type Alias JwtInclusion
+	aux := &struct{ *Alias }{Alias: (*Alias)(j)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if j.Enabled == nil {
+		t := true
+		j.Enabled = &t
+	}
+	if j.ClaimsToInclude == nil {
+		j.ClaimsToInclude = make([]ClaimInclusion, 0)
+	}
+	return nil
+}
+
+func (j JwtInclusion) MarshalJSON() ([]byte, error) {
+	type Alias JwtInclusion
+	if j.Enabled == nil {
+		t := true
+		j.Enabled = &t
+	}
+	if j.ClaimsToInclude == nil {
+		j.ClaimsToInclude = make([]ClaimInclusion, 0)
+	}
+	return json.Marshal((Alias)(j))
 }
 
 type ClaimInclusion struct {
@@ -183,8 +216,28 @@ type EndpointEntry struct {
 type HolderVerification struct {
 	// should holder verification be enabled
 	Enabled bool `json:"enabled" mapstructure:"enabled"`
-	// the claim containing the holder
+	// the claim containing the holder; defaults to "subject" when absent.
 	Claim string `json:"claim" mapstructure:"claim"`
+}
+
+func (h *HolderVerification) UnmarshalJSON(data []byte) error {
+	type Alias HolderVerification
+	aux := &struct{ *Alias }{Alias: (*Alias)(h)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if h.Claim == "" {
+		h.Claim = "subject"
+	}
+	return nil
+}
+
+func (h HolderVerification) MarshalJSON() ([]byte, error) {
+	type Alias HolderVerification
+	if h.Claim == "" {
+		h.Claim = "subject"
+	}
+	return json.Marshal((Alias)(h))
 }
 
 type PresentationDefinition struct {
@@ -193,6 +246,10 @@ type PresentationDefinition struct {
 	InputDescriptors []InputDescriptor `json:"input_descriptors" mapstructure:"input_descriptors"`
 	// Format of the credential to be requested
 	Format map[string]FormatObject `json:"format" mapstructure:"format"`
+	// A human readable name for the definition
+	Name string `json:"name,omitempty" mapstructure:"name,omitempty"`
+	// A string that describes the purpose for which the definition should be used
+	Purpose string `json:"purpose,omitempty" mapstructure:"purpose,omitempty"`
 }
 type FormatObject struct {
 	// list of algorithms to be requested for credential - f.e. ES256
@@ -206,8 +263,11 @@ type InputDescriptor struct {
 	// defines the information to be requested
 	Constraints Constraints `json:"constraints" mapstructure:"constraints"`
 	// Format of the credential to be requested
-
 	Format map[string]FormatObject `json:"format,omitempty" mapstructure:"format,omitempty"`
+	// A human readable name for the definition
+	Name string `json:"name,omitempty" mapstructure:"name,omitempty"`
+	// A string that describes the purpose for which the definition should be used
+	Purpose string `json:"purpose,omitempty" mapstructure:"purpose,omitempty"`
 }
 
 type Constraints struct {
@@ -282,12 +342,39 @@ type CredentialQuery struct {
 	Claims []ClaimsQuery `json:"claims" mapstructure:"claims"`
 	// Defines additional properties requested by the Verifier that apply to the metadata and validity data of the Credential. The properties of this object are defined per Credential Format. If empty, no specific constraints are placed on the metadata or validity of the requested Credential.
 	Meta *MetaDataQuery `json:"meta,omitempty" mapstructure:"meta,omitempty"`
-	// A boolean which indicates whether the Verifier requires a Cryptographic Holder Binding proof. The default value is true, i.e., a Verifiable Presentation with Cryptographic Holder Binding is required. If set to false, the Verifier accepts a Credential without Cryptographic Holder Binding proof.
-	RequireCryptographicHolderBinding bool `json:"require_cryptographic_holder_binding" mapstructure:"require_cryptographic_holder_binding"`
+	// A boolean which indicates whether the Verifier requires a Cryptographic Holder Binding proof. Defaults to true when absent.
+	RequireCryptographicHolderBinding *bool `json:"require_cryptographic_holder_binding,omitempty" mapstructure:"require_cryptographic_holder_binding"`
 	// A non-empty array containing arrays of identifiers for elements in claims that specifies which combinations of claims for the Credential are requested.
 	ClaimSets [][]string `json:"claim_sets,omitempty" mapstructure:"claim_sets,omitempty"`
 	// A non-empty array of objects  that specifies expected authorities or trust frameworks that certify Issuers, that the Verifier will accept. Every Credential returned by the Wallet SHOULD match at least one of the conditions present in the corresponding trusted_authorities array if present.
 	TrustedAuthorities []TrustedAuthorityQuery `json:"trusted_authorities" mapstructure:"trusted_authorities"`
+}
+
+// RequiresCryptographicHolderBinding returns true when the field is nil (absent) or explicitly true.
+func (cq *CredentialQuery) RequiresCryptographicHolderBinding() bool {
+	return cq.RequireCryptographicHolderBinding == nil || *cq.RequireCryptographicHolderBinding
+}
+
+func (cq *CredentialQuery) UnmarshalJSON(data []byte) error {
+	type Alias CredentialQuery
+	aux := &struct{ *Alias }{Alias: (*Alias)(cq)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if cq.RequireCryptographicHolderBinding == nil {
+		t := true
+		cq.RequireCryptographicHolderBinding = &t
+	}
+	return nil
+}
+
+func (cq CredentialQuery) MarshalJSON() ([]byte, error) {
+	type Alias CredentialQuery
+	if cq.RequireCryptographicHolderBinding == nil {
+		t := true
+		cq.RequireCryptographicHolderBinding = &t
+	}
+	return json.Marshal((Alias)(cq))
 }
 
 // ClaimsQuery is a query to specifies claims in the requested Credential.

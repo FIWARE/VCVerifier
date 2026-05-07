@@ -105,7 +105,7 @@ func TestMigrationCompat_CCSJavaFormatRoundTrip(t *testing.T) {
 	assert.True(t, cred.HolderVerification.Enabled)
 	assert.Equal(t, "sub", cred.HolderVerification.Claim)
 	assert.False(t, cred.RequireCompliance)
-	assert.True(t, cred.JwtInclusion.Enabled)
+	assert.True(t, cred.JwtInclusion.IsEnabled())
 	assert.False(t, cred.JwtInclusion.FullInclusion)
 	require.Len(t, cred.JwtInclusion.ClaimsToInclude, 1)
 	assert.Equal(t, "roles", cred.JwtInclusion.ClaimsToInclude[0].OriginalKey)
@@ -157,7 +157,7 @@ func TestMigrationCompat_GoWriteCCSRead(t *testing.T) {
 						HolderVerification:       config.HolderVerification{Enabled: false, Claim: ""},
 						RequireCompliance:        true,
 						JwtInclusion: config.JwtInclusion{
-							Enabled:       true,
+							Enabled:       &TRUE_OPTION,
 							FullInclusion: true,
 							ClaimsToInclude: []config.ClaimInclusion{
 								{OriginalKey: "name", NewKey: "displayName"},

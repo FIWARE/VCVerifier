@@ -43,6 +43,7 @@ func sampleService(id string) config.ConfiguredService {
 // PresentationDefinition and a DCQL query for round-trip testing.
 func sampleServiceWithPD(id string) config.ConfiguredService {
 	falseOption := false
+	trueOption := true
 	return config.ConfiguredService{
 		Id:               id,
 		DefaultOidcScope: "pd-scope",
@@ -55,7 +56,7 @@ func sampleServiceWithPD(id string) config.ConfiguredService {
 						HolderVerification:       config.HolderVerification{Enabled: false},
 						RequireCompliance:        true,
 						JwtInclusion: config.JwtInclusion{
-							Enabled:       true,
+							Enabled:       &trueOption,
 							FullInclusion: false,
 							ClaimsToInclude: []config.ClaimInclusion{
 								{OriginalKey: "name", NewKey: "preferred_name"},
@@ -451,7 +452,7 @@ func TestJSONRoundTrip_Credentials(t *testing.T) {
 	require.Len(t, cred.TrustedParticipantsLists, 1)
 	assert.Equal(t, "ebsi", cred.TrustedParticipantsLists[0].Type)
 
-	assert.True(t, cred.JwtInclusion.Enabled)
+	assert.True(t, cred.JwtInclusion.IsEnabled())
 	assert.False(t, cred.JwtInclusion.FullInclusion)
 	require.Len(t, cred.JwtInclusion.ClaimsToInclude, 1)
 	assert.Equal(t, "name", cred.JwtInclusion.ClaimsToInclude[0].OriginalKey)

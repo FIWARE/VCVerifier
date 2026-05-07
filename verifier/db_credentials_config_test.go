@@ -100,6 +100,7 @@ func resetGlobalCache() {
 // testService creates a ConfiguredService with the given ID and a single scope
 // containing one credential of the given type.
 func testService(id, scopeName, credentialType string) config.ConfiguredService {
+	trueOption := true
 	return config.ConfiguredService{
 		Id:               id,
 		DefaultOidcScope: scopeName,
@@ -112,7 +113,7 @@ func testService(id, scopeName, credentialType string) config.ConfiguredService 
 						TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "ebsi", Url: "https://tpl.example.com"}},
 						HolderVerification:       config.HolderVerification{Enabled: true, Claim: "sub"},
 						RequireCompliance:        true,
-						JwtInclusion:             config.JwtInclusion{Enabled: true, FullInclusion: false},
+						JwtInclusion:             config.JwtInclusion{Enabled: &trueOption, FullInclusion: false},
 					},
 				},
 				FlatClaims: true,
@@ -249,7 +250,7 @@ func TestDbBackedCredentialsConfig_AllInterfaceMethods(t *testing.T) {
 	t.Run("GetJwtInclusion", func(t *testing.T) {
 		ji, err := cc.GetJwtInclusion("test-svc", "myScope", "TestCredential")
 		require.NoError(t, err)
-		assert.True(t, ji.Enabled)
+		assert.True(t, ji.IsEnabled())
 		assert.False(t, ji.FullInclusion)
 	})
 

@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var TRUE_VALUE bool = true
+
 type MockHttpClient struct {
 	Answer string
 }
@@ -243,9 +245,10 @@ func Test_getServices(t *testing.T) {
 			DCQL: &DCQL{
 				Credentials: []CredentialQuery{
 					{
-						Id:     "my-credential-query-id",
-						Format: "jwt_vc_json",
-						Claims: []ClaimsQuery{{Path: []interface{}{"$.vc.credentialSubject.familyName"}, IntentToRetain: true}},
+						Id:                                "my-credential-query-id",
+						Format:                            "jwt_vc_json",
+						RequireCryptographicHolderBinding: &TRUE_VALUE,
+						Claims:                            []ClaimsQuery{{Path: []interface{}{"$.vc.credentialSubject.familyName"}, IntentToRetain: true}},
 					},
 				},
 				CredentialSets: []CredentialSetQuery{

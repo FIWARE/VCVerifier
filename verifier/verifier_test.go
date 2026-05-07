@@ -575,6 +575,7 @@ func TestAuthenticationResponse(t *testing.T) {
 	}
 
 	for _, tc := range tests {
+		trueOption := true
 		t.Run(tc.testName, func(t *testing.T) {
 			logging.Log().Info("TestAuthenticationResponse +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
@@ -596,7 +597,7 @@ func TestAuthenticationResponse(t *testing.T) {
 					"": {
 						Credentials: []configModel.Credential{{
 							Type:         "VerifiableCredential",
-							JwtInclusion: configModel.JwtInclusion{Enabled: true},
+							JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption},
 						}},
 					},
 				},
