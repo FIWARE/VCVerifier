@@ -33,6 +33,9 @@ var presentationParser PresentationParser
 // allow singleton access to the parser
 var sdJwtParser SdJwtParser
 
+// globalProofChecker is the shared proof checker for deferred VP signature verification.
+var globalProofChecker *JWTProofChecker
+
 // parser interface
 type PresentationParser interface {
 	ParsePresentation(tokenBytes []byte) (*common.Presentation, error)
@@ -59,6 +62,11 @@ func GetSdJwtParser() SdJwtParser {
 		logging.Log().Error("SdJwtParser is not initialized.")
 	}
 	return sdJwtParser
+}
+
+// GetProofChecker returns the shared JWT proof checker for VP signature verification.
+func GetProofChecker() *JWTProofChecker {
+	return globalProofChecker
 }
 
 /**
@@ -102,6 +110,7 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 	}
 
 	checker := NewJWTProofChecker(registry, jAdESValidator)
+	globalProofChecker = checker
 	presentationParser = &ConfigurablePresentationParser{ProofChecker: checker}
 	sdJwtParser = &ConfigurableSdJwtParser{
 		ProofChecker: checker,
@@ -523,17 +532,9 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 		presentation.AddCredentials(credential)
 	}
 
-	// Verify VP JWT signature and capture holder key
-	if sjp.ProofChecker != nil {
-		_, holderKey, err := sjp.ProofChecker.VerifyJWTAndReturnKey(tokenBytes)
-		if err != nil {
-			logging.Log().Warnf("VP JWT signature verification failed: %v", err)
-			return nil, ErrorInvalidProof
-		}
-		if holderKey != nil {
-			presentation.SetHolderKey(holderKey)
-		}
-	}
+	// Store raw token for deferred VP signature verification.
+	// Verification happens in GenerateToken only when holder binding is required by the service config.
+	presentation.SetRawToken(tokenBytes)
 
 	return presentation, nil
 }

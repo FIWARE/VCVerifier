@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fiware/VCVerifier/logging"
 	"github.com/gin-gonic/gin"
 	"github.com/hellofresh/health-go/v5"
 )
@@ -40,6 +41,21 @@ func HealthReq(c *gin.Context) {
 // Health returns the global health check instance for the verifier server.
 func Health() *health.Health {
 	return healthCheck
+}
+
+// RegisterDBHealth adds a database ping check to the verifier's global health
+// check instance. Safe to call once per unique database connection.
+func RegisterDBHealth(db *sql.DB) {
+	if err := healthCheck.Register(health.Config{
+		Name:      healthCheckDBComponentName,
+		Timeout:   healthCheckDBPingTimeout,
+		SkipOnErr: false,
+		Check: func(ctx context.Context) error {
+			return db.PingContext(ctx)
+		},
+	}); err != nil {
+		logging.Log().Errorf("Failed to register database health check: %v", err)
+	}
 }
 
 // NewConfigServerHealth creates a new health check instance for the config server,

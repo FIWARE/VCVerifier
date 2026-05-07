@@ -1,12 +1,14 @@
 package verifier
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -77,6 +79,14 @@ var ErrorNoExpiration = errors.New("no_jwt_expiration_set")
 var ErrorNoKeyId = errors.New("no_key_id_available")
 var ErrorNoRequestObject = errors.New("no_request_object_available")
 var ErrorInvalidNonce = errors.New("invalid_nonce")
+var ErrorRefreshTokenDisabled = errors.New("refresh_token_not_enabled")
+var ErrorRefreshTokenExpired = errors.New("refresh_token_expired")
+var ErrorRefreshTokenNotFound = errors.New("refresh_token_not_found")
+var ErrorRefreshTokenInvalidSignature = errors.New("refresh_token_invalid_signature")
+
+// refreshTokenByteLength is the number of random bytes used to generate
+// an opaque refresh token. 32 bytes → 43-character base64url string.
+const refreshTokenByteLength = 32
 
 // Actual implementation of the verfifier functionality
 
@@ -94,7 +104,7 @@ type Verifier interface {
 	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qrLoginInfo QRLoginInfo, err error)
 	StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error)
 	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
-	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error)
+	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error)
 	GetJWKS() jwk.Set
 	AuthenticationResponse(state string, verifiablePresentation *common.Presentation) (sameDevice Response, err error)
 	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *common.Presentation) (int64, string, error)
@@ -103,6 +113,17 @@ type Verifier interface {
 	GetHost() string
 	GetAuthorizationType(clientId string) string
 	GetDefaultScope(serviceIdentifier string) (string, error)
+	// ExchangeRefreshToken atomically consumes a refresh token and returns a
+	// new signed access token JWT, its expiration (seconds), and a rotated
+	// refresh token. Returns ErrorRefreshTokenDisabled when the feature is off.
+	ExchangeRefreshToken(refreshToken string) (jwtString string, expiration int64, newRefreshToken string, err error)
+	// IsRefreshTokenEnabled reports whether the refresh token feature is active.
+	IsRefreshTokenEnabled() bool
+	// RefreshTokenExpiresIn returns the configured refresh token lifetime in seconds.
+	RefreshTokenExpiresIn() int64
+	// CreateRefreshToken generates a new opaque refresh token, stores the
+	// full signed JWT in the database, and returns the token string.
+	CreateRefreshToken(clientId string, signedJWT string) (string, error)
 }
 
 type ValidationService interface {
@@ -148,6 +169,13 @@ type CredentialVerifier struct {
 	jwtExpiration time.Duration
 	// Session duration in seconds
 	sessionDuration time.Duration
+	// refreshTokenEnabled indicates whether the refresh token feature is active.
+	refreshTokenEnabled bool
+	// refreshTokenExpiration is the lifetime of issued refresh tokens.
+	refreshTokenExpiration time.Duration
+	// refreshTokenRepo is the database-backed store for refresh tokens.
+	// nil when refresh tokens are disabled.
+	refreshTokenRepo database.RefreshTokenRepository
 }
 
 // allow singleton access to the verifier
@@ -248,6 +276,8 @@ type loginSession struct {
 type tokenStore struct {
 	token        jwt.Token
 	redirect_uri string
+	// clientId identifies the relying party for refresh token generation.
+	clientId string
 }
 
 // Response structure for successful same-device authentications
@@ -382,10 +412,27 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		*verifierConfig,
 		time.Duration(verifierConfig.JwtExpiration) * time.Minute,
 		time.Duration(verifierConfig.SessionExpiry),
+		verifierConfig.RefreshToken.Enabled,
+		time.Duration(verifierConfig.RefreshToken.Expiration) * time.Minute,
+		nil, // refreshTokenRepo — set below when enabled
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
+	if verifierConfig.RefreshToken.Enabled {
+		logging.Log().Infof("Refresh tokens enabled (expiration: %d minutes)", verifierConfig.RefreshToken.Expiration)
+	}
 	return
+}
+
+// SetRefreshTokenRepo configures the database-backed refresh token
+// repository. It must be called after InitVerifier when RefreshTokenEnabled
+// is true. The verifier is stored as a package-level singleton, so this
+// method updates that instance via a type assertion on the concrete
+// CredentialVerifier.
+func SetRefreshTokenRepo(repo database.RefreshTokenRepository) {
+	if cv, ok := verifier.(*CredentialVerifier); ok && cv != nil {
+		cv.refreshTokenRepo = repo
+	}
 }
 
 /**
@@ -484,15 +531,16 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 	}
 }
 
-/**
-*   Returns an already generated jwt from the cache to properly authorized requests. Every token will only be returend once.
-**/
-func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, err error) {
+// GetToken returns an already generated jwt from the cache to properly
+// authorized requests. Every token will only be returned once. When the
+// refresh token feature is enabled, a refresh token is generated and
+// returned alongside the access token; otherwise refreshToken is empty.
+func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
 
 	tokenSessionInterface, hit := v.tokenCache.Get(authorizationCode)
 	if !hit {
 		logging.Log().Infof("No such authorization code cached: %s.", authorizationCode)
-		return jwtString, expiration, ErrorNoSuchCode
+		return jwtString, expiration, "", ErrorNoSuchCode
 	}
 	// we do only allow retrieval once.
 	v.tokenCache.Delete(authorizationCode)
@@ -500,7 +548,7 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 	tokenSession := tokenSessionInterface.(tokenStore)
 	if !validated && tokenSession.redirect_uri != redirectUri {
 		logging.Log().Infof("Redirect uri does not match for authorization %s. Was %s but is expected %s.", authorizationCode, redirectUri, tokenSession.redirect_uri)
-		return jwtString, expiration, ErrorRedirectUriMismatch
+		return jwtString, expiration, "", ErrorRedirectUriMismatch
 	}
 
 	var signatureAlgorithm jwa.SignatureAlgorithm
@@ -515,18 +563,28 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 	jwtBytes, err := v.tokenSigner.Sign(tokenSession.token, jwt.WithKey(signatureAlgorithm, v.signingKey))
 	if err != nil {
 		logging.Log().Warnf("Was not able to sign the token. Err: %v", err)
-		return jwtString, expiration, err
+		return jwtString, expiration, "", err
 	}
 
 	tokenExpiry, exists := tokenSession.token.Expiration()
 	if !exists {
 		logging.Log().Warn("Token does not have an expiration.")
-		return jwtString, expiration, ErrorNoExpiration
+		return jwtString, expiration, "", ErrorNoExpiration
 	}
 
 	expiration = tokenExpiry.Unix() - v.clock.Now().Unix()
+	jwtString = string(jwtBytes)
 
-	return string(jwtBytes), expiration, err
+	// Generate a refresh token if the feature is enabled.
+	if v.refreshTokenEnabled {
+		refreshToken, err = v.CreateRefreshToken(tokenSession.clientId, jwtString)
+		if err != nil {
+			logging.Log().Warnf("Failed to create refresh token for authorization code %s: %v", authorizationCode, err)
+			return jwtString, expiration, "", err
+		}
+	}
+
+	return jwtString, expiration, refreshToken, nil
 }
 
 /**
@@ -584,6 +642,10 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	holder := verifiablePresentation.Holder
 	var credentialsToBeIncluded []map[string]interface{}
 	flatClaims := false
+
+	if err := v.verifyVPSignatureIfRequired(clientId, scopes, credentialTypes, verifiablePresentation); err != nil {
+		return 0, "", err
+	}
 
 	// Go through all requested scopes and create a verification context
 	for _, scope := range scopes {
@@ -917,7 +979,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		return sameDevice, err
 	}
 
-	tokenStore := tokenStore{token, loginSession.callback}
+	tokenStore := tokenStore{token, loginSession.callback, loginSession.clientId}
 	authorizationCode := v.nonceGenerator.GenerateNonce()
 	// store for retrieval by token endpoint
 	err = v.tokenCache.Add(authorizationCode, tokenStore, cache.DefaultExpiration)
@@ -1004,6 +1066,43 @@ func (v *CredentialVerifier) GetRequestObject(state string) (jwt string, err err
 	}
 
 	return loginSession.requestObject, err
+}
+
+// verifyVPSignatureIfRequired verifies the VP JWT signature only when the service config
+// requires holder binding for at least one credential type in the presentation.
+// It is a no-op when the presentation carries no raw token (non-SD-JWT VP path).
+func (v *CredentialVerifier) verifyVPSignatureIfRequired(clientId string, scopes []string, credentialTypes []string, presentation *common.Presentation) error {
+	rawToken := presentation.RawToken()
+	if rawToken == nil {
+		return nil
+	}
+
+	holderRequired := false
+outer:
+	for _, scope := range scopes {
+		for _, credentialType := range credentialTypes {
+			isEnabled, _, err := v.credentialsConfig.GetHolderVerification(clientId, scope, credentialType)
+			if err != nil {
+				logging.Log().Warnf("Could not read holder verification config for client %s, scope %s, type %s: %v", clientId, scope, credentialType, err)
+				return ErrorVerficationContextSetup
+			}
+			if isEnabled {
+				holderRequired = true
+				break outer
+			}
+		}
+	}
+
+	if !holderRequired {
+		return nil
+	}
+
+	_, _, err := GetProofChecker().VerifyJWTAndReturnKey(rawToken)
+	if err != nil {
+		logging.Log().Warnf("VP JWT holder binding verification failed: %v", err)
+		return ErrorInvalidVCHolder
+	}
+	return nil
 }
 
 func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope string, credentialTypes []string, holder string) (validationContext []HolderValidationContext, err error) {
@@ -1527,4 +1626,154 @@ func loadCertChainFromPEM(path string) ([]*x509.Certificate, error) {
 
 func (v *CredentialVerifier) GetHost() string {
 	return v.host
+}
+
+// IsRefreshTokenEnabled reports whether the refresh token feature is active.
+func (v *CredentialVerifier) IsRefreshTokenEnabled() bool {
+	return v.refreshTokenEnabled
+}
+
+// RefreshTokenExpiresIn returns the configured refresh token lifetime in seconds.
+func (v *CredentialVerifier) RefreshTokenExpiresIn() int64 {
+	return int64(v.refreshTokenExpiration.Seconds())
+}
+
+// generateRefreshToken creates a cryptographically random opaque token
+// encoded as a base64url string (no padding). The token is 32 random bytes
+// which yields a 43-character string.
+func (v *CredentialVerifier) generateRefreshToken() (string, error) {
+	buf := make([]byte, refreshTokenByteLength)
+	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
+		return "", fmt.Errorf("generate refresh token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// CreateRefreshToken generates a new opaque refresh token, stores the raw
+// JWT claims (not the signed access token) in the database, and returns
+// the token string. Returns ErrorRefreshTokenDisabled when the feature is off.
+func (v *CredentialVerifier) CreateRefreshToken(clientId string, signedJWT string) (string, error) {
+	if !v.refreshTokenEnabled {
+		return "", ErrorRefreshTokenDisabled
+	}
+
+	token, err := v.generateRefreshToken()
+	if err != nil {
+		return "", err
+	}
+
+	// Extract the raw JSON claims from the JWT payload segment (base64url-encoded
+	// middle part of the compact serialization). Storing only the claims avoids
+	// persisting a usable bearer token in the database.
+	parts := strings.SplitN(signedJWT, ".", 3)
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid JWT format: expected 3 dot-separated segments")
+	}
+	rawClaims, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("decode JWT claims segment: %w", err)
+	}
+
+	row := database.RefreshTokenRow{
+		Token:     token,
+		ClientID:  clientId,
+		Claims:    string(rawClaims),
+		ExpiresAt: v.clock.Now().Add(v.refreshTokenExpiration).Unix(),
+	}
+
+	if err := v.refreshTokenRepo.StoreRefreshToken(context.Background(), row); err != nil {
+		logging.Log().Warnf("Failed to store refresh token: %v", err)
+		return "", err
+	}
+
+	logging.Log().Debug("Created refresh token")
+	return token, nil
+}
+
+// signToken signs a jwt.Token and returns the serialized JWT string.
+// This is a helper to deduplicate signing logic across GetToken,
+// GenerateToken, and ExchangeRefreshToken.
+func (v *CredentialVerifier) signToken(token jwt.Token) (string, error) {
+	var signatureAlgorithm jwa.SignatureAlgorithm
+	switch v.signingAlgorithm {
+	case "RS256":
+		signatureAlgorithm = jwa.RS256()
+	case "ES256":
+		signatureAlgorithm = jwa.ES256()
+	}
+
+	jwtBytes, err := v.tokenSigner.Sign(token, jwt.WithKey(signatureAlgorithm, v.signingKey))
+	if err != nil {
+		logging.Log().Warnf("Was not able to sign the token. Err: %v", err)
+		return "", err
+	}
+	return string(jwtBytes), nil
+}
+
+// ExchangeRefreshToken atomically consumes a refresh token and returns a
+// new signed access token JWT, its expiration in seconds, and a rotated
+// refresh token. Returns ErrorRefreshTokenDisabled when the feature is off,
+// ErrorRefreshTokenNotFound when the token does not exist, and
+// ErrorRefreshTokenExpired when the token has passed its expiry.
+func (v *CredentialVerifier) ExchangeRefreshToken(refreshToken string) (jwtString string, expiration int64, newRefreshToken string, err error) {
+	if !v.refreshTokenEnabled {
+		return "", 0, "", ErrorRefreshTokenDisabled
+	}
+
+	// Atomically retrieve and delete (single-use). The repository verifies the
+	// stored HMAC integrity and returns ErrRefreshTokenInvalidIntegrity on mismatch.
+	row, err := v.refreshTokenRepo.GetAndDeleteRefreshToken(context.Background(), refreshToken)
+	if err != nil {
+		if errors.Is(err, database.ErrRefreshTokenNotFound) {
+			return "", 0, "", ErrorRefreshTokenNotFound
+		}
+		if errors.Is(err, database.ErrRefreshTokenInvalidIntegrity) {
+			return "", 0, "", ErrorRefreshTokenInvalidSignature
+		}
+		return "", 0, "", err
+	}
+
+	// Defence-in-depth: check expiry even though housekeeping may have
+	// already cleaned up expired rows.
+	if row.ExpiresAt < v.clock.Now().Unix() {
+		return "", 0, "", ErrorRefreshTokenExpired
+	}
+
+	// Build a new token from the stored claims, updating only the
+	// time-dependent fields (iat, exp).
+	now := v.clock.Now()
+	builder := jwt.NewBuilder().
+		IssuedAt(now).
+		Expiration(now.Add(v.jwtExpiration))
+
+	var claimsMap map[string]interface{}
+	if err := json.Unmarshal([]byte(row.Claims), &claimsMap); err != nil {
+		return "", 0, "", fmt.Errorf("parse stored claims: %w", err)
+	}
+	for key, val := range claimsMap {
+		if key == "iat" || key == "exp" {
+			continue
+		}
+		builder = builder.Claim(key, val)
+	}
+
+	newToken, err := builder.Build()
+	if err != nil {
+		return "", 0, "", fmt.Errorf("build refreshed token: %w", err)
+	}
+
+	jwtString, err = v.signToken(newToken)
+	if err != nil {
+		return "", 0, "", err
+	}
+
+	expiration = now.Add(v.jwtExpiration).Unix() - now.Unix()
+
+	// Rotate: generate a new refresh token storing the newly signed JWT.
+	newRefreshToken, err = v.CreateRefreshToken(row.ClientID, jwtString)
+	if err != nil {
+		return "", 0, "", fmt.Errorf("rotate refresh token: %w", err)
+	}
+
+	return jwtString, expiration, newRefreshToken, nil
 }

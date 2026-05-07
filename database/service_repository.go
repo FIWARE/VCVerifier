@@ -12,7 +12,6 @@ import (
 	"github.com/fiware/VCVerifier/logging"
 )
 
-// Sentinel errors returned by ServiceRepository methods.
 var (
 	// ErrServiceNotFound is returned when a service ID does not exist.
 	ErrServiceNotFound = errors.New("service not found")
@@ -66,11 +65,6 @@ type SqlServiceRepository struct {
 func NewServiceRepository(db *sql.DB, dbType string) *SqlServiceRepository {
 	return &SqlServiceRepository{db: db, dbType: dbType}
 }
-
-// ---------------------------------------------------------------------------
-// SQL query constants (written with ? placeholders; adapted at runtime for
-// PostgreSQL which requires $N style).
-// ---------------------------------------------------------------------------
 
 const (
 	sqlInsertService = `INSERT INTO service (id, default_oidc_scope, authorization_type) VALUES (?, ?, ?)`
@@ -216,7 +210,6 @@ func (r *SqlServiceRepository) UpdateService(ctx context.Context, id string, ser
 		return config.ConfiguredService{}, fmt.Errorf("update service: %w", err)
 	}
 
-	// Replace all scope entries: delete old, insert new.
 	if _, err := tx.ExecContext(ctx, r.adapt(sqlDeleteScopesByServiceID), id); err != nil {
 		return config.ConfiguredService{}, fmt.Errorf("delete old scopes: %w", err)
 	}
@@ -230,7 +223,6 @@ func (r *SqlServiceRepository) UpdateService(ctx context.Context, id string, ser
 
 	logging.Log().Infof("Updated service %q", id)
 
-	// Re-read from DB to return the persisted state.
 	return r.GetService(ctx, id)
 }
 
@@ -255,7 +247,6 @@ func (r *SqlServiceRepository) DeleteService(ctx context.Context, id string) err
 // GetServiceScopes returns the credential type names required for the given
 // scope. When oidcScope is nil the service's default scope is used.
 func (r *SqlServiceRepository) GetServiceScopes(ctx context.Context, id string, oidcScope *string) ([]string, error) {
-	// Fetch the service to verify existence and resolve default scope.
 	svcRow, err := r.scanServiceRow(ctx, r.db, id)
 	if err != nil {
 		return nil, err
@@ -306,7 +297,7 @@ func (r *SqlServiceRepository) ServiceExists(ctx context.Context, id string) (bo
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Internal helpers shared across the database package
 // ---------------------------------------------------------------------------
 
 // queryExecer abstracts *sql.DB and *sql.Tx for shared scan helpers.
@@ -315,8 +306,6 @@ type queryExecer interface {
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
 }
 
-// scanServiceRow reads a single service row. Returns ErrServiceNotFound when
-// the ID does not exist.
 func (r *SqlServiceRepository) scanServiceRow(ctx context.Context, qe queryExecer, id string) (ServiceRow, error) {
 	var sr ServiceRow
 	err := qe.QueryRowContext(ctx, r.adapt(sqlSelectServiceByID), id).
@@ -330,7 +319,6 @@ func (r *SqlServiceRepository) scanServiceRow(ctx context.Context, qe queryExece
 	return sr, nil
 }
 
-// scanScopeEntryRows reads all scope entries belonging to a service.
 func (r *SqlServiceRepository) scanScopeEntryRows(ctx context.Context, qe queryExecer, serviceID string) ([]ScopeEntryRow, error) {
 	rows, err := qe.QueryContext(ctx, r.adapt(sqlSelectScopesByServiceID), serviceID)
 	if err != nil {
@@ -350,8 +338,6 @@ func (r *SqlServiceRepository) scanScopeEntryRows(ctx context.Context, qe queryE
 	return result, rows.Err()
 }
 
-// insertScopeEntries marshals and inserts scope entries within an existing
-// transaction.
 func (r *SqlServiceRepository) insertScopeEntries(ctx context.Context, tx *sql.Tx, serviceID string, scopes map[string]config.ScopeEntry) error {
 	scopeRows, err := ScopeEntryToRows(serviceID, scopes)
 	if err != nil {
@@ -367,8 +353,6 @@ func (r *SqlServiceRepository) insertScopeEntries(ctx context.Context, tx *sql.T
 	return nil
 }
 
-// batchScopeEntries loads scope entries for multiple service IDs in a single
-// query and groups them by service ID.
 func (r *SqlServiceRepository) batchScopeEntries(ctx context.Context, serviceIDs []string) (map[string][]ScopeEntryRow, error) {
 	if len(serviceIDs) == 0 {
 		return nil, nil
@@ -404,8 +388,6 @@ func (r *SqlServiceRepository) batchScopeEntries(ctx context.Context, serviceIDs
 	return result, rows.Err()
 }
 
-// adapt replaces ? placeholders with $N for PostgreSQL. For MySQL and SQLite
-// the query is returned unchanged.
 func (r *SqlServiceRepository) adapt(query string) string {
 	if r.dbType != DriverTypePostgres {
 		return query
@@ -424,8 +406,6 @@ func (r *SqlServiceRepository) adapt(query string) string {
 	return b.String()
 }
 
-// ph returns the SQL placeholder for the given 1-based parameter position,
-// adapting for the database type ($N for Postgres, ? otherwise).
 func (r *SqlServiceRepository) ph(pos int) string {
 	if r.dbType == DriverTypePostgres {
 		return fmt.Sprintf("$%d", pos)

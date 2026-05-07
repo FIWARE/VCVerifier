@@ -55,10 +55,59 @@ func main() {
 			panic(err)
 		}
 		defer database.Close(db)
+		RegisterDBHealth(db)
 	}
 
 	verifier.InitVerifier(&configuration, repo)
 	verifier.InitPresentationParser(&configuration, Health())
+
+	// bgCtx is cancelled before graceful shutdown to stop background tasks.
+	bgCtx, cancelBg := context.WithCancel(context.Background())
+
+	// Wire up the database-backed refresh token repository when enabled.
+	if configuration.Verifier.RefreshToken.Enabled {
+		var refreshDB *sql.DB
+		if db != nil {
+			// Reuse the existing database connection from the config server.
+			refreshDB = db
+		} else {
+			// Open a dedicated connection when there is no config server.
+			refreshDB, err = database.NewConnection(configuration.Database)
+			if err != nil {
+				logger.Errorf("Refresh tokens enabled but database connection failed: %v", err)
+				panic(err)
+			}
+			if err := database.InitSchema(refreshDB, configuration.Database.Type); err != nil {
+				logger.Errorf("Failed to initialize database schema for refresh tokens: %v", err)
+				panic(err)
+			}
+			defer database.Close(refreshDB)
+			RegisterDBHealth(refreshDB)
+		}
+		refreshTokenRepo := database.NewRefreshTokenRepository(refreshDB, configuration.Database.Type)
+
+		var salt []byte
+		if s := configuration.Verifier.RefreshToken.HashSalt; s != "" {
+			salt = []byte(s)
+			logger.Info("Refresh token hashing using configured salt")
+		} else {
+			salt, err = database.GenerateSalt()
+			if err != nil {
+				logger.Errorf("Failed to generate refresh token salt: %v", err)
+				panic(err)
+			}
+			logger.Debug("Refresh token hashing using ephemeral salt (tokens invalidated on restart)")
+		}
+		refreshTokenRepo.ConfigureHashing(salt)
+
+		verifier.SetRefreshTokenRepo(refreshTokenRepo)
+		logger.Info("Refresh token support enabled")
+
+		if interval := configuration.Verifier.RefreshToken.CleanupInterval; interval > 0 {
+			refreshTokenRepo.SetCleanupInterval(bgCtx, time.Duration(interval)*time.Second)
+			logger.Infof("Refresh token cleanup enabled (interval: %d seconds)", interval)
+		}
+	}
 
 	router := getRouter()
 
@@ -129,6 +178,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	<-quit
+	cancelBg()
 	logging.Log().Info("Shutting down servers...")
 
 	shutdownTimeout := time.Duration(configuration.Server.ShutdownTimeout) * time.Second
