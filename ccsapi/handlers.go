@@ -60,7 +60,7 @@ func CreateService(repo database.ServiceRepository) gin.HandlerFunc {
 
 		location := fmt.Sprintf("/service/%s", req.ID)
 		c.Header("Location", location)
-		c.JSON(http.StatusCreated, ConfiguredServiceToResponse(svc))
+		c.JSON(http.StatusCreated, svc)
 	}
 }
 
@@ -248,9 +248,18 @@ func validateServiceRequest(req ServiceRequest, requireID bool) error {
 		return fmt.Errorf("field 'oidcScopes' is required and must contain at least one scope")
 	}
 
+	if _, ok := req.OidcScopes[req.DefaultOidcScope]; !ok {
+		return fmt.Errorf("Default scope %q must exist in OIDC scopes list", req.DefaultOidcScope)
+	}
+
 	for scopeKey, scope := range req.OidcScopes {
 		if len(scope.Credentials) == 0 {
 			return fmt.Errorf("scope %q must contain at least one credential", scopeKey)
+		}
+		for idx, cred := range scope.Credentials {
+			if cred.Type == "" {
+				return fmt.Errorf("Type of the Credential[%d] of scope %q cannot be null", idx, scopeKey)
+			}
 		}
 	}
 

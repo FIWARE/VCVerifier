@@ -151,4 +151,3 @@ func TestServiceBackedCredentialsConfig_GetCredentialStatusConfig_DefaultsAreOff
 	assert.Empty(t, got.AcceptedPurposes, "zero-value CredentialStatus must have no accepted purposes")
 	assert.False(t, got.RequireStatus, "zero-value CredentialStatus must not require a status entry")
 }
-

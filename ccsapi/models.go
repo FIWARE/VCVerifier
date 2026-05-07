@@ -82,14 +82,10 @@ func ServiceRequestToConfiguredService(req ServiceRequest, id string) config.Con
 // ConfiguredServiceToResponse converts a config.ConfiguredService into a
 // ServiceResponse for the API response body.
 func ConfiguredServiceToResponse(svc config.ConfiguredService) ServiceResponse {
-	scopes := svc.ServiceScopes
-	if scopes == nil {
-		scopes = make(map[string]config.ScopeEntry)
-	}
 	return ServiceResponse{
 		ID:                svc.Id,
 		DefaultOidcScope:  svc.DefaultOidcScope,
-		OidcScopes:        scopes,
+		OidcScopes:        svc.ServiceScopes,
 		AuthorizationType: svc.AuthorizationType,
 	}
 }
