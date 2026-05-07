@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var TRUE_VALUE bool = true
+
 type MockHttpClient struct {
 	Answer string
 }
@@ -205,61 +207,58 @@ func Test_getServices(t *testing.T) {
 		t.Error("should not return error", err)
 	}
 	assert.NotEmpty(t, services)
-	expectedData := []ConfiguredService{
-		{
-			Id:               "service_all",
-			DefaultOidcScope: "did_write",
-			ServiceScopes: map[string]ScopeEntry{
-				"did_write": {
-					Credentials: []Credential{
-						{
-							Type:                     "VerifiableCredential",
-							TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
-							TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
-							HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
-						},
-					},
-					PresentationDefinition: &PresentationDefinition{
-						Id: "my-pd",
-						InputDescriptors: []InputDescriptor{
-							{
-								Id: "my-descriptor",
-								Constraints: Constraints{
-									Fields: []Fields{
-										{
-											Id:   "my-field",
-											Path: []string{"$.vc.my.claim"},
-										},
-									},
+	assert.Len(t, services, 1)
+
+	svc := services[0]
+	assert.Equal(t, "service_all", svc.Id)
+	assert.Equal(t, "did_write", svc.DefaultOidcScope)
+
+	scopesVO := svc.ServiceScopes
+	expectedOptionalField := true
+	expectedScopesVO := map[string]ScopeEntry{
+		"did_write": {
+			Credentials: []Credential{
+				{
+					Type:                     "VerifiableCredential",
+					TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
+					TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
+					HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
+				},
+			},
+			PresentationDefinition: &PresentationDefinition{
+				Id: "my-pd",
+				InputDescriptors: []InputDescriptor{
+					{
+						Id: "my-descriptor",
+						Constraints: Constraints{
+							Fields: []Fields{
+								{
+									Id:       "my-field",
+									Path:     []string{"$.vc.my.claim"},
+									Optional: &expectedOptionalField,
 								},
-							},
-						},
-					},
-					DCQL: &DCQL{
-						Credentials: []CredentialQuery{
-							{
-								Id:     "my-credential-query-id",
-								Format: "jwt_vc_json",
-								Claims: []ClaimsQuery{
-									{
-										Path:           []interface{}{"$.vc.credentialSubject.familyName"},
-										IntentToRetain: true,
-									},
-								},
-							},
-						},
-						CredentialSets: []CredentialSetQuery{
-							{
-								Options: [][]string{{"my-credential-query-id"}},
-								Purpose: "Please provide your family name.",
 							},
 						},
 					},
 				},
 			},
+			DCQL: &DCQL{
+				Credentials: []CredentialQuery{
+					{
+						Id:                                "my-credential-query-id",
+						Format:                            "jwt_vc_json",
+						RequireCryptographicHolderBinding: &TRUE_VALUE,
+						Claims:                            []ClaimsQuery{{Path: []interface{}{"$.vc.credentialSubject.familyName"}, IntentToRetain: true}},
+					},
+				},
+				CredentialSets: []CredentialSetQuery{
+					{
+						Options: [][]string{{"my-credential-query-id"}},
+						Purpose: "Please provide your family name.",
+					},
+				},
+			},
 		},
 	}
-	assert.Equal(t, 1, len(services))
-	assert.Equal(t, expectedData, services)
-
+	assert.Equal(t, expectedScopesVO, scopesVO)
 }

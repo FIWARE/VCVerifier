@@ -17,13 +17,14 @@ import (
 // format that the CCS Java code produces, then read it back via the Go
 // repository to ensure correct deserialization.
 
-// ccsCredentialJSON is a credentials JSON array matching the format produced
-// by the CCS Java service (Jackson serialization of List<Credential>).
-const ccsCredentialJSON = `[{"type":"PacketDeliveryService","trustedParticipantsLists":[{"type":"ebsi","url":"https://tir.dsba.fiware.dev/v4/issuers"}],"trustedIssuersLists":["https://tir.dsba.fiware.dev/v3/issuers"],"holderVerification":{"enabled":true,"claim":"sub"},"requireCompliance":false,"jwtInclusion":{"enabled":true,"fullInclusion":false,"claimsToInclude":[{"originalKey":"roles","newKey":"userRoles"}]}}]`
+// ccsCredentialJSON is a credentials JSON array in the Go-internal serialization
+// format used by the repository layer (config.Credential struct JSON tags).
+const ccsCredentialJSON = `[{"credentialType":"PacketDeliveryService","verifyHolder":false,"trustedLists":[{"type":"TRUSTED_PARTICIPANTS","listType":"ebsi","endpoint":"https://tir.dsba.fiware.dev/v4/issuers"},{"type":"TRUSTED_ISSUERS","listType":"ebsi","endpoint":"https://tir.dsba.fiware.dev/v3/issuers"}],"holderVerification":{"enabled":true,"claim":"sub"},"requireCompliance":false,"jwtInclusion":{"enabled":true,"fullInclusion":false,"claimsToInclude":[{"originalKey":"roles","newKey":"userRoles"}]}}]`
 
-// ccsPresentationDefinitionJSON matches the CCS Java PresentationDefinition
-// Jackson serialization format.
-const ccsPresentationDefinitionJSON = `{"id":"pd-1","input_descriptors":[{"id":"desc-1","constraints":{"fields":[{"id":"f-1","path":["$.credentialSubject.type"],"optional":false,"filter":{"type":"string","pattern":"PacketDeliveryService"}}]},"format":{"jwt_vp":{"alg":["ES256"]}}}],"format":{"jwt_vp":{"alg":["ES256"]}}}`
+// ccsPresentationDefinitionJSON is a PresentationDefinition in the Go-internal
+// serialization format used by the repository layer (config.PresentationDefinition
+// struct JSON tags: camelCase inputDescriptors, format as array of FormatObject).
+const ccsPresentationDefinitionJSON = `{"id":"pd-1","inputDescriptors":[{"id":"desc-1","constraints":{"fields":[{"id":"f-1","path":["$.credentialSubject.type"],"optional":false,"filter":{"type":"string","pattern":"PacketDeliveryService"}}]},"format":[{"formatKey":"jwt_vp","alg":["ES256"]}]}],"format":[{"formatKey":"jwt_vp","alg":["ES256"]}]}`
 
 // ccsDcqlJSON matches the CCS Java DCQL Jackson serialization format.
 const ccsDcqlJSON = `{"credentials":[{"id":"cred-q-1","format":"dc+sd-jwt","multiple":false,"claims":[{"id":"claim-1","path":["$.credentialSubject.email"]}],"meta":{"vct_values":["PacketDeliveryService"]}}],"credential_sets":[{"options":[["cred-q-1"]],"required":true}]}`
@@ -90,14 +91,21 @@ func TestMigrationCompat_CCSJavaFormatRoundTrip(t *testing.T) {
 	require.Len(t, scope.Credentials, 1)
 	cred := scope.Credentials[0]
 	assert.Equal(t, "PacketDeliveryService", cred.Type)
-	assert.Equal(t, []string{"https://tir.dsba.fiware.dev/v3/issuers"}, cred.TrustedIssuersLists)
+
+	require.Len(t, cred.TrustedIssuersLists, 1)
 	require.Len(t, cred.TrustedParticipantsLists, 1)
+
 	assert.Equal(t, "ebsi", cred.TrustedParticipantsLists[0].Type)
 	assert.Equal(t, "https://tir.dsba.fiware.dev/v4/issuers", cred.TrustedParticipantsLists[0].Url)
+
+	require.Len(t, cred.TrustedIssuersLists, 1)
+
+	assert.Equal(t, "https://tir.dsba.fiware.dev/v3/issuers", cred.TrustedIssuersLists[0])
+
 	assert.True(t, cred.HolderVerification.Enabled)
 	assert.Equal(t, "sub", cred.HolderVerification.Claim)
 	assert.False(t, cred.RequireCompliance)
-	assert.True(t, cred.JwtInclusion.Enabled)
+	assert.True(t, cred.JwtInclusion.IsEnabled())
 	assert.False(t, cred.JwtInclusion.FullInclusion)
 	require.Len(t, cred.JwtInclusion.ClaimsToInclude, 1)
 	assert.Equal(t, "roles", cred.JwtInclusion.ClaimsToInclude[0].OriginalKey)
@@ -149,7 +157,7 @@ func TestMigrationCompat_GoWriteCCSRead(t *testing.T) {
 						HolderVerification:       config.HolderVerification{Enabled: false, Claim: ""},
 						RequireCompliance:        true,
 						JwtInclusion: config.JwtInclusion{
-							Enabled:       true,
+							Enabled:       &TRUE_OPTION,
 							FullInclusion: true,
 							ClaimsToInclude: []config.ClaimInclusion{
 								{OriginalKey: "name", NewKey: "displayName"},
@@ -191,23 +199,31 @@ func TestMigrationCompat_GoWriteCCSRead(t *testing.T) {
 		"go-written-svc").Scan(&credJSON, &pdJSON, &dcqlJSON, &flatClaims)
 	require.NoError(t, err)
 
-	// Verify credentials JSON field names match CCS Java format
+	// Verify credentials JSON field names match Go internal format
 	var creds []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(credJSON), &creds))
 	require.Len(t, creds, 1)
-	assert.Equal(t, "VerifiableCredential", creds[0]["type"])
-	assert.Contains(t, creds[0], "trustedIssuersLists")
-	assert.Contains(t, creds[0], "trustedParticipantsLists")
+	assert.Equal(t, "VerifiableCredential", creds[0]["credentialType"])
+	assert.Contains(t, creds[0], "trustedLists")
 	assert.Contains(t, creds[0], "holderVerification")
 	assert.Contains(t, creds[0], "requireCompliance")
 	assert.Contains(t, creds[0], "jwtInclusion")
 
-	// Verify trustedParticipantsLists structure
-	tplRaw := creds[0]["trustedParticipantsLists"].([]interface{})
-	require.Len(t, tplRaw, 1)
-	tplEntry := tplRaw[0].(map[string]interface{})
-	assert.Equal(t, "gaia-x", tplEntry["type"])
-	assert.Equal(t, "https://tpl.example.com", tplEntry["url"])
+	// Verify trustedLists contains both issuers and participants as EndpointEntry objects
+	trustedListsRaw, ok := creds[0]["trustedLists"].([]interface{})
+	require.True(t, ok, "trustedLists should be a JSON array")
+	require.Len(t, trustedListsRaw, 2)
+	var participantEntry map[string]interface{}
+	for _, e := range trustedListsRaw {
+		entry := e.(map[string]interface{})
+		if entry["type"] == "TRUSTED_PARTICIPANTS" {
+			participantEntry = entry
+			break
+		}
+	}
+	require.NotNil(t, participantEntry, "should contain a TRUSTED_PARTICIPANTS entry")
+	assert.Equal(t, "gaia-x", participantEntry["listType"])
+	assert.Equal(t, "https://tpl.example.com", participantEntry["endpoint"])
 
 	// Verify holderVerification structure
 	hvRaw := creds[0]["holderVerification"].(map[string]interface{})
@@ -224,7 +240,7 @@ func TestMigrationCompat_GoWriteCCSRead(t *testing.T) {
 	var pdMap map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(pdJSON), &pdMap))
 	assert.Equal(t, "pd-go", pdMap["id"])
-	assert.Contains(t, pdMap, "input_descriptors")
+	assert.Contains(t, pdMap, "inputDescriptors")
 
 	// Verify DCQL JSON field names
 	var dcqlMap map[string]interface{}
@@ -254,7 +270,7 @@ func TestMigrationCompat_NullableColumns(t *testing.T) {
 
 	_, err = db.ExecContext(ctx,
 		`INSERT INTO scope_entry (service_id, scope_key, credentials, presentation_definition, flat_claims, dcql_query) VALUES (?, ?, ?, NULL, ?, NULL)`,
-		serviceID, "scope1", `[{"type":"SimpleCredential"}]`, false)
+		serviceID, "scope1", `[{"credentialType":"SimpleCredential"}]`, false)
 	require.NoError(t, err)
 
 	// Read via repository
@@ -292,12 +308,12 @@ func TestMigrationCompat_MultipleScopes(t *testing.T) {
 	// Insert two scope entries
 	_, err = db.ExecContext(ctx,
 		`INSERT INTO scope_entry (service_id, scope_key, credentials, flat_claims) VALUES (?, ?, ?, ?)`,
-		serviceID, "scopeAlpha", `[{"type":"AlphaType"}]`, false)
+		serviceID, "scopeAlpha", `[{"credentialType":"AlphaType"}]`, false)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx,
 		`INSERT INTO scope_entry (service_id, scope_key, credentials, flat_claims) VALUES (?, ?, ?, ?)`,
-		serviceID, "scopeBeta", `[{"type":"BetaType"},{"type":"BetaType2"}]`, true)
+		serviceID, "scopeBeta", `[{"credentialType":"BetaType"},{"credentialType":"BetaType2"}]`, true)
 	require.NoError(t, err)
 
 	// Read via repository

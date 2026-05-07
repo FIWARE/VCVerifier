@@ -21,17 +21,17 @@ func init() {
 // mockServiceRepository is a test double for database.ServiceRepository that
 // returns preconfigured results. All methods are safe for concurrent use.
 type mockServiceRepository struct {
-	services      []config.ConfiguredService
-	total         int
-	getAllError    error
-	getError      error
-	createError   error
-	deleteError   error
-	updateError   error
-	existsResult  bool
-	existsError   error
-	scopeResult   []string
-	scopeError    error
+	services        []config.ConfiguredService
+	total           int
+	getAllError     error
+	getError        error
+	createError     error
+	deleteError     error
+	updateError     error
+	existsResult    bool
+	existsError     error
+	scopeResult     []string
+	scopeError      error
 	getAllCallCount int
 }
 
@@ -100,6 +100,7 @@ func resetGlobalCache() {
 // testService creates a ConfiguredService with the given ID and a single scope
 // containing one credential of the given type.
 func testService(id, scopeName, credentialType string) config.ConfiguredService {
+	trueOption := true
 	return config.ConfiguredService{
 		Id:               id,
 		DefaultOidcScope: scopeName,
@@ -112,10 +113,29 @@ func testService(id, scopeName, credentialType string) config.ConfiguredService 
 						TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "ebsi", Url: "https://tpl.example.com"}},
 						HolderVerification:       config.HolderVerification{Enabled: true, Claim: "sub"},
 						RequireCompliance:        true,
-						JwtInclusion:             config.JwtInclusion{Enabled: true, FullInclusion: false},
+						JwtInclusion:             config.JwtInclusion{Enabled: &trueOption, FullInclusion: false},
 					},
 				},
 				FlatClaims: true,
+			},
+		},
+		AuthorizationType: "oidc4vp",
+	}
+}
+
+func testServiceVO(id, scopeName, credentialType string) config.ConfiguredService {
+	return config.ConfiguredService{
+		Id:               id,
+		DefaultOidcScope: scopeName,
+		ServiceScopes: map[string]config.ScopeEntry{
+			scopeName: {
+				Credentials: []config.Credential{
+					{
+						Type:                     credentialType,
+						TrustedIssuersLists:      []string{"https://tir.example.com"},
+						TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "ebsi", Url: "https://tpl.example.com"}},
+					},
+				},
 			},
 		},
 		AuthorizationType: "oidc4vp",
@@ -230,7 +250,7 @@ func TestDbBackedCredentialsConfig_AllInterfaceMethods(t *testing.T) {
 	t.Run("GetJwtInclusion", func(t *testing.T) {
 		ji, err := cc.GetJwtInclusion("test-svc", "myScope", "TestCredential")
 		require.NoError(t, err)
-		assert.True(t, ji.Enabled)
+		assert.True(t, ji.IsEnabled())
 		assert.False(t, ji.FullInclusion)
 	})
 
@@ -273,7 +293,7 @@ func TestDbBackedCredentialsConfig_ServiceNotFound(t *testing.T) {
 func TestDbBackedCredentialsConfig_FallbackToStaticConfig(t *testing.T) {
 	resetGlobalCache()
 
-	staticSvc := testService("static-svc", "staticScope", "StaticCredential")
+	staticSvc := testServiceVO("static-svc", "staticScope", "StaticCredential")
 
 	repo := &mockServiceRepository{
 		services: []config.ConfiguredService{},
@@ -505,7 +525,7 @@ func TestInitCredentialsConfig_SelectsHTTPWhenNoRepo(t *testing.T) {
 func TestInitCredentialsConfig_SelectsStaticWhenNoRepoNoEndpoint(t *testing.T) {
 	resetGlobalCache()
 
-	staticSvc := testService("static-only", "scope", "Cred")
+	staticSvc := testServiceVO("static-only", "scope", "Cred")
 	repoConfig := &config.ConfigRepo{
 		Services:       []config.ConfiguredService{staticSvc},
 		UpdateInterval: 30,
@@ -567,7 +587,7 @@ func TestDbBackedCredentialsConfig_RefreshUpdatesCache(t *testing.T) {
 func TestDbBackedCredentialsConfig_StaticServicePreservedWhenNotInDB(t *testing.T) {
 	resetGlobalCache()
 
-	staticSvc := testService("static-only-svc", "staticScope", "StaticCred")
+	staticSvc := testServiceVO("static-only-svc", "staticScope", "StaticCred")
 	dbSvc := testService("db-only-svc", "dbScope", "DbCred")
 
 	repo := &mockServiceRepository{

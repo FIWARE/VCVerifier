@@ -778,7 +778,7 @@ func (v *CredentialVerifier) shouldBeIncluded(clientId string, scope string, cre
 	logging.Log().Debugf("Check inclusion %s", credentialTypes)
 	for _, credentialType := range credentialTypes {
 		inclusion, _ := v.credentialsConfig.GetJwtInclusion(clientId, scope, credentialType)
-		if inclusion.Enabled {
+		if inclusion.IsEnabled() {
 			return true, inclusion
 		}
 	}

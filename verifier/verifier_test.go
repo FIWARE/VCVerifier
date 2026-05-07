@@ -102,7 +102,12 @@ type mockCredentialConfig struct {
 }
 
 func createMockCredentials(serviceId, scope, credentialType, url, holderClaim string, holderVerfication bool) map[string]map[string]configModel.ScopeEntry {
-	credential := configModel.Credential{Type: credentialType, TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: url}}, TrustedIssuersLists: []string{url}, HolderVerification: configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim}}
+	credential := configModel.Credential{
+		Type:                     credentialType,
+		TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: url}},
+		TrustedIssuersLists:      []string{url},
+		HolderVerification:       configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim},
+	}
 
 	entry := configModel.ScopeEntry{Credentials: []configModel.Credential{credential}}
 
@@ -570,6 +575,7 @@ func TestAuthenticationResponse(t *testing.T) {
 	}
 
 	for _, tc := range tests {
+		trueOption := true
 		t.Run(tc.testName, func(t *testing.T) {
 			logging.Log().Info("TestAuthenticationResponse +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
@@ -591,7 +597,7 @@ func TestAuthenticationResponse(t *testing.T) {
 					"": {
 						Credentials: []configModel.Credential{{
 							Type:         "VerifiableCredential",
-							JwtInclusion: configModel.JwtInclusion{Enabled: true},
+							JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption},
 						}},
 					},
 				},

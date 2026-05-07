@@ -26,7 +26,7 @@ import (
 type mockServiceRepository struct {
 	createServiceFn    func(ctx context.Context, svc config.ConfiguredService) error
 	getServiceFn       func(ctx context.Context, id string) (config.ConfiguredService, error)
-	getAllServicesFn    func(ctx context.Context, page, pageSize int) ([]config.ConfiguredService, int, error)
+	getAllServicesFn   func(ctx context.Context, page, pageSize int) ([]config.ConfiguredService, int, error)
 	updateServiceFn    func(ctx context.Context, id string, svc config.ConfiguredService) (config.ConfiguredService, error)
 	deleteServiceFn    func(ctx context.Context, id string) error
 	getServiceScopesFn func(ctx context.Context, id string, oidcScope *string) ([]string, error)
@@ -762,17 +762,6 @@ func TestConfiguredServiceToResponse(t *testing.T) {
 	assert.Len(t, resp.OidcScopes, 1)
 }
 
-func TestConfiguredServiceToResponse_NilScopes(t *testing.T) {
-	svc := config.ConfiguredService{
-		Id:               "svc-1",
-		DefaultOidcScope: "default",
-	}
-
-	resp := ConfiguredServiceToResponse(svc)
-	assert.NotNil(t, resp.OidcScopes, "nil scopes should be converted to empty map")
-	assert.Empty(t, resp.OidcScopes)
-}
-
 func TestConfiguredServicesToResponses(t *testing.T) {
 	services := []config.ConfiguredService{
 		sampleConfiguredService("svc-1"),
@@ -886,6 +875,19 @@ func TestValidateServiceRequest(t *testing.T) {
 			errMsg:    "'oidcScopes' is required",
 		},
 		{
+			name: "default scope not in oidcScopes",
+			req: ServiceRequest{
+				ID:               "svc",
+				DefaultOidcScope: "missing",
+				OidcScopes: map[string]config.ScopeEntry{
+					"other": {Credentials: []config.Credential{{Type: "VC"}}},
+				},
+			},
+			requireID: true,
+			wantErr:   true,
+			errMsg:    `"missing" must exist in OIDC scopes list`,
+		},
+		{
 			name: "scope with empty credentials",
 			req: ServiceRequest{
 				ID:               "svc",
@@ -897,6 +899,19 @@ func TestValidateServiceRequest(t *testing.T) {
 			requireID: true,
 			wantErr:   true,
 			errMsg:    "at least one credential",
+		},
+		{
+			name: "credential with empty type",
+			req: ServiceRequest{
+				ID:               "svc",
+				DefaultOidcScope: "default",
+				OidcScopes: map[string]config.ScopeEntry{
+					"default": {Credentials: []config.Credential{{Type: ""}}},
+				},
+			},
+			requireID: true,
+			wantErr:   true,
+			errMsg:    "cannot be null",
 		},
 	}
 

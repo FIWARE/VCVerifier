@@ -42,6 +42,8 @@ func sampleService(id string) config.ConfiguredService {
 // sampleServiceWithPD builds a ConfiguredService that includes a
 // PresentationDefinition and a DCQL query for round-trip testing.
 func sampleServiceWithPD(id string) config.ConfiguredService {
+	falseOption := false
+	trueOption := true
 	return config.ConfiguredService{
 		Id:               id,
 		DefaultOidcScope: "pd-scope",
@@ -49,14 +51,12 @@ func sampleServiceWithPD(id string) config.ConfiguredService {
 			"pd-scope": {
 				Credentials: []config.Credential{
 					{
-						Type: "PacketDeliveryService",
-						TrustedParticipantsLists: []config.TrustedParticipantsList{
-							{Type: "ebsi", Url: "https://tpl.example.com"},
-						},
-						HolderVerification: config.HolderVerification{Enabled: false},
-						RequireCompliance:  true,
+						Type:                     "PacketDeliveryService",
+						TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "ebsi", Url: "https://tpl.example.com"}},
+						HolderVerification:       config.HolderVerification{Enabled: false},
+						RequireCompliance:        true,
 						JwtInclusion: config.JwtInclusion{
-							Enabled:       true,
+							Enabled:       &trueOption,
 							FullInclusion: false,
 							ClaimsToInclude: []config.ClaimInclusion{
 								{OriginalKey: "name", NewKey: "preferred_name"},
@@ -71,7 +71,7 @@ func sampleServiceWithPD(id string) config.ConfiguredService {
 							Id: "desc-1",
 							Constraints: config.Constraints{
 								Fields: []config.Fields{
-									{Id: "f1", Path: []string{"$.type"}, Optional: false},
+									{Id: "f1", Path: []string{"$.type"}, Optional: &falseOption},
 								},
 							},
 						},
@@ -410,6 +410,7 @@ func TestJSONRoundTrip_PresentationDefinition(t *testing.T) {
 	assert.Equal(t, "pd-1", entry.PresentationDefinition.Id)
 	require.Len(t, entry.PresentationDefinition.InputDescriptors, 1)
 	assert.Equal(t, "desc-1", entry.PresentationDefinition.InputDescriptors[0].Id)
+	require.Len(t, entry.PresentationDefinition.Format, 1)
 	require.Contains(t, entry.PresentationDefinition.Format, "jwt_vp")
 	assert.Equal(t, []string{"ES256"}, entry.PresentationDefinition.Format["jwt_vp"].Alg)
 }
@@ -446,9 +447,12 @@ func TestJSONRoundTrip_Credentials(t *testing.T) {
 	cred := entry.Credentials[0]
 	assert.Equal(t, "PacketDeliveryService", cred.Type)
 	assert.True(t, cred.RequireCompliance)
+
+	require.Len(t, cred.TrustedIssuersLists, 0)
 	require.Len(t, cred.TrustedParticipantsLists, 1)
 	assert.Equal(t, "ebsi", cred.TrustedParticipantsLists[0].Type)
-	assert.True(t, cred.JwtInclusion.Enabled)
+
+	assert.True(t, cred.JwtInclusion.IsEnabled())
 	assert.False(t, cred.JwtInclusion.FullInclusion)
 	require.Len(t, cred.JwtInclusion.ClaimsToInclude, 1)
 	assert.Equal(t, "name", cred.JwtInclusion.ClaimsToInclude[0].OriginalKey)

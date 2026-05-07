@@ -37,7 +37,7 @@ func TestApplyEnvOverrides_StringField(t *testing.T) {
 
 	cfg := Configuration{}
 	require.NoError(t, ApplyEnvOverrides(&cfg))
-	assert.Equal(t, "secret123", cfg.Database.Password)
+	assert.Equal(t, "secret123", string(cfg.Database.Password))
 }
 
 func TestApplyEnvOverrides_IntField(t *testing.T) {
@@ -74,7 +74,7 @@ func TestApplyEnvOverrides_MultipleFields(t *testing.T) {
 	require.NoError(t, ApplyEnvOverrides(&cfg))
 	assert.Equal(t, "db.prod.example.com", cfg.Database.Host)
 	assert.Equal(t, 5433, cfg.Database.Port)
-	assert.Equal(t, "prod-secret", cfg.Database.Password)
+	assert.Equal(t, "prod-secret", string(cfg.Database.Password))
 	assert.Equal(t, 443, cfg.Server.Port)
 }
 
@@ -85,7 +85,7 @@ func TestApplyEnvOverrides_OverridesExistingValue(t *testing.T) {
 		Database: Database{Password: "from_yaml"},
 	}
 	require.NoError(t, ApplyEnvOverrides(&cfg))
-	assert.Equal(t, "from_env", cfg.Database.Password)
+	assert.Equal(t, "from_env", string(cfg.Database.Password))
 }
 
 func TestApplyEnvOverrides_DoesNotOverrideWhenUnset(t *testing.T) {
@@ -93,7 +93,7 @@ func TestApplyEnvOverrides_DoesNotOverrideWhenUnset(t *testing.T) {
 		Database: Database{Password: "original"},
 	}
 	require.NoError(t, ApplyEnvOverrides(&cfg))
-	assert.Equal(t, "original", cfg.Database.Password)
+	assert.Equal(t, "original", string(cfg.Database.Password))
 }
 
 func TestApplyEnvOverrides_InvalidIntReturnsError(t *testing.T) {

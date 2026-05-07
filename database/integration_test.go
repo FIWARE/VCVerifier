@@ -20,6 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var TRUE_OPTION bool = true
+var FALSE_OPTION bool = false
+
 func init() {
 	gin.SetMode(gin.TestMode)
 }
@@ -86,7 +89,7 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 					HolderVerification:  config.HolderVerification{Enabled: true, Claim: "sub"},
 					RequireCompliance:   true,
 					JwtInclusion: config.JwtInclusion{
-						Enabled:       true,
+						Enabled:       &TRUE_OPTION,
 						FullInclusion: false,
 						ClaimsToInclude: []config.ClaimInclusion{
 							{OriginalKey: "email", NewKey: "userEmail"},
@@ -195,7 +198,7 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 	// GetJwtInclusion
 	jwtInc, err := credConfig.GetJwtInclusion(serviceID, "defaultScope", "VerifiableCredential")
 	require.NoError(t, err)
-	assert.True(t, jwtInc.Enabled)
+	assert.True(t, jwtInc.IsEnabled())
 	assert.False(t, jwtInc.FullInclusion)
 	assert.Len(t, jwtInc.ClaimsToInclude, 1)
 	assert.Equal(t, "email", jwtInc.ClaimsToInclude[0].OriginalKey)
@@ -436,13 +439,13 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 					TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "ebsi", Url: "https://tpl-a.example.com"}},
 					HolderVerification:       config.HolderVerification{Enabled: true, Claim: "holderId"},
 					RequireCompliance:        true,
-					JwtInclusion:             config.JwtInclusion{Enabled: true, FullInclusion: true},
+					JwtInclusion:             config.JwtInclusion{Enabled: &TRUE_OPTION, FullInclusion: true},
 				},
 				{
 					Type:                "CredTypeB",
 					TrustedIssuersLists: []string{"https://til-b.example.com"},
 					RequireCompliance:   false,
-					JwtInclusion:        config.JwtInclusion{Enabled: false},
+					JwtInclusion:        config.JwtInclusion{Enabled: &FALSE_OPTION},
 				},
 			},
 			PresentationDefinition: &config.PresentationDefinition{
@@ -542,13 +545,13 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 	// JWT inclusion — CredTypeA
 	jwtA, err := credConfig.GetJwtInclusion(serviceID, "scopeA", "CredTypeA")
 	require.NoError(t, err)
-	assert.True(t, jwtA.Enabled)
+	assert.True(t, jwtA.IsEnabled())
 	assert.True(t, jwtA.FullInclusion)
 
 	// JWT inclusion — CredTypeB
 	jwtB, err := credConfig.GetJwtInclusion(serviceID, "scopeA", "CredTypeB")
 	require.NoError(t, err)
-	assert.False(t, jwtB.Enabled)
+	assert.False(t, jwtB.IsEnabled())
 
 	// Flat claims — scopeA has it true
 	flatA, err := credConfig.GetFlatClaims(serviceID, "scopeA")
