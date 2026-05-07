@@ -636,9 +636,9 @@ components:
     TokenRequest:
       type: object
       properties:
-        grant_type: 
+        grant_type:
           type: string
-          enum: ["authorization_code", "urn:ietf:params:oauth:grant-type:token-exchange"]
+          enum: ["authorization_code", "urn:ietf:params:oauth:grant-type:token-exchange", "refresh_token"]
         code:
           type: string
           example: myRandomString
@@ -671,6 +671,9 @@ components:
           type: string
           description: An identifier that indicates the type of the security token in the subject_token parameter.
           enum: ["urn:eu:oidf:vp_token"]
+        refresh_token:
+          type: string
+          description: The refresh token to exchange for a new access token. Required when grant_type is refresh_token.
       required:
         - grant_type
     TokenResponse:
@@ -687,3 +690,10 @@ components:
           example: 3600
         access_token:
           type: string
+        refresh_token:
+          type: string
+          description: Refresh token to obtain new access tokens. Only present when refresh tokens are enabled.
+        refresh_token_expires_in:
+          type: integer
+          description: Lifetime of the refresh token in seconds. Only present when refresh tokens are enabled.
+          example: 172800

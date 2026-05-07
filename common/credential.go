@@ -255,6 +255,9 @@ type Presentation struct {
 	// Stored as interface{} to avoid jwx dependency in the common package.
 	// The verifier package type-asserts to jwk.Key.
 	holderKey interface{}
+	// rawToken stores the original VP JWT bytes for deferred signature verification.
+	// Only set in the SD-JWT VP path; nil for JSON-LD VPs.
+	rawToken []byte
 }
 
 // HolderKey returns the public key that signed the VP JWT, if available.
@@ -265,6 +268,16 @@ func (p *Presentation) HolderKey() interface{} {
 // SetHolderKey stores the public key that signed the VP JWT.
 func (p *Presentation) SetHolderKey(key interface{}) {
 	p.holderKey = key
+}
+
+// RawToken returns the original VP JWT bytes, if available.
+func (p *Presentation) RawToken() []byte {
+	return p.rawToken
+}
+
+// SetRawToken stores the original VP JWT bytes for deferred verification.
+func (p *Presentation) SetRawToken(token []byte) {
+	p.rawToken = token
 }
 
 // Credentials returns the credentials contained in the presentation.

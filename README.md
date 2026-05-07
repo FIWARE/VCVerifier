@@ -18,6 +18,9 @@ VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer 
     * [Local Setup](#local-setup)
     * [Configuration](#configuration)
         * [Templating](#templating)
+        * [Database](#database)
+        * [Refresh Token](#refresh-token)
+        * [ConfigServer](#configserver)
     * [WaltID SSIKit](#waltid-ssikit)
 * [Usage](#usage)
     * [Frontend-Integration](#frontend-integration)
@@ -225,6 +228,92 @@ configRepo:
 #### Templating
 
 The login-page, provided at ```/api/v1/loginQR```, can be configured by providing a different template in the ```templateDir```. The templateDir needs to contain a file named ```verifier_present_qr.html``` which will be rendered on calls to the login-api. The template needs to include the QR-Code via ```<img src="data:{{.qrcode}}"```. Beside that, all options provided by the [goview-framework](https://github.com/foolin/goview) can be used. Static content(like icons, images) can be provided through the ```staticDir``` and will be available at the path ```/static```.
+
+#### Database
+
+The VCVerifier supports an optional relational database for persistent storage. It is used to store **refresh tokens** (when [`refreshToken.enabled`](#refresh-token) is `true`) or **service trust configuration** (when [`configServer.enabled`](#configserver) is `true`). The following databases are supported:
+
+| Database | `type` value |
+|----------|-------------|
+| PostgreSQL | `postgres` |
+| MySQL / MariaDB | `mysql` |
+| SQLite (file or in-memory) | `sqlite` |
+
+```yaml
+database:
+    # database backend: postgres, mysql, or sqlite
+    type: postgres
+    # hostname of the database server (default: localhost)
+    host: localhost
+    # port of the database server (default: 5432)
+    port: 5432
+    # database name; for SQLite: file path or ":memory:" for an in-memory database
+    name: vcverifier
+    # database user
+    user: vcverifier
+    # database password — never write plaintext here; use an environment variable:
+    password: ${DB_PASSWORD}
+    # TLS mode: "disable" / "require" / etc. (postgres) or "true" / "false" / "skip-verify" (mysql)
+    sslMode: disable
+```
+
+> :warning: **Security**: Never store the database password in plain text in `server.yaml`. Use the `${DB_PASSWORD}` interpolation syntax shown above, or set the `VCVERIFIER_DATABASE_PASSWORD` environment variable.
+
+#### Refresh Token
+
+When enabled, the verifier issues a `refresh_token` alongside each `access_token`. Refresh tokens are hashed and persisted in the [database](#database), so **a database connection is required**.
+
+```yaml
+verifier:
+    refreshToken:
+        # enable refresh token issuance alongside access tokens (requires database)
+        enabled: false
+        # lifetime of issued refresh tokens in minutes (default: 2880 = 48 h)
+        expiration: 2880
+        # how often (in seconds) expired tokens are purged from the database (default: 60)
+        cleanupInterval: 60
+        # HMAC-SHA256 key used to hash tokens before storage.
+        # When omitted a random salt is generated at startup — tokens are invalidated on restart.
+        # Use an environment variable to keep this secret off disk:
+        hashSalt: ${REFRESH_TOKEN_HASH_SALT}
+```
+
+> :warning: **Security**: The `hashSalt` value is a secret used to sign stored tokens. Never write it in plain text in `server.yaml`. Use the `${REFRESH_TOKEN_HASH_SALT}` syntax or set the `VCVERIFIER_VERIFIER_REFRESH_TOKEN_HASH_SALT` environment variable.
+
+#### ConfigServer
+
+The ConfigServer exposes an additional REST API that lets external tools (for example [Credentials Config Service](https://github.com/FIWARE/credentials-config-service)) manage trust configuration at runtime, without restarting the verifier. When `enabled` is `true`, a second HTTP listener is started on the configured port. **A database connection is required.**
+
+```yaml
+configServer:
+    # enable the ConfigServer REST API (requires database)
+    enabled: false
+    # port for the secondary HTTP listener (default: 8090)
+    port: 8090
+    # HTTP read timeout in seconds (default: 5)
+    readTimeout: 5
+    # HTTP write timeout in seconds (default: 10)
+    writeTimeout: 10
+    # keep-alive idle timeout in seconds (default: 120)
+    idleTimeout: 120
+    # graceful-shutdown timeout in seconds (default: 5)
+    shutdownTimeout: 5
+```
+
+The `configRepo` section controls how service scope and trust configurations are loaded. When `configEndpoint` is set, the verifier fetches service configuration from that external CCS instance. When `configEndpoint` is **not** set and a [database](#database) is configured, service configuration is read directly from the database. Services can also be defined statically in `server.yaml`:
+
+```yaml
+configRepo:
+    # URL of an external Credentials-Config-Service instance (optional).
+    # When absent and a database is configured, configuration is read from the database instead.
+    configEndpoint: http://config-service:8080
+    # how often (in seconds) to refresh configuration from configEndpoint (default: 30)
+    updateInterval: 30
+    # static service definitions — used when neither configEndpoint nor database is available,
+    # or to seed the database on first start
+    services:
+        ...
+```
 
 ## Usage
 
