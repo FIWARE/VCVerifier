@@ -11,6 +11,9 @@ on:
     branches:
       - main
 
+permissions:
+  pull-requests: write
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -29,16 +32,10 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
   comment:
+    needs: check
     runs-on: ubuntu-latest
-    if: always()
+    if: failure()
     steps:
-      - uses: technote-space/workflow-conclusion-action@v2
-
-      - uses: actions/checkout@v4
-
-      - name: Comment PR
-        if: env.WORKFLOW_CONCLUSION == 'failure'
-        uses: thollander/actions-comment-pull-request@v3
+      - uses: thollander/actions-comment-pull-request@v3
         with:
           message: "Please apply one of the following labels to the PR: `patch`, `minor`, or `major`. See [CONTRIBUTING.md](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md) for details."
-          github-token: ${{ secrets.GITHUB_TOKEN }}
