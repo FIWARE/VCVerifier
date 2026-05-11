@@ -108,10 +108,10 @@ type Credential struct {
 	// Type of the credential
 	Type string `json:"type" mapstructure:"type"`
 	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted participants from.
-	TrustedParticipantsLists []TrustedParticipantsList `json:"trustedParticipantsLists,omitempty" mapstructure:"trustedParticipantsLists,omitempty"`
+	TrustedParticipantsLists TrustedParticipantsLists `json:"trustedParticipantsLists,omitempty" mapstructure:"trustedParticipantsLists,omitempty"`
 	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted issuers from. The attributes need to be formatted to comply with the verifiers requirements.
 	TrustedIssuersLists []string `json:"trustedIssuersLists,omitempty" mapstructure:"trustedIssuersLists,omitempty"`
-	// Configuration of Holder Verfification
+	// Configuration of Holder Verification
 	HolderVerification HolderVerification `json:"holderVerification" mapstructure:"holderVerification"`
 	// Does the given credential require a compliancy credential
 	RequireCompliance bool `json:"requireCompliance" mapstructure:"requireCompliance"`
@@ -199,6 +199,36 @@ type TrustedParticipantsList struct {
 	Type string `json:"type" mapstructure:"type"`
 	// url of the list
 	Url string `json:"url" mapstructure:"url"`
+}
+
+type TrustedParticipantsLists []TrustedParticipantsList
+
+func (t *TrustedParticipantsLists) UnmarshalJSON(data []byte) error {
+	// Try structured format first
+	var structured []TrustedParticipantsList
+	if err := json.Unmarshal(data, &structured); err == nil {
+		*t = structured
+		return nil
+	}
+
+	// Fallback to string array format
+	var urls []string
+	if err := json.Unmarshal(data, &urls); err != nil {
+		return err
+	}
+
+	result := make([]TrustedParticipantsList, len(urls))
+
+	for i, url := range urls {
+		result[i] = TrustedParticipantsList{
+			Type: DEFAULT_LIST_TYPE,
+			Url:  url,
+		}
+	}
+
+	*t = result
+
+	return nil
 }
 
 // EndpointEntry describes a single trust-registry endpoint together with its
