@@ -33,7 +33,7 @@ func TestValidateSignature(t *testing.T) {
 			signature: "valid_signature",
 			mockResponse: &http.Response{
 				StatusCode: http.StatusOK,
-				Body: ioutil.NopCloser(bytes.NewBufferString(`{"simpleReport":{"signaturesCount":1,"validSignaturesCount":1}}`)),
+				Body:       ioutil.NopCloser(bytes.NewBufferString(`{"simpleReport":{"signaturesCount":1,"validSignaturesCount":1}}`)),
 			},
 			mockError:      nil,
 			expectedResult: true,

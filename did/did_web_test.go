@@ -245,9 +245,9 @@ func TestParseDIDDocument_MultipleVerificationMethods(t *testing.T) {
 				},
 			},
 			{
-				"id":         "did:web:example.com#key-2",
-				"type":       "Ed25519VerificationKey2020",
-				"controller": "did:web:example.com",
+				"id":                 "did:web:example.com#key-2",
+				"type":               "Ed25519VerificationKey2020",
+				"controller":         "did:web:example.com",
 				"publicKeyMultibase": "z6MkTest123",
 			},
 			{

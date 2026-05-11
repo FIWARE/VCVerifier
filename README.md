@@ -30,6 +30,7 @@ VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer 
 * [Testing](#testing)
     * [Unit Tests](#unit-tests)
     * [Integration Tests](#integration-tests)
+* [Code Style](#code-style)
 * [License](#license)
 
 ## Background
@@ -688,6 +689,22 @@ go test -tags integration -v -count=1 -run TestEndpoints ./...
     go test -tags integration -v -count=1 ./...
     ```
 
+
+## Code Style
+
+This project enforces code style via [golangci-lint](https://golangci-lint.run/), which includes `gofmt` and additional static analysis checks. The linter runs automatically on every pull request and push to `main`.
+
+To run it locally:
+
+```shell
+golangci-lint run ./...
+```
+
+If you don't have `golangci-lint` installed:
+
+```shell
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+```
 
 ## License
 

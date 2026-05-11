@@ -927,15 +927,15 @@ func TestGetTokenWithRefreshToken(t *testing.T) {
 	const refreshTokenExpirationMinutes = 60
 
 	type test struct {
-		testName              string
-		testCode              string
-		testRedirectUri       string
-		tokenSession          map[string]tokenStore
-		refreshTokenEnabled   bool
-		refreshTokenRepo      *mockRefreshTokenRepository
-		expectedRefreshToken  bool
-		expectedError         error
-		repoStoreErr          error
+		testName             string
+		testCode             string
+		testRedirectUri      string
+		tokenSession         map[string]tokenStore
+		refreshTokenEnabled  bool
+		refreshTokenRepo     *mockRefreshTokenRepository
+		expectedRefreshToken bool
+		expectedError        error
+		repoStoreErr         error
 	}
 
 	tests := []test{

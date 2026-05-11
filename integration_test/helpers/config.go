@@ -76,11 +76,11 @@ type ScopeConfig struct {
 
 // CredentialConfig holds configuration for a single credential type within a scope.
 type CredentialConfig struct {
-	Type                 string
-	TrustedIssuersLists  []string
-	HolderVerification   *HolderVerificationConfig
-	TrustedParticipants  []TrustedParticipantsListConfig
-	JwtInclusion         *JwtInclusionConfig
+	Type                string
+	TrustedIssuersLists []string
+	HolderVerification  *HolderVerificationConfig
+	TrustedParticipants []TrustedParticipantsListConfig
+	JwtInclusion        *JwtInclusionConfig
 }
 
 // JwtInclusionConfig defines JWT inclusion settings for a credential type.

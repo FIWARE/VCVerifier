@@ -198,16 +198,16 @@ func TestGetToken(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
 			apiVerifier = &mockVerifier{
-				mockJWTString:          tc.mockJWTString,
-				mockExpiration:         tc.mockExpiration,
-				mockError:              tc.mockError,
+				mockJWTString:           tc.mockJWTString,
+				mockExpiration:          tc.mockExpiration,
+				mockError:               tc.mockError,
 				mockRefreshTokenEnabled: tc.mockRefreshEnabled,
-				mockRefreshToken:       tc.mockRefreshToken,
-				mockRefreshTokenError:  tc.mockRefreshTokenError,
-				mockExchangeJWT:        tc.mockExchangeJWT,
-				mockExchangeExpiration: tc.mockExchangeExpiration,
-				mockExchangeRefresh:    tc.mockExchangeRefresh,
-				mockExchangeError:      tc.mockExchangeError,
+				mockRefreshToken:        tc.mockRefreshToken,
+				mockRefreshTokenError:   tc.mockRefreshTokenError,
+				mockExchangeJWT:         tc.mockExchangeJWT,
+				mockExchangeExpiration:  tc.mockExchangeExpiration,
+				mockExchangeRefresh:     tc.mockExchangeRefresh,
+				mockExchangeError:       tc.mockExchangeError,
 			}
 
 			formArray := []string{}

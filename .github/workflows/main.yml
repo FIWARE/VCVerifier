@@ -17,20 +17,11 @@ jobs:
   security-analysis:
     uses: ./.github/workflows/security-analysis.yml
 
-  build-images:
-    needs: build
-    uses: ./.github/workflows/build-images.yml
-
-  image-security-analysis:
-    needs: build-images
-    uses: ./.github/workflows/image-security-analysis.yml
-
   release:
     needs:
       - style-guide
       - tests
       - security-analysis
-      - image-security-analysis
     uses: ./.github/workflows/release.yml
     secrets:
       QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}

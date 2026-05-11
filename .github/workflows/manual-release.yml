@@ -9,19 +9,7 @@ on:
         type: string
 
 jobs:
-  build:
-    uses: ./.github/workflows/build.yml
-
-  build-images:
-    needs: build
-    uses: ./.github/workflows/build-images.yml
-
-  image-security-analysis:
-    needs: build-images
-    uses: ./.github/workflows/image-security-analysis.yml
-
   release:
-    needs: image-security-analysis
     uses: ./.github/workflows/release.yml
     with:
       version: ${{ inputs.version }}

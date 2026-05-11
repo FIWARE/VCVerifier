@@ -157,14 +157,14 @@ func bitstringStatusEntry(url, purpose string, index uint64) common.JSONObject {
 // no fetch occurred.
 func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 	type test struct {
-		testName         string
-		credential       *common.Credential
-		perType          map[string]configModel.CredentialStatus
-		fixtures         map[string]*common.Credential
-		fetchErr         error
-		expectedResult   bool
-		expectedError    error
-		expectedNoFetch  bool
+		testName        string
+		credential      *common.Credential
+		perType         map[string]configModel.CredentialStatus
+		fixtures        map[string]*common.Credential
+		fetchErr        error
+		expectedResult  bool
+		expectedError   error
+		expectedNoFetch bool
 	}
 
 	revokedList := newStatusListCredential(t, encodeTestBitstring(t, statusValidationRevokedByte), configModel.StatusPurposeRevocation)

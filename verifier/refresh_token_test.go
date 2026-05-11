@@ -402,17 +402,17 @@ func TestExchangeRefreshToken_TableDriven(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	type testCase struct {
-		name            string
-		enabled         bool
+		name    string
+		enabled bool
 		// seedFunc seeds the repo after verifier creation and returns the input token.
 		// When nil, staticInputToken is used and no seeding occurs.
-		seedFunc        func(v *CredentialVerifier, repo *mockRefreshTokenRepository) string
+		seedFunc         func(v *CredentialVerifier, repo *mockRefreshTokenRepository) string
 		staticInputToken string
-		repoGetErr      error
-		expectErr       error
-		expectErrSubstr string
-		expectJWT       bool
-		expectRotation  bool
+		repoGetErr       error
+		expectErr        error
+		expectErrSubstr  string
+		expectJWT        bool
+		expectRotation   bool
 	}
 
 	helperVerifier := newRefreshTokenVerifier(t, true, newMockRefreshTokenRepo())
