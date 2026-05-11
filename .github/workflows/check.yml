@@ -1,0 +1,44 @@
+name: Check PR
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+    branches:
+      - main
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: bump
+        uses: zwaldowski/match-label-action@v1
+        with:
+          allowed: major,minor,patch
+
+      - uses: zwaldowski/semver-release-action@v6
+        with:
+          dry_run: true
+          bump: ${{ steps.bump.outputs.match }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  comment:
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: technote-space/workflow-conclusion-action@v2
+
+      - uses: actions/checkout@v4
+
+      - name: Comment PR
+        if: env.WORKFLOW_CONCLUSION == 'failure'
+        uses: thollander/actions-comment-pull-request@v3
+        with:
+          message: "Please apply one of the following labels to the PR: `patch`, `minor`, or `major`. See [CONTRIBUTING.md](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md) for details."
+          github-token: ${{ secrets.GITHUB_TOKEN }}
