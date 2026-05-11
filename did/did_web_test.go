@@ -94,7 +94,7 @@ func TestWebVDR_Read(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/did.json" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(docBytes)
+			_, _ = w.Write(docBytes)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -139,7 +139,7 @@ func TestWebVDR_Read(t *testing.T) {
 		// Create a handler that serves at any path
 		anyPathServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(docBytes)
+			_, _ = w.Write(docBytes)
 		}))
 		defer anyPathServer.Close()
 

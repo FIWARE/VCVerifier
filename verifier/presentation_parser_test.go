@@ -241,14 +241,22 @@ func buildSignedJWT(t *testing.T, kid string, payload map[string]interface{}) []
 	if err != nil {
 		t.Fatalf("Failed to import key: %v", err)
 	}
-	ljwk.AssignKeyID(jwkKey)
+	if err := ljwk.AssignKeyID(jwkKey); err != nil {
+		t.Fatalf("Failed to assign key ID: %v", err)
+	}
 
 	payloadBytes, _ := json.Marshal(payload)
 
 	hdrs := jws.NewHeaders()
-	hdrs.Set(jws.KeyIDKey, kid)
-	hdrs.Set(jws.AlgorithmKey, jwa.ES256())
-	hdrs.Set("typ", "JWT")
+	if err := hdrs.Set(jws.KeyIDKey, kid); err != nil {
+		t.Fatalf("Failed to set hdrs KeyID: %v", err)
+	}
+	if err := hdrs.Set(jws.AlgorithmKey, jwa.ES256()); err != nil {
+		t.Fatalf("Failed to set hdrs Algorithm: %v", err)
+	}
+	if err := hdrs.Set("typ", "JWT"); err != nil {
+		t.Fatalf("Failed to set hdrs typ: %v", err)
+	}
 
 	signed, err := jws.Sign(payloadBytes, jws.WithKey(jwa.ES256(), jwkKey, jws.WithProtectedHeaders(hdrs)))
 	if err != nil {
@@ -434,7 +442,9 @@ func TestVerifyCnfBinding_MatchingKey(t *testing.T) {
 		t.Fatalf("Failed to marshal public key: %v", err)
 	}
 	var pubKeyMap map[string]interface{}
-	json.Unmarshal(pubKeyBytes, &pubKeyMap)
+	if err := json.Unmarshal(pubKeyBytes, &pubKeyMap); err != nil {
+		t.Fatalf("Failed to unmarshal public key: %v", err)
+	}
 
 	cred, _ := common.CreateCredential(common.CredentialContents{}, common.CustomFields{
 		common.JWTClaimCnf: map[string]interface{}{
@@ -458,7 +468,9 @@ func TestVerifyCnfBinding_MismatchedKey(t *testing.T) {
 	otherPubKey, _ := otherKey.PublicKey()
 	otherPubKeyBytes, _ := json.Marshal(otherPubKey)
 	var otherPubKeyMap map[string]interface{}
-	json.Unmarshal(otherPubKeyBytes, &otherPubKeyMap)
+	if err := json.Unmarshal(otherPubKeyBytes, &otherPubKeyMap); err != nil {
+		t.Fatalf("Failed to unmarshal other public key: %v", err)
+	}
 
 	cred, _ := common.CreateCredential(common.CredentialContents{}, common.CustomFields{
 		common.JWTClaimCnf: map[string]interface{}{

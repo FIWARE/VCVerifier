@@ -297,7 +297,7 @@ func DecodeBitstring(encoded string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: gzip reader init failed: %v", ErrorStatusListBitstringDecode, err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	decoded, err := io.ReadAll(reader)
 	if err != nil {

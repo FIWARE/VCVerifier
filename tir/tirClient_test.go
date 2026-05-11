@@ -167,7 +167,7 @@ func getTestServer(path string, errorCode int) *httptest.Server {
 		if req.URL.String() == path {
 			rw.Header().Set("Content-Type", "json")
 			// Send response to be tested
-			rw.Write([]byte(ISHARE_EXAMPLE))
+			_, _ = rw.Write([]byte(ISHARE_EXAMPLE))
 		} else {
 			rw.WriteHeader(errorCode)
 		}

@@ -10,7 +10,7 @@ import (
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/google/go-cmp/cmp"
-	"golang.org/x/exp/slices"
+	"slices"
 )
 
 const WILDCARD_TIL = "*"

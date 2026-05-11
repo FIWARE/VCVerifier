@@ -71,7 +71,9 @@ func TestVerifierPageDisplayQRSIOP(t *testing.T) {
 		if tc.expectedStatusCode == 400 {
 			errorBody, _ := io.ReadAll(recorder.Body)
 			errorMessage := ErrorMessage{}
-			json.Unmarshal(errorBody, &errorMessage)
+			if err := json.Unmarshal(errorBody, &errorMessage); err != nil {
+				t.Fatalf("Failed to unmarshal error body: %v", err)
+			}
 			if errorMessage != tc.expectedError {
 				t.Errorf("%s - Expected error %s but was %s.", tc.testName, logging.PrettyPrintObject(tc.expectedError), logging.PrettyPrintObject(errorMessage))
 				continue

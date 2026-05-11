@@ -262,7 +262,9 @@ func TestGetToken(t *testing.T) {
 			if tc.expectedStatusCode == 400 || (tc.expectedStatusCode == 403 && tc.expectedError != (ErrorMessage{})) {
 				errorBody, _ := io.ReadAll(recorder.Body)
 				errorMessage := ErrorMessage{}
-				json.Unmarshal(errorBody, &errorMessage)
+				if err := json.Unmarshal(errorBody, &errorMessage); err != nil {
+					t.Fatalf("Failed to unmarshal error body: %v", err)
+				}
 				if errorMessage != tc.expectedError {
 					t.Errorf("%s - Expected error %s but was %s.", tc.testName, logging.PrettyPrintObject(tc.expectedError), logging.PrettyPrintObject(errorMessage))
 					return
@@ -416,7 +418,9 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 			if tc.expectedStatusCode == 400 {
 				errorBody, _ := io.ReadAll(recorder.Body)
 				errorMessage := ErrorMessage{}
-				json.Unmarshal(errorBody, &errorMessage)
+				if err := json.Unmarshal(errorBody, &errorMessage); err != nil {
+					t.Fatalf("Failed to unmarshal error body: %v", err)
+				}
 				if errorMessage != tc.expectedError {
 					t.Errorf("%s - Expected error %s but was %s.", tc.testName, logging.PrettyPrintObject(tc.expectedError), logging.PrettyPrintObject(errorMessage))
 					return
@@ -506,7 +510,9 @@ func TestVerifierAPIStartSIOP(t *testing.T) {
 			if tc.expectedStatusCode == 400 {
 				errorBody, _ := io.ReadAll(recorder.Body)
 				errorMessage := ErrorMessage{}
-				json.Unmarshal(errorBody, &errorMessage)
+				if err := json.Unmarshal(errorBody, &errorMessage); err != nil {
+					t.Fatalf("Failed to unmarshal error body: %v", err)
+				}
 				if errorMessage != tc.expectedError {
 					t.Errorf("%s - Expected error %s but was %s.", tc.testName, logging.PrettyPrintObject(tc.expectedError), logging.PrettyPrintObject(errorMessage))
 					return
@@ -580,9 +586,15 @@ func buildSignedVPToken(t *testing.T) string {
 		},
 	})
 	vcHdrs := jws.NewHeaders()
-	vcHdrs.Set(jws.KeyIDKey, issuerDID)
-	vcHdrs.Set(jws.AlgorithmKey, jwa.ES256())
-	vcHdrs.Set("typ", "JWT")
+	if err := vcHdrs.Set(jws.KeyIDKey, issuerDID); err != nil {
+		t.Fatalf("Failed to set vcHdrs KeyID: %v", err)
+	}
+	if err := vcHdrs.Set(jws.AlgorithmKey, jwa.ES256()); err != nil {
+		t.Fatalf("Failed to set vcHdrs Algorithm: %v", err)
+	}
+	if err := vcHdrs.Set("typ", "JWT"); err != nil {
+		t.Fatalf("Failed to set vcHdrs typ: %v", err)
+	}
 	vcSigned, err := jws.Sign(vcPayload, jws.WithKey(jwa.ES256(), issuerJWK, jws.WithProtectedHeaders(vcHdrs)))
 	if err != nil {
 		t.Fatalf("Failed to sign VC: %v", err)
@@ -608,9 +620,15 @@ func buildSignedVPToken(t *testing.T) string {
 		},
 	})
 	vpHdrs := jws.NewHeaders()
-	vpHdrs.Set(jws.KeyIDKey, holderDID)
-	vpHdrs.Set(jws.AlgorithmKey, jwa.ES256())
-	vpHdrs.Set("typ", "JWT")
+	if err := vpHdrs.Set(jws.KeyIDKey, holderDID); err != nil {
+		t.Fatalf("Failed to set vpHdrs KeyID: %v", err)
+	}
+	if err := vpHdrs.Set(jws.AlgorithmKey, jwa.ES256()); err != nil {
+		t.Fatalf("Failed to set vpHdrs Algorithm: %v", err)
+	}
+	if err := vpHdrs.Set("typ", "JWT"); err != nil {
+		t.Fatalf("Failed to set vpHdrs typ: %v", err)
+	}
 	vpSigned, err := jws.Sign(vpPayload, jws.WithKey(jwa.ES256(), holderJWK, jws.WithProtectedHeaders(vpHdrs)))
 	if err != nil {
 		t.Fatalf("Failed to sign VP: %v", err)

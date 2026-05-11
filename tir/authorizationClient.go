@@ -11,7 +11,7 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/patrickmn/go-cache"
-	"golang.org/x/exp/slices"
+	"slices"
 )
 
 const WELL_KNOWN_ENDPOINT = "/.well-known/openid-configuration"

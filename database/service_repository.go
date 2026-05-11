@@ -155,7 +155,11 @@ func (r *SqlServiceRepository) GetAllServices(ctx context.Context, page, pageSiz
 	if err != nil {
 		return nil, 0, fmt.Errorf("select services: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			logging.Log().Warnf("rows.Close: %v", closeErr)
+		}
+	}()
 
 	var serviceIDs []string
 	svcRows := make(map[string]ServiceRow)
@@ -324,7 +328,11 @@ func (r *SqlServiceRepository) scanScopeEntryRows(ctx context.Context, qe queryE
 	if err != nil {
 		return nil, fmt.Errorf("query scopes for %q: %w", serviceID, err)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			logging.Log().Warnf("rows.Close: %v", closeErr)
+		}
+	}()
 
 	var result []ScopeEntryRow
 	for rows.Next() {
@@ -374,7 +382,11 @@ func (r *SqlServiceRepository) batchScopeEntries(ctx context.Context, serviceIDs
 	if err != nil {
 		return nil, fmt.Errorf("batch scope entries: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			logging.Log().Warnf("rows.Close: %v", closeErr)
+		}
+	}()
 
 	result := make(map[string][]ScopeEntryRow)
 	for rows.Next() {

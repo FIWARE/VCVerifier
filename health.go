@@ -64,14 +64,16 @@ func NewConfigServerHealth(db *sql.DB) *health.Health {
 	h, _ := health.New(health.WithComponent(health.Component{
 		Name: "config-server",
 	}))
-	h.Register(health.Config{
+	if err := h.Register(health.Config{
 		Name:      healthCheckDBComponentName,
 		Timeout:   healthCheckDBPingTimeout,
 		SkipOnErr: false,
 		Check: func(ctx context.Context) error {
 			return db.PingContext(ctx)
 		},
-	})
+	}); err != nil {
+		logging.Log().Errorf("Failed to register config-server database health check: %v", err)
+	}
 	return h
 }
 

@@ -14,11 +14,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
-	"golang.org/x/exp/slices"
+	"slices"
 
 	"github.com/PaesslerAG/jsonpath"
 	common "github.com/fiware/VCVerifier/common"
@@ -249,7 +248,9 @@ type NonceGenerator interface {
 // generate a random nonce
 func (r *randomGenerator) GenerateNonce() string {
 	b := make([]byte, 16)
-	io.ReadFull(rand.Reader, b)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		logging.Log().Warnf("Was not able to generate random nonce. Err: %v", err)
+	}
 	nonce := base64.RawURLEncoding.EncodeToString(b)
 	return nonce
 }
@@ -371,7 +372,9 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	}
 	if key != nil && !key.Has(jwk.KeyIDKey) {
 		logging.Log().Infof("Adding kid='%s' to keyset", kid)
-		key.Set(jwk.KeyIDKey, kid)
+		if setErr := key.Set(jwk.KeyIDKey, kid); setErr != nil {
+			logging.Log().Warnf("Was not able to set kid on key. Error: %v", setErr)
+		}
 	}
 
 	if err != nil {
@@ -593,7 +596,9 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 func (v *CredentialVerifier) GetJWKS() jwk.Set {
 	jwks := jwk.NewSet()
 	publicKey, _ := v.signingKey.PublicKey()
-	jwks.AddKey(publicKey)
+	if addErr := jwks.AddKey(publicKey); addErr != nil {
+		logging.Log().Warnf("Was not able to add public key to JWKS. Error: %v", addErr)
+	}
 	return jwks
 }
 
@@ -1428,7 +1433,10 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	}
 
 	headers := jws.NewHeaders()
-	headers.Set("typ", REQUEST_OBJECT_TYP)
+	if err := headers.Set("typ", REQUEST_OBJECT_TYP); err != nil {
+		logging.Log().Errorf("Was not able to set request object type header. Error: %v", err)
+		return requestObject, err
+	}
 	if v.clientIdentification.CertificatePath != "" {
 		certs, err := loadCertChainFromPEM(v.clientIdentification.CertificatePath)
 		if err != nil {
@@ -1438,7 +1446,10 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 
 		x5cChain := cert.Chain{}
 		for _, cert := range certs {
-			x5cChain.AddString(base64.StdEncoding.EncodeToString(cert.Raw))
+			if addErr := x5cChain.AddString(base64.StdEncoding.EncodeToString(cert.Raw)); addErr != nil {
+				logging.Log().Errorf("Was not able to add certificate to x5c chain. Error: %v", addErr)
+				return requestObject, addErr
+			}
 		}
 
 		err = headers.Set("x5c", &x5cChain)
@@ -1509,15 +1520,6 @@ func callbackToRequester(loginSession loginSession, authorizationCode string) er
 	return nil
 }
 
-// helper method to extract the hostname from a url
-func getHostName(urlString string) (host string, err error) {
-	url, err := url.Parse(urlString)
-	if err != nil {
-		logging.Log().Warnf("Was not able to extract the host from the redirect_url %s. Err: %v", urlString, err)
-		return host, err
-	}
-	return url.Host, err
-}
 
 func loadKey(keyPath string) (key jwk.Key, err error) {
 	// read key file
@@ -1538,7 +1540,9 @@ func loadKey(keyPath string) (key jwk.Key, err error) {
 func getRequestSigningKey(keyPath string, clientId string) (key jwk.Key, err error) {
 	key, err = loadKey(keyPath)
 	if key != nil {
-		key.Set("kid", clientId)
+		if setErr := key.Set("kid", clientId); setErr != nil {
+			logging.Log().Warnf("Was not able to set kid on key. Error: %v", setErr)
+		}
 	}
 	return
 }

@@ -435,7 +435,7 @@ func TestMigrationCompat_ColumnTypes(t *testing.T) {
 	// Query service table columns
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(service)`)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	serviceColumns := map[string]bool{}
 	for rows.Next() {
@@ -458,7 +458,7 @@ func TestMigrationCompat_ColumnTypes(t *testing.T) {
 	// Query scope_entry table columns
 	rows2, err := db.QueryContext(ctx, `PRAGMA table_info(scope_entry)`)
 	require.NoError(t, err)
-	defer rows2.Close()
+	defer func() { _ = rows2.Close() }()
 
 	scopeColumns := map[string]bool{}
 	for rows2.Next() {

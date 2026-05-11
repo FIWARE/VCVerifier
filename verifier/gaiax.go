@@ -7,7 +7,7 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/gaiax"
-	"golang.org/x/exp/slices"
+	"slices"
 
 	logging "github.com/fiware/VCVerifier/logging"
 )
@@ -15,7 +15,7 @@ import (
 const gaiaxCompliancePolicy = "GaiaXComplianceIssuer"
 const registryUrlPropertyName = "registryAddress"
 
-var ErrorNoTrustedIssuer = errors.New("Issuer is not in trusted issuer list")
+var ErrorNoTrustedIssuer = errors.New("issuer is not in trusted issuer list")
 
 type GaiaXRegistryValidationService struct {
 	validateAll               bool

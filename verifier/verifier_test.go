@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -592,7 +593,9 @@ func TestAuthenticationResponse(t *testing.T) {
 			httpClient = mockHttpClient{tc.callbackError, nil}
 			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			testKey, _ := jwk.Import(ecdsaKey)
-			jwk.AssignKeyID(testKey)
+			if err := jwk.AssignKeyID(testKey); err != nil {
+				t.Fatalf("Failed to assign key ID: %v", err)
+			}
 			nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
 			credentialsConfig := mockCredentialConfig{
 				mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {
@@ -827,20 +830,26 @@ func (mts mockTokenSigner) Sign(t jwt.Token, options ...jwt.SignOption) ([]byte,
 
 // get the static key
 func getECDSAKey() (key jwk.Key) {
-
+	// Use crypto/ecdh to derive the public key from a fixed 32-byte scalar,
+	// avoiding the deprecated elliptic.Curve.ScalarBaseMult method.
+	dBytes := make([]byte, 32)
 	d := new(big.Int)
 	d.SetString("1234567890123456789012345678901234567890", 10) // example private scalar
+	dRaw := d.Bytes()
+	copy(dBytes[32-len(dRaw):], dRaw)
 
-	// Choose the curve
-	curve := elliptic.P256()
+	ecdhKey, err := ecdh.P256().NewPrivateKey(dBytes)
+	if err != nil {
+		panic(err)
+	}
 
-	// Derive the public key point (X, Y)
-	x, y := curve.ScalarBaseMult(d.Bytes())
+	pub := ecdhKey.PublicKey().Bytes() // uncompressed: 0x04 || X (32) || Y (32)
+	x := new(big.Int).SetBytes(pub[1:33])
+	y := new(big.Int).SetBytes(pub[33:65])
 
-	// Construct the private key
 	priv := &ecdsa.PrivateKey{
 		PublicKey: ecdsa.PublicKey{
-			Curve: curve,
+			Curve: elliptic.P256(),
 			X:     x,
 			Y:     y,
 		},

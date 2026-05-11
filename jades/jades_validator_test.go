@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"testing"
 )
@@ -33,7 +33,7 @@ func TestValidateSignature(t *testing.T) {
 			signature: "valid_signature",
 			mockResponse: &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       ioutil.NopCloser(bytes.NewBufferString(`{"simpleReport":{"signaturesCount":1,"validSignaturesCount":1}}`)),
+				Body:       io.NopCloser(bytes.NewBufferString(`{"simpleReport":{"signaturesCount":1,"validSignaturesCount":1}}`)),
 			},
 			mockError:      nil,
 			expectedResult: true,
@@ -44,7 +44,7 @@ func TestValidateSignature(t *testing.T) {
 			signature: "invalid_signature",
 			mockResponse: &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       ioutil.NopCloser(bytes.NewBufferString(`{"simpleReport":{"signaturesCount":1,"validSignaturesCount":0}}`)),
+				Body:       io.NopCloser(bytes.NewBufferString(`{"simpleReport":{"signaturesCount":1,"validSignaturesCount":0}}`)),
 			},
 			mockError:      nil,
 			expectedResult: false,
@@ -55,7 +55,7 @@ func TestValidateSignature(t *testing.T) {
 			signature: "no_signatures",
 			mockResponse: &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       ioutil.NopCloser(bytes.NewBufferString(`{"simpleReport":{"signaturesCount":0,"validSignaturesCount":0}}`)),
+				Body:       io.NopCloser(bytes.NewBufferString(`{"simpleReport":{"signaturesCount":0,"validSignaturesCount":0}}`)),
 			},
 			mockError:      nil,
 			expectedResult: false,
@@ -64,7 +64,7 @@ func TestValidateSignature(t *testing.T) {
 		{
 			testName:       "Bad response from validation endpoint",
 			signature:      "bad_response",
-			mockResponse:   &http.Response{StatusCode: http.StatusInternalServerError, Body: ioutil.NopCloser(bytes.NewBufferString(""))},
+			mockResponse:   &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(bytes.NewBufferString(""))},
 			mockError:      nil,
 			expectedResult: false,
 			expectedError:  ErrorBadResponse,
@@ -90,7 +90,7 @@ func TestValidateSignature(t *testing.T) {
 			signature: "decode_error",
 			mockResponse: &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       ioutil.NopCloser(bytes.NewBufferString(`{"simpleReport":`)),
+				Body:       io.NopCloser(bytes.NewBufferString(`{"simpleReport":`)),
 			},
 			mockError:      nil,
 			expectedResult: false,
