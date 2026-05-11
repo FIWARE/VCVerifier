@@ -1,0 +1,30 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 1.2.3)'
+        required: true
+        type: string
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
+  build-images:
+    needs: build
+    uses: ./.github/workflows/build-images.yml
+
+  image-security-analysis:
+    needs: build-images
+    uses: ./.github/workflows/image-security-analysis.yml
+
+  release:
+    needs: image-security-analysis
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ inputs.version }}
+    secrets:
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+      QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
