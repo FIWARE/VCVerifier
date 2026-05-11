@@ -4,6 +4,19 @@ Three entry-point workflows depending on the event. All reusable jobs live at th
 
 ## Workflows
 
+### `check.yml` — PR Label Check
+
+Triggered on every PR targeting `main`, including when labels are added or removed. Enforces that the PR has a `major`, `minor`, or `patch` label before it can be merged. If the check fails, a comment is posted on the PR with instructions.
+
+```
+PR opened / labeled / updated
+        │
+        ├──► check   (zwaldowski/match-label-action → semver dry-run)
+        └──► comment (posts PR comment on failure)
+```
+
+---
+
 ### `pr.yml` — Pull Request
 
 Triggered on every PR targeting `main`. Runs validation in parallel to give fast feedback before merge. Does **not** build or push images.
@@ -21,7 +34,7 @@ PR opened / updated
 
 ### `main.yml` — Merge to main
 
-Triggered when a PR is merged into `main`. Runs validation in parallel, then the release pipeline. The release only happens if the merged PR carries a `major`, `minor`, or `patch` label — otherwise the image is published as `latest` only.
+Triggered when a PR is merged into `main`. Runs validation in parallel, then the release pipeline. The release only happens if the merged PR carries a `major`, `minor`, or `patch` label — otherwise no image is pushed.
 
 ```
 Merge to main
@@ -37,51 +50,40 @@ Release (single job):
   4. docker build + push (multi-platform: amd64 + arm64)
   5. GitHub Release (only if PR had major/minor/patch label)
 
-  PR label present (major/minor/patch) → push :latest + :x.y.z + GitHub Release
-  No label                             → push :latest only
-```
-
----
-
-### `manual-release.yml` — Manual Release
-
-Triggered manually from the GitHub Actions UI. Accepts a version string and skips label detection entirely. Useful for hotfixes or re-releasing without creating a new PR.
-
-```
-workflow_dispatch (version: x.y.z)
-        │
-        └──► Release
-               │
-               ├── go build
-               ├── docker build → trivy scan → SARIF
-               ├── docker build + push :latest + :x.y.z (multi-platform)
-               └── GitHub Release
+  PR label present (major/minor/patch) → push :x.y.z + GitHub Release
+  No label                             → no image pushed
 ```
 
 ---
 
 ## Reusable workflows
 
-| File | Tool | Blocks pipeline |
+| File | Tool | Purpose | Blocks pipeline |
+|---|---|---|---|
+| `style-guide.yml` | golangci-lint | Code style enforcement | Yes |
+| `build.yml` | go build | Compilation check | Yes |
+| `tests.yml` | go test -race + Coveralls | Unit tests + coverage | Yes |
+| `security-analysis.yml` | govulncheck + gosec | Dependency CVEs + source code security | No (report only) |
+| `release.yml` | trivy + quay.io push + GitHub Release | Image scan + publish | Yes |
+
+## Security reporting
+
+Three tools report findings to the **Security → Code scanning** tab in GitHub via SARIF:
+
+| Tool | What it scans | Where |
 |---|---|---|
-| `style-guide.yml` | golangci-lint | Yes |
-| `build.yml` | go build | Yes |
-| `tests.yml` | go test -race + Coveralls | Yes |
-| `security-analysis.yml` | govulncheck, gosec | No (report only) |
-| `release.yml` | trivy + quay.io push + GitHub Release | Yes |
+| **gosec** | Go source code — hardcoded secrets, SQL injection, unsafe patterns | `security-analysis.yml` |
+| **govulncheck** | Go dependencies — known CVEs (Go Vulnerability Database) | `security-analysis.yml` |
+| **trivy** | Container image — OS and library vulnerabilities | `release.yml` |
 
-### Security reporting
-
-Both `security-analysis.yml` (source code) and the trivy scan inside `release.yml` (container image) report findings to the **Security → Code scanning** tab in GitHub via SARIF upload. Neither blocks the pipeline (`continue-on-error: true`).
-
-The trivy scan builds the image locally (never pushed to a registry, never stored as an artifact) and scans it in-place before the final multi-platform push.
+None of these block the pipeline (`continue-on-error: true`). The image scanned by trivy is built locally and never stored as an artifact.
 
 ## Secrets required
 
 | Secret | Used in |
 |---|---|
-| `QUAY_USERNAME` | `main.yml`, `manual-release.yml` |
-| `QUAY_PASSWORD` | `main.yml`, `manual-release.yml` |
+| `QUAY_USERNAME` | `main.yml` |
+| `QUAY_PASSWORD` | `main.yml` |
 
 ## Configuration
 
