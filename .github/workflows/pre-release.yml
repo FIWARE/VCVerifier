@@ -1,17 +1,15 @@
-name: Release
+name: Pre-Release
 
 on:
-  workflow_call:
-    inputs:
-      version:
-        required: false
-        type: string
-        default: ""
-    secrets:
-      QUAY_USERNAME:
-        required: true
-      QUAY_PASSWORD:
-        required: true
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+    branches:
+      - main
 
 env:
   REGISTRY: quay.io
@@ -22,52 +20,26 @@ jobs:
   generate-version:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      has_version: ${{ steps.version.outputs.has_version }}
+      version: ${{ steps.out.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - id: pr
-        if: inputs.version == ''
-        uses: actions-ecosystem/action-get-merged-pull-request@v1.0.1
+      - id: bump
+        uses: zwaldowski/match-label-action@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Detect semver label
-        if: inputs.version == ''
-        id: label
-        run: |
-          BUMP=""
-          while IFS= read -r label; do
-            case "$label" in
-              major|minor|patch) BUMP="$label"; break ;;
-            esac
-          done <<< "${{ steps.pr.outputs.labels }}"
-          echo "bump=$BUMP" >> $GITHUB_OUTPUT
-          [[ -n "$BUMP" ]] && echo "has_bump=true" >> $GITHUB_OUTPUT || echo "has_bump=false" >> $GITHUB_OUTPUT
+          allowed: major,minor,patch
 
       - uses: zwaldowski/semver-release-action@v6
-        if: inputs.version == '' && steps.label.outputs.has_bump == 'true'
-        id: semver
         with:
           dry_run: true
-          bump: ${{ steps.label.outputs.bump }}
+          bump: ${{ steps.bump.outputs.match }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set version output
-        id: version
-        run: |
-          if [[ -n "${{ inputs.version }}" ]]; then
-            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-            echo "has_version=true" >> $GITHUB_OUTPUT
-          elif [[ "${{ steps.label.outputs.has_bump }}" == "true" ]]; then
-            echo "version=${{ steps.semver.outputs.version }}" >> $GITHUB_OUTPUT
-            echo "has_version=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_version=false" >> $GITHUB_OUTPUT
-          fi
+      - name: Set pre-release version
+        id: out
+        run: echo "version=${VERSION}-PRE-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
 
   build-scan-push:
     needs: generate-version
@@ -114,21 +86,15 @@ jobs:
           username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_PASSWORD }}
 
-      - name: Build and push
-        if: needs.generate-version.outputs.has_version == 'true'
-        uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ needs.generate-version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          tags: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ needs.generate-version.outputs.version }}
 
   build-binaries:
     needs: generate-version
-    if: needs.generate-version.outputs.has_version == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -162,7 +128,6 @@ jobs:
       - generate-version
       - build-scan-push
       - build-binaries
-    if: needs.generate-version.outputs.has_version == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -179,7 +144,7 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           automatic_release_tag: ${{ needs.generate-version.outputs.version }}
-          prerelease: false
+          prerelease: true
           title: ${{ needs.generate-version.outputs.version }}
           files: |
             LICENSE
