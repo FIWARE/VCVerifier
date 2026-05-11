@@ -90,6 +90,6 @@ The image name and registry are configured at the top of `release.yml`:
 ```yaml
 env:
   REGISTRY: quay.io
-  REPOSITORY: mortega5
+  REPOSITORY: fiware
   IMAGE_NAME: vcverifier
 ```

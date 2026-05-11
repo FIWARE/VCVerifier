@@ -15,7 +15,7 @@ on:
 
 env:
   REGISTRY: quay.io
-  REPOSITORY: mortega5
+  REPOSITORY: fiware
   IMAGE_NAME: vcverifier
 
 jobs:
