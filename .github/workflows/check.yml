@@ -1,7 +1,7 @@
 name: Check PR
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - opened
       - synchronize
@@ -18,8 +18,6 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - id: bump
         uses: zwaldowski/match-label-action@v1
         with:
