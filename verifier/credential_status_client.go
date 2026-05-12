@@ -119,7 +119,7 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrorStatusListHttpFailure, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < statusListHTTPOKMin || resp.StatusCode >= statusListHTTPOKMaxExclusive {
 		return nil, fmt.Errorf("%w: unexpected status %d", ErrorStatusListHttpFailure, resp.StatusCode)

@@ -592,7 +592,7 @@ func TestAuthenticationResponse(t *testing.T) {
 			httpClient = mockHttpClient{tc.callbackError, nil}
 			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			testKey, _ := jwk.Import(ecdsaKey)
-			jwk.AssignKeyID(testKey)
+			_ = jwk.AssignKeyID(testKey)
 			nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
 			credentialsConfig := mockCredentialConfig{
 				mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {
@@ -835,7 +835,7 @@ func getECDSAKey() (key jwk.Key) {
 	curve := elliptic.P256()
 
 	// Derive the public key point (X, Y)
-	x, y := curve.ScalarBaseMult(d.Bytes())
+	x, y := curve.ScalarBaseMult(d.Bytes()) //nolint:staticcheck
 
 	// Construct the private key
 	priv := &ecdsa.PrivateKey{
@@ -927,15 +927,15 @@ func TestGetTokenWithRefreshToken(t *testing.T) {
 	const refreshTokenExpirationMinutes = 60
 
 	type test struct {
-		testName              string
-		testCode              string
-		testRedirectUri       string
-		tokenSession          map[string]tokenStore
-		refreshTokenEnabled   bool
-		refreshTokenRepo      *mockRefreshTokenRepository
-		expectedRefreshToken  bool
-		expectedError         error
-		repoStoreErr          error
+		testName             string
+		testCode             string
+		testRedirectUri      string
+		tokenSession         map[string]tokenStore
+		refreshTokenEnabled  bool
+		refreshTokenRepo     *mockRefreshTokenRepository
+		expectedRefreshToken bool
+		expectedError        error
+		repoStoreErr         error
 	}
 
 	tests := []test{

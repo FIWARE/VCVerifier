@@ -14,7 +14,7 @@ const (
 	GAIA_X_COMPLIANCE_SUBJECT_TYPE = "gx:compliance"
 )
 
-var ErrorNoComplianceID = errors.New("No compliance subject found for credential")
+var ErrorNoComplianceID = errors.New("no compliance subject found for credential")
 
 type ComplianceValidationContext struct {
 	complianceSubjects []ComplianceSubject

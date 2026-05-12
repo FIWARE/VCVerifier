@@ -45,7 +45,7 @@ func TestHealth_ReturnsSingleton(t *testing.T) {
 func TestNewConfigServerHealth_WithValidDB(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	h := NewConfigServerHealth(db)
 	assert.NotNil(t, h)
@@ -58,7 +58,7 @@ func TestNewConfigServerHealth_WithValidDB(t *testing.T) {
 func TestNewConfigServerHealth_WithClosedDB(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-	db.Close() // Close immediately to simulate a dead connection
+	_ = db.Close() // Close immediately to simulate a dead connection
 
 	h := NewConfigServerHealth(db)
 	assert.NotNil(t, h)
@@ -71,7 +71,7 @@ func TestNewConfigServerHealth_WithClosedDB(t *testing.T) {
 func TestConfigServerHealthReq_ReturnsOKWithLiveDB(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	h := NewConfigServerHealth(db)
 
@@ -93,7 +93,7 @@ func TestConfigServerHealthReq_ReturnsOKWithLiveDB(t *testing.T) {
 func TestConfigServerHealthReq_ReturnsUnavailableWithClosedDB(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-	db.Close()
+	_ = db.Close()
 
 	h := NewConfigServerHealth(db)
 

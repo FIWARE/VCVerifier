@@ -383,4 +383,3 @@ func assertHasClaim(t *testing.T, token jwt.Token, key string) {
 	require.NoError(t, err, "claim %q must be present in JWT", key)
 	require.NotNil(t, val, "claim %q must not be nil", key)
 }
-

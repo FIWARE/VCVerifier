@@ -120,11 +120,11 @@ func (ac AuthorizingHttpClient) handleAuthorization(tirAddress string) (bearerTo
 	}
 
 	metaData := metaDataInterface.(common.OpenIDProviderMetadata)
-	if !slices.Contains(metaData.GrantTypesSupported, common.TYPE_VP_TOKEN) {
+	if !slices.Contains(metaData.GrantTypesSupported, common.TYPE_VP_TOKEN) { //nolint:govet
 		logging.Log().Warnf("The server does not support grant type vp_token. Config: %v", logging.PrettyPrintObject(metaData))
 		return bearerToken, ErrorGrantTypeNotSupported
 	}
-	if !slices.Contains(metaData.ScopesSupported, SCOPE_TIR_READ) {
+	if !slices.Contains(metaData.ScopesSupported, SCOPE_TIR_READ) { //nolint:govet
 		logging.Log().Warnf("The server does not support scope tir_read. Config: %v", logging.PrettyPrintObject(metaData))
 		return bearerToken, ErrorScopeNotSupported
 	}

@@ -49,7 +49,7 @@ func applyEnvOverrides(v reflect.Value, prefix string) error {
 			if err := applyEnvOverrides(fieldVal, envName); err != nil {
 				return err
 			}
-		case reflect.Ptr:
+		case reflect.Pointer:
 			if fieldVal.Type().Elem().Kind() == reflect.Struct {
 				if hasEnvVarWithPrefix(fieldVal.Type().Elem(), envName) {
 					if fieldVal.IsNil() {
@@ -101,7 +101,7 @@ func hasEnvVarWithPrefix(t reflect.Type, prefix string) bool {
 			if hasEnvVarWithPrefix(field.Type, envName) {
 				return true
 			}
-		case reflect.Ptr:
+		case reflect.Pointer:
 			if field.Type.Elem().Kind() == reflect.Struct {
 				if hasEnvVarWithPrefix(field.Type.Elem(), envName) {
 					return true

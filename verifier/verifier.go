@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -249,7 +248,7 @@ type NonceGenerator interface {
 // generate a random nonce
 func (r *randomGenerator) GenerateNonce() string {
 	b := make([]byte, 16)
-	io.ReadFull(rand.Reader, b)
+	_, _ = io.ReadFull(rand.Reader, b)
 	nonce := base64.RawURLEncoding.EncodeToString(b)
 	return nonce
 }
@@ -371,7 +370,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	}
 	if key != nil && !key.Has(jwk.KeyIDKey) {
 		logging.Log().Infof("Adding kid='%s' to keyset", kid)
-		key.Set(jwk.KeyIDKey, kid)
+		_ = key.Set(jwk.KeyIDKey, kid)
 	}
 
 	if err != nil {
@@ -380,7 +379,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	}
 
 	didSigningKey, err := getRequestSigningKey(verifierConfig.ClientIdentification.KeyPath, verifierConfig.ClientIdentification.Id)
-	if (slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_VALUE) || slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_REFERENCE)) && err != nil {
+	if (slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_VALUE) || slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_REFERENCE)) && err != nil { //nolint:govet
 		logging.Log().Errorf("Was not able to get a signing key, despite mode %s supported. Err: %v", REQUEST_MODE_BY_VALUE, err)
 		return err
 	} else {
@@ -444,7 +443,7 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 		logging.Log().Warnf("Supported: %s", v)
 	}
 
-	if !slices.Contains(v.supportedRequestModes, requestMode) {
+	if !slices.Contains(v.supportedRequestModes, requestMode) { //nolint:govet
 		logging.Log().Infof("QR with mode %s was requested, but only %v is supported.", requestMode, v.supportedRequestModes)
 		return qr, ErrorUnsupportedRequestMode
 	}
@@ -472,7 +471,7 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 		logging.Log().Warnf("Supported: %s", v)
 	}
 
-	if !slices.Contains(v.supportedRequestModes, requestMode) {
+	if !slices.Contains(v.supportedRequestModes, requestMode) { //nolint:govet
 		logging.Log().Infof("QR with mode %s was requested, but only %v is supported.", requestMode, v.supportedRequestModes)
 		return qrInfo, ErrorUnsupportedRequestMode
 	}
@@ -593,7 +592,7 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 func (v *CredentialVerifier) GetJWKS() jwk.Set {
 	jwks := jwk.NewSet()
 	publicKey, _ := v.signingKey.PublicKey()
-	jwks.AddKey(publicKey)
+	_ = jwks.AddKey(publicKey)
 	return jwks
 }
 
@@ -1198,7 +1197,7 @@ func (v *CredentialVerifier) getTrustRegistriesValidationContextFromScope(client
 
 	// Check if all required credentials were presented
 	for _, credentialType := range requiredCredentialTypes {
-		if !slices.Contains(credentialTypes, credentialType) {
+		if !slices.Contains(credentialTypes, credentialType) { //nolint:govet
 			logging.Log().Warnf("Required Credential of Type %s was not provided. Type was: %s", credentialType, credentialTypes)
 			return verificationContext, ErrorRequiredCredentialNotProvided
 		}
@@ -1234,13 +1233,13 @@ func verifyChain(vcs []*common.Credential) (bool, error) {
 	var compliance *common.Credential
 	for _, vc := range vcs {
 		types := vc.Contents().Types
-		if slices.Contains(types, "gx:LegalParticipant") {
+		if slices.Contains(types, "gx:LegalParticipant") { //nolint:govet
 			legalEntity = vc
 		}
-		if slices.Contains(types, "gx:compliance") {
+		if slices.Contains(types, "gx:compliance") { //nolint:govet
 			compliance = vc
 		}
-		if slices.Contains(types, "gx:NaturalParticipant") {
+		if slices.Contains(types, "gx:NaturalParticipant") { //nolint:govet
 			naturalEntity = vc
 		}
 	}
@@ -1428,7 +1427,7 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 	}
 
 	headers := jws.NewHeaders()
-	headers.Set("typ", REQUEST_OBJECT_TYP)
+	_ = headers.Set("typ", REQUEST_OBJECT_TYP)
 	if v.clientIdentification.CertificatePath != "" {
 		certs, err := loadCertChainFromPEM(v.clientIdentification.CertificatePath)
 		if err != nil {
@@ -1438,7 +1437,7 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 
 		x5cChain := cert.Chain{}
 		for _, cert := range certs {
-			x5cChain.AddString(base64.StdEncoding.EncodeToString(cert.Raw))
+			_ = x5cChain.AddString(base64.StdEncoding.EncodeToString(cert.Raw))
 		}
 
 		err = headers.Set("x5c", &x5cChain)
@@ -1509,15 +1508,6 @@ func callbackToRequester(loginSession loginSession, authorizationCode string) er
 	return nil
 }
 
-// helper method to extract the hostname from a url
-func getHostName(urlString string) (host string, err error) {
-	url, err := url.Parse(urlString)
-	if err != nil {
-		logging.Log().Warnf("Was not able to extract the host from the redirect_url %s. Err: %v", urlString, err)
-		return host, err
-	}
-	return url.Host, err
-}
 
 func loadKey(keyPath string) (key jwk.Key, err error) {
 	// read key file
@@ -1538,7 +1528,7 @@ func loadKey(keyPath string) (key jwk.Key, err error) {
 func getRequestSigningKey(keyPath string, clientId string) (key jwk.Key, err error) {
 	key, err = loadKey(keyPath)
 	if key != nil {
-		key.Set("kid", clientId)
+		_ = key.Set("kid", clientId)
 	}
 	return
 }
@@ -1581,7 +1571,7 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	if verifierConfig.TirAddress == "" {
 		return ErrorNoTIR
 	}
-	if !slices.Contains(SupportedModes, verifierConfig.ValidationMode) {
+	if !slices.Contains(SupportedModes, verifierConfig.ValidationMode) { //nolint:govet
 		return ErrorUnsupportedValidationMode
 	}
 	if len(verifierConfig.SupportedModes) == 0 {

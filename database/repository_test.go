@@ -583,10 +583,10 @@ func newTestRefreshRepo(t *testing.T) *SqlRefreshTokenRepository {
 // sampleRefreshToken builds a RefreshTokenRow for testing.
 func sampleRefreshToken(token string, expiresAt int64) RefreshTokenRow {
 	return RefreshTokenRow{
-		Token:      token,
-		ClientID:   "client-1",
-		Claims: `{"iss":"https://verifier.example.com","sub":"did:key:holder123","aud":"aud-1"}`,
-		ExpiresAt:  expiresAt,
+		Token:     token,
+		ClientID:  "client-1",
+		Claims:    `{"iss":"https://verifier.example.com","sub":"did:key:holder123","aud":"aud-1"}`,
+		ExpiresAt: expiresAt,
 	}
 }
 
@@ -718,10 +718,10 @@ func TestStoreRefreshToken_FieldRoundTrip(t *testing.T) {
 
 	claimsJSON := `eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJ2ZXJpZmllciIsInN1YiI6ImRpZDprZXk6aG9sZGVyIiwiYXVkIjoiYXVkLTEifQ.sig`
 	row := RefreshTokenRow{
-		Token:      "field-roundtrip-tok",
-		ClientID:   "client-roundtrip",
-		Claims: claimsJSON,
-		ExpiresAt:  1893456000, // 2030-01-01
+		Token:     "field-roundtrip-tok",
+		ClientID:  "client-roundtrip",
+		Claims:    claimsJSON,
+		ExpiresAt: 1893456000, // 2030-01-01
 	}
 	require.NoError(t, repo.StoreRefreshToken(ctx, row))
 
@@ -743,16 +743,16 @@ func TestRefreshTokenIsolation(t *testing.T) {
 
 	// Store two tokens for different clients.
 	row1 := RefreshTokenRow{
-		Token:      "iso-tok-1",
-		ClientID:   "client-alpha",
-		Claims: `{"client":"alpha"}`,
-		ExpiresAt:  9999999999,
+		Token:     "iso-tok-1",
+		ClientID:  "client-alpha",
+		Claims:    `{"client":"alpha"}`,
+		ExpiresAt: 9999999999,
 	}
 	row2 := RefreshTokenRow{
-		Token:      "iso-tok-2",
-		ClientID:   "client-beta",
-		Claims: `{"client":"beta"}`,
-		ExpiresAt:  9999999999,
+		Token:     "iso-tok-2",
+		ClientID:  "client-beta",
+		Claims:    `{"client":"beta"}`,
+		ExpiresAt: 9999999999,
 	}
 	require.NoError(t, repo.StoreRefreshToken(ctx, row1))
 	require.NoError(t, repo.StoreRefreshToken(ctx, row2))
@@ -852,10 +852,10 @@ func TestRefreshTokenRepository_TableDriven(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			row := RefreshTokenRow{
-				Token:      tc.token,
-				ClientID:   tc.clientID,
-				Claims: tc.payload,
-				ExpiresAt:  tc.expiresAt,
+				Token:     tc.token,
+				ClientID:  tc.clientID,
+				Claims:    tc.payload,
+				ExpiresAt: tc.expiresAt,
 			}
 			require.NoError(t, repo.StoreRefreshToken(ctx, row))
 
@@ -1103,4 +1103,3 @@ func TestConfigureHashing_DifferentSaltsProduceDifferentKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 }
-

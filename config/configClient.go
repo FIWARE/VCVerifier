@@ -517,9 +517,9 @@ func NewCCSHttpClient(configEndpoint string) (client ConfigClient, err error) {
 }
 
 func (hcc HttpConfigClient) GetServices() (services []ConfiguredService, err error) {
-	var currentPage int = 0
-	var pageSize int = 100
-	var finished bool = false
+	var currentPage = 0
+	var pageSize = 100
+	var finished = false
 	services = []ConfiguredService{}
 
 	for !finished {
@@ -528,9 +528,7 @@ func (hcc HttpConfigClient) GetServices() (services []ConfiguredService, err err
 			logging.Log().Warnf("Failed to receive services page %v with size %v. Err: %v", currentPage, pageSize, err)
 			return nil, err
 		}
-		for _, svc := range servicesResponse.Services {
-			services = append(services, svc)
-		}
+		services = append(services, servicesResponse.Services...)
 		// we check both, since its possible that during the iteration new services where added to old pages(total != len(services)).
 		// those will be retrieved on next iteration, thus can be ignored
 		if servicesResponse.Total == 0 || len(servicesResponse.Services) < pageSize || servicesResponse.Total == len(services) {

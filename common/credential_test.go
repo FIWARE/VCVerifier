@@ -260,7 +260,9 @@ func TestPresentation_MarshalJSON_Empty(t *testing.T) {
 	}
 
 	var parsed map[string]interface{}
-	json.Unmarshal(data, &parsed)
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Expected no error unmarshalling, got %v", err)
+	}
 	if _, ok := parsed[VPKeyVerifiableCredential]; ok {
 		t.Error("Expected no verifiableCredential key for empty presentation")
 	}
@@ -280,7 +282,9 @@ func TestPresentation_MarshalJSON_CustomContext(t *testing.T) {
 	}
 
 	var parsed map[string]interface{}
-	json.Unmarshal(data, &parsed)
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Expected no error unmarshalling, got %v", err)
+	}
 	ctx := parsed[JSONLDKeyContext].([]interface{})
 	if len(ctx) != 2 || ctx[0] != ContextCredentialsV2 {
 		t.Errorf("Expected custom context, got %v", ctx)
