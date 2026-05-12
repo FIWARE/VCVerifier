@@ -1,0 +1,32 @@
+name: Main
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: main-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  style-guide:
+    uses: ./.github/workflows/style-guide.yml
+
+  build:
+    uses: ./.github/workflows/build.yml
+
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  security-analysis:
+    uses: ./.github/workflows/security-analysis.yml
+
+  release:
+    needs:
+      - style-guide
+      - tests
+      - security-analysis
+    uses: ./.github/workflows/release.yml
+    secrets:
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+      QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}

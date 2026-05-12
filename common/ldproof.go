@@ -32,11 +32,11 @@ const (
 )
 
 var (
-	ErrorLDProofMarshal       = errors.New("failed_to_marshal_presentation")
-	ErrorLDProofUnmarshal     = errors.New("failed_to_unmarshal_presentation")
-	ErrorLDProofCanonDoc      = errors.New("failed_to_canonicalize_document")
-	ErrorLDProofCanonProof    = errors.New("failed_to_canonicalize_proof_options")
-	ErrorLDProofSign          = errors.New("failed_to_sign")
+	ErrorLDProofMarshal    = errors.New("failed_to_marshal_presentation")
+	ErrorLDProofUnmarshal  = errors.New("failed_to_unmarshal_presentation")
+	ErrorLDProofCanonDoc   = errors.New("failed_to_canonicalize_document")
+	ErrorLDProofCanonProof = errors.New("failed_to_canonicalize_proof_options")
+	ErrorLDProofSign       = errors.New("failed_to_sign")
 )
 
 // LDProof represents a Linked Data Proof attached to a Verifiable Presentation.
@@ -80,7 +80,7 @@ func (p *Presentation) AddLinkedDataProof(ctx *LinkedDataProofContext) error {
 	// Create proof options with @context from the document
 	created := ctx.Created.Format(time.RFC3339)
 	proofOptions := JSONObject{
-		JSONLDKeyContext:              vpMap[JSONLDKeyContext],
+		JSONLDKeyContext:             vpMap[JSONLDKeyContext],
 		JSONLDKeyType:                ctx.SignatureType,
 		LDProofKeyCreated:            created,
 		LDProofKeyVerificationMethod: ctx.VerificationMethod,

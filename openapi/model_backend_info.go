@@ -10,7 +10,6 @@
 package openapi
 
 type BackendInfo struct {
-
 	IssuerDid Did `json:"issuerDid,omitempty"`
 
 	VerifierDid Did `json:"verifierDid,omitempty"`

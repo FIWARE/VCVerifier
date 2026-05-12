@@ -97,7 +97,7 @@ func isWildcardTil(tilList []string) (isWildcard bool, err error) {
 	if len(tilList) == 1 && tilList[0] == WILDCARD_TIL {
 		return true, err
 	}
-	if len(tilList) > 1 && slices.Contains(tilList, WILDCARD_TIL) {
+	if len(tilList) > 1 && slices.Contains(tilList, WILDCARD_TIL) { //nolint:govet
 		return false, ErrorInvalidTil
 	}
 	return false, err
@@ -188,7 +188,7 @@ func verifyWithJsonPath(subjectToVerfiy common.Subject, claim tir.Claim) (result
 	case map[string]interface{}:
 		return containsMap(toSliceOfMaps(claim.AllowedValues), claimValues)
 	default:
-		return slices.Contains(claim.AllowedValues, claimValues)
+		return slices.Contains(claim.AllowedValues, claimValues) //nolint:govet
 	}
 
 }
@@ -249,7 +249,7 @@ func contains(interfaces []interface{}, interfaceToCheck interface{}) bool {
 			logging.Log().Warn("Not able to marshal one of the interfaces.")
 			continue
 		}
-		if slices.Compare(jsonBytes, jsonBytesToCheck) == 0 {
+		if slices.Compare(jsonBytes, jsonBytesToCheck) == 0 { //nolint:govet
 			return true
 		}
 	}

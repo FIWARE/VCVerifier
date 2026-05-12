@@ -15,7 +15,7 @@ import (
 const gaiaxCompliancePolicy = "GaiaXComplianceIssuer"
 const registryUrlPropertyName = "registryAddress"
 
-var ErrorNoTrustedIssuer = errors.New("Issuer is not in trusted issuer list")
+var ErrorNoTrustedIssuer = errors.New("issuer is not in trusted issuer list")
 
 type GaiaXRegistryValidationService struct {
 	validateAll               bool
@@ -51,7 +51,7 @@ func InitGaiaXRegistryValidationService(verifierConfig *configModel.Verifier) Ga
 func (v *GaiaXRegistryValidationService) ValidateVC(verifiableCredential *common.Credential, validationContext ValidationContext) (result bool, err error) {
 	isContained := false
 	for _, t := range verifiableCredential.Contents().Types {
-		isContained = slices.Contains(v.credentialTypesToValidate, t)
+		isContained = slices.Contains(v.credentialTypesToValidate, t) //nolint:govet
 		if isContained {
 			break
 		}
@@ -62,7 +62,7 @@ func (v *GaiaXRegistryValidationService) ValidateVC(verifiableCredential *common
 		if err != nil {
 			return false, err
 		}
-		if slices.Contains(issuerDids, verifiableCredential.Contents().Issuer.ID) {
+		if slices.Contains(issuerDids, verifiableCredential.Contents().Issuer.ID) { //nolint:govet
 			logging.Log().Info("Credential was issued by trusted issuer")
 			return true, nil
 		} else {

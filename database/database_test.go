@@ -40,7 +40,7 @@ func TestNewConnection_SQLiteInMemory(t *testing.T) {
 	db, err := NewConnection(cfg)
 	require.NoError(t, err)
 	require.NotNil(t, db)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Verify the connection works.
 	var result int

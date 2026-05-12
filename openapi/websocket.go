@@ -30,7 +30,7 @@ func sendRedirect(c *gin.Context, state string, code string, redirectUrl string)
 		logging.Log().Warnf("Was not able to notify frontend. Err: %v", err)
 	}
 	go func() {
-		defer wsConnection.Close()
+		defer func() { _ = wsConnection.Close() }()
 		for {
 			_, _, err := wsConnection.ReadMessage()
 			if err != nil {
@@ -51,14 +51,16 @@ func WsHandler(c *gin.Context) {
 
 	connection, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		c.AbortWithError(http.StatusBadRequest, err)
+		_ = c.AbortWithError(http.StatusBadRequest, err)
 		return
 	}
 	sessions.Store(state, connection)
-	connection.WriteJSON(gin.H{"type": "session"})
+	if err := connection.WriteJSON(gin.H{"type": "session"}); err != nil {
+		logging.Log().Warnf("Was not able to send session message to frontend. Err: %v", err)
+	}
 
 	go func() {
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		for {
 			_, _, err := connection.ReadMessage()
 			if err != nil {

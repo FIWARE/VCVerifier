@@ -49,8 +49,8 @@ func buildSDJWT(t *testing.T, claims map[string]interface{}, sdClaims []string, 
 		privKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		jwkKey, _ := jwk.Import(privKey)
 		hdrs := jws.NewHeaders()
-		hdrs.Set(jws.AlgorithmKey, jwa.ES256())
-		hdrs.Set("typ", "vc+sd-jwt")
+		_ = hdrs.Set(jws.AlgorithmKey, jwa.ES256())
+		_ = hdrs.Set("typ", "vc+sd-jwt")
 		signed, err := jws.Sign(payloadBytes, jws.WithKey(jwa.ES256(), jwkKey, jws.WithProtectedHeaders(hdrs)))
 		if err != nil {
 			t.Fatalf("Failed to sign: %v", err)

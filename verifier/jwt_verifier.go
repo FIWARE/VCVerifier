@@ -13,7 +13,7 @@ const (
 	ValidationModeNone        = "none"
 	ValidationModeCombined    = "combined"
 	ValidationModeJsonLd      = "jsonLd"
-	ValidationModeBaseContext  = "baseContext"
+	ValidationModeBaseContext = "baseContext"
 )
 
 // W3C base context credential types.

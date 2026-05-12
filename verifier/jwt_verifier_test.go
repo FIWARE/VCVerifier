@@ -8,46 +8,46 @@ import (
 
 func TestGetKeyFromMethod(t *testing.T) {
 	type test struct {
-		testName             string
-		verificationMethod   string
-		expectedKeyId        string
-		expectedAbsolutePath string
+		testName                 string
+		verificationMethod       string
+		expectedKeyId            string
+		expectedAbsolutePath     string
 		expectedFullAbsolutePath string
-		expectedError        error
+		expectedError            error
 	}
 
 	tests := []test{
 		{
-			testName:             "Full absolute path",
-			verificationMethod:   "did:key:123#abc",
-			expectedKeyId:        "abc",
-			expectedAbsolutePath: "did:key:123",
+			testName:                 "Full absolute path",
+			verificationMethod:       "did:key:123#abc",
+			expectedKeyId:            "abc",
+			expectedAbsolutePath:     "did:key:123",
 			expectedFullAbsolutePath: "did:key:123#abc",
-			expectedError:        nil,
+			expectedError:            nil,
 		},
 		{
-			testName:             "Absolute path",
-			verificationMethod:   "did:key:123",
-			expectedKeyId:        "123",
-			expectedAbsolutePath: "did:key:123",
+			testName:                 "Absolute path",
+			verificationMethod:       "did:key:123",
+			expectedKeyId:            "123",
+			expectedAbsolutePath:     "did:key:123",
 			expectedFullAbsolutePath: "",
-			expectedError:        nil,
+			expectedError:            nil,
 		},
 		{
-			testName:             "Key only",
-			verificationMethod:   "123",
-			expectedKeyId:        "123",
-			expectedAbsolutePath: "",
+			testName:                 "Key only",
+			verificationMethod:       "123",
+			expectedKeyId:            "123",
+			expectedAbsolutePath:     "",
 			expectedFullAbsolutePath: "",
-			expectedError:        nil,
+			expectedError:            nil,
 		},
 		{
-			testName:             "Invalid method",
-			verificationMethod:   "",
-			expectedKeyId:        "",
-			expectedAbsolutePath: "",
+			testName:                 "Invalid method",
+			verificationMethod:       "",
+			expectedKeyId:            "",
+			expectedAbsolutePath:     "",
 			expectedFullAbsolutePath: "",
-			expectedError:        ErrorNotAValidVerficationMethod,
+			expectedError:            ErrorNotAValidVerficationMethod,
 		},
 	}
 

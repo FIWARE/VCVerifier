@@ -10,6 +10,5 @@
 package openapi
 
 type Did struct {
-
 	Id string `json:"id,omitempty"`
 }

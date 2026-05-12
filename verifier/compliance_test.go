@@ -7,8 +7,8 @@ import (
 	"errors"
 	"testing"
 
-	common "github.com/fiware/VCVerifier/common"
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"
+	common "github.com/fiware/VCVerifier/common"
 )
 
 func TestCheckSignature(t *testing.T) {

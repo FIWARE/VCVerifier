@@ -10,7 +10,6 @@
 package openapi
 
 type SubjectRole struct {
-
 	Names []string `json:"names,omitempty"`
 
 	Target string `json:"target,omitempty"`

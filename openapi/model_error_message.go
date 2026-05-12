@@ -10,7 +10,6 @@
 package openapi
 
 type ErrorMessage struct {
-
 	Summary string `json:"summary,omitempty"`
 
 	Details string `json:"details,omitempty"`

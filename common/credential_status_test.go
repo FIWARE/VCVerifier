@@ -259,7 +259,7 @@ func TestIsStatusSet(t *testing.T) {
 		{name: "index out of range", index: 16, statusSize: 1, wantErr: ErrorStatusListIndexOutOfRange},
 		{name: "zero statusSize", index: 0, statusSize: 0, wantErr: ErrorStatusListInvalidStatusSize},
 		{name: "negative statusSize", index: 0, statusSize: -1, wantErr: ErrorStatusListInvalidStatusSize},
-		{name: "multi-bit group all clear", index: 1, statusSize: 2, want: false}, // bits 2,3 = 00
+		{name: "multi-bit group all clear", index: 1, statusSize: 2, want: false},   // bits 2,3 = 00
 		{name: "multi-bit group with set bit", index: 3, statusSize: 2, want: true}, // bits 6,7 = 01
 		{name: "multi-bit group exceeds bitstring", index: 8, statusSize: 2, wantErr: ErrorStatusListIndexOutOfRange},
 	}
