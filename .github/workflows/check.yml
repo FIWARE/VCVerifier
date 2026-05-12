@@ -1,7 +1,7 @@
 name: Check PR
 
 on:
-  pull_request:
+  pull_request_target:
     types:
       - opened
       - synchronize
@@ -11,40 +11,33 @@ on:
     branches:
       - main
 
+concurrency:
+  group: check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+
 jobs:
   check:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v2
-
-      - uses: actions/setup-java@v1
-        with:
-          java-version: '11'
-          java-package: jdk
-
       - id: bump
         uses: zwaldowski/match-label-action@v1
         with:
           allowed: major,minor,patch
 
-      - uses: zwaldowski/semver-release-action@v2
+      - uses: zwaldowski/semver-release-action@v6
         with:
           dry_run: true
           bump: ${{ steps.bump.outputs.match }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
   comment:
+    needs: check
     runs-on: ubuntu-latest
-    if: always()
+    if: failure()
     steps:
-      - uses: technote-space/workflow-conclusion-action@v2
-      - name: Checkout
-        uses: actions/checkout@v1
-
-      - name: Comment PR
-        if: env.WORKFLOW_CONCLUSION == 'failure'
-        uses: thollander/actions-comment-pull-request@1.0.2
+      - uses: thollander/actions-comment-pull-request@v3
         with:
-          message: "Please apply one of the following labels to the PR: 'patch', 'minor', 'major'. For more information see: https://github.com/FIWARE/endpoint-auth-service/CONTRIBUTING.md"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          message: "Please apply one of the following labels to the PR: `patch`, `minor`, or `major`. See [CONTRIBUTING.md](https://github.com/${{ github.repository }}/blob/main/CONTRIBUTING.md) for details."
