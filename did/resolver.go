@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	ErrInvalidDID   = errors.New("invalid DID format")
+	ErrInvalidDID         = errors.New("invalid DID format")
 	ErrMethodNotSupported = errors.New("DID method not supported")
 	ErrResolutionFailed   = errors.New("DID resolution failed")
 )

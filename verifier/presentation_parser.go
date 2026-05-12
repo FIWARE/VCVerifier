@@ -99,14 +99,16 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 		}
 		jAdESValidator = externalValidator
 
-		healthCheck.Register(health.Config{
+		if err := healthCheck.Register(health.Config{
 			Name:      "JAdES-Validator",
 			Timeout:   time.Second * 5,
 			SkipOnErr: false,
 			Check: func(ctx context.Context) error {
 				return externalValidator.IsReady()
 			},
-		})
+		}); err != nil {
+			logging.Log().Errorf("Failed to register JAdES-Validator health check: %v", err)
+		}
 	}
 
 	checker := NewJWTProofChecker(registry, jAdESValidator)

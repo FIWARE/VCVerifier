@@ -258,7 +258,8 @@ func (cred CredentialDB) VO() config.Credential {
 	trustedIssuerList := make([]string, 0, len(cred.TrustedIssuersLists))
 	trustedParticipantsList := make([]config.TrustedParticipantsList, 0, len(cred.TrustedIssuersLists))
 	for _, trustedIssuer := range cred.TrustedIssuersLists {
-		if trustedIssuer.Type == config.TrustedParticipants {
+		switch trustedIssuer.Type {
+		case config.TrustedParticipants:
 			listType := trustedIssuer.ListType
 			if listType == "" {
 				listType = config.DEFAULT_LIST_TYPE
@@ -267,7 +268,7 @@ func (cred CredentialDB) VO() config.Credential {
 				Type: listType,
 				Url:  trustedIssuer.Endpoint,
 			})
-		} else if trustedIssuer.Type == config.TrustedIssuers {
+		case config.TrustedIssuers:
 			trustedIssuerList = append(trustedIssuerList, trustedIssuer.Endpoint)
 		}
 	}
@@ -292,7 +293,7 @@ func (c CredentialDB) FromVO(cv config.Credential) CredentialDB {
 		}
 		trustedLists = append(trustedLists, config.EndpointEntry{
 			Type:     config.TrustedParticipants,
-			ListType: tp.Type,
+			ListType: listType,
 			Endpoint: tp.Url,
 		})
 	}

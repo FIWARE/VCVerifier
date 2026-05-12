@@ -10,7 +10,7 @@ import (
 
 type HolderValidationService struct{}
 
-var ErrorNoHolderClaim = errors.New("Credential has not holder claim")
+var ErrorNoHolderClaim = errors.New("credential has not holder claim")
 
 func (hvs *HolderValidationService) ValidateVC(verifiableCredential *common.Credential, validationContext ValidationContext) (result bool, err error) {
 	logging.Log().Debugf("Validate holder for %s", logging.PrettyPrintObject(verifiableCredential))

@@ -95,7 +95,7 @@ func (ghc GaiaXHttpClient) verifyFileChain(registryEndpoint string, x5u string) 
 		logging.Log().Infof("Was not able to check cert chain %s at %s. E: %v", x5u, registryEndpoint, err)
 		return false
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != 200 {
 		logging.Log().Infof("x5u %s was not verified to be a trust anchor at %s. Response: %v", x5u, registryEndpoint, response.StatusCode)
 		return false

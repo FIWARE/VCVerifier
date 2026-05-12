@@ -50,7 +50,7 @@ func (w *WebVDR) Read(didStr string) (*DocResolution, error) {
 		logging.Log().Infof("HTTP request failed for did:web %s at %s: %v", didStr, docURL, err)
 		return nil, fmt.Errorf("error resolving did:web did --> http request unsuccessful --> %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		logging.Log().Infof("Unexpected HTTP status %d when resolving did:web %s from %s", resp.StatusCode, didStr, docURL)

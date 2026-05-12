@@ -10,7 +10,6 @@
 package openapi
 
 type Jwk struct {
-
 	Kid string `json:"kid,omitempty"`
 
 	Kty string `json:"kty,omitempty"`

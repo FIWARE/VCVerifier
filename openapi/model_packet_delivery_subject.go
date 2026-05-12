@@ -10,7 +10,6 @@
 package openapi
 
 type PacketDeliverySubject struct {
-
 	Id string `json:"id,omitempty"`
 
 	FamilyName string `json:"familyName,omitempty"`

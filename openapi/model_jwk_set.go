@@ -10,6 +10,5 @@
 package openapi
 
 type JwkSet struct {
-
 	Keys []Jwk `json:"keys,omitempty"`
 }

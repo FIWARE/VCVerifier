@@ -19,32 +19,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// newTestDB creates an in-memory SQLite database with initialized schema
-// suitable for use in tests. The caller must call db.Close() when done.
-func newTestDB(t *testing.T) (*database.SqlServiceRepository, *http.Server, func()) {
-	t.Helper()
-
-	cfg := config.Database{
-		Type: database.DriverTypeSQLite,
-		Name: "",
-	}
-
-	db, err := database.NewConnection(cfg)
-	require.NoError(t, err)
-
-	err = database.InitSchema(db, cfg.Type)
-	require.NoError(t, err)
-
-	repo := database.NewServiceRepository(db, cfg.Type)
-	router := getConfigRouter(db, repo)
-
-	srv := httptest.NewServer(router)
-
-	return repo, nil, func() {
-		srv.Close()
-		database.Close(db)
-	}
-}
 
 func TestInitConfigServer_WithSQLite(t *testing.T) {
 	configuration := &config.Configuration{

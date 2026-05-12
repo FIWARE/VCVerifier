@@ -249,7 +249,7 @@ func validateServiceRequest(req ServiceRequest, requireID bool) error {
 	}
 
 	if _, ok := req.OidcScopes[req.DefaultOidcScope]; !ok {
-		return fmt.Errorf("Default scope %q must exist in OIDC scopes list", req.DefaultOidcScope)
+		return fmt.Errorf("default scope %q must exist in OIDC scopes list", req.DefaultOidcScope)
 	}
 
 	for scopeKey, scope := range req.OidcScopes {
@@ -258,7 +258,7 @@ func validateServiceRequest(req ServiceRequest, requireID bool) error {
 		}
 		for idx, cred := range scope.Credentials {
 			if cred.Type == "" {
-				return fmt.Errorf("Type of the Credential[%d] of scope %q cannot be null", idx, scopeKey)
+				return fmt.Errorf("type of the Credential[%d] of scope %q cannot be null", idx, scopeKey)
 			}
 		}
 	}
