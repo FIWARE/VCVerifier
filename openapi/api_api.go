@@ -672,26 +672,50 @@ func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *co
 func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentation *common.Presentation, err error) {
 	tokenBytes := decodeVpString(vpToken)
 
-	var queryMap map[string]string
-	//unmarshal
-	err = json.Unmarshal(tokenBytes, &queryMap)
-	if err != nil {
-		logging.Log().Debug("VP Token does not contain query map. Checking the other options.", err)
-		return nil, nil
+	// First, try the OID4VP drafts 22-24 shape:
+	//   {"<query_id>": "<single-presentation>"}
+	// Kept as-is for backward compatibility with wallets that follow drafts 22-24.
+	var stringQueryMap map[string]string
+	if legacyErr := json.Unmarshal(tokenBytes, &stringQueryMap); legacyErr == nil {
+		for _, v := range stringQueryMap {
+			p, parseErr := tokenToPresentation(c, v)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			if parsedPresentation == nil {
+				parsedPresentation = p
+			} else {
+				parsedPresentation.AddCredentials(p.Credentials()...)
+			}
+		}
+		return parsedPresentation, nil
 	}
 
-	for _, v := range queryMap {
-		p, err := tokenToPresentation(c, v)
-		if err != nil {
-			return nil, err
+	// Fall back to the OID4VP draft 25+ shape:
+	//   {"<query_id>": ["<presentation>", ...]}
+	// Since draft 25 the value is REQUIRED to be an array, even when there is a single
+	// presentation (multiple=false in DCQL controls how many the wallet may return,
+	// not the JSON shape).
+	var arrayQueryMap map[string][]string
+	if draft22Err := json.Unmarshal(tokenBytes, &arrayQueryMap); draft22Err == nil {
+		for _, presentations := range arrayQueryMap {
+			for _, v := range presentations {
+				p, parseErr := tokenToPresentation(c, v)
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				if parsedPresentation == nil {
+					parsedPresentation = p
+				} else {
+					parsedPresentation.AddCredentials(p.Credentials()...)
+				}
+			}
 		}
-		if parsedPresentation == nil {
-			parsedPresentation = p
-		} else {
-			parsedPresentation.AddCredentials(p.Credentials()...)
-		}
+		return parsedPresentation, nil
 	}
-	return parsedPresentation, err
+
+	logging.Log().Debug("VP Token is not a DCQL query map (neither drafts 22-24 single-string nor draft 25+ array shape). Checking the other options.")
+	return nil, nil
 }
 
 // checks if the presented token contains a single sd-jwt credential. Will be repackage to a presentation for further validation
