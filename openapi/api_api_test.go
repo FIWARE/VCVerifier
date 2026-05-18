@@ -625,6 +625,70 @@ func buildSignedVPToken(t *testing.T) string {
 	return string(vpSigned)
 }
 
+// TestGetPresentationFromQuery exercises both shapes of the DCQL vp_token map:
+//   - OID4VP drafts 22-24: {"<query_id>": "<single-presentation>"}
+//   - OID4VP draft 25+:    {"<query_id>": ["<presentation>", ...]}
+// Both must be accepted (backward-compatible). Inputs that are neither a query
+// map nor parseable as a single token must return (nil, nil) so the caller
+// falls through to the flat-string presentation parsing path.
+func TestGetPresentationFromQuery(t *testing.T) {
+
+	logging.Configure(LOGGING_CONFIG)
+
+	sdJwt := getValidSDJwtToken()
+
+	stringShapeMap, err := json.Marshal(map[string]string{"lpc-query": sdJwt})
+	if err != nil {
+		t.Fatalf("Failed to marshal drafts 22-24 query map: %v", err)
+	}
+	arrayShapeMap, err := json.Marshal(map[string][]string{"lpc-query": {sdJwt}})
+	if err != nil {
+		t.Fatalf("Failed to marshal draft 25+ query map: %v", err)
+	}
+
+	type test struct {
+		testName       string
+		vpToken        string
+		expectedNonNil bool
+	}
+
+	tests := []test{
+		{"OID4VP drafts 22-24 single-string-shape query map should be parsed.", string(stringShapeMap), true},
+		{"OID4VP draft 25+ array-shape query map should be parsed.", string(arrayShapeMap), true},
+		{"A flat sd-jwt (no query map) should return nil so the caller falls through.", sdJwt, false},
+		{"A non-JSON token should return nil so the caller falls through.", "this-is-not-json", false},
+	}
+
+	for _, tc := range tests {
+
+		t.Run(tc.testName, func(t *testing.T) {
+
+			presentationParser = &verifier.ConfigurablePresentationParser{
+				ProofChecker: newTestProofChecker()}
+			sdJwtParser = &verifier.ConfigurableSdJwtParser{
+				ProofChecker: newTestProofChecker()}
+
+			recorder := httptest.NewRecorder()
+			testContext, _ := gin.CreateTestContext(recorder)
+
+			parsed, parseErr := getPresentationFromQuery(testContext, tc.vpToken)
+
+			if parseErr != nil {
+				t.Errorf("%s - Unexpected error: %v", tc.testName, parseErr)
+				return
+			}
+			if tc.expectedNonNil && parsed == nil {
+				t.Errorf("%s - Expected a non-nil presentation but got nil.", tc.testName)
+				return
+			}
+			if !tc.expectedNonNil && parsed != nil {
+				t.Errorf("%s - Expected nil presentation (so caller can fall through) but got %v.", tc.testName, parsed)
+				return
+			}
+		})
+	}
+}
+
 func getNoHolderVPToken() string {
 	return "ewogICJAY29udGV4dCI6IFsKICAgICJodHRwczovL3d3dy53My5vcmcvMjAxOC9jcmVkZW50aWFscy92MSIKICBdLAogICJ0eXBlIjogWwogICAgIlZlcmlmaWFibGVQcmVzZW50YXRpb24iCiAgXSwKICAidmVyaWZpYWJsZUNyZWRlbnRpYWwiOiBbCiAgICB7CiAgICAgICJ0eXBlcyI6IFsKICAgICAgICAiUGFja2V0RGVsaXZlcnlTZXJ2aWNlIiwKICAgICAgICAiVmVyaWZpYWJsZUNyZWRlbnRpYWwiCiAgICAgIF0sCiAgICAgICJAY29udGV4dCI6IFsKICAgICAgICAiaHR0cHM6Ly93d3cudzMub3JnLzIwMTgvY3JlZGVudGlhbHMvdjEiLAogICAgICAgICJodHRwczovL3czaWQub3JnL3NlY3VyaXR5L3N1aXRlcy9qd3MtMjAyMC92MSIKICAgICAgXSwKICAgICAgImNyZWRlbnRpYWxzU3ViamVjdCI6IHt9LAogICAgICAiYWRkaXRpb25hbFByb3AxIjoge30KICAgIH0KICBdLAogICJpZCI6ICJlYmM2ZjFjMiIsCiAgImhvbGRlciI6IHsKICAgICJub3RhIjogImhvbGRlciIKICB9LAogICJwcm9vZiI6IHsKICAgICJ0eXBlIjogIkpzb25XZWJTaWduYXR1cmUyMDIwIiwKICAgICJjcmVhdG9yIjogImRpZDprZXk6ejZNa3M5bTlpZkx3eTNKV3FINGM1N0ViQlFWUzJTcFJDamZhNzl3SGI1dldNNnZoIiwKICAgICJjcmVhdGVkIjogIjIwMjMtMDEtMDZUMDc6NTE6MzZaIiwKICAgICJ2ZXJpZmljYXRpb25NZXRob2QiOiAiZGlkOmtleTp6Nk1rczltOWlmTHd5M0pXcUg0YzU3RWJCUVZTMlNwUkNqZmE3OXdIYjV2V002dmgjejZNa3M5bTlpZkx3eTNKV3FINGM1N0ViQlFWUzJTcFJDamZhNzl3SGI1dldNNnZoIiwKICAgICJqd3MiOiAiZXlKaU5qUWlPbVpoYkhObExDSmpjbWwwSWpwYkltSTJOQ0pkTENKaGJHY2lPaUpGWkVSVFFTSjkuLjZ4U3FvWmphME53akYwYWY5WmtucXgzQ2JoOUdFTnVuQmY5Qzh1TDJ1bEdmd3VzM1VGTV9abmhQald0SFBsLTcyRTlwM0JUNWYycHRab1lrdE1LcERBIgogIH0KfQ"
 }
