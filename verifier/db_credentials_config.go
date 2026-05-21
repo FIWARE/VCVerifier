@@ -73,6 +73,7 @@ func (dbc DbBackedCredentialsConfig) RequiredCredentialTypes(serviceIdentifier s
 func (dbc DbBackedCredentialsConfig) GetDefaultScope(serviceIdentifier string) (string, error) {
 	svc, err := dbc.getService(serviceIdentifier)
 	if err != nil {
+		logging.Log().Warnf("Was not able to get default scope: %s", err)
 		return "", ErrorNoDefaultScope
 	}
 	return svc.DefaultOidcScope, nil
@@ -82,6 +83,7 @@ func (dbc DbBackedCredentialsConfig) GetDefaultScope(serviceIdentifier string) (
 func (dbc DbBackedCredentialsConfig) GetScope(serviceIdentifier string) ([]string, error) {
 	svc, err := dbc.getService(serviceIdentifier)
 	if err != nil {
+		logging.Log().Warnf("Was not able to get scope for %s: %s", serviceIdentifier, err)
 		return []string{}, nil
 	}
 	return maps.Keys(svc.ServiceScopes), nil
@@ -91,6 +93,7 @@ func (dbc DbBackedCredentialsConfig) GetScope(serviceIdentifier string) ([]strin
 func (dbc DbBackedCredentialsConfig) GetAuthorizationType(serviceIdentifier string) (string, error) {
 	svc, err := dbc.getService(serviceIdentifier)
 	if err != nil {
+		logging.Log().Warnf("Was not able to get authorization type for %s: %s", serviceIdentifier, err)
 		return "", nil
 	}
 	return svc.AuthorizationType, nil
@@ -100,6 +103,7 @@ func (dbc DbBackedCredentialsConfig) GetAuthorizationType(serviceIdentifier stri
 func (dbc DbBackedCredentialsConfig) GetAuthorizationPath(serviceIdentifier string) string {
 	svc, err := dbc.getService(serviceIdentifier)
 	if err != nil {
+		logging.Log().Warnf("Was not able to get authorization path for %s: %s", serviceIdentifier, err)
 		return ""
 	}
 	return svc.AuthorizationPath
@@ -109,6 +113,7 @@ func (dbc DbBackedCredentialsConfig) GetAuthorizationPath(serviceIdentifier stri
 func (dbc DbBackedCredentialsConfig) GetPresentationDefinition(serviceIdentifier string, scope string) (*config.PresentationDefinition, error) {
 	svc, err := dbc.getService(serviceIdentifier)
 	if err != nil {
+		logging.Log().Warnf("Was not able to get presentation definition for %s: %s", serviceIdentifier, err)
 		return nil, nil
 	}
 	return svc.GetPresentationDefinition(scope)
@@ -118,6 +123,7 @@ func (dbc DbBackedCredentialsConfig) GetPresentationDefinition(serviceIdentifier
 func (dbc DbBackedCredentialsConfig) GetDcqlQuery(serviceIdentifier string, scope string) (*config.DCQL, error) {
 	svc, err := dbc.getService(serviceIdentifier)
 	if err != nil {
+		logging.Log().Warnf("Was not able to get dcql for %s: %s", serviceIdentifier, err)
 		return nil, nil
 	}
 	return svc.GetDcqlQuery(scope)
