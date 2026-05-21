@@ -304,9 +304,11 @@ func GetVerifier() Verifier {
 }
 
 // InitVerifier initializes the verifier and all its components from the configuration.
-// When repo is non-nil, the verifier uses a database-backed credentials config;
-// otherwise it falls back to the HTTP-based or static config mode.
-func InitVerifier(config *configModel.Configuration, repo database.ServiceRepository) (err error) {
+// When repo is non-nil, the verifier uses a database-backed credentials config and
+// the returned ConfigUpdateNotifier is non-nil (it should be wired into the CCS API
+// so that cache refreshes happen immediately on writes). Otherwise it falls back to
+// the HTTP-based or static config mode and the notifier is nil.
+func InitVerifier(config *configModel.Configuration, repo database.ServiceRepository) (configNotifier common.ConfigUpdateNotifier, err error) {
 
 	logging.Log().Info("Init verifeir")
 
@@ -324,7 +326,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 
 	externalGaiaXValidator := InitGaiaXRegistryValidationService(verifierConfig)
 
-	credentialsConfig, err := InitCredentialsConfig(&config.ConfigRepo, repo)
+	credentialsConfig, configNotifier, err := InitCredentialsConfig(&config.ConfigRepo, repo)
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate the credentials config. Err: %v", err)
 	}
@@ -336,7 +338,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		tokenProvider, err = tir.InitM2MTokenProvider(config, clock)
 		if err != nil {
 			logging.Log().Errorf("Was not able to instantiate the token provider. Err: %v", err)
-			return err
+			return
 		}
 		logging.Log().Info("Successfully created token provider")
 	} else {
@@ -346,7 +348,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	tirClient, err := tir.NewTirHttpClient(tokenProvider, config.M2M, config.Verifier)
 	if err != nil {
 		logging.Log().Errorf("Was not able to instantiate the trusted-issuers-registry client. Err: %v", err)
-		return err
+		return
 	}
 	gaiaXClient, _ := gaiax.NewGaiaXHttpClient()
 	trustedParticipantVerificationService := TrustedParticipantValidationService{tirClient: tirClient, gaiaXClient: gaiaXClient}
@@ -375,13 +377,13 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate a signing key. Err: %v", err)
-		return err
+		return
 	}
 
 	didSigningKey, err := getRequestSigningKey(verifierConfig.ClientIdentification.KeyPath, verifierConfig.ClientIdentification.Id)
 	if (slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_VALUE) || slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_REFERENCE)) && err != nil { //nolint:govet
 		logging.Log().Errorf("Was not able to get a signing key, despite mode %s supported. Err: %v", REQUEST_MODE_BY_VALUE, err)
-		return err
+		return
 	} else {
 		err = nil
 	}

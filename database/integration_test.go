@@ -47,7 +47,7 @@ func setupIntegrationEnv(t *testing.T) (*gin.Engine, database.ServiceRepository,
 	repo := database.NewServiceRepository(db, cfg.Type)
 
 	router := gin.New()
-	ccsapi.RegisterRoutes(router, repo)
+	ccsapi.RegisterRoutes(router, repo, nil)
 
 	return router, repo, func() {
 		database.Close(db)
@@ -145,7 +145,7 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 	repoConfig := &config.ConfigRepo{
 		UpdateInterval: 300, // long interval — we manually call fillCache
 	}
-	credConfig, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
+	credConfig, _, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
 	// Verify all CredentialsConfig interface methods work through the cache
@@ -246,7 +246,7 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 
 	// Reinitialize cache to pick up changes
 	resetGlobalCache()
-	credConfig2, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
+	credConfig2, _, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
 	credTypes2, err := credConfig2.RequiredCredentialTypes(serviceID, "updatedScope")
@@ -380,7 +380,7 @@ func TestIntegration_DbBackedCacheIncludesStaticServices(t *testing.T) {
 		UpdateInterval: 300,
 	}
 
-	credConfig, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
+	credConfig, _, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
 	// Static service should be accessible
@@ -405,7 +405,7 @@ func TestIntegration_DbBackedCacheIncludesStaticServices(t *testing.T) {
 
 	// Reinitialize to refresh cache
 	resetGlobalCache()
-	credConfig2, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
+	credConfig2, _, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
 	// Both should be accessible
@@ -484,7 +484,7 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 
 	// Initialize cache from DB
 	repoConfig := &config.ConfigRepo{UpdateInterval: 300}
-	credConfig, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
+	credConfig, _, err := verifier.InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
 	// --- Verify all lookups ---
@@ -688,13 +688,15 @@ func TestIntegration_InitCredentialsConfigFactory(t *testing.T) {
 	}
 
 	// With repo → should use DB-backed
-	cc, err := verifier.InitCredentialsConfig(repoConfig, repo)
+	cc, notifier, err := verifier.InitCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 	assert.NotNil(t, cc)
+	assert.NotNil(t, notifier)
 
 	// Without repo → should use HTTP/static-backed
 	resetGlobalCache()
-	cc2, err := verifier.InitCredentialsConfig(repoConfig, nil)
+	cc2, notifier2, err := verifier.InitCredentialsConfig(repoConfig, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, cc2)
+	assert.Nil(t, notifier2)
 }

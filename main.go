@@ -46,10 +46,11 @@ func main() {
 	// --- Optional: Database and Config Server initialization ---
 	var db *sql.DB
 	var configSrv *http.Server
+	var configRouter *gin.Engine
 	var repo database.ServiceRepository
 
 	if configuration.ConfigServer.Enabled {
-		db, configSrv, repo, err = initConfigServer(&configuration)
+		db, configSrv, configRouter, repo, err = initConfigServer(&configuration)
 		if err != nil {
 			logger.Errorf("Failed to initialize config server: %v", err)
 			panic(err)
@@ -58,8 +59,14 @@ func main() {
 		RegisterDBHealth(db)
 	}
 
-	if err := verifier.InitVerifier(&configuration, repo); err != nil {
+	configNotifier, err := verifier.InitVerifier(&configuration, repo)
+	if err != nil {
 		logger.Fatalf("Failed to initialize verifier: %v", err)
+	}
+
+	// Register CCS API routes after verifier init so the notifier is available.
+	if configRouter != nil {
+		ccsapi.RegisterRoutes(configRouter, repo, configNotifier)
 	}
 	if err := verifier.InitPresentationParser(&configuration, Health()); err != nil {
 		logger.Fatalf("Failed to initialize presentation parser: %v", err)
@@ -207,28 +214,28 @@ func main() {
 }
 
 // initConfigServer opens a database connection, initializes the schema, creates
-// a service repository, and builds the CCS API HTTP server. Returns the database
-// connection (for deferred close), the config HTTP server (to be started by the
-// caller), the service repository (for verifier integration), or an error if
-// setup fails.
-func initConfigServer(configuration *configModel.Configuration) (*sql.DB, *http.Server, database.ServiceRepository, error) {
+// a service repository, and builds the CCS API HTTP server. The returned Gin
+// engine (configRouter) does NOT have CCS API routes registered yet — the
+// caller must call ccsapi.RegisterRoutes after the verifier is initialized so
+// that the ConfigUpdateNotifier can be wired in.
+func initConfigServer(configuration *configModel.Configuration) (*sql.DB, *http.Server, *gin.Engine, database.ServiceRepository, error) {
 	logger := logging.Log()
 
 	logger.Info("Initializing database connection for config server...")
 	db, err := database.NewConnection(configuration.Database)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to open database connection: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to open database connection: %w", err)
 	}
 
 	logger.Info("Initializing database schema...")
 	if err := database.InitSchema(db, configuration.Database.Type); err != nil {
 		database.Close(db)
-		return nil, nil, nil, fmt.Errorf("failed to initialize database schema: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to initialize database schema: %w", err)
 	}
 
 	repo := database.NewServiceRepository(db, configuration.Database.Type)
 
-	configRouter := getConfigRouter(db, repo)
+	configRouter := getConfigRouter(db)
 
 	cfgSrv := configuration.ConfigServer
 	srv := &http.Server{
@@ -240,12 +247,14 @@ func initConfigServer(configuration *configModel.Configuration) (*sql.DB, *http.
 	}
 
 	logger.Infof("Config server configured on port %v", cfgSrv.Port)
-	return db, srv, repo, nil
+	return db, srv, configRouter, repo, nil
 }
 
-// getConfigRouter creates a Gin router for the CCS API with health check,
-// CORS middleware, and all CCS service routes registered.
-func getConfigRouter(db *sql.DB, repo database.ServiceRepository) *gin.Engine {
+// getConfigRouter creates a Gin router for the CCS API with health check and
+// CORS middleware. CCS service routes are NOT registered here — they are
+// registered later via ccsapi.RegisterRoutes after the verifier is initialized,
+// so that the ConfigUpdateNotifier is available.
+func getConfigRouter(db *sql.DB) *gin.Engine {
 	writer := logging.GetGinInternalWriter()
 	gin.DefaultWriter = writer
 	gin.DefaultErrorWriter = writer
@@ -263,9 +272,6 @@ func getConfigRouter(db *sql.DB, repo database.ServiceRepository) *gin.Engine {
 	// Health check with database ping
 	configHealth := NewConfigServerHealth(db)
 	router.GET("/health", ConfigServerHealthReq(configHealth))
-
-	// Register CCS API routes
-	ccsapi.RegisterRoutes(router, repo)
 
 	return router
 }

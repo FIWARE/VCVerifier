@@ -82,16 +82,18 @@ type ServiceBackedCredentialsConfig struct {
 
 // InitCredentialsConfig creates the appropriate CredentialsConfig implementation based on
 // the provided configuration. When repo is non-nil, a DbBackedCredentialsConfig is used
-// (database mode). When repo is nil but ConfigEndpoint is set, the existing HTTP-based
-// ServiceBackedCredentialsConfig is used. When neither is available, static-only mode
-// is used (services from ConfigRepo.Services with no expiration).
-func InitCredentialsConfig(repoConfig *config.ConfigRepo, repo database.ServiceRepository) (CredentialsConfig, error) {
+// (database mode) and the returned ConfigUpdateNotifier is non-nil. When repo is nil but
+// ConfigEndpoint is set, the existing HTTP-based ServiceBackedCredentialsConfig is used
+// and the notifier is nil. When neither is available, static-only mode is used (services
+// from ConfigRepo.Services with no expiration) and the notifier is nil.
+func InitCredentialsConfig(repoConfig *config.ConfigRepo, repo database.ServiceRepository) (CredentialsConfig, common.ConfigUpdateNotifier, error) {
 	if repo != nil {
 		logging.Log().Info("Using database-backed credentials configuration.")
 		return InitDbBackedCredentialsConfig(repoConfig, repo)
 	}
 	logging.Log().Info("Using HTTP/static-backed credentials configuration.")
-	return InitServiceBackedCredentialsConfig(repoConfig)
+	cc, err := InitServiceBackedCredentialsConfig(repoConfig)
+	return cc, nil, err
 }
 
 // InitServiceBackedCredentialsConfig creates a CredentialsConfig that fetches service
