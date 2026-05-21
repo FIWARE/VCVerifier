@@ -1,7 +1,6 @@
 package ccsapi
 
 import (
-	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/database"
 	"github.com/gin-gonic/gin"
 )
@@ -16,14 +15,11 @@ import (
 //	PUT    /service/:id      — Update a service
 //	DELETE /service/:id      — Delete a service
 //	GET    /service/:id/scope — Get credential types for a scope
-//
-// When notifier is non-nil, write operations (create, update, delete) trigger
-// an immediate cache refresh via notifier.NotifyConfigUpdate().
-func RegisterRoutes(router *gin.Engine, repo database.ServiceRepository, notifier common.ConfigUpdateNotifier) {
-	router.POST("/service", CreateService(repo, notifier))
+func RegisterRoutes(router *gin.Engine, repo database.ServiceRepository) {
+	router.POST("/service", CreateService(repo))
 	router.GET("/service", GetAllServices(repo))
 	router.GET("/service/:id", GetService(repo))
-	router.PUT("/service/:id", UpdateService(repo, notifier))
-	router.DELETE("/service/:id", DeleteService(repo, notifier))
+	router.PUT("/service/:id", UpdateService(repo))
+	router.DELETE("/service/:id", DeleteService(repo))
 	router.GET("/service/:id/scope", GetServiceScopes(repo))
 }

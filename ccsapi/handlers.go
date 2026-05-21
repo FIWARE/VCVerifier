@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
 	"github.com/fiware/VCVerifier/logging"
@@ -30,9 +29,7 @@ const (
 //
 // On success, returns 201 Created with a Location header pointing to the new
 // resource. Returns 400 for invalid input, 409 if the service ID already exists.
-// When notifier is non-nil, the credentials config cache is refreshed immediately
-// after a successful create.
-func CreateService(repo database.ServiceRepository, notifier common.ConfigUpdateNotifier) gin.HandlerFunc {
+func CreateService(repo database.ServiceRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req ServiceRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -60,8 +57,6 @@ func CreateService(repo database.ServiceRepository, notifier common.ConfigUpdate
 				"Internal server error", "Failed to create the service.")
 			return
 		}
-
-		notifyConfigChange(notifier)
 
 		location := fmt.Sprintf("/service/%s", req.ID)
 		c.Header("Location", location)
@@ -136,9 +131,7 @@ func GetService(repo database.ServiceRepository) gin.HandlerFunc {
 // PUT /service/:id
 //
 // Returns 200 with the updated service, 400 for invalid input, or 404 if not found.
-// When notifier is non-nil, the credentials config cache is refreshed immediately
-// after a successful update.
-func UpdateService(repo database.ServiceRepository, notifier common.ConfigUpdateNotifier) gin.HandlerFunc {
+func UpdateService(repo database.ServiceRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 
@@ -170,8 +163,6 @@ func UpdateService(repo database.ServiceRepository, notifier common.ConfigUpdate
 			return
 		}
 
-		notifyConfigChange(notifier)
-
 		c.JSON(http.StatusOK, ConfiguredServiceToResponse(updated))
 	}
 }
@@ -179,9 +170,8 @@ func UpdateService(repo database.ServiceRepository, notifier common.ConfigUpdate
 // DeleteService returns a Gin handler that removes a service by ID.
 // DELETE /service/:id
 //
-// Returns 204 on success or 404 if not found. When notifier is non-nil, the
-// credentials config cache is refreshed immediately after a successful delete.
-func DeleteService(repo database.ServiceRepository, notifier common.ConfigUpdateNotifier) gin.HandlerFunc {
+// Returns 204 on success or 404 if not found.
+func DeleteService(repo database.ServiceRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 
@@ -197,8 +187,6 @@ func DeleteService(repo database.ServiceRepository, notifier common.ConfigUpdate
 				"Internal server error", "Failed to delete the service.")
 			return
 		}
-
-		notifyConfigChange(notifier)
 
 		c.Status(http.StatusNoContent)
 	}
@@ -290,15 +278,6 @@ func parseIntQueryParam(c *gin.Context, name string, defaultVal int) (int, error
 		return 0, fmt.Errorf("query parameter %q must be an integer, got %q", name, raw)
 	}
 	return val, nil
-}
-
-// notifyConfigChange triggers an immediate cache refresh via the given notifier.
-// It is a no-op when notifier is nil (e.g. when the config server runs without
-// a database-backed credentials config).
-func notifyConfigChange(notifier common.ConfigUpdateNotifier) {
-	if notifier != nil {
-		notifier.NotifyConfigUpdate()
-	}
 }
 
 // respondProblem writes an RFC 7807 ProblemDetails JSON response with the given

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
 	"github.com/gin-gonic/gin"
@@ -91,17 +90,10 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
-// setupRouter creates a Gin engine with CCS routes registered against the mock
-// and no ConfigUpdateNotifier.
+// setupRouter creates a Gin engine with CCS routes registered against the mock.
 func setupRouter(repo database.ServiceRepository) *gin.Engine {
-	return setupRouterWithNotifier(repo, nil)
-}
-
-// setupRouterWithNotifier creates a Gin engine with CCS routes registered
-// against the mock and an optional ConfigUpdateNotifier.
-func setupRouterWithNotifier(repo database.ServiceRepository, notifier common.ConfigUpdateNotifier) *gin.Engine {
 	router := gin.New()
-	RegisterRoutes(router, repo, notifier)
+	RegisterRoutes(router, repo)
 	return router
 }
 
@@ -936,184 +928,3 @@ func TestValidateServiceRequest(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Mock notifier
-// ---------------------------------------------------------------------------
-
-// mockConfigUpdateNotifier records calls to NotifyConfigUpdate.
-type mockConfigUpdateNotifier struct {
-	callCount int
-}
-
-func (m *mockConfigUpdateNotifier) NotifyConfigUpdate() {
-	m.callCount++
-}
-
-// ---------------------------------------------------------------------------
-// ConfigUpdateNotifier integration tests
-// ---------------------------------------------------------------------------
-
-func TestCreateService_NotifiesOnSuccess(t *testing.T) {
-	notifier := &mockConfigUpdateNotifier{}
-	repo := &mockServiceRepository{
-		createServiceFn: func(_ context.Context, _ config.ConfiguredService) error {
-			return nil
-		},
-	}
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/service", strings.NewReader(validServiceJSON()))
-	req.Header.Set("Content-Type", "application/json")
-	setupRouterWithNotifier(repo, notifier).ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusCreated, w.Code)
-	assert.Equal(t, 1, notifier.callCount, "notifier should be called once on successful create")
-}
-
-func TestCreateService_DoesNotNotifyOnError(t *testing.T) {
-	notifier := &mockConfigUpdateNotifier{}
-	repo := &mockServiceRepository{
-		createServiceFn: func(_ context.Context, _ config.ConfiguredService) error {
-			return database.ErrServiceAlreadyExists
-		},
-	}
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/service", strings.NewReader(validServiceJSON()))
-	req.Header.Set("Content-Type", "application/json")
-	setupRouterWithNotifier(repo, notifier).ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusConflict, w.Code)
-	assert.Equal(t, 0, notifier.callCount, "notifier should not be called on error")
-}
-
-func TestUpdateService_NotifiesOnSuccess(t *testing.T) {
-	notifier := &mockConfigUpdateNotifier{}
-	updated := sampleConfiguredService("my-service")
-	repo := &mockServiceRepository{
-		updateServiceFn: func(_ context.Context, _ string, _ config.ConfiguredService) (config.ConfiguredService, error) {
-			return updated, nil
-		},
-	}
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPut, "/service/my-service", strings.NewReader(validUpdateJSON()))
-	req.Header.Set("Content-Type", "application/json")
-	setupRouterWithNotifier(repo, notifier).ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, 1, notifier.callCount, "notifier should be called once on successful update")
-}
-
-func TestUpdateService_DoesNotNotifyOnError(t *testing.T) {
-	notifier := &mockConfigUpdateNotifier{}
-	repo := &mockServiceRepository{
-		updateServiceFn: func(_ context.Context, _ string, _ config.ConfiguredService) (config.ConfiguredService, error) {
-			return config.ConfiguredService{}, database.ErrServiceNotFound
-		},
-	}
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPut, "/service/my-service", strings.NewReader(validUpdateJSON()))
-	req.Header.Set("Content-Type", "application/json")
-	setupRouterWithNotifier(repo, notifier).ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-	assert.Equal(t, 0, notifier.callCount, "notifier should not be called on error")
-}
-
-func TestDeleteService_NotifiesOnSuccess(t *testing.T) {
-	notifier := &mockConfigUpdateNotifier{}
-	repo := &mockServiceRepository{
-		deleteServiceFn: func(_ context.Context, _ string) error {
-			return nil
-		},
-	}
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodDelete, "/service/my-service", nil)
-	setupRouterWithNotifier(repo, notifier).ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNoContent, w.Code)
-	assert.Equal(t, 1, notifier.callCount, "notifier should be called once on successful delete")
-}
-
-func TestDeleteService_DoesNotNotifyOnError(t *testing.T) {
-	notifier := &mockConfigUpdateNotifier{}
-	repo := &mockServiceRepository{
-		deleteServiceFn: func(_ context.Context, _ string) error {
-			return database.ErrServiceNotFound
-		},
-	}
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodDelete, "/service/unknown", nil)
-	setupRouterWithNotifier(repo, notifier).ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-	assert.Equal(t, 0, notifier.callCount, "notifier should not be called on error")
-}
-
-func TestWriteHandlers_WorkWithNilNotifier(t *testing.T) {
-	repo := &mockServiceRepository{
-		createServiceFn: func(_ context.Context, _ config.ConfiguredService) error {
-			return nil
-		},
-		updateServiceFn: func(_ context.Context, _ string, svc config.ConfiguredService) (config.ConfiguredService, error) {
-			return svc, nil
-		},
-		deleteServiceFn: func(_ context.Context, _ string) error {
-			return nil
-		},
-	}
-
-	router := setupRouterWithNotifier(repo, nil)
-
-	tests := []struct {
-		name           string
-		method         string
-		path           string
-		body           string
-		expectedStatus int
-	}{
-		{
-			name:           "create with nil notifier",
-			method:         http.MethodPost,
-			path:           "/service",
-			body:           validServiceJSON(),
-			expectedStatus: http.StatusCreated,
-		},
-		{
-			name:           "update with nil notifier",
-			method:         http.MethodPut,
-			path:           "/service/my-service",
-			body:           validUpdateJSON(),
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "delete with nil notifier",
-			method:         http.MethodDelete,
-			path:           "/service/my-service",
-			expectedStatus: http.StatusNoContent,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var body *strings.Reader
-			if tc.body != "" {
-				body = strings.NewReader(tc.body)
-			}
-			var req *http.Request
-			if body != nil {
-				req, _ = http.NewRequest(tc.method, tc.path, body)
-				req.Header.Set("Content-Type", "application/json")
-			} else {
-				req, _ = http.NewRequest(tc.method, tc.path, nil)
-			}
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-			assert.Equal(t, tc.expectedStatus, w.Code)
-		})
-	}
-}

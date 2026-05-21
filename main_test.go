@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fiware/VCVerifier/ccsapi"
 	"github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
 	"github.com/gin-gonic/gin"
@@ -20,14 +18,6 @@ import (
 
 	_ "modernc.org/sqlite"
 )
-
-// testConfigRouter creates a config router with CCS routes registered (nil notifier)
-// for use in tests that need the full route set.
-func testConfigRouter(db *sql.DB, repo database.ServiceRepository) *gin.Engine {
-	router := getConfigRouter(db)
-	ccsapi.RegisterRoutes(router, repo, nil)
-	return router
-}
 
 
 func TestInitConfigServer_WithSQLite(t *testing.T) {
@@ -46,11 +36,10 @@ func TestInitConfigServer_WithSQLite(t *testing.T) {
 		},
 	}
 
-	db, srv, configRouter, repo, err := initConfigServer(configuration)
+	db, srv, repo, err := initConfigServer(configuration)
 	require.NoError(t, err)
 	assert.NotNil(t, db)
 	assert.NotNil(t, srv)
-	assert.NotNil(t, configRouter)
 	assert.NotNil(t, repo)
 
 	// Verify server is configured with correct address
@@ -72,11 +61,10 @@ func TestInitConfigServer_InvalidDBType(t *testing.T) {
 		},
 	}
 
-	db, srv, configRouter, repo, err := initConfigServer(configuration)
+	db, srv, repo, err := initConfigServer(configuration)
 	assert.Error(t, err)
 	assert.Nil(t, db)
 	assert.Nil(t, srv)
-	assert.Nil(t, configRouter)
 	assert.Nil(t, repo)
 }
 
@@ -93,7 +81,8 @@ func TestGetConfigRouter_HasHealthEndpoint(t *testing.T) {
 	err = database.InitSchema(db, cfg.Type)
 	require.NoError(t, err)
 
-	router := getConfigRouter(db)
+	repo := database.NewServiceRepository(db, cfg.Type)
+	router := getConfigRouter(db, repo)
 
 	// Test health endpoint
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -117,7 +106,7 @@ func TestGetConfigRouter_HasCCSAPIEndpoints(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := database.NewServiceRepository(db, cfg.Type)
-	router := testConfigRouter(db, repo)
+	router := getConfigRouter(db, repo)
 
 	tests := []struct {
 		name           string
@@ -194,7 +183,7 @@ func TestGetConfigRouter_CORSHeaders(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := database.NewServiceRepository(db, cfg.Type)
-	router := testConfigRouter(db, repo)
+	router := getConfigRouter(db, repo)
 
 	// Test CORS preflight request. The Origin must differ from the request Host
 	// so the gin-contrib/cors middleware treats it as a cross-origin request.
@@ -222,7 +211,7 @@ func TestGetConfigRouter_FullCRUDFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := database.NewServiceRepository(db, cfg.Type)
-	router := testConfigRouter(db, repo)
+	router := getConfigRouter(db, repo)
 
 	serviceID := "crud-test-service"
 	createBody := fmt.Sprintf(`{
@@ -322,7 +311,7 @@ func TestGetConfigRouter_RegistersAllRoutes(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := database.NewServiceRepository(db, cfg.Type)
-	router := testConfigRouter(db, repo)
+	router := getConfigRouter(db, repo)
 
 	// Verify all expected routes are registered
 	routes := router.Routes()
@@ -363,7 +352,7 @@ func TestInitConfigServer_SetsCorrectTimeouts(t *testing.T) {
 		},
 	}
 
-	db, srv, _, _, err := initConfigServer(configuration)
+	db, srv, _, err := initConfigServer(configuration)
 	require.NoError(t, err)
 	defer database.Close(db)
 
@@ -388,7 +377,7 @@ func TestGetConfigRouter_HealthEndpointIncludesDBCheck(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := database.NewServiceRepository(db, cfg.Type)
-	router := testConfigRouter(db, repo)
+	router := getConfigRouter(db, repo)
 
 	// Test health endpoint returns JSON with system info
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)

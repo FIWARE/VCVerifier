@@ -304,11 +304,9 @@ func GetVerifier() Verifier {
 }
 
 // InitVerifier initializes the verifier and all its components from the configuration.
-// When repo is non-nil, the verifier uses a database-backed credentials config and
-// the returned ConfigUpdateNotifier is non-nil (it should be wired into the CCS API
-// so that cache refreshes happen immediately on writes). Otherwise it falls back to
-// the HTTP-based or static config mode and the notifier is nil.
-func InitVerifier(config *configModel.Configuration, repo database.ServiceRepository) (configNotifier common.ConfigUpdateNotifier, err error) {
+// When repo is non-nil, the verifier uses a database-backed credentials config;
+// otherwise it falls back to the HTTP-based or static config mode.
+func InitVerifier(config *configModel.Configuration, repo database.ServiceRepository) (err error) {
 
 	logging.Log().Info("Init verifeir")
 
@@ -326,7 +324,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 
 	externalGaiaXValidator := InitGaiaXRegistryValidationService(verifierConfig)
 
-	credentialsConfig, configNotifier, err := InitCredentialsConfig(&config.ConfigRepo, repo)
+	credentialsConfig, err := InitCredentialsConfig(&config.ConfigRepo, repo)
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate the credentials config. Err: %v", err)
 	}
