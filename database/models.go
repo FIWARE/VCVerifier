@@ -8,6 +8,21 @@ import (
 	"github.com/fiware/VCVerifier/config"
 )
 
+var DB_FORMAT_MAP = map[string]string{
+	"dc+sd-jwt": "DC_SD_JWT",
+	"vc+sd-jwt": "VC_SD_JWT",
+	"mso_mdoc": "MSO_MDOC",
+	"ldp_vc": "LDP_VC",
+	"jwt_vc_json": "JWT_VC_JSON",
+}
+var FORMAT_MAP = map[string]string{
+    "DC_SD_JWT": "dc+sd-jwt",
+	"VC_SD_JWT": "vc+sd-jwt",
+	"MSO_MDOC": "mso_mdoc",
+	"LDP_VC": "ldp_vc",
+	"JWT_VC_JSON": "jwt_vc_json",
+}
+
 // ServiceRow represents a row in the service table.
 type ServiceRow struct {
 	// ID is the unique service identifier (primary key).
@@ -405,7 +420,7 @@ type DCQLDB struct {
 	// A non-empty array of Credential Queries that specify the requested Credentials.
 	Credentials []CredentialQueryDB `json:"credentials" mapstructure:"credentials"`
 	// A non-empty array of Credential Set Queries that specifies additional constraints on which of the requested Credentials to return.
-	CredentialSets []config.CredentialSetQuery `json:"credential_sets,omitempty" mapstructure:"credential_sets,omitempty"`
+	CredentialSets []config.CredentialSetQuery `json:"credentialSets,omitempty" mapstructure:"credentialSets,omitempty"`
 }
 
 func (dcql DCQLDB) VO() config.DCQL {
@@ -438,23 +453,31 @@ type CredentialQueryDB struct {
 	// A boolean which indicates whether multiple Credentials can be returned for this Credential Query. If omitted, the default value is false.
 	Multiple bool `json:"multiple" mapstructure:"multiple" default:"false"`
 	// A non-empty array of objects  that specifies claims in the requested Credential. Verifiers MUST NOT point to the same claim more than once in a single query. Wallets SHOULD ignore such duplicate claim queries.
-	Claims []config.ClaimsQuery `json:"claims" mapstructure:"claims"`
+	Claims []ClaimsQueryDB `json:"claims" mapstructure:"claims"`
 	// Defines additional properties requested by the Verifier that apply to the metadata and validity data of the Credential. The properties of this object are defined per Credential Format. If empty, no specific constraints are placed on the metadata or validity of the requested Credential.
 	Meta *config.MetaDataQuery `json:"meta,omitempty" mapstructure:"meta,omitempty"`
 	// A boolean which indicates whether the Verifier requires a Cryptographic Holder Binding proof. The default value is true, i.e., a Verifiable Presentation with Cryptographic Holder Binding is required. If set to false, the Verifier accepts a Credential without Cryptographic Holder Binding proof.
 	RequireCryptographicHolderBinding bool `json:"requireCryptographicHolderBinding,omitempty" mapstructure:"requireCryptographicHolderBinding,omitempty" default:"false"`
 	// A non-empty array containing arrays of identifiers for elements in claims that specifies which combinations of claims for the Credential are requested.
-	ClaimSets [][]string `json:"claim_sets,omitempty" mapstructure:"claim_sets,omitempty"`
+	ClaimSets [][]string `json:"claimSets,omitempty" mapstructure:"claimSets,omitempty"`
 	// A non-empty array of objects  that specifies expected authorities or trust frameworks that certify Issuers, that the Verifier will accept. Every Credential returned by the Wallet SHOULD match at least one of the conditions present in the corresponding trusted_authorities array if present.
-	TrustedAuthorities []config.TrustedAuthorityQuery `json:"trusted_authorities" mapstructure:"trusted_authorities" default:"[]"`
+	TrustedAuthorities []config.TrustedAuthorityQuery `json:"trustedAuthorities" mapstructure:"trustedAuthorities" default:"[]"`
 }
 
 func (cq CredentialQueryDB) VO() config.CredentialQuery {
+	format, ok := FORMAT_MAP[cq.Format]
+	if !ok {
+		format = strings.ToLower(cq.Format)
+	}
+	claims := make([]config.ClaimsQuery, 0, len(cq.Claims))
+	for _, claim := range cq.Claims {
+		claims = append(claims, claim.VO())
+	}
 	vo := config.CredentialQuery{
 		Id:                                cq.Id,
-		Format:                            strings.ToLower(cq.Format),
+		Format:                            format,
 		Multiple:                          cq.Multiple,
-		Claims:                            cq.Claims,
+		Claims:                            claims,
 		Meta:                              cq.Meta,
 		RequireCryptographicHolderBinding: &cq.RequireCryptographicHolderBinding,
 		ClaimSets:                         cq.ClaimSets,
@@ -470,14 +493,59 @@ func (cq CredentialQueryDB) VO() config.CredentialQuery {
 }
 
 func (cq CredentialQueryDB) FromVO(cqVO config.CredentialQuery) CredentialQueryDB {
+	format, ok := DB_FORMAT_MAP[cqVO.Format]
+	if !ok {
+		format = strings.ToUpper(cqVO.Format)
+	}
+	claims := make([]ClaimsQueryDB, 0, len(cqVO.Claims))
+	for _, claimVO := range cqVO.Claims {
+		claims = append(claims, ClaimsQueryDB{}.FromVO(claimVO))
+	}
 	return CredentialQueryDB{
 		Id:                                cqVO.Id,
-		Format:                            strings.ToUpper(cqVO.Format),
+		Format:                            format,
 		Multiple:                          cqVO.Multiple,
-		Claims:                            cqVO.Claims,
+		Claims:                            claims,
 		Meta:                              cqVO.Meta,
 		RequireCryptographicHolderBinding: cqVO.RequiresCryptographicHolderBinding(),
 		ClaimSets:                         cqVO.ClaimSets,
 		TrustedAuthorities:                cqVO.TrustedAuthorities,
+	}
+}
+
+type ClaimsQueryDB struct {
+	// REQUIRED if claim_sets is present in the Credential Query; OPTIONAL otherwise. A string identifying the particular claim. The value MUST be a non-empty string consisting of alphanumeric, underscore (_), or hyphen (-) characters. Within the particular claims array, the same id MUST NOT be present more than once.
+	Id string `json:"id,omitempty" mapstructure:"id,omitempty"`
+	//  The value MUST be a non-empty array representing a claims path pointer that specifies the path to a claim within the Credential. See https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-claims-path-pointer
+	Path []interface{} `json:"path,omitempty" mapstructure:"path,omitempty"`
+	// A non-empty array of strings, integers or boolean values that specifies the expected values of the claim. If the values property is present, the Wallet SHOULD return the claim only if the type and value of the claim both match exactly for at least one of the elements in the array.
+	Values []interface{} `json:"values,omitempty" mapstructure:"values,omitempty"`
+	// MDoc specific parameter, ignored for all other types. The flag can be set to inform that the reader wishes to keep(store) the data. In case of false, its data is only used to be dispalyed and verified.
+	IntentToRetain bool `json:"intent_to_retain,omitempty" mapstructure:"intent_to_retain,omitempty"`
+	// MDoc specific parameter, ignored for all other types. Refers to a namespace inside an mdoc.
+	Namespace string `json:"namespace,omitempty" mapstructure:"namespace,omitempty"`
+	// MDoc specific parameter, ignored for all other types. Identifier for the data-element in the namespace.
+	ClaimName string `json:"claimName,omitempty" mapstructure:"claimName,omitempty"`
+}
+
+func (cq ClaimsQueryDB) VO() config.ClaimsQuery {
+	return config.ClaimsQuery{
+		Id:             cq.Id,
+		Path:           cq.Path,
+		Values:         cq.Values,
+		IntentToRetain: cq.IntentToRetain,
+		Namespace:      cq.Namespace,
+		ClaimName:      cq.ClaimName,
+	}
+}
+
+func (cq ClaimsQueryDB) FromVO(cqVO config.ClaimsQuery) ClaimsQueryDB {
+	return ClaimsQueryDB{
+		Id:             cqVO.Id,
+		Path:           cqVO.Path,
+		Values:         cqVO.Values,
+		IntentToRetain: cqVO.IntentToRetain,
+		Namespace:      cqVO.Namespace,
+		ClaimName:      cqVO.ClaimName,
 	}
 }
