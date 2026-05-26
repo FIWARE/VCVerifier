@@ -26,8 +26,8 @@ const ccsCredentialJSON = `[{"credentialType":"PacketDeliveryService","verifyHol
 // struct JSON tags: camelCase inputDescriptors, format as array of FormatObject).
 const ccsPresentationDefinitionJSON = `{"id":"pd-1","inputDescriptors":[{"id":"desc-1","constraints":{"fields":[{"id":"f-1","path":["$.credentialSubject.type"],"optional":false,"filter":{"type":"string","pattern":"PacketDeliveryService"}}]},"format":[{"formatKey":"jwt_vp","alg":["ES256"]}]}],"format":[{"formatKey":"jwt_vp","alg":["ES256"]}]}`
 
-// ccsDcqlJSON matches the CCS Java DCQL Jackson serialization format.
-const ccsDcqlJSON = `{"credentials":[{"id":"cred-q-1","format":"dc+sd-jwt","multiple":false,"claims":[{"id":"claim-1","path":["$.credentialSubject.email"]}],"meta":{"vct_values":["PacketDeliveryService"]}}],"credential_sets":[{"options":[["cred-q-1"]],"required":true}]}`
+// ccsDcqlJSON matches the Go-internal DCQL serialization format used by the database layer (DCQLDB struct).
+const ccsDcqlJSON = `{"credentials":[{"id":"cred-q-1","format":"dc+sd-jwt","multiple":false,"claims":[{"id":"claim-1","path":["$.credentialSubject.email"]}],"meta":{"vct_values":["PacketDeliveryService"]}}],"credentialSets":[{"options":[["cred-q-1"]],"required":true}]}`
 
 // newTestSQLiteDB creates a fresh in-memory SQLite database with the schema
 // initialized. Returns the raw *sql.DB and a cleanup function.
