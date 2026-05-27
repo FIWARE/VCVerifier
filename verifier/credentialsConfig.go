@@ -82,9 +82,10 @@ type ServiceBackedCredentialsConfig struct {
 
 // InitCredentialsConfig creates the appropriate CredentialsConfig implementation based on
 // the provided configuration. When repo is non-nil, a DbBackedCredentialsConfig is used
-// (database mode). When repo is nil but ConfigEndpoint is set, the existing HTTP-based
-// ServiceBackedCredentialsConfig is used. When neither is available, static-only mode
-// is used (services from ConfigRepo.Services with no expiration).
+// (database mode) that reads directly from the database. When repo is nil but
+// ConfigEndpoint is set, the existing HTTP-based ServiceBackedCredentialsConfig is used.
+// When neither is available, static-only mode is used (services from ConfigRepo.Services
+// with no expiration).
 func InitCredentialsConfig(repoConfig *config.ConfigRepo, repo database.ServiceRepository) (CredentialsConfig, error) {
 	if repo != nil {
 		logging.Log().Info("Using database-backed credentials configuration.")
@@ -162,8 +163,7 @@ func (cc ServiceBackedCredentialsConfig) fillCache(context.Context) {
 }
 
 // updateCacheFromServices updates the global service cache and TIR endpoints cache
-// with the given list of services. This is shared between the HTTP-based and DB-based
-// credentials config implementations.
+// with the given list of services.
 func updateCacheFromServices(services []config.ConfiguredService) {
 	base := cacheBasedCredentialsConfig{}
 	for _, configuredService := range services {
