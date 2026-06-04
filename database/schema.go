@@ -135,11 +135,5 @@ func InitSchema(db *sql.DB, dbType string) error {
 	}
 
 	logging.Log().Info("Database schema initialized successfully")
-
-	// Run data migrations after schema is in place.
-	if err := MigrateCredentialsTrustedListType(db, dbType); err != nil {
-		return fmt.Errorf("failed to run credentials listType migration: %w", err)
-	}
-
 	return nil
 }
