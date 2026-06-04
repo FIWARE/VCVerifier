@@ -100,7 +100,8 @@ func TestMigrationCompat_CCSJavaFormatRoundTrip(t *testing.T) {
 
 	require.Len(t, cred.TrustedIssuersLists, 1)
 
-	assert.Equal(t, "https://tir.dsba.fiware.dev/v3/issuers", cred.TrustedIssuersLists[0])
+	assert.Equal(t, "ebsi", cred.TrustedIssuersLists[0].Type)
+	assert.Equal(t, "https://tir.dsba.fiware.dev/v3/issuers", cred.TrustedIssuersLists[0].Url)
 
 	assert.True(t, cred.HolderVerification.Enabled)
 	assert.Equal(t, "sub", cred.HolderVerification.Claim)
@@ -152,7 +153,7 @@ func TestMigrationCompat_GoWriteCCSRead(t *testing.T) {
 				Credentials: []config.Credential{
 					{
 						Type:                     "VerifiableCredential",
-						TrustedIssuersLists:      []string{"https://til.example.com"},
+						TrustedIssuersLists:      config.TrustedIssuersLists{{Type: "ebsi", Url: "https://til.example.com"}},
 						TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "gaia-x", Url: "https://tpl.example.com"}},
 						HolderVerification:       config.HolderVerification{Enabled: false, Claim: ""},
 						RequireCompliance:        true,

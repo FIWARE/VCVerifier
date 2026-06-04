@@ -221,7 +221,7 @@ func Test_getServices(t *testing.T) {
 				{
 					Type:                     "VerifiableCredential",
 					TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
-					TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
+					TrustedIssuersLists:      TrustedIssuersLists{{Type: "ebsi", Url: "https://til-pdc.ebsi.fiware.dev"}},
 					HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
 				},
 			},
@@ -261,4 +261,137 @@ func Test_getServices(t *testing.T) {
 		},
 	}
 	assert.Equal(t, expectedScopesVO, scopesVO)
+}
+
+func TestTrustedIssuersLists_UnmarshalJSON(t *testing.T) {
+	type testCase struct {
+		name     string
+		input    string
+		expected TrustedIssuersLists
+		wantErr  bool
+	}
+
+	tests := []testCase{
+		{
+			name:  "structured format with explicit types",
+			input: `[{"type":"ebsi-v5","url":"https://v5.example.com"},{"type":"ebsi","url":"https://v3.example.com"}]`,
+			expected: TrustedIssuersLists{
+				{Type: "ebsi-v5", Url: "https://v5.example.com"},
+				{Type: "ebsi", Url: "https://v3.example.com"},
+			},
+		},
+		{
+			name:  "legacy plain string array",
+			input: `["https://tir-a.example.com","https://tir-b.example.com"]`,
+			expected: TrustedIssuersLists{
+				{Type: DEFAULT_LIST_TYPE, Url: "https://tir-a.example.com"},
+				{Type: DEFAULT_LIST_TYPE, Url: "https://tir-b.example.com"},
+			},
+		},
+		{
+			name:     "empty array",
+			input:    `[]`,
+			expected: TrustedIssuersLists{},
+		},
+		{
+			name:  "single legacy string",
+			input: `["https://only.example.com"]`,
+			expected: TrustedIssuersLists{
+				{Type: DEFAULT_LIST_TYPE, Url: "https://only.example.com"},
+			},
+		},
+		{
+			name:  "single structured entry",
+			input: `[{"type":"ebsi-v5","url":"https://only-v5.example.com"}]`,
+			expected: TrustedIssuersLists{
+				{Type: "ebsi-v5", Url: "https://only-v5.example.com"},
+			},
+		},
+		{
+			name:    "invalid JSON",
+			input:   `not-json`,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var got TrustedIssuersLists
+			err := json.Unmarshal([]byte(tc.input), &got)
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expected, got)
+		})
+	}
+}
+
+func TestTrustedIssuersListsDecodeHook(t *testing.T) {
+	hook := TrustedIssuersListsDecodeHook()
+
+	type testCase struct {
+		name     string
+		input    interface{}
+		expected interface{}
+	}
+
+	tests := []testCase{
+		{
+			name: "legacy plain string slice",
+			input: []interface{}{
+				"https://tir-a.example.com",
+				"https://tir-b.example.com",
+			},
+			expected: TrustedIssuersLists{
+				{Type: DEFAULT_LIST_TYPE, Url: "https://tir-a.example.com"},
+				{Type: DEFAULT_LIST_TYPE, Url: "https://tir-b.example.com"},
+			},
+		},
+		{
+			name: "structured map entries",
+			input: []interface{}{
+				map[string]interface{}{"type": "ebsi-v5", "url": "https://v5.example.com"},
+				map[string]interface{}{"type": "ebsi", "url": "https://v3.example.com"},
+			},
+			expected: TrustedIssuersLists{
+				{Type: "ebsi-v5", Url: "https://v5.example.com"},
+				{Type: "ebsi", Url: "https://v3.example.com"},
+			},
+		},
+		{
+			name: "mixed strings and maps",
+			input: []interface{}{
+				"https://legacy.example.com",
+				map[string]interface{}{"type": "ebsi-v5", "url": "https://v5.example.com"},
+			},
+			expected: TrustedIssuersLists{
+				{Type: DEFAULT_LIST_TYPE, Url: "https://legacy.example.com"},
+				{Type: "ebsi-v5", Url: "https://v5.example.com"},
+			},
+		},
+		{
+			name:     "empty slice",
+			input:    []interface{}{},
+			expected: TrustedIssuersLists{},
+		},
+	}
+
+	targetType := reflect.TypeOf(TrustedIssuersLists{})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := hook(reflect.TypeOf(tc.input), targetType, tc.input)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+
+	t.Run("passthrough for non-target type", func(t *testing.T) {
+		input := []interface{}{"https://example.com"}
+		result, err := hook(reflect.TypeOf(input), reflect.TypeOf(""), input)
+		assert.NoError(t, err)
+		// Should return the input unchanged since target type doesn't match.
+		assert.Equal(t, input, result)
+	})
 }

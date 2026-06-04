@@ -269,8 +269,10 @@ type CredentialDB struct {
 	CredentialStatus config.CredentialStatus `json:"credentialStatus,omitempty" mapstructure:"credentialStatus,omitempty"`
 }
 
+// VO converts a CredentialDB into its config.Credential value object, mapping
+// the unified EndpointEntry list back into separate participants and issuers lists.
 func (cred CredentialDB) VO() config.Credential {
-	trustedIssuerList := make([]string, 0, len(cred.TrustedIssuersLists))
+	trustedIssuerList := make(config.TrustedIssuersLists, 0, len(cred.TrustedIssuersLists))
 	trustedParticipantsList := make([]config.TrustedParticipantsList, 0, len(cred.TrustedIssuersLists))
 	for _, trustedIssuer := range cred.TrustedIssuersLists {
 		switch trustedIssuer.Type {
@@ -284,7 +286,14 @@ func (cred CredentialDB) VO() config.Credential {
 				Url:  trustedIssuer.Endpoint,
 			})
 		case config.TrustedIssuers:
-			trustedIssuerList = append(trustedIssuerList, trustedIssuer.Endpoint)
+			listType := trustedIssuer.ListType
+			if listType == "" {
+				listType = config.DEFAULT_LIST_TYPE
+			}
+			trustedIssuerList = append(trustedIssuerList, config.TrustedIssuersList{
+				Type: listType,
+				Url:  trustedIssuer.Endpoint,
+			})
 		}
 	}
 
@@ -299,6 +308,9 @@ func (cred CredentialDB) VO() config.Credential {
 	}
 }
 
+// FromVO converts a config.Credential value object into a CredentialDB,
+// merging the separate participants and issuers lists into a unified
+// EndpointEntry slice.
 func (c CredentialDB) FromVO(cv config.Credential) CredentialDB {
 	trustedLists := make([]config.EndpointEntry, 0, len(cv.TrustedParticipantsLists)+len(cv.TrustedIssuersLists))
 	for _, tp := range cv.TrustedParticipantsLists {
@@ -312,11 +324,15 @@ func (c CredentialDB) FromVO(cv config.Credential) CredentialDB {
 			Endpoint: tp.Url,
 		})
 	}
-	for _, endpoint := range cv.TrustedIssuersLists {
+	for _, issuer := range cv.TrustedIssuersLists {
+		listType := issuer.Type
+		if listType == "" {
+			listType = config.DEFAULT_LIST_TYPE
+		}
 		trustedLists = append(trustedLists, config.EndpointEntry{
 			Type:     config.TrustedIssuers,
-			ListType: config.DEFAULT_LIST_TYPE,
-			Endpoint: endpoint,
+			ListType: listType,
+			Endpoint: issuer.Url,
 		})
 	}
 	return CredentialDB{

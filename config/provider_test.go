@@ -82,7 +82,7 @@ func Test_ReadConfig(t *testing.T) {
 										{
 											Type:                     "VerifiableCredential",
 											TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
-											TrustedIssuersLists:      []string{"https://til-pdc.ebsi.fiware.dev"},
+											TrustedIssuersLists:      TrustedIssuersLists{{Type: "ebsi", Url: "https://til-pdc.ebsi.fiware.dev"}},
 										},
 									},
 									PresentationDefinition: &PresentationDefinition{

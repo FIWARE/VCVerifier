@@ -7,6 +7,7 @@ import (
 
 	"github.com/PaesslerAG/jsonpath"
 	"github.com/fiware/VCVerifier/common"
+	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/google/go-cmp/cmp"
@@ -63,13 +64,17 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 			return false, err
 		}
 
-		tilAddress, credentialSupported := til[credentialType]
+		tilEntries, credentialSupported := til[credentialType]
 		if !credentialSupported {
 			logging.Log().Debugf("No trusted issuers list configured for type %s", credentialType)
 			return false, ErrorNoTilForType
 		}
 
-		exist, trustedIssuer, err := tpvs.tirClient.GetTrustedIssuer(tilAddress, verifiableCredential.Contents().Issuer.ID)
+		// Extract URLs from entries with ebsi type (or empty/default) for v3/v4 lookup.
+		// V5 dispatch will be added in a later step.
+		tilURLs := extractTilURLs(tilEntries)
+
+		exist, trustedIssuer, err := tpvs.tirClient.GetTrustedIssuer(tilURLs, verifiableCredential.Contents().Issuer.ID)
 
 		if err != nil {
 			logging.Log().Warnf("Was not able to validate trusted issuer. Err: %v", err)
@@ -93,14 +98,32 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 	return true, err
 }
 
-func isWildcardTil(tilList []string) (isWildcard bool, err error) {
-	if len(tilList) == 1 && tilList[0] == WILDCARD_TIL {
+// isWildcardTil checks whether the given TIL list contains the wildcard
+// entry ("*"). A wildcard must be the only entry; mixing it with other
+// entries is considered invalid configuration.
+func isWildcardTil(tilList []configModel.TrustedIssuersList) (isWildcard bool, err error) {
+	if len(tilList) == 1 && tilList[0].Url == WILDCARD_TIL {
 		return true, err
 	}
-	if len(tilList) > 1 && slices.Contains(tilList, WILDCARD_TIL) { //nolint:govet
+	urls := make([]string, len(tilList))
+	for i, entry := range tilList {
+		urls[i] = entry.Url
+	}
+	if len(tilList) > 1 && slices.Contains(urls, WILDCARD_TIL) { //nolint:govet
 		return false, ErrorInvalidTil
 	}
 	return false, err
+}
+
+// extractTilURLs collects the URL strings from TrustedIssuersList entries.
+// In this step all entries are passed through; v5-specific dispatch will be
+// added in a later step.
+func extractTilURLs(entries []configModel.TrustedIssuersList) []string {
+	urls := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		urls = append(urls, entry.Url)
+	}
+	return urls
 }
 
 func verifyWithCredentialsConfig(verifiableCredential *common.Credential, credentials []tir.Credential) (result bool, err error) {
