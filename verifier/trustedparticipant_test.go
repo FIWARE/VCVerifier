@@ -32,6 +32,14 @@ func (mtc mockTirClient) GetTrustedIssuer(tirEndpoints []string, did string) (ex
 	return slices.Contains(mtc.participantsList, did), mtc.expectedIssuer, mtc.expectedError
 }
 
+func (mtc mockTirClient) IsTrustedParticipantV5(tirEndpoint string, did string) (trusted bool) {
+	return slices.Contains(mtc.participantsList, did)
+}
+
+func (mtc mockTirClient) GetTrustedIssuerV5(tirEndpoints []string, did string) (exists bool, trustedIssuer tir.TrustedIssuer, err error) {
+	return slices.Contains(mtc.participantsList, did), mtc.expectedIssuer, mtc.expectedError
+}
+
 func TestVerifyVC_Participant(t *testing.T) {
 
 	type test struct {
