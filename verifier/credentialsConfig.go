@@ -49,7 +49,7 @@ type CredentialsConfig interface {
 	// GetTrustedIssuersLists returns (EBSI TrustedIssuersRegistry compliant) endpoints for the
 	// given service/credential combination, to check that credentials are issued by trusted issuers
 	// and that the issuer has permission to issue such claims.
-	GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error)
+	GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []config.TrustedIssuersList, err error)
 	// RequiredCredentialTypes returns the credential types that are required for the given service and scope.
 	RequiredCredentialTypes(serviceIdentifier string, scope string) (credentialTypes []string, err error)
 	// GetHolderVerification returns holder verification configuration.
@@ -177,7 +177,9 @@ func updateCacheFromServices(services []config.ConfiguredService) {
 				if err != nil {
 					logging.Log().Errorf("failed caching issuers lists in fillCache(): %v", err)
 				} else {
-					tirEndpoints = append(tirEndpoints, serviceIssuersLists...)
+					for _, entry := range serviceIssuersLists {
+						tirEndpoints = append(tirEndpoints, entry.Url)
+					}
 				}
 			}
 		}
@@ -284,7 +286,7 @@ func (cc cacheBasedCredentialsConfig) GetTrustedParticipantLists(serviceIdentifi
 }
 
 // GetTrustedIssuersLists returns trusted issuers list endpoints for the given service, scope, and credential type.
-func (cc cacheBasedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error) {
+func (cc cacheBasedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []config.TrustedIssuersList, err error) {
 	logging.Log().Debugf("Get issuers list for %s - %s - %s.", serviceIdentifier, scope, credentialType)
 	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
 	if hit {
@@ -295,7 +297,7 @@ func (cc cacheBasedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifier s
 		}
 	}
 	logging.Log().Debugf("No trusted issuers for %s - %s", serviceIdentifier, credentialType)
-	return []string{}, nil
+	return []config.TrustedIssuersList{}, nil
 }
 
 // GetComplianceRequired returns whether compliance is required for the given credential type.

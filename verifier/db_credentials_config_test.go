@@ -108,7 +108,7 @@ func testService(id, scopeName, credentialType string) config.ConfiguredService 
 				Credentials: []config.Credential{
 					{
 						Type:                     credentialType,
-						TrustedIssuersLists:      []string{"https://tir.example.com"},
+						TrustedIssuersLists:      config.TrustedIssuersLists{{Type: "ebsi", Url: "https://tir.example.com"}},
 						TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "ebsi", Url: "https://tpl.example.com"}},
 						HolderVerification:       config.HolderVerification{Enabled: true, Claim: "sub"},
 						RequireCompliance:        true,
@@ -131,7 +131,7 @@ func testServiceVO(id, scopeName, credentialType string) config.ConfiguredServic
 				Credentials: []config.Credential{
 					{
 						Type:                     credentialType,
-						TrustedIssuersLists:      []string{"https://tir.example.com"},
+						TrustedIssuersLists:      config.TrustedIssuersLists{{Type: "ebsi", Url: "https://tir.example.com"}},
 						TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "ebsi", Url: "https://tpl.example.com"}},
 					},
 				},
@@ -221,7 +221,7 @@ func TestDbBackedCredentialsConfig_AllInterfaceMethods(t *testing.T) {
 	t.Run("GetTrustedIssuersLists", func(t *testing.T) {
 		til, err := cc.GetTrustedIssuersLists("test-svc", "myScope", "TestCredential")
 		require.NoError(t, err)
-		assert.Equal(t, []string{"https://tir.example.com"}, til)
+		assert.Equal(t, []config.TrustedIssuersList{{Type: "ebsi", Url: "https://tir.example.com"}}, til)
 	})
 
 	t.Run("GetHolderVerification", func(t *testing.T) {

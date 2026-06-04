@@ -85,7 +85,7 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 			Credentials: []config.Credential{
 				{
 					Type:                "VerifiableCredential",
-					TrustedIssuersLists: []string{"https://tir.example.com"},
+					TrustedIssuersLists: config.TrustedIssuersLists{{Type: "ebsi", Url: "https://tir.example.com"}},
 					HolderVerification:  config.HolderVerification{Enabled: true, Claim: "sub"},
 					RequireCompliance:   true,
 					JwtInclusion: config.JwtInclusion{
@@ -212,7 +212,7 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 	// GetTrustedIssuersLists
 	issuersLists, err := credConfig.GetTrustedIssuersLists(serviceID, "defaultScope", "VerifiableCredential")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"https://tir.example.com"}, issuersLists)
+	assert.Equal(t, []config.TrustedIssuersList{{Type: "ebsi", Url: "https://tir.example.com"}}, issuersLists)
 
 	// --- Step 4: Update the service → verify changes propagate ---
 	updatedScopes := map[string]config.ScopeEntry{
@@ -220,7 +220,7 @@ func TestIntegration_FullCRUDToCacheFlow(t *testing.T) {
 			Credentials: []config.Credential{
 				{
 					Type:                "UpdatedCredential",
-					TrustedIssuersLists: []string{"https://tir-updated.example.com"},
+					TrustedIssuersLists: config.TrustedIssuersLists{{Type: "ebsi", Url: "https://tir-updated.example.com"}},
 					RequireCompliance:   false,
 				},
 			},
@@ -435,7 +435,7 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 			Credentials: []config.Credential{
 				{
 					Type:                     "CredTypeA",
-					TrustedIssuersLists:      []string{"https://til-a.example.com"},
+					TrustedIssuersLists:      config.TrustedIssuersLists{{Type: "ebsi", Url: "https://til-a.example.com"}},
 					TrustedParticipantsLists: []config.TrustedParticipantsList{{Type: "ebsi", Url: "https://tpl-a.example.com"}},
 					HolderVerification:       config.HolderVerification{Enabled: true, Claim: "holderId"},
 					RequireCompliance:        true,
@@ -443,7 +443,7 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 				},
 				{
 					Type:                "CredTypeB",
-					TrustedIssuersLists: []string{"https://til-b.example.com"},
+					TrustedIssuersLists: config.TrustedIssuersLists{{Type: "ebsi", Url: "https://til-b.example.com"}},
 					RequireCompliance:   false,
 					JwtInclusion:        config.JwtInclusion{Enabled: &FALSE_OPTION},
 				},
@@ -566,7 +566,7 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 	// Trusted issuers lists
 	tilA, err := credConfig.GetTrustedIssuersLists(serviceID, "scopeA", "CredTypeA")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"https://til-a.example.com"}, tilA)
+	assert.Equal(t, []config.TrustedIssuersList{{Type: "ebsi", Url: "https://til-a.example.com"}}, tilA)
 
 	// Trusted participants lists
 	tplA, err := credConfig.GetTrustedParticipantLists(serviceID, "scopeA", "CredTypeA")

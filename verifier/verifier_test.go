@@ -107,7 +107,7 @@ func createMockCredentials(serviceId, scope, credentialType, url, holderClaim st
 	credential := configModel.Credential{
 		Type:                     credentialType,
 		TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: url}},
-		TrustedIssuersLists:      []string{url},
+		TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: url}},
 		HolderVerification:       configModel.HolderVerification{Enabled: holderVerfication, Claim: holderClaim},
 	}
 
@@ -153,7 +153,7 @@ func (mcc mockCredentialConfig) GetTrustedParticipantLists(serviceIdentifier str
 	}
 	return trustedIssuersRegistryUrl, err
 }
-func (mcc mockCredentialConfig) GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []string, err error) {
+func (mcc mockCredentialConfig) GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) (trustedIssuersRegistryUrl []configModel.TrustedIssuersList, err error) {
 	if mcc.mockError != nil {
 		return trustedIssuersRegistryUrl, mcc.mockError
 	}
