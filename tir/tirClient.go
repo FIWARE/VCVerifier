@@ -3,6 +3,7 @@ package tir
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -16,8 +17,13 @@ import (
 
 const ISSUERS_V4_PATH = "v4/issuers"
 const ISSUERS_V3_PATH = "v3/issuers"
+const ISSUERS_V5_PATH = "v5/issuers"
 
 const DID_V4_Path = "v4/identifiers"
+
+// maxPaginationPages limits the number of pages fetched during v5 attribute
+// list pagination to prevent infinite loops or excessively long request chains.
+const maxPaginationPages = 100
 
 var ErrorTirNoResponse = errors.New("no_response_from_tir")
 var ErrorTirEmptyResponse = errors.New("empty_response_from_tir")
@@ -25,6 +31,13 @@ var ErrorTirEmptyResponse = errors.New("empty_response_from_tir")
 type TirClient interface {
 	IsTrustedParticipant(tirEndpoints string, did string) (trusted bool)
 	GetTrustedIssuer(tirEndpoints []string, did string) (exists bool, trustedIssuer TrustedIssuer, err error)
+	// IsTrustedParticipantV5 checks whether the given DID is registered as a
+	// trusted participant at the specified v5 TIR endpoint.
+	IsTrustedParticipantV5(tirEndpoint string, did string) (trusted bool)
+	// GetTrustedIssuerV5 fetches a trusted issuer from v5 TIR endpoints. The v5
+	// API requires multi-step fetching: get issuer, list attributes (with
+	// pagination), then fetch each attribute individually.
+	GetTrustedIssuerV5(tirEndpoints []string, did string) (exists bool, trustedIssuer TrustedIssuer, err error)
 }
 
 /**
@@ -73,6 +86,47 @@ type Claim struct {
 	Name          string        `json:"name"`
 	Path          string        `json:"path"`
 	AllowedValues []interface{} `json:"allowedValues"`
+}
+
+// TrustedIssuerV5Response represents the response from GET /v5/issuers/{did}.
+// The Attributes field contains a URL reference to the paginated attributes list,
+// rather than inline attribute data as in v3/v4.
+type TrustedIssuerV5Response struct {
+	Did           string `json:"did"`
+	Attributes    string `json:"attributes"`
+	HasAttributes bool   `json:"hasAttributes"`
+}
+
+// AttributesListV5Response represents a paginated list of attribute references
+// returned by GET /v5/issuers/{did}/attributes.
+type AttributesListV5Response struct {
+	Items    []AttributeListItem `json:"items"`
+	Links    PaginationLinks     `json:"links"`
+	Total    int                 `json:"total"`
+	PageSize int                 `json:"pageSize"`
+	Self     string              `json:"self"`
+}
+
+// AttributeListItem represents a single entry in the paginated attributes list,
+// containing the attribute's ID and an href to fetch its full details.
+type AttributeListItem struct {
+	ID   string `json:"id"`
+	Href string `json:"href"`
+}
+
+// PaginationLinks holds the pagination navigation links returned by the v5 API.
+type PaginationLinks struct {
+	First string `json:"first"`
+	Last  string `json:"last"`
+	Next  string `json:"next"`
+	Prev  string `json:"prev"`
+}
+
+// AttributeV5Response represents the response from fetching a single attribute
+// via GET /v5/issuers/{did}/attributes/{id}.
+type AttributeV5Response struct {
+	Attribute IssuerAttribute `json:"attribute"`
+	Did       string          `json:"did"`
 }
 
 func NewTirHttpClient(tokenProvider TokenProvider, m2mConfig config.M2M, verifierConfig config.Verifier) (client TirClient, err error) {
@@ -219,5 +273,193 @@ func getIssuerV4Url(did string) string {
 
 func getIssuerV3Url(did string) string {
 	return ISSUERS_V3_PATH + "/" + did
+}
 
+// getIssuerV5Url returns the v5 API path for fetching issuer information by DID.
+func getIssuerV5Url(did string) string {
+	return ISSUERS_V5_PATH + "/" + did
+}
+
+// getAttributesV5Url returns the v5 API path for listing an issuer's attributes.
+func getAttributesV5Url(did string) string {
+	return ISSUERS_V5_PATH + "/" + did + "/attributes"
+}
+
+// IsTrustedParticipantV5 checks whether the given DID is registered as a
+// trusted participant at the specified v5 TIR endpoint. Returns true if the
+// endpoint responds with HTTP 200 for the issuer lookup.
+func (tc TirHttpClient) IsTrustedParticipantV5(tirEndpoint string, did string) (trusted bool) {
+	if tc.issuerExistsV5(tirEndpoint, did) {
+		logging.Log().Debugf("Issuer %s is a trusted participant via v5 endpoint %s.", did, tirEndpoint)
+		return true
+	}
+	return false
+}
+
+// issuerExistsV5 checks the v5 endpoint for the existence of a given DID,
+// using the cache to avoid redundant requests.
+func (tc TirHttpClient) issuerExistsV5(tirEndpoint string, did string) (trusted bool) {
+	cacheKey := tirEndpoint + "/v5/" + did
+	exists, hit := tc.tirCache.Get(cacheKey)
+
+	if !hit {
+		resp, err := tc.client.Get(tirEndpoint, getIssuerV5Url(did))
+		if err != nil {
+			logging.Log().Warnf("V5: Was not able to check issuer %s at %s. Err: %v", did, tirEndpoint, err)
+			return false
+		}
+		if resp == nil {
+			logging.Log().Warnf("V5: No response for issuer %s from %s.", did, tirEndpoint)
+			return false
+		}
+		logging.Log().Debugf("V5: Issuer %s response from %s is %v", did, tirEndpoint, resp.StatusCode)
+		exists = resp.StatusCode == 200
+		tc.tirCache.Set(cacheKey, exists, cache.DefaultExpiration)
+	}
+
+	return exists.(bool)
+}
+
+// GetTrustedIssuerV5 fetches a trusted issuer from v5 TIR endpoints. For each
+// endpoint it performs a multi-step fetch: (1) get issuer, (2) if the issuer has
+// attributes, paginate through the attributes list, (3) fetch each individual
+// attribute. The assembled TrustedIssuer is cached for subsequent lookups.
+func (tc TirHttpClient) GetTrustedIssuerV5(tirEndpoints []string, did string) (exists bool, trustedIssuer TrustedIssuer, err error) {
+	for _, tirEndpoint := range tirEndpoints {
+		cacheKey := tirEndpoint + "/v5/" + did + "/full"
+		cached, hit := tc.tilCache.Get(cacheKey)
+		if hit {
+			return true, cached.(TrustedIssuer), nil
+		}
+
+		issuer, fetchErr := tc.fetchTrustedIssuerV5(tirEndpoint, did)
+		if fetchErr != nil {
+			logging.Log().Warnf("V5: Was not able to get the issuer %s from %s. Err: %v", did, tirEndpoint, fetchErr)
+			err = fetchErr
+			continue
+		}
+
+		logging.Log().Debugf("V5: Got issuer %s.", logging.PrettyPrintObject(issuer))
+		tc.tilCache.Set(cacheKey, issuer, cache.DefaultExpiration)
+		return true, issuer, nil
+	}
+	return false, trustedIssuer, err
+}
+
+// fetchTrustedIssuerV5 performs the full multi-step v5 fetch for a single
+// endpoint: get issuer metadata, paginate attribute list, and fetch each
+// attribute's details.
+func (tc TirHttpClient) fetchTrustedIssuerV5(tirEndpoint string, did string) (TrustedIssuer, error) {
+	// Step 1: GET /v5/issuers/{did}
+	resp, err := tc.client.Get(tirEndpoint, getIssuerV5Url(did))
+	if err != nil {
+		return TrustedIssuer{}, err
+	}
+	if resp == nil {
+		return TrustedIssuer{}, ErrorTirNoResponse
+	}
+	if resp.StatusCode != 200 {
+		logging.Log().Debugf("V5: Issuer %s not found at %s (status %d).", did, tirEndpoint, resp.StatusCode)
+		return TrustedIssuer{}, fmt.Errorf("issuer %s not found at %s: status %d", did, tirEndpoint, resp.StatusCode)
+	}
+
+	var issuerResp TrustedIssuerV5Response
+	if resp.Body == nil {
+		return TrustedIssuer{}, ErrorTirEmptyResponse
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&issuerResp); err != nil {
+		return TrustedIssuer{}, fmt.Errorf("failed to decode v5 issuer response: %w", err)
+	}
+
+	result := TrustedIssuer{Did: issuerResp.Did}
+
+	// Step 2: If issuer has no attributes, return early
+	if !issuerResp.HasAttributes {
+		logging.Log().Debugf("V5: Issuer %s has no attributes.", did)
+		return result, nil
+	}
+
+	// Step 3: Paginate through attributes list
+	attributeItems, err := tc.fetchAllAttributeItemsV5(tirEndpoint, did)
+	if err != nil {
+		return TrustedIssuer{}, fmt.Errorf("failed to fetch attribute list for %s: %w", did, err)
+	}
+
+	// Step 4: Fetch each individual attribute
+	var attributes []IssuerAttribute
+	for _, item := range attributeItems {
+		attr, err := tc.fetchSingleAttributeV5(tirEndpoint, item.Href)
+		if err != nil {
+			logging.Log().Warnf("V5: Failed to fetch attribute %s for issuer %s: %v", item.ID, did, err)
+			return TrustedIssuer{}, fmt.Errorf("failed to fetch attribute %s for %s: %w", item.ID, did, err)
+		}
+		attributes = append(attributes, attr)
+	}
+
+	result.Attributes = attributes
+	return result, nil
+}
+
+// fetchAllAttributeItemsV5 paginates through the v5 attributes list endpoint,
+// collecting all AttributeListItem entries across pages. It follows the
+// Links.Next URL until exhausted or until the safety limit is reached.
+func (tc TirHttpClient) fetchAllAttributeItemsV5(tirEndpoint string, did string) ([]AttributeListItem, error) {
+	var allItems []AttributeListItem
+	currentPath := getAttributesV5Url(did)
+
+	for page := 0; page < maxPaginationPages; page++ {
+		resp, err := tc.client.Get(tirEndpoint, currentPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch attributes page: %w", err)
+		}
+		if resp == nil {
+			return nil, ErrorTirNoResponse
+		}
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("unexpected status %d when fetching attributes", resp.StatusCode)
+		}
+		if resp.Body == nil {
+			return nil, ErrorTirEmptyResponse
+		}
+
+		var listResp AttributesListV5Response
+		if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+			return nil, fmt.Errorf("failed to decode attributes list: %w", err)
+		}
+
+		allItems = append(allItems, listResp.Items...)
+
+		// Stop if there is no next page
+		if listResp.Links.Next == "" || listResp.Links.Next == listResp.Self {
+			break
+		}
+		currentPath = listResp.Links.Next
+	}
+
+	return allItems, nil
+}
+
+// fetchSingleAttributeV5 fetches a single attribute by its href path from the
+// v5 API and returns the parsed IssuerAttribute.
+func (tc TirHttpClient) fetchSingleAttributeV5(tirEndpoint string, href string) (IssuerAttribute, error) {
+	resp, err := tc.client.Get(tirEndpoint, href)
+	if err != nil {
+		return IssuerAttribute{}, fmt.Errorf("failed to fetch attribute: %w", err)
+	}
+	if resp == nil {
+		return IssuerAttribute{}, ErrorTirNoResponse
+	}
+	if resp.StatusCode != 200 {
+		return IssuerAttribute{}, fmt.Errorf("unexpected status %d when fetching attribute", resp.StatusCode)
+	}
+	if resp.Body == nil {
+		return IssuerAttribute{}, ErrorTirEmptyResponse
+	}
+
+	var attrResp AttributeV5Response
+	if err := json.NewDecoder(resp.Body).Decode(&attrResp); err != nil {
+		return IssuerAttribute{}, fmt.Errorf("failed to decode attribute response: %w", err)
+	}
+
+	return attrResp.Attribute, nil
 }
