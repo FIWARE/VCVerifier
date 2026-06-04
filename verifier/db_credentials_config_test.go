@@ -8,6 +8,7 @@ import (
 
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/config"
+	"github.com/fiware/VCVerifier/database"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/patrickmn/go-cache"
 	"github.com/stretchr/testify/assert"
@@ -21,18 +22,17 @@ func init() {
 // mockServiceRepository is a test double for database.ServiceRepository that
 // returns preconfigured results. All methods are safe for concurrent use.
 type mockServiceRepository struct {
-	services        []config.ConfiguredService
-	total           int
-	getAllError     error
-	getError        error
-	createError     error
-	deleteError     error
-	updateError     error
-	existsResult    bool
-	existsError     error
-	scopeResult     []string
-	scopeError      error
-	getAllCallCount int
+	services     []config.ConfiguredService
+	total        int
+	getAllError   error
+	getError     error
+	createError  error
+	deleteError  error
+	updateError  error
+	existsResult bool
+	existsError  error
+	scopeResult  []string
+	scopeError   error
 }
 
 func (m *mockServiceRepository) CreateService(_ context.Context, _ config.ConfiguredService) error {
@@ -48,11 +48,10 @@ func (m *mockServiceRepository) GetService(_ context.Context, id string) (config
 			return svc, nil
 		}
 	}
-	return config.ConfiguredService{}, errors.New("service not found")
+	return config.ConfiguredService{}, database.ErrServiceNotFound
 }
 
 func (m *mockServiceRepository) GetAllServices(_ context.Context, page, pageSize int) ([]config.ConfiguredService, int, error) {
-	m.getAllCallCount++
 	if m.getAllError != nil {
 		return nil, 0, m.getAllError
 	}
@@ -142,39 +141,30 @@ func testServiceVO(id, scopeName, credentialType string) config.ConfiguredServic
 	}
 }
 
-func TestDbBackedCredentialsConfig_CachePopulationFromDB(t *testing.T) {
-	resetGlobalCache()
-
+func TestDbBackedCredentialsConfig_ServiceFromDB(t *testing.T) {
 	svc := testService("db-svc-1", "defaultScope", "VerifiableCredential")
 	repo := &mockServiceRepository{
 		services: []config.ConfiguredService{svc},
 	}
 
-	repoConfig := &config.ConfigRepo{
-		UpdateInterval: 30,
-	}
+	repoConfig := &config.ConfigRepo{}
 
 	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 	require.NotNil(t, cc)
 
-	// Verify service is in cache
 	scopes, err := cc.GetScope("db-svc-1")
 	require.NoError(t, err)
 	assert.Contains(t, scopes, "defaultScope")
 }
 
 func TestDbBackedCredentialsConfig_AllInterfaceMethods(t *testing.T) {
-	resetGlobalCache()
-
 	svc := testService("test-svc", "myScope", "TestCredential")
 	repo := &mockServiceRepository{
 		services: []config.ConfiguredService{svc},
 	}
 
-	repoConfig := &config.ConfigRepo{
-		UpdateInterval: 60,
-	}
+	repoConfig := &config.ConfigRepo{}
 
 	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
@@ -199,7 +189,7 @@ func TestDbBackedCredentialsConfig_AllInterfaceMethods(t *testing.T) {
 
 	t.Run("GetAuthorizationPath", func(t *testing.T) {
 		path := cc.GetAuthorizationPath("test-svc")
-		assert.Equal(t, "", path) // not set in testService
+		assert.Equal(t, "", path)
 	})
 
 	t.Run("RequiredCredentialTypes", func(t *testing.T) {
@@ -211,13 +201,13 @@ func TestDbBackedCredentialsConfig_AllInterfaceMethods(t *testing.T) {
 	t.Run("GetPresentationDefinition", func(t *testing.T) {
 		pd, err := cc.GetPresentationDefinition("test-svc", "myScope")
 		require.NoError(t, err)
-		assert.Nil(t, pd) // not set in testService
+		assert.Nil(t, pd)
 	})
 
 	t.Run("GetDcqlQuery", func(t *testing.T) {
 		dcql, err := cc.GetDcqlQuery("test-svc", "myScope")
 		require.NoError(t, err)
-		assert.Nil(t, dcql) // not set in testService
+		assert.Nil(t, dcql)
 	})
 
 	t.Run("GetTrustedParticipantLists", func(t *testing.T) {
@@ -262,13 +252,11 @@ func TestDbBackedCredentialsConfig_AllInterfaceMethods(t *testing.T) {
 }
 
 func TestDbBackedCredentialsConfig_ServiceNotFound(t *testing.T) {
-	resetGlobalCache()
-
 	repo := &mockServiceRepository{
 		services: []config.ConfiguredService{},
 	}
 
-	repoConfig := &config.ConfigRepo{UpdateInterval: 30}
+	repoConfig := &config.ConfigRepo{}
 
 	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
@@ -291,8 +279,6 @@ func TestDbBackedCredentialsConfig_ServiceNotFound(t *testing.T) {
 }
 
 func TestDbBackedCredentialsConfig_FallbackToStaticConfig(t *testing.T) {
-	resetGlobalCache()
-
 	staticSvc := testServiceVO("static-svc", "staticScope", "StaticCredential")
 
 	repo := &mockServiceRepository{
@@ -300,14 +286,12 @@ func TestDbBackedCredentialsConfig_FallbackToStaticConfig(t *testing.T) {
 	}
 
 	repoConfig := &config.ConfigRepo{
-		Services:       []config.ConfiguredService{staticSvc},
-		UpdateInterval: 30,
+		Services: []config.ConfiguredService{staticSvc},
 	}
 
 	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
-	// Static service should be available even though DB has no services.
 	scopes, err := cc.GetScope("static-svc")
 	require.NoError(t, err)
 	assert.Contains(t, scopes, "staticScope")
@@ -318,8 +302,6 @@ func TestDbBackedCredentialsConfig_FallbackToStaticConfig(t *testing.T) {
 }
 
 func TestDbBackedCredentialsConfig_DBOverridesStaticConfig(t *testing.T) {
-	resetGlobalCache()
-
 	staticSvc := config.ConfiguredService{
 		Id:               "shared-svc",
 		DefaultOidcScope: "oldScope",
@@ -337,14 +319,13 @@ func TestDbBackedCredentialsConfig_DBOverridesStaticConfig(t *testing.T) {
 	}
 
 	repoConfig := &config.ConfigRepo{
-		Services:       []config.ConfiguredService{staticSvc},
-		UpdateInterval: 30,
+		Services: []config.ConfiguredService{staticSvc},
 	}
 
 	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
-	// DB version should take precedence after cache fill.
+	// DB version should take precedence.
 	defaultScope, err := cc.GetDefaultScope("shared-svc")
 	require.NoError(t, err)
 	assert.Equal(t, "newScope", defaultScope)
@@ -354,42 +335,27 @@ func TestDbBackedCredentialsConfig_DBOverridesStaticConfig(t *testing.T) {
 	assert.Equal(t, []string{"NewCred"}, types)
 }
 
-func TestDbBackedCredentialsConfig_DBErrorPreservesCache(t *testing.T) {
-	resetGlobalCache()
+func TestDbBackedCredentialsConfig_DBErrorFallsBackToStatic(t *testing.T) {
+	staticSvc := testServiceVO("fallback-svc", "staticScope", "StaticCred")
 
-	svc := testService("cached-svc", "scope1", "Cred1")
-
-	callCount := 0
 	repo := &mockServiceRepository{
-		services: []config.ConfiguredService{svc},
+		getError: errors.New("connection refused"),
 	}
 
-	repoConfig := &config.ConfigRepo{UpdateInterval: 30}
+	repoConfig := &config.ConfigRepo{
+		Services: []config.ConfiguredService{staticSvc},
+	}
 
-	// Initial fill succeeds (services are loaded).
 	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
-	// Verify service is cached.
-	scopes, err := cc.GetScope("cached-svc")
+	// DB error for unknown services still returns empty.
+	scopes, err := cc.GetScope("fallback-svc")
 	require.NoError(t, err)
-	assert.Contains(t, scopes, "scope1")
-	_ = callCount
-
-	// Now simulate DB failure on next fill.
-	repo.getAllError = errors.New("connection refused")
-	dbc := cc.(DbBackedCredentialsConfig)
-	dbc.fillCache(context.Background())
-
-	// Cache should still have the previously loaded service.
-	scopes, err = cc.GetScope("cached-svc")
-	require.NoError(t, err)
-	assert.Contains(t, scopes, "scope1")
+	assert.Empty(t, scopes, "DB error (not ErrServiceNotFound) should not fall back to static")
 }
 
 func TestDbBackedCredentialsConfig_MultipleServicesFromDB(t *testing.T) {
-	resetGlobalCache()
-
 	svc1 := testService("svc-a", "scopeA", "CredA")
 	svc2 := testService("svc-b", "scopeB", "CredB")
 
@@ -397,12 +363,11 @@ func TestDbBackedCredentialsConfig_MultipleServicesFromDB(t *testing.T) {
 		services: []config.ConfiguredService{svc1, svc2},
 	}
 
-	repoConfig := &config.ConfigRepo{UpdateInterval: 30}
+	repoConfig := &config.ConfigRepo{}
 
 	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
-	// Both services should be available.
 	scopesA, err := cc.GetScope("svc-a")
 	require.NoError(t, err)
 	assert.Contains(t, scopesA, "scopeA")
@@ -412,75 +377,64 @@ func TestDbBackedCredentialsConfig_MultipleServicesFromDB(t *testing.T) {
 	assert.Contains(t, scopesB, "scopeB")
 }
 
-func TestDbBackedCredentialsConfig_PaginatedFetch(t *testing.T) {
-	resetGlobalCache()
-
-	// Create more services than the default page size to test pagination.
-	// We use a small page size via the mock's behavior.
-	var services []config.ConfiguredService
-	for i := 0; i < 3; i++ {
-		services = append(services, testService(
-			"paginated-svc-"+string(rune('0'+i)),
-			"scope",
-			"Cred",
-		))
-	}
-
-	repo := &mockServiceRepository{
-		services: services,
-		total:    3,
-	}
-
-	repoConfig := &config.ConfigRepo{UpdateInterval: 30}
-
-	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
-	require.NoError(t, err)
-
-	// All three services should be fetchable.
-	for i := 0; i < 3; i++ {
-		id := "paginated-svc-" + string(rune('0'+i))
-		scopes, err := cc.GetScope(id)
-		require.NoError(t, err, "service %s should be available", id)
-		assert.Contains(t, scopes, "scope")
-	}
-}
-
-func TestDbBackedCredentialsConfig_DefaultUpdateInterval(t *testing.T) {
-	resetGlobalCache()
-
-	repo := &mockServiceRepository{
-		services: []config.ConfiguredService{},
-	}
-
-	// UpdateInterval of 0 should default to 30s (no panic).
-	repoConfig := &config.ConfigRepo{UpdateInterval: 0}
-
-	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
-	require.NoError(t, err)
-	require.NotNil(t, cc)
-}
-
-func TestDbBackedCredentialsConfig_TIREndpointsCached(t *testing.T) {
-	resetGlobalCache()
-
-	svc := testService("tir-svc", "scope1", "CredWithTIR")
-
+func TestDbBackedCredentialsConfig_ImmediateVisibilityOfDBChanges(t *testing.T) {
+	svc := testService("live-svc", "scope1", "Cred1")
 	repo := &mockServiceRepository{
 		services: []config.ConfiguredService{svc},
 	}
 
-	repoConfig := &config.ConfigRepo{UpdateInterval: 30}
+	repoConfig := &config.ConfigRepo{}
 
-	_, err := InitDbBackedCredentialsConfig(repoConfig, repo)
+	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
-	// TIR endpoints should have been cached during fillCache.
-	entry, found := common.GlobalCache.TirEndpoints.Get("tirEndpoints")
-	assert.True(t, found, "TIR endpoints should be cached")
-	if found {
-		endpoints := entry.([]string)
-		assert.Contains(t, endpoints, "https://tir.example.com")
+	// Initial data present.
+	defaultScope, err := cc.GetDefaultScope("live-svc")
+	require.NoError(t, err)
+	assert.Equal(t, "scope1", defaultScope)
+
+	// Simulate a service update in the database — visible immediately since
+	// every call reads from the DB.
+	updatedSvc := config.ConfiguredService{
+		Id:               "live-svc",
+		DefaultOidcScope: "updatedScope",
+		ServiceScopes:    map[string]config.ScopeEntry{"updatedScope": {Credentials: []config.Credential{{Type: "UpdatedCred"}}}},
 	}
+	repo.services = []config.ConfiguredService{updatedSvc}
+
+	defaultScope, err = cc.GetDefaultScope("live-svc")
+	require.NoError(t, err)
+	assert.Equal(t, "updatedScope", defaultScope)
+
+	types, err := cc.RequiredCredentialTypes("live-svc", "updatedScope")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"UpdatedCred"}, types)
+}
+
+func TestDbBackedCredentialsConfig_StaticServicePreservedWhenNotInDB(t *testing.T) {
+	staticSvc := testServiceVO("static-only-svc", "staticScope", "StaticCred")
+	dbSvc := testService("db-only-svc", "dbScope", "DbCred")
+
+	repo := &mockServiceRepository{
+		services: []config.ConfiguredService{dbSvc},
+	}
+
+	repoConfig := &config.ConfigRepo{
+		Services: []config.ConfiguredService{staticSvc},
+	}
+
+	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
+	require.NoError(t, err)
+
+	// DB service should be available.
+	dbScopes, err := cc.GetScope("db-only-svc")
+	require.NoError(t, err)
+	assert.Contains(t, dbScopes, "dbScope")
+
+	// Static service should still be available as fallback.
+	staticScopes, err := cc.GetScope("static-only-svc")
+	require.NoError(t, err)
+	assert.Contains(t, staticScopes, "staticScope")
 }
 
 func TestInitCredentialsConfig_SelectsDbWhenRepoProvided(t *testing.T) {
@@ -491,16 +445,14 @@ func TestInitCredentialsConfig_SelectsDbWhenRepoProvided(t *testing.T) {
 		services: []config.ConfiguredService{svc},
 	}
 
-	repoConfig := &config.ConfigRepo{UpdateInterval: 30}
+	repoConfig := &config.ConfigRepo{}
 
 	cc, err := InitCredentialsConfig(repoConfig, repo)
 	require.NoError(t, err)
 
-	// Should be a DbBackedCredentialsConfig.
 	_, ok := cc.(DbBackedCredentialsConfig)
 	assert.True(t, ok, "expected DbBackedCredentialsConfig when repo is provided")
 
-	// Service from DB should be available.
 	scopes, err := cc.GetScope("factory-db-svc")
 	require.NoError(t, err)
 	assert.Contains(t, scopes, "scope")
@@ -517,7 +469,6 @@ func TestInitCredentialsConfig_SelectsHTTPWhenNoRepo(t *testing.T) {
 	cc, err := InitCredentialsConfig(repoConfig, nil)
 	require.NoError(t, err)
 
-	// Should be a ServiceBackedCredentialsConfig.
 	_, ok := cc.(ServiceBackedCredentialsConfig)
 	assert.True(t, ok, "expected ServiceBackedCredentialsConfig when repo is nil and endpoint is set")
 }
@@ -534,81 +485,10 @@ func TestInitCredentialsConfig_SelectsStaticWhenNoRepoNoEndpoint(t *testing.T) {
 	cc, err := InitCredentialsConfig(repoConfig, nil)
 	require.NoError(t, err)
 
-	// Should be a ServiceBackedCredentialsConfig (static mode).
 	_, ok := cc.(ServiceBackedCredentialsConfig)
 	assert.True(t, ok, "expected ServiceBackedCredentialsConfig in static mode")
 
-	// Static service should be available.
 	scopes, err := cc.GetScope("static-only")
 	require.NoError(t, err)
 	assert.Contains(t, scopes, "scope")
-}
-
-func TestDbBackedCredentialsConfig_RefreshUpdatesCache(t *testing.T) {
-	resetGlobalCache()
-
-	svc := testService("refresh-svc", "scope1", "Cred1")
-	repo := &mockServiceRepository{
-		services: []config.ConfiguredService{svc},
-	}
-
-	repoConfig := &config.ConfigRepo{UpdateInterval: 30}
-
-	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
-	require.NoError(t, err)
-
-	// Initial data present.
-	defaultScope, err := cc.GetDefaultScope("refresh-svc")
-	require.NoError(t, err)
-	assert.Equal(t, "scope1", defaultScope)
-
-	// Simulate a service update in the database.
-	updatedSvc := config.ConfiguredService{
-		Id:               "refresh-svc",
-		DefaultOidcScope: "updatedScope",
-		ServiceScopes:    map[string]config.ScopeEntry{"updatedScope": {Credentials: []config.Credential{{Type: "UpdatedCred"}}}},
-	}
-	repo.services = []config.ConfiguredService{updatedSvc}
-
-	// Trigger a manual cache refresh.
-	dbc := cc.(DbBackedCredentialsConfig)
-	dbc.fillCache(context.Background())
-
-	// Updated data should be visible.
-	defaultScope, err = cc.GetDefaultScope("refresh-svc")
-	require.NoError(t, err)
-	assert.Equal(t, "updatedScope", defaultScope)
-
-	types, err := cc.RequiredCredentialTypes("refresh-svc", "updatedScope")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"UpdatedCred"}, types)
-}
-
-func TestDbBackedCredentialsConfig_StaticServicePreservedWhenNotInDB(t *testing.T) {
-	resetGlobalCache()
-
-	staticSvc := testServiceVO("static-only-svc", "staticScope", "StaticCred")
-	dbSvc := testService("db-only-svc", "dbScope", "DbCred")
-
-	repo := &mockServiceRepository{
-		services: []config.ConfiguredService{dbSvc},
-	}
-
-	repoConfig := &config.ConfigRepo{
-		Services:       []config.ConfiguredService{staticSvc},
-		UpdateInterval: 30,
-	}
-
-	cc, err := InitDbBackedCredentialsConfig(repoConfig, repo)
-	require.NoError(t, err)
-
-	// DB service should be available.
-	dbScopes, err := cc.GetScope("db-only-svc")
-	require.NoError(t, err)
-	assert.Contains(t, dbScopes, "dbScope")
-
-	// Static service should still be available (preserved by fetchAllServices).
-	staticScopes, err := cc.GetScope("static-only-svc")
-	require.NoError(t, err)
-	assert.Contains(t, staticScopes, "staticScope")
 }
