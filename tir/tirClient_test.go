@@ -560,3 +560,226 @@ func getTestServer(path string, errorCode int) *httptest.Server {
 		}
 	}))
 }
+
+// TestV5AttributeRetrieval_Integration verifies correct retrieval of attributes
+// from a v5 TIR API using a real HTTP test server. The test exercises the
+// complete multi-step v5 flow: (1) GET issuer, (2) paginate attribute list,
+// (3) fetch each individual attribute — and validates that the returned
+// TrustedIssuer contains the expected attribute data.
+func TestV5AttributeRetrieval_Integration(t *testing.T) {
+	type test struct {
+		testName          string
+		did               string
+		handlers          map[string]http.HandlerFunc
+		expectedExists    bool
+		expectedError     bool
+		expectedDid       string
+		expectedAttrCount int
+		// expectedAttrs maps attribute index to the expected IssuerAttribute fields.
+		expectedAttrs map[int]IssuerAttribute
+	}
+
+	tests := []test{
+		{
+			testName: "Single attribute retrieved from v5 API via httptest server.",
+			did:      "did:web:example.org",
+			handlers: map[string]http.HandlerFunc{
+				"/v5/issuers/did:web:example.org": jsonHandler(200, `{
+					"did": "did:web:example.org",
+					"attributes": "v5/issuers/did:web:example.org/attributes",
+					"hasAttributes": true
+				}`),
+				"/v5/issuers/did:web:example.org/attributes": jsonHandler(200, `{
+					"items": [{"id": "a1", "href": "v5/issuers/did:web:example.org/attributes/a1"}],
+					"links": {"first": "", "last": "", "next": "", "prev": ""},
+					"total": 1,
+					"pageSize": 1,
+					"self": ""
+				}`),
+				"/v5/issuers/did:web:example.org/attributes/a1": jsonHandler(200, `{
+					"attribute": {"hash": "sha256-abc", "body": "dGVzdC1ib2R5", "issuerType": "credential-issuer", "tao": "did:web:tao.org", "rootTao": "did:web:root.org"},
+					"did": "did:web:example.org"
+				}`),
+			},
+			expectedExists:    true,
+			expectedDid:       "did:web:example.org",
+			expectedAttrCount: 1,
+			expectedAttrs: map[int]IssuerAttribute{
+				0: {Hash: "sha256-abc", Body: "dGVzdC1ib2R5", IssuerType: "credential-issuer", Tao: "did:web:tao.org", RootTao: "did:web:root.org"},
+			},
+		},
+		{
+			testName: "Multiple attributes across two pages retrieved via httptest server.",
+			did:      "did:web:multi.org",
+			handlers: map[string]http.HandlerFunc{
+				"/v5/issuers/did:web:multi.org": jsonHandler(200, `{
+					"did": "did:web:multi.org",
+					"attributes": "v5/issuers/did:web:multi.org/attributes",
+					"hasAttributes": true
+				}`),
+				"/v5/issuers/did:web:multi.org/attributes": jsonHandler(200, `{
+					"items": [{"id": "attr-1", "href": "v5/issuers/did:web:multi.org/attributes/attr-1"}],
+					"links": {"first": "", "last": "", "next": "v5/issuers/did:web:multi.org/attributes?page=2", "prev": ""},
+					"total": 2,
+					"pageSize": 1,
+					"self": ""
+				}`),
+				"/v5/issuers/did:web:multi.org/attributes?page=2": jsonHandler(200, `{
+					"items": [{"id": "attr-2", "href": "v5/issuers/did:web:multi.org/attributes/attr-2"}],
+					"links": {"first": "", "last": "", "next": "", "prev": ""},
+					"total": 2,
+					"pageSize": 1,
+					"self": ""
+				}`),
+				"/v5/issuers/did:web:multi.org/attributes/attr-1": jsonHandler(200, `{
+					"attribute": {"hash": "h1", "body": "Ym9keS0x", "issuerType": "type-A", "tao": "did:web:tao-a.org", "rootTao": "did:web:root-a.org"},
+					"did": "did:web:multi.org"
+				}`),
+				"/v5/issuers/did:web:multi.org/attributes/attr-2": jsonHandler(200, `{
+					"attribute": {"hash": "h2", "body": "Ym9keS0y", "issuerType": "type-B", "tao": "did:web:tao-b.org", "rootTao": "did:web:root-b.org"},
+					"did": "did:web:multi.org"
+				}`),
+			},
+			expectedExists:    true,
+			expectedDid:       "did:web:multi.org",
+			expectedAttrCount: 2,
+			expectedAttrs: map[int]IssuerAttribute{
+				0: {Hash: "h1", Body: "Ym9keS0x", IssuerType: "type-A", Tao: "did:web:tao-a.org", RootTao: "did:web:root-a.org"},
+				1: {Hash: "h2", Body: "Ym9keS0y", IssuerType: "type-B", Tao: "did:web:tao-b.org", RootTao: "did:web:root-b.org"},
+			},
+		},
+		{
+			testName: "Issuer with no attributes returns empty attribute list.",
+			did:      "did:web:noattr.org",
+			handlers: map[string]http.HandlerFunc{
+				"/v5/issuers/did:web:noattr.org": jsonHandler(200, `{
+					"did": "did:web:noattr.org",
+					"attributes": "",
+					"hasAttributes": false
+				}`),
+			},
+			expectedExists:    true,
+			expectedDid:       "did:web:noattr.org",
+			expectedAttrCount: 0,
+			expectedAttrs:     map[int]IssuerAttribute{},
+		},
+		{
+			testName: "Issuer not found returns 404.",
+			did:      "did:web:unknown.org",
+			handlers: map[string]http.HandlerFunc{
+				"/v5/issuers/did:web:unknown.org": jsonHandler(404, `{"error": "not found"}`),
+			},
+			expectedExists: false,
+			expectedError:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			common.ResetGlobalCache()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handler, ok := tc.handlers[r.URL.RequestURI()]
+				if !ok {
+					w.WriteHeader(404)
+					return
+				}
+				handler(w, r)
+			}))
+			defer server.Close()
+
+			tirClient := TirHttpClient{
+				client:   getClient{client: server.Client()},
+				tilCache: mockCache{},
+				tirCache: mockCache{},
+			}
+
+			exists, issuer, err := tirClient.GetTrustedIssuerV5([]string{server.URL}, tc.did)
+
+			assert.Equal(t, tc.expectedExists, exists, "exists mismatch")
+			if tc.expectedError {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedDid, issuer.Did, "issuer DID mismatch")
+			assert.Equal(t, tc.expectedAttrCount, len(issuer.Attributes), "attribute count mismatch")
+
+			for idx, expectedAttr := range tc.expectedAttrs {
+				actual := issuer.Attributes[idx]
+				assert.Equal(t, expectedAttr.Hash, actual.Hash, "attribute[%d] Hash mismatch", idx)
+				assert.Equal(t, expectedAttr.Body, actual.Body, "attribute[%d] Body mismatch", idx)
+				assert.Equal(t, expectedAttr.IssuerType, actual.IssuerType, "attribute[%d] IssuerType mismatch", idx)
+				assert.Equal(t, expectedAttr.Tao, actual.Tao, "attribute[%d] Tao mismatch", idx)
+				assert.Equal(t, expectedAttr.RootTao, actual.RootTao, "attribute[%d] RootTao mismatch", idx)
+			}
+		})
+	}
+}
+
+// TestV5ParticipantCheck_Integration verifies that IsTrustedParticipantV5
+// correctly identifies registered and unregistered participants when querying
+// a real HTTP test server serving v5 API responses.
+func TestV5ParticipantCheck_Integration(t *testing.T) {
+	type test struct {
+		testName       string
+		did            string
+		serverStatus   int
+		expectedResult bool
+	}
+
+	tests := []test{
+		{
+			testName:       "Registered participant returns true.",
+			did:            "did:web:trusted.org",
+			serverStatus:   200,
+			expectedResult: true,
+		},
+		{
+			testName:       "Unregistered participant (404) returns false.",
+			did:            "did:web:unknown.org",
+			serverStatus:   404,
+			expectedResult: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			common.ResetGlobalCache()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				expectedPath := "/v5/issuers/" + tc.did
+				if r.URL.Path == expectedPath {
+					w.WriteHeader(tc.serverStatus)
+					if tc.serverStatus == 200 {
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = fmt.Fprintf(w, `{"did": "%s", "hasAttributes": false}`, tc.did)
+					}
+				} else {
+					w.WriteHeader(404)
+				}
+			}))
+			defer server.Close()
+
+			tirClient := TirHttpClient{
+				client:   getClient{client: server.Client()},
+				tilCache: mockCache{},
+				tirCache: mockCache{},
+			}
+
+			result := tirClient.IsTrustedParticipantV5(server.URL, tc.did)
+			assert.Equal(t, tc.expectedResult, result)
+		})
+	}
+}
+
+// jsonHandler returns an http.HandlerFunc that writes the given status code and
+// JSON body to the response. This simplifies test server setup for v5 API
+// endpoint mocking.
+func jsonHandler(statusCode int, body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		_, _ = w.Write([]byte(body))
+	}
+}
