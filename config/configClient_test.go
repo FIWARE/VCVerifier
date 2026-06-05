@@ -263,6 +263,43 @@ func Test_getServices(t *testing.T) {
 	assert.Equal(t, expectedScopesVO, scopesVO)
 }
 
+// Test_getServicesV5 verifies that the CCS HTTP client correctly parses a JSON
+// response containing "ebsi-v5" typed TrustedIssuersLists and
+// TrustedParticipantsLists entries.
+func Test_getServicesV5(t *testing.T) {
+	mockedHttpClient := MockHttpClient{readFile("ccs_v5.json", t)}
+	ccsClient := HttpConfigClient{mockedHttpClient, "test.com"}
+	services, err := ccsClient.GetServices()
+	if err != nil {
+		t.Error("should not return error", err)
+	}
+	assert.NotEmpty(t, services)
+	assert.Len(t, services, 1)
+
+	svc := services[0]
+	assert.Equal(t, "service_v5", svc.Id)
+	assert.Equal(t, "v5_scope", svc.DefaultOidcScope)
+
+	scopesVO := svc.ServiceScopes
+	creds := scopesVO["v5_scope"].Credentials
+	assert.Len(t, creds, 1)
+
+	cred := creds[0]
+	assert.Equal(t, "VerifiableCredential", cred.Type)
+
+	// Verify TrustedParticipantsLists with ebsi-v5 type
+	assert.Len(t, cred.TrustedParticipantsLists, 1)
+	assert.Equal(t, "ebsi-v5", cred.TrustedParticipantsLists[0].Type)
+	assert.Equal(t, "https://tir-v5.ebsi.fiware.dev", cred.TrustedParticipantsLists[0].Url)
+
+	// Verify mixed TrustedIssuersLists: ebsi-v5 + ebsi
+	assert.Len(t, cred.TrustedIssuersLists, 2)
+	assert.Equal(t, "ebsi-v5", cred.TrustedIssuersLists[0].Type)
+	assert.Equal(t, "https://til-v5.ebsi.fiware.dev", cred.TrustedIssuersLists[0].Url)
+	assert.Equal(t, "ebsi", cred.TrustedIssuersLists[1].Type)
+	assert.Equal(t, "https://til-pdc.ebsi.fiware.dev", cred.TrustedIssuersLists[1].Url)
+}
+
 func TestTrustedIssuersLists_UnmarshalJSON(t *testing.T) {
 	type testCase struct {
 		name     string

@@ -247,6 +247,62 @@ func Test_ReadConfig(t *testing.T) {
 	}
 }
 
+// TestReadConfigV5 verifies that a YAML config with "ebsi-v5" structured
+// TrustedIssuersLists and TrustedParticipantsLists is correctly parsed.
+func TestReadConfigV5(t *testing.T) {
+	config.Reset()
+	gotConfig, err := ReadConfig("data/config_test_v5.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for v5 config")
+
+	services := gotConfig.ConfigRepo.Services
+	assert.Len(t, services, 1)
+	assert.Equal(t, "testServiceV5", services[0].Id)
+
+	credentials := services[0].ServiceScopes["v5Scope"].Credentials
+	assert.Len(t, credentials, 1)
+	cred := credentials[0]
+	assert.Equal(t, "VerifiableCredential", cred.Type)
+
+	// Verify structured TrustedIssuersLists with type "ebsi-v5"
+	assert.Len(t, cred.TrustedIssuersLists, 1)
+	assert.Equal(t, "ebsi-v5", cred.TrustedIssuersLists[0].Type)
+	assert.Equal(t, "https://til-v5.ebsi.fiware.dev", cred.TrustedIssuersLists[0].Url)
+
+	// Verify TrustedParticipantsLists with type "ebsi-v5"
+	assert.Len(t, cred.TrustedParticipantsLists, 1)
+	assert.Equal(t, "ebsi-v5", cred.TrustedParticipantsLists[0].Type)
+	assert.Equal(t, "https://tir-v5.ebsi.fiware.dev", cred.TrustedParticipantsLists[0].Url)
+}
+
+// TestReadConfigMixed verifies backward-compatible parsing of a YAML config
+// that uses legacy string-array TrustedIssuersLists alongside structured
+// TrustedParticipantsLists with mixed ebsi and ebsi-v5 types.
+func TestReadConfigMixed(t *testing.T) {
+	config.Reset()
+	gotConfig, err := ReadConfig("data/config_test_mixed.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for mixed config")
+
+	services := gotConfig.ConfigRepo.Services
+	assert.Len(t, services, 1)
+	assert.Equal(t, "testServiceMixed", services[0].Id)
+
+	credentials := services[0].ServiceScopes["mixedScope"].Credentials
+	assert.Len(t, credentials, 1)
+	cred := credentials[0]
+
+	// Legacy string array format should default to type "ebsi"
+	assert.Len(t, cred.TrustedIssuersLists, 1)
+	assert.Equal(t, DEFAULT_LIST_TYPE, cred.TrustedIssuersLists[0].Type)
+	assert.Equal(t, "https://til-pdc.ebsi.fiware.dev", cred.TrustedIssuersLists[0].Url)
+
+	// Mixed participants: ebsi and ebsi-v5
+	assert.Len(t, cred.TrustedParticipantsLists, 2)
+	assert.Equal(t, "ebsi", cred.TrustedParticipantsLists[0].Type)
+	assert.Equal(t, "https://tir-pdc.ebsi.fiware.dev", cred.TrustedParticipantsLists[0].Url)
+	assert.Equal(t, "ebsi-v5", cred.TrustedParticipantsLists[1].Type)
+	assert.Equal(t, "https://tir-v5.ebsi.fiware.dev", cred.TrustedParticipantsLists[1].Url)
+}
+
 // TestRefreshTokenConfigDefaults verifies that the refresh token configuration
 // fields receive correct default values when absent from the YAML input and
 // are correctly parsed when explicitly set.
