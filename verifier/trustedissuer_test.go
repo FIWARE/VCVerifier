@@ -74,8 +74,11 @@ func TestVerifyVC_Issuers(t *testing.T) {
 		credentialToVerifiy common.Credential
 		verificationContext ValidationContext
 		participantsList    []string
+		participantsV5List  []string
 		tirResponse         tir.TrustedIssuer
+		tirResponseV5       tir.TrustedIssuer
 		tirError            error
+		tirErrorV5          error
 		expectedResult      bool
 	}
 
@@ -136,6 +139,51 @@ func TestVerifyVC_Issuers(t *testing.T) {
 		{testName: "If a wildcard til and another til is configured for the type, the vc should be rejected.",
 			credentialToVerifiy: getVerifiableCredential("testClaim", "testValue"), verificationContext: getInvalidMixedVerificationContext(),
 			participantsList: []string{"did:test:issuer"}, tirError: nil, expectedResult: false},
+		// ebsi-v5 test cases
+		{testName: "If the issuer is found via ebsi-v5, the vc should be accepted.",
+			credentialToVerifiy: getVerifiableCredential("testClaim", "testValue"),
+			verificationContext: getV5VerificationContext(),
+			participantsV5List:  []string{"did:test:issuer"},
+			tirResponseV5:       getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "VerifiableCredential", map[string][]interface{}{})}),
+			expectedResult:      true},
+		{testName: "If the issuer is not found via ebsi-v5, the vc should be rejected.",
+			credentialToVerifiy: getVerifiableCredential("testClaim", "testValue"),
+			verificationContext: getV5VerificationContext(),
+			participantsV5List:  []string{},
+			tirResponseV5:       tir.TrustedIssuer{},
+			expectedResult:      false},
+		{testName: "If the ebsi-v5 registry returns an error, the vc should be rejected.",
+			credentialToVerifiy: getVerifiableCredential("testClaim", "testValue"),
+			verificationContext: getV5VerificationContext(),
+			participantsV5List:  []string{"did:test:issuer"},
+			tirResponseV5:       tir.TrustedIssuer{},
+			tirErrorV5:          errors.New("v5-error"),
+			expectedResult:      false},
+		// Mixed ebsi + ebsi-v5 test cases
+		{testName: "Mixed types: issuer found via ebsi (v3/v4) takes precedence.",
+			credentialToVerifiy: getVerifiableCredential("testClaim", "testValue"),
+			verificationContext: getMixedEbsiVerificationContext(),
+			participantsList:    []string{"did:test:issuer"},
+			tirResponse:         getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "VerifiableCredential", map[string][]interface{}{})}),
+			participantsV5List:  []string{},
+			tirResponseV5:       tir.TrustedIssuer{},
+			expectedResult:      true},
+		{testName: "Mixed types: issuer not in ebsi but found via ebsi-v5.",
+			credentialToVerifiy: getVerifiableCredential("testClaim", "testValue"),
+			verificationContext: getMixedEbsiVerificationContext(),
+			participantsList:    []string{},
+			tirResponse:         tir.TrustedIssuer{},
+			participantsV5List:  []string{"did:test:issuer"},
+			tirResponseV5:       getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "VerifiableCredential", map[string][]interface{}{})}),
+			expectedResult:      true},
+		{testName: "Mixed types: issuer not found in either registry should be rejected.",
+			credentialToVerifiy: getVerifiableCredential("testClaim", "testValue"),
+			verificationContext: getMixedEbsiVerificationContext(),
+			participantsList:    []string{},
+			tirResponse:         tir.TrustedIssuer{},
+			participantsV5List:  []string{},
+			tirResponseV5:       tir.TrustedIssuer{},
+			expectedResult:      false},
 	}
 
 	for _, tc := range tests {
@@ -143,7 +191,15 @@ func TestVerifyVC_Issuers(t *testing.T) {
 
 			logging.Log().Info("TestVerifyVC +++++++++++++++++ Running test: ", tc.testName)
 
-			trustedIssuerVerificationService := TrustedIssuerValidationService{mockTirClient{tc.participantsList, tc.tirResponse, tc.tirError}}
+			tirClient := mockTirClient{
+				participantsList:   tc.participantsList,
+				participantsV5List: tc.participantsV5List,
+				expectedIssuer:     tc.tirResponse,
+				expectedIssuerV5:   tc.tirResponseV5,
+				expectedError:      tc.tirError,
+				expectedErrorV5:    tc.tirErrorV5,
+			}
+			trustedIssuerVerificationService := TrustedIssuerValidationService{tirClient}
 			result, _ := trustedIssuerVerificationService.ValidateVC(&tc.credentialToVerifiy, tc.verificationContext)
 			if result != tc.expectedResult {
 				t.Errorf("%s - Expected result %v but was %v.", tc.testName, tc.expectedResult, result)
@@ -290,6 +346,34 @@ func getWildcardAndNormalVerificationContext() ValidationContext {
 		trustedIssuersLists: map[string][]config.TrustedIssuersList{
 			"VerifiableCredential": {{Type: "ebsi", Url: "*"}},
 			"SecondType":           {{Type: "ebsi", Url: "http://my-til.org"}},
+		},
+	}
+}
+
+// getV5VerificationContext returns a context with only ebsi-v5 typed TIL entries.
+func getV5VerificationContext() ValidationContext {
+	return TrustRegistriesValidationContext{
+		trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{
+			"VerifiableCredential": {{Type: "ebsi", Url: "http://my-trust-registry.org"}},
+		},
+		trustedIssuersLists: map[string][]config.TrustedIssuersList{
+			"VerifiableCredential": {{Type: "ebsi-v5", Url: "http://my-v5-til.org"}},
+		},
+	}
+}
+
+// getMixedEbsiVerificationContext returns a context with both ebsi and ebsi-v5
+// typed TIL entries for the same credential type.
+func getMixedEbsiVerificationContext() ValidationContext {
+	return TrustRegistriesValidationContext{
+		trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{
+			"VerifiableCredential": {{Type: "ebsi", Url: "http://my-trust-registry.org"}},
+		},
+		trustedIssuersLists: map[string][]config.TrustedIssuersList{
+			"VerifiableCredential": {
+				{Type: "ebsi", Url: "http://my-til.org"},
+				{Type: "ebsi-v5", Url: "http://my-v5-til.org"},
+			},
 		},
 	}
 }

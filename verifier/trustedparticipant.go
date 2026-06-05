@@ -13,8 +13,9 @@ var ErrorCannotConverContext = errors.New("cannot_convert_context")
 var ErrorInvalidCredential = errors.New("invalid_trusted_participant_type")
 
 const (
-	typeGaiaX = "gaia-x"
-	typeEbsi  = "ebsi"
+	typeGaiaX  = "gaia-x"
+	typeEbsi   = "ebsi"
+	typeEbsiV5 = "ebsi-v5"
 )
 
 /**
@@ -54,6 +55,10 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 			if participantList.Type == typeEbsi {
 				logging.Log().Debug("Check at ebsi.")
 				result = tpvs.tirClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
+			}
+			if participantList.Type == typeEbsiV5 {
+				logging.Log().Debug("Check at ebsi-v5.")
+				result = tpvs.tirClient.IsTrustedParticipantV5(participantList.Url, verifiableCredential.Contents().Issuer.ID)
 			}
 			if participantList.Type == typeGaiaX {
 				logging.Log().Debug("Check at gaia-x.")
