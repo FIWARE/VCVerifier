@@ -1,0 +1,40 @@
+server:
+  port: 3000
+  staticDir: "views/static"
+  templateDir: "views/"
+
+logging:
+  level: "DEBUG"
+  jsonLogging: true
+  logRequests: true
+
+verifier:
+  did: "did:key:somekey"
+  tirAddress: "https://test.dev/trusted_issuer/v3/issuers/"
+
+m2m:
+  authEnabled: false
+
+configRepo:
+  services:
+    - id: testServiceV5
+      defaultOidcScope: v5Scope
+      oidcScopes:
+        v5Scope:
+          credentials:
+            - type: VerifiableCredential
+              trustedParticipantsLists:
+                - type: ebsi-v5
+                  url: https://tir-v5.ebsi.fiware.dev
+              trustedIssuersLists:
+                - type: ebsi-v5
+                  url: https://til-v5.ebsi.fiware.dev
+          presentationDefinition:
+            id: v5-pd
+            input_descriptors:
+              - id: v5-descriptor
+                constraints:
+                  fields:
+                    - id: v5-field
+                      path:
+                        - $.vc.my.claim

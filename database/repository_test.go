@@ -29,7 +29,7 @@ func sampleService(id string) config.ConfiguredService {
 				Credentials: []config.Credential{
 					{
 						Type:                "VerifiableCredential",
-						TrustedIssuersLists: []string{"https://tir.example.com"},
+						TrustedIssuersLists: config.TrustedIssuersLists{{Type: "ebsi", Url: "https://tir.example.com"}},
 						HolderVerification:  config.HolderVerification{Enabled: true, Claim: "sub"},
 					},
 				},

@@ -7,6 +7,7 @@ import (
 
 	"github.com/PaesslerAG/jsonpath"
 	"github.com/fiware/VCVerifier/common"
+	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/logging"
 	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/google/go-cmp/cmp"
@@ -63,18 +64,38 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 			return false, err
 		}
 
-		tilAddress, credentialSupported := til[credentialType]
+		tilEntries, credentialSupported := til[credentialType]
 		if !credentialSupported {
 			logging.Log().Debugf("No trusted issuers list configured for type %s", credentialType)
 			return false, ErrorNoTilForType
 		}
 
-		exist, trustedIssuer, err := tpvs.tirClient.GetTrustedIssuer(tilAddress, verifiableCredential.Contents().Issuer.ID)
+		// Dispatch by type: collect URLs per registry type and try each.
+		// "ebsi" (or empty/default) uses v3/v4 auto-detection; "ebsi-v5" uses the v5 API.
+		ebsiURLs := extractTilURLsByType(tilEntries, typeEbsi)
+		ebsiV5URLs := extractTilURLsByType(tilEntries, typeEbsiV5)
 
-		if err != nil {
-			logging.Log().Warnf("Was not able to validate trusted issuer. Err: %v", err)
-			return false, err
+		var exist bool
+		var trustedIssuer tir.TrustedIssuer
+
+		// Try ebsi (v3/v4) endpoints first.
+		if len(ebsiURLs) > 0 {
+			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuer(ebsiURLs, verifiableCredential.Contents().Issuer.ID)
+			if err != nil {
+				logging.Log().Warnf("Was not able to validate trusted issuer via ebsi. Err: %v", err)
+				return false, err
+			}
 		}
+
+		// If not found via ebsi, try ebsi-v5 endpoints.
+		if !exist && len(ebsiV5URLs) > 0 {
+			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuerV5(ebsiV5URLs, verifiableCredential.Contents().Issuer.ID)
+			if err != nil {
+				logging.Log().Warnf("Was not able to validate trusted issuer via ebsi-v5. Err: %v", err)
+				return false, err
+			}
+		}
+
 		if !exist {
 			logging.Log().Warnf("Trusted issuer for %s does not exist in context %s.", logging.PrettyPrintObject(verifiableCredential), logging.PrettyPrintObject(validationContext))
 			return false, ErrorNoTilDefined
@@ -93,14 +114,38 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 	return true, err
 }
 
-func isWildcardTil(tilList []string) (isWildcard bool, err error) {
-	if len(tilList) == 1 && tilList[0] == WILDCARD_TIL {
+// isWildcardTil checks whether the given TIL list contains the wildcard
+// entry ("*"). A wildcard must be the only entry; mixing it with other
+// entries is considered invalid configuration.
+func isWildcardTil(tilList []configModel.TrustedIssuersList) (isWildcard bool, err error) {
+	if len(tilList) == 1 && tilList[0].Url == WILDCARD_TIL {
 		return true, err
 	}
-	if len(tilList) > 1 && slices.Contains(tilList, WILDCARD_TIL) { //nolint:govet
+	urls := make([]string, len(tilList))
+	for i, entry := range tilList {
+		urls[i] = entry.Url
+	}
+	if len(tilList) > 1 && slices.Contains(urls, WILDCARD_TIL) { //nolint:govet
 		return false, ErrorInvalidTil
 	}
 	return false, err
+}
+
+// extractTilURLsByType collects URL strings from TrustedIssuersList entries
+// matching the given registry type. Entries with an empty type are treated
+// as "ebsi" (the default) for backward compatibility.
+func extractTilURLsByType(entries []configModel.TrustedIssuersList, listType string) []string {
+	urls := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		entryType := entry.Type
+		if entryType == "" {
+			entryType = typeEbsi
+		}
+		if entryType == listType {
+			urls = append(urls, entry.Url)
+		}
+	}
+	return urls
 }
 
 func verifyWithCredentialsConfig(verifiableCredential *common.Credential, credentials []tir.Credential) (result bool, err error) {

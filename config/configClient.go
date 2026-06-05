@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/fiware/VCVerifier/logging"
+	"github.com/mitchellh/mapstructure"
 )
 
 type EndpointType int
@@ -110,7 +112,7 @@ type Credential struct {
 	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted participants from.
 	TrustedParticipantsLists TrustedParticipantsLists `json:"trustedParticipantsLists,omitempty" mapstructure:"trustedParticipantsLists,omitempty"`
 	// A list of (EBSI Trusted Issuers Registry compatible) endpoints to  retrieve the trusted issuers from. The attributes need to be formatted to comply with the verifiers requirements.
-	TrustedIssuersLists []string `json:"trustedIssuersLists,omitempty" mapstructure:"trustedIssuersLists,omitempty"`
+	TrustedIssuersLists TrustedIssuersLists `json:"trustedIssuersLists,omitempty" mapstructure:"trustedIssuersLists,omitempty"`
 	// Configuration of Holder Verification
 	HolderVerification HolderVerification `json:"holderVerification" mapstructure:"holderVerification"`
 	// Does the given credential require a compliancy credential
@@ -229,6 +231,101 @@ func (t *TrustedParticipantsLists) UnmarshalJSON(data []byte) error {
 	*t = result
 
 	return nil
+}
+
+// TrustedIssuersList represents a single trusted issuers registry endpoint
+// with an associated type (e.g. "ebsi", "ebsi-v5"). Mirrors
+// TrustedParticipantsList for issuers.
+type TrustedIssuersList struct {
+	// Type of issuers list to be used — "ebsi" for v3/v4, "ebsi-v5" for v5.
+	Type string `json:"type" mapstructure:"type"`
+	// Url of the trusted issuers registry endpoint.
+	Url string `json:"url" mapstructure:"url"`
+}
+
+// TrustedIssuersLists is a slice of TrustedIssuersList with a custom JSON
+// unmarshaler that accepts both the new structured format and the legacy
+// plain string array format for backward compatibility.
+type TrustedIssuersLists []TrustedIssuersList
+
+// UnmarshalJSON supports two JSON formats:
+//   - Structured: [{"type":"ebsi-v5","url":"https://..."}]
+//   - Legacy string array: ["https://..."] — each URL defaults to type "ebsi".
+func (t *TrustedIssuersLists) UnmarshalJSON(data []byte) error {
+	// Try structured format first
+	var structured []TrustedIssuersList
+	if err := json.Unmarshal(data, &structured); err == nil {
+		*t = structured
+		return nil
+	}
+
+	// Fallback to string array format
+	var urls []string
+	if err := json.Unmarshal(data, &urls); err != nil {
+		return err
+	}
+
+	result := make([]TrustedIssuersList, len(urls))
+
+	for i, url := range urls {
+		result[i] = TrustedIssuersList{
+			Type: DEFAULT_LIST_TYPE,
+			Url:  url,
+		}
+	}
+
+	*t = result
+
+	return nil
+}
+
+// trustedIssuersListsType is the reflect.Type for TrustedIssuersLists, cached
+// to avoid repeated reflect calls in the decode hook.
+var trustedIssuersListsType = reflect.TypeOf(TrustedIssuersLists{})
+
+// TrustedIssuersListsDecodeHook returns a mapstructure DecodeHookFuncType that
+// converts a legacy plain-string slice (from YAML) into a TrustedIssuersLists
+// value. Each bare URL string becomes a TrustedIssuersList entry with the
+// default type ("ebsi"). Structured entries (maps) are decoded inline.
+// This mirrors the JSON backward-compatibility provided by UnmarshalJSON but
+// for the YAML/mapstructure code path.
+func TrustedIssuersListsDecodeHook() mapstructure.DecodeHookFuncType {
+	return func(from reflect.Type, to reflect.Type, data interface{}) (interface{}, error) {
+		if to != trustedIssuersListsType {
+			return data, nil
+		}
+
+		slice, ok := data.([]interface{})
+		if !ok {
+			return data, nil
+		}
+
+		result := make(TrustedIssuersLists, 0, len(slice))
+		for _, item := range slice {
+			switch v := item.(type) {
+			case string:
+				// Legacy plain-URL format → default type.
+				result = append(result, TrustedIssuersList{
+					Type: DEFAULT_LIST_TYPE,
+					Url:  v,
+				})
+			case map[string]interface{}:
+				// Structured format — extract type and url.
+				entry := TrustedIssuersList{}
+				if t, ok := v["type"]; ok {
+					entry.Type = fmt.Sprintf("%v", t)
+				}
+				if u, ok := v["url"]; ok {
+					entry.Url = fmt.Sprintf("%v", u)
+				}
+				result = append(result, entry)
+			default:
+				// Unrecognised element — let mapstructure surface an error.
+				return data, nil
+			}
+		}
+		return result, nil
+	}
 }
 
 // EndpointEntry describes a single trust-registry endpoint together with its

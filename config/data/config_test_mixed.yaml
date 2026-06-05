@@ -1,0 +1,42 @@
+server:
+  port: 3000
+  staticDir: "views/static"
+  templateDir: "views/"
+
+logging:
+  level: "DEBUG"
+  jsonLogging: true
+  logRequests: true
+
+verifier:
+  did: "did:key:somekey"
+  tirAddress: "https://test.dev/trusted_issuer/v3/issuers/"
+
+m2m:
+  authEnabled: false
+
+configRepo:
+  services:
+    - id: testServiceMixed
+      defaultOidcScope: mixedScope
+      oidcScopes:
+        mixedScope:
+          credentials:
+            - type: VerifiableCredential
+              trustedParticipantsLists:
+                - type: ebsi
+                  url: https://tir-pdc.ebsi.fiware.dev
+                - type: ebsi-v5
+                  url: https://tir-v5.ebsi.fiware.dev
+              # Legacy string array format for backward compatibility.
+              trustedIssuersLists:
+                - https://til-pdc.ebsi.fiware.dev
+          presentationDefinition:
+            id: mixed-pd
+            input_descriptors:
+              - id: mixed-descriptor
+                constraints:
+                  fields:
+                    - id: mixed-field
+                      path:
+                        - $.vc.my.claim

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Backfill empty listType values in the credentials JSON column of
+        scope_entry. Prior versions of the trusted-issuers configuration
+        may have stored endpoint entries without a listType (serialised as
+        "listType":""). This migration sets missing values to the default
+        type "ebsi" so that the TIR v5 routing logic can distinguish list
+        types reliably.
+
+        The UPDATE uses a simple text REPLACE on the JSON stored in the
+        TEXT column. This is safe because:
+          - "listType":"" is an unambiguous pattern (no other field shares
+            that key name inside the trustedLists array).
+          - The replacement is idempotent: once every empty listType is
+            set to "ebsi", re-running the statement is a no-op.
+
+        Compatible with the credentials-config-service Liquibase migration
+        chain (v0 .. v2). Append this file (or its contents) to the CCS
+        migration directory to run it against production databases.
+    -->
+
+    <changeSet id="007-backfill-trusted-list-type" author="fiware">
+        <comment>Backfill empty listType in scope_entry credentials JSON with default value "ebsi"</comment>
+        <sql>
+            UPDATE scope_entry
+               SET credentials = REPLACE(credentials, '"listType":""', '"listType":"ebsi"')
+             WHERE credentials LIKE '%"listType":""%'
+        </sql>
+    </changeSet>
+
+    <changeSet id="100-tag-db" author="fiware">
+        <tagDatabase tag="v3.0.0"/>
+    </changeSet>
+
+</databaseChangeLog>
