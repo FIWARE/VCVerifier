@@ -70,16 +70,32 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 			return false, ErrorNoTilForType
 		}
 
-		// Extract URLs from entries with ebsi type (or empty/default) for v3/v4 lookup.
-		// V5 dispatch will be added in a later step.
-		tilURLs := extractTilURLs(tilEntries)
+		// Dispatch by type: collect URLs per registry type and try each.
+		// "ebsi" (or empty/default) uses v3/v4 auto-detection; "ebsi-v5" uses the v5 API.
+		ebsiURLs := extractTilURLsByType(tilEntries, typeEbsi)
+		ebsiV5URLs := extractTilURLsByType(tilEntries, typeEbsiV5)
 
-		exist, trustedIssuer, err := tpvs.tirClient.GetTrustedIssuer(tilURLs, verifiableCredential.Contents().Issuer.ID)
+		var exist bool
+		var trustedIssuer tir.TrustedIssuer
 
-		if err != nil {
-			logging.Log().Warnf("Was not able to validate trusted issuer. Err: %v", err)
-			return false, err
+		// Try ebsi (v3/v4) endpoints first.
+		if len(ebsiURLs) > 0 {
+			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuer(ebsiURLs, verifiableCredential.Contents().Issuer.ID)
+			if err != nil {
+				logging.Log().Warnf("Was not able to validate trusted issuer via ebsi. Err: %v", err)
+				return false, err
+			}
 		}
+
+		// If not found via ebsi, try ebsi-v5 endpoints.
+		if !exist && len(ebsiV5URLs) > 0 {
+			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuerV5(ebsiV5URLs, verifiableCredential.Contents().Issuer.ID)
+			if err != nil {
+				logging.Log().Warnf("Was not able to validate trusted issuer via ebsi-v5. Err: %v", err)
+				return false, err
+			}
+		}
+
 		if !exist {
 			logging.Log().Warnf("Trusted issuer for %s does not exist in context %s.", logging.PrettyPrintObject(verifiableCredential), logging.PrettyPrintObject(validationContext))
 			return false, ErrorNoTilDefined
@@ -115,13 +131,19 @@ func isWildcardTil(tilList []configModel.TrustedIssuersList) (isWildcard bool, e
 	return false, err
 }
 
-// extractTilURLs collects the URL strings from TrustedIssuersList entries.
-// In this step all entries are passed through; v5-specific dispatch will be
-// added in a later step.
-func extractTilURLs(entries []configModel.TrustedIssuersList) []string {
+// extractTilURLsByType collects URL strings from TrustedIssuersList entries
+// matching the given registry type. Entries with an empty type are treated
+// as "ebsi" (the default) for backward compatibility.
+func extractTilURLsByType(entries []configModel.TrustedIssuersList, listType string) []string {
 	urls := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		urls = append(urls, entry.Url)
+		entryType := entry.Type
+		if entryType == "" {
+			entryType = typeEbsi
+		}
+		if entryType == listType {
+			urls = append(urls, entry.Url)
+		}
 	}
 	return urls
 }
