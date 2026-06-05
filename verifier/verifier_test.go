@@ -1752,3 +1752,366 @@ func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TIR v5 — getTrustRegistriesValidationContext type propagation
+// ---------------------------------------------------------------------------
+
+// TestGetTrustRegistriesValidationContext_V5TypePropagation verifies that
+// getTrustRegistriesValidationContext correctly propagates "ebsi-v5" type
+// information from config through to the TrustRegistriesValidationContext.
+func TestGetTrustRegistriesValidationContext_V5TypePropagation(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName              string
+		credentialScopes      map[string]map[string]configModel.ScopeEntry
+		clientId              string
+		scope                 string
+		credentialTypes       []string
+		expectedIssuersMap    map[string][]configModel.TrustedIssuersList
+		expectedParticipants  map[string][]configModel.TrustedParticipantsList
+		configError           error
+		expectedError         error
+	}
+
+	tests := []test{
+		{
+			testName: "ebsi-v5 issuers and participants are propagated through validation context",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{
+				"client-v5": {
+					"v5-scope": {
+						Credentials: []configModel.Credential{
+							{
+								Type: "VerifiableCredential",
+								TrustedIssuersLists: configModel.TrustedIssuersLists{
+									{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+								},
+								TrustedParticipantsLists: []configModel.TrustedParticipantsList{
+									{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+								},
+							},
+						},
+					},
+				},
+			},
+			clientId:        "client-v5",
+			scope:           "v5-scope",
+			credentialTypes: []string{"VerifiableCredential"},
+			expectedIssuersMap: map[string][]configModel.TrustedIssuersList{
+				"VerifiableCredential": {
+					{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+				},
+			},
+			expectedParticipants: map[string][]configModel.TrustedParticipantsList{
+				"VerifiableCredential": {
+					{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+				},
+			},
+		},
+		{
+			testName: "mixed ebsi and ebsi-v5 types are propagated correctly",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{
+				"client-mixed": {
+					"mixed-scope": {
+						Credentials: []configModel.Credential{
+							{
+								Type: "VerifiableCredential",
+								TrustedIssuersLists: configModel.TrustedIssuersLists{
+									{Type: "ebsi", Url: "https://til-ebsi.example.com"},
+									{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+								},
+								TrustedParticipantsLists: []configModel.TrustedParticipantsList{
+									{Type: "ebsi", Url: "https://tir-ebsi.example.com"},
+									{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+								},
+							},
+						},
+					},
+				},
+			},
+			clientId:        "client-mixed",
+			scope:           "mixed-scope",
+			credentialTypes: []string{"VerifiableCredential"},
+			expectedIssuersMap: map[string][]configModel.TrustedIssuersList{
+				"VerifiableCredential": {
+					{Type: "ebsi", Url: "https://til-ebsi.example.com"},
+					{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+				},
+			},
+			expectedParticipants: map[string][]configModel.TrustedParticipantsList{
+				"VerifiableCredential": {
+					{Type: "ebsi", Url: "https://tir-ebsi.example.com"},
+					{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+				},
+			},
+		},
+		{
+			testName: "multiple credential types each with their own v5 config",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{
+				"client-multi": {
+					"multi-scope": {
+						Credentials: []configModel.Credential{
+							{
+								Type: "VerifiableCredential",
+								TrustedIssuersLists: configModel.TrustedIssuersLists{
+									{Type: "ebsi-v5", Url: "https://til-vc-v5.example.com"},
+								},
+								TrustedParticipantsLists: []configModel.TrustedParticipantsList{
+									{Type: "ebsi-v5", Url: "https://tir-vc-v5.example.com"},
+								},
+							},
+							{
+								Type: "CustomerCredential",
+								TrustedIssuersLists: configModel.TrustedIssuersLists{
+									{Type: "ebsi", Url: "https://til-cc-ebsi.example.com"},
+								},
+								TrustedParticipantsLists: []configModel.TrustedParticipantsList{
+									{Type: "ebsi", Url: "https://tir-cc-ebsi.example.com"},
+								},
+							},
+						},
+					},
+				},
+			},
+			clientId:        "client-multi",
+			scope:           "multi-scope",
+			credentialTypes: []string{"VerifiableCredential", "CustomerCredential"},
+			expectedIssuersMap: map[string][]configModel.TrustedIssuersList{
+				"VerifiableCredential": {
+					{Type: "ebsi-v5", Url: "https://til-vc-v5.example.com"},
+				},
+				"CustomerCredential": {
+					{Type: "ebsi", Url: "https://til-cc-ebsi.example.com"},
+				},
+			},
+			expectedParticipants: map[string][]configModel.TrustedParticipantsList{
+				"VerifiableCredential": {
+					{Type: "ebsi-v5", Url: "https://tir-vc-v5.example.com"},
+				},
+				"CustomerCredential": {
+					{Type: "ebsi", Url: "https://tir-cc-ebsi.example.com"},
+				},
+			},
+		},
+		{
+			testName:      "config error is propagated",
+			configError:   errors.New("config_failure"),
+			clientId:      "client-err",
+			scope:         "scope-err",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{},
+			credentialTypes:  []string{"VerifiableCredential"},
+			expectedError: errors.New("config_failure"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			mockConfig := mockCredentialConfig{mockScopes: tc.credentialScopes, mockError: tc.configError}
+			verifier := CredentialVerifier{credentialsConfig: &mockConfig}
+
+			ctx, err := verifier.getTrustRegistriesValidationContext(tc.clientId, tc.credentialTypes, tc.scope)
+
+			if tc.expectedError != nil {
+				assert.Error(t, err)
+				assert.Equal(t, tc.expectedError.Error(), err.Error())
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedIssuersMap, ctx.GetTrustedIssuersLists())
+			assert.Equal(t, tc.expectedParticipants, ctx.GetTrustedParticipantLists())
+		})
+	}
+}
+
+// TestGetTrustRegistriesValidationContextFromScope_V5 verifies that
+// getTrustRegistriesValidationContextFromScope correctly propagates "ebsi-v5"
+// type information and validates required credential types.
+func TestGetTrustRegistriesValidationContextFromScope_V5(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName             string
+		credentialScopes     map[string]map[string]configModel.ScopeEntry
+		clientId             string
+		scope                string
+		presentedTypes       []string
+		expectedIssuersMap   map[string][]configModel.TrustedIssuersList
+		expectedParticipants map[string][]configModel.TrustedParticipantsList
+		expectedError        error
+	}
+
+	tests := []test{
+		{
+			testName: "v5 issuers propagated from scope when all required types are presented",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{
+				"client-v5": {
+					"v5-scope": {
+						Credentials: []configModel.Credential{
+							{
+								Type: "VerifiableCredential",
+								TrustedIssuersLists: configModel.TrustedIssuersLists{
+									{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+								},
+								TrustedParticipantsLists: []configModel.TrustedParticipantsList{
+									{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+								},
+							},
+						},
+					},
+				},
+			},
+			clientId:       "client-v5",
+			scope:          "v5-scope",
+			presentedTypes: []string{"VerifiableCredential"},
+			expectedIssuersMap: map[string][]configModel.TrustedIssuersList{
+				"VerifiableCredential": {
+					{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+				},
+			},
+			expectedParticipants: map[string][]configModel.TrustedParticipantsList{
+				"VerifiableCredential": {
+					{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+				},
+			},
+		},
+		{
+			testName: "missing required credential type returns error",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{
+				"client-v5": {
+					"v5-scope": {
+						Credentials: []configModel.Credential{
+							{
+								Type: "VerifiableCredential",
+								TrustedIssuersLists: configModel.TrustedIssuersLists{
+									{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+								},
+							},
+						},
+					},
+				},
+			},
+			clientId:       "client-v5",
+			scope:          "v5-scope",
+			presentedTypes: []string{"OtherCredential"},
+			expectedError:  ErrorRequiredCredentialNotProvided,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			mockConfig := mockCredentialConfig{mockScopes: tc.credentialScopes}
+			v := CredentialVerifier{credentialsConfig: &mockConfig}
+
+			ctx, err := v.getTrustRegistriesValidationContextFromScope(tc.clientId, tc.scope, tc.presentedTypes)
+
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedIssuersMap, ctx.GetTrustedIssuersLists())
+			assert.Equal(t, tc.expectedParticipants, ctx.GetTrustedParticipantLists())
+		})
+	}
+}
+
+// TestAuthenticationResponse_V5ValidationServices exercises the full
+// AuthenticationResponse flow with "ebsi-v5" configured trust registries
+// and a mocked validation service, verifying that the v5-typed trust config
+// flows end-to-end through verification to JWT caching.
+func TestAuthenticationResponse_V5ValidationServices(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	trueOption := true
+
+	// Configure mock credentials with ebsi-v5 trust registries
+	v5CredentialScopes := map[string]map[string]configModel.ScopeEntry{
+		"clientId": {
+			"": {
+				Credentials: []configModel.Credential{
+					{
+						Type: "VerifiableCredential",
+						TrustedIssuersLists: configModel.TrustedIssuersLists{
+							{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+						},
+						TrustedParticipantsLists: []configModel.TrustedParticipantsList{
+							{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+						},
+						JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption},
+					},
+				},
+			},
+		},
+	}
+
+	tests := []authTest{
+		{
+			testName:   "Same-device flow with ebsi-v5 trust registries succeeds when credential is valid.",
+			sameDevice: true, testState: "login-state",
+			testVP:            getVP([]string{"vc"}),
+			testHolder:        "holder",
+			testSession:       loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
+			requestedState:    "login-state",
+			verificationResult: []bool{true},
+			expectedResponse:   Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"},
+		},
+		{
+			testName:   "Same-device flow with ebsi-v5 trust registries fails when credential is invalid.",
+			sameDevice: true, testState: "login-state",
+			testVP:            getVP([]string{"vc"}),
+			testHolder:        "holder",
+			testSession:       loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
+			requestedState:    "login-state",
+			verificationResult: []bool{false},
+			expectedError:     ErrorInvalidVC,
+			expectedResponse:   Response{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+			if tc.testSession != (loginSession{}) {
+				sessionCache.sessions[tc.testState] = tc.testSession
+			}
+			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}, errorToThrow: tc.tokenCacheError}
+			httpClient = mockHttpClient{tc.callbackError, nil}
+			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			testKey, _ := jwk.Import(ecdsaKey)
+			_ = jwk.AssignKeyID(testKey)
+			nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
+			credentialsConfig := mockCredentialConfig{mockScopes: v5CredentialScopes}
+
+			validationServices := []ValidationService{
+				&mockExternalSsiKit{
+					verificationResults: tc.verificationResult,
+					verificationError:   tc.verificationError,
+				},
+			}
+			v := CredentialVerifier{
+				did:                  "did:key:verifier",
+				signingKey:           testKey,
+				tokenCache:           &tokenCache,
+				sessionCache:         &sessionCache,
+				nonceGenerator:       &nonceGenerator,
+				validationServices:   validationServices,
+				clock:                mockClock{},
+				credentialsConfig:    credentialsConfig,
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			sameDeviceResponse, err := v.AuthenticationResponse(tc.requestedState, &tc.testVP)
+			if tc.expectedError != nil {
+				assert.Equal(t, tc.expectedError, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedResponse, sameDeviceResponse)
+			_, found := tokenCache.tokens[sameDeviceResponse.Code]
+			assert.True(t, found, "a token should be cached after successful authentication")
+		})
+	}
+}

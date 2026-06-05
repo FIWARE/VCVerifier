@@ -1,0 +1,36 @@
+{
+    "total": 1,
+    "pageNumber": 0,
+    "pageSize": 100,
+    "services": [
+        {
+            "id": "service_v5",
+            "defaultOidcScope": "v5_scope",
+            "oidcScopes": {
+                "v5_scope": {
+                    "credentials": [
+                        {
+                            "type": "VerifiableCredential",
+                            "trustedParticipantsLists": [
+                                {
+                                    "type": "ebsi-v5",
+                                    "url": "https://tir-v5.ebsi.fiware.dev"
+                                }
+                            ],
+                            "trustedIssuersLists": [
+                                {
+                                    "type": "ebsi-v5",
+                                    "url": "https://til-v5.ebsi.fiware.dev"
+                                },
+                                {
+                                    "type": "ebsi",
+                                    "url": "https://til-pdc.ebsi.fiware.dev"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    ]
+}
