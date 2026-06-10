@@ -193,6 +193,158 @@ func TestCredentialQueryDB_FromVO_ClaimsConverted(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// CredentialDB — TrustedIssuersLists round-trip (ebsi-v5 support)
+// ---------------------------------------------------------------------------
+
+// TestCredentialDB_VO_TrustedListsV5 verifies that CredentialDB.VO() correctly
+// maps EndpointEntry entries (including "ebsi-v5" typed ones) back to their
+// respective TrustedIssuersLists and TrustedParticipantsLists with preserved
+// Type and Url fields.
+func TestCredentialDB_VO_TrustedListsV5(t *testing.T) {
+	tests := []struct {
+		name                     string
+		endpoints                []config.EndpointEntry
+		expectedIssuers          config.TrustedIssuersLists
+		expectedParticipants     config.TrustedParticipantsLists
+	}{
+		{
+			name: "single ebsi-v5 issuer",
+			endpoints: []config.EndpointEntry{
+				{Type: config.TrustedIssuers, ListType: "ebsi-v5", Endpoint: "https://til-v5.example.com"},
+			},
+			expectedIssuers: config.TrustedIssuersLists{
+				{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+			},
+			expectedParticipants: config.TrustedParticipantsLists{},
+		},
+		{
+			name: "mixed ebsi and ebsi-v5 issuers",
+			endpoints: []config.EndpointEntry{
+				{Type: config.TrustedIssuers, ListType: "ebsi", Endpoint: "https://til-ebsi.example.com"},
+				{Type: config.TrustedIssuers, ListType: "ebsi-v5", Endpoint: "https://til-v5.example.com"},
+			},
+			expectedIssuers: config.TrustedIssuersLists{
+				{Type: "ebsi", Url: "https://til-ebsi.example.com"},
+				{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+			},
+			expectedParticipants: config.TrustedParticipantsLists{},
+		},
+		{
+			name: "ebsi-v5 participant and issuer",
+			endpoints: []config.EndpointEntry{
+				{Type: config.TrustedParticipants, ListType: "ebsi-v5", Endpoint: "https://tir-v5.example.com"},
+				{Type: config.TrustedIssuers, ListType: "ebsi-v5", Endpoint: "https://til-v5.example.com"},
+			},
+			expectedIssuers: config.TrustedIssuersLists{
+				{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+			},
+			expectedParticipants: config.TrustedParticipantsLists{
+				{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+			},
+		},
+		{
+			name: "empty list type defaults to ebsi",
+			endpoints: []config.EndpointEntry{
+				{Type: config.TrustedIssuers, ListType: "", Endpoint: "https://til.example.com"},
+				{Type: config.TrustedParticipants, ListType: "", Endpoint: "https://tir.example.com"},
+			},
+			expectedIssuers: config.TrustedIssuersLists{
+				{Type: config.DEFAULT_LIST_TYPE, Url: "https://til.example.com"},
+			},
+			expectedParticipants: config.TrustedParticipantsLists{
+				{Type: config.DEFAULT_LIST_TYPE, Url: "https://tir.example.com"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db := CredentialDB{
+				Type:                "VerifiableCredential",
+				TrustedIssuersLists: tc.endpoints,
+			}
+			vo := db.VO()
+			assert.Equal(t, tc.expectedIssuers, vo.TrustedIssuersLists)
+			assert.Equal(t, tc.expectedParticipants, vo.TrustedParticipantsLists)
+		})
+	}
+}
+
+// TestCredentialDB_FromVO_TrustedListsV5 verifies that CredentialDB.FromVO()
+// correctly merges TrustedIssuersLists and TrustedParticipantsLists (including
+// "ebsi-v5" typed entries) into a unified EndpointEntry slice.
+func TestCredentialDB_FromVO_TrustedListsV5(t *testing.T) {
+	tests := []struct {
+		name              string
+		issuers           config.TrustedIssuersLists
+		participants      config.TrustedParticipantsLists
+		expectedEndpoints []config.EndpointEntry
+	}{
+		{
+			name: "single ebsi-v5 issuer from VO",
+			issuers: config.TrustedIssuersLists{
+				{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+			},
+			participants: nil,
+			expectedEndpoints: []config.EndpointEntry{
+				{Type: config.TrustedIssuers, ListType: "ebsi-v5", Endpoint: "https://til-v5.example.com"},
+			},
+		},
+		{
+			name: "mixed ebsi and ebsi-v5 from VO",
+			issuers: config.TrustedIssuersLists{
+				{Type: "ebsi", Url: "https://til-ebsi.example.com"},
+				{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+			},
+			participants: config.TrustedParticipantsLists{
+				{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+			},
+			expectedEndpoints: []config.EndpointEntry{
+				{Type: config.TrustedParticipants, ListType: "ebsi-v5", Endpoint: "https://tir-v5.example.com"},
+				{Type: config.TrustedIssuers, ListType: "ebsi", Endpoint: "https://til-ebsi.example.com"},
+				{Type: config.TrustedIssuers, ListType: "ebsi-v5", Endpoint: "https://til-v5.example.com"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			vo := config.Credential{
+				Type:                     "VerifiableCredential",
+				TrustedIssuersLists:      tc.issuers,
+				TrustedParticipantsLists: tc.participants,
+			}
+			db := CredentialDB{}.FromVO(vo)
+			assert.Equal(t, tc.expectedEndpoints, db.TrustedIssuersLists)
+		})
+	}
+}
+
+// TestCredentialDB_RoundTrip_V5 verifies that a CredentialDB with "ebsi-v5"
+// typed entries survives a full FromVO() → VO() round-trip with type and URL
+// preserved.
+func TestCredentialDB_RoundTrip_V5(t *testing.T) {
+	original := config.Credential{
+		Type: "VerifiableCredential",
+		TrustedIssuersLists: config.TrustedIssuersLists{
+			{Type: "ebsi", Url: "https://til-ebsi.example.com"},
+			{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+		},
+		TrustedParticipantsLists: config.TrustedParticipantsLists{
+			{Type: "ebsi", Url: "https://tir-ebsi.example.com"},
+			{Type: "ebsi-v5", Url: "https://tir-v5.example.com"},
+		},
+	}
+
+	db := CredentialDB{}.FromVO(original)
+	roundTripped := db.VO()
+
+	assert.Equal(t, original.Type, roundTripped.Type)
+	assert.Equal(t, original.TrustedIssuersLists, roundTripped.TrustedIssuersLists)
+	assert.Equal(t, original.TrustedParticipantsLists, roundTripped.TrustedParticipantsLists)
+}
+
+// ---------------------------------------------------------------------------
 // DCQLDB — full VO / FromVO conversion
 // ---------------------------------------------------------------------------
 

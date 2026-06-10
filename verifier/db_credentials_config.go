@@ -145,14 +145,14 @@ func (dbc DbBackedCredentialsConfig) GetTrustedParticipantLists(serviceIdentifie
 
 // GetTrustedIssuersLists returns trusted issuers list endpoints for the given
 // service, scope, and credential type.
-func (dbc DbBackedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) ([]string, error) {
+func (dbc DbBackedCredentialsConfig) GetTrustedIssuersLists(serviceIdentifier string, scope string, credentialType string) ([]config.TrustedIssuersList, error) {
 	svc, err := dbc.getService(serviceIdentifier)
 	if err != nil {
-		return []string{}, nil
+		return []config.TrustedIssuersList{}, nil
 	}
 	credential, ok := svc.GetCredential(scope, credentialType)
 	if !ok {
-		return []string{}, nil
+		return []config.TrustedIssuersList{}, nil
 	}
 	return credential.TrustedIssuersLists, nil
 }

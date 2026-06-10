@@ -191,11 +191,12 @@ var localFileAccessor common.FileAccessor = common.DiskFileAccessor{}
 type ValidationContext interface{}
 
 type TrustRegistriesValidationContext struct {
-	trustedIssuersLists           map[string][]string
+	trustedIssuersLists           map[string][]configModel.TrustedIssuersList
 	trustedParticipantsRegistries map[string][]configModel.TrustedParticipantsList
 }
 
-func (trvc TrustRegistriesValidationContext) GetTrustedIssuersLists() map[string][]string {
+// GetTrustedIssuersLists returns the per-credential-type trusted issuers list configuration.
+func (trvc TrustRegistriesValidationContext) GetTrustedIssuersLists() map[string][]configModel.TrustedIssuersList {
 	return trvc.trustedIssuersLists
 }
 
@@ -1122,7 +1123,7 @@ func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope s
 
 func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string, credentialTypes []string, scope string) (verificationContext TrustRegistriesValidationContext, err error) {
 	logging.Log().Debugf("Create trust registry validation context for client '%s', scope '%s' and credential types %s", clientId, scope, credentialTypes)
-	trustedIssuersLists := map[string][]string{}
+	trustedIssuersLists := map[string][]configModel.TrustedIssuersList{}
 	trustedParticipantsRegistries := map[string][]configModel.TrustedParticipantsList{}
 
 	for _, credentialType := range credentialTypes {
@@ -1186,7 +1187,7 @@ func selectValidationContext(service ValidationService, trustContext TrustRegist
 }
 
 func (v *CredentialVerifier) getTrustRegistriesValidationContextFromScope(clientId string, scope string, credentialTypes []string) (verificationContext TrustRegistriesValidationContext, err error) {
-	trustedIssuersLists := map[string][]string{}
+	trustedIssuersLists := map[string][]configModel.TrustedIssuersList{}
 	trustedParticipantsRegistries := map[string][]configModel.TrustedParticipantsList{}
 
 	requiredCredentialTypes, err := v.credentialsConfig.RequiredCredentialTypes(clientId, scope)
