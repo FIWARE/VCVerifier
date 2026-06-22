@@ -839,6 +839,14 @@ func setValueAtPath(m map[string]interface{}, path []string, value interface{}) 
 func (v *CredentialVerifier) shouldBeIncluded(clientId string, scope string, credentialTypes []string) (enabled bool, inclusion configModel.JwtInclusion) {
 	logging.Log().Debugf("Check inclusion %s", credentialTypes)
 	for _, credentialType := range credentialTypes {
+		// Skip the generic W3C base types: they have no inclusion config of
+		// their own, and GetJwtInclusion returns a zero-value config whose
+		// IsEnabled() defaults to true. Matching the base type first would
+		// short-circuit with an empty inclusion (FullInclusion=false, no
+		// claims), dropping the actual credential claims from the token.
+		if baseCredentialTypes[credentialType] {
+			continue
+		}
 		inclusion, _ := v.credentialsConfig.GetJwtInclusion(clientId, scope, credentialType)
 		if inclusion.IsEnabled() {
 			return true, inclusion
@@ -1508,7 +1516,6 @@ func callbackToRequester(loginSession loginSession, authorizationCode string) er
 	}
 	return nil
 }
-
 
 func loadKey(keyPath string) (key jwk.Key, err error) {
 	// read key file
