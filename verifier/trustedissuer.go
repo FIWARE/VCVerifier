@@ -16,6 +16,18 @@ import (
 
 const WILDCARD_TIL = "*"
 
+// baseCredentialTypes are the generic W3C container types that are present on
+// every credential (e.g. a `jwt_vc_json` credential carries the base
+// `VerifiableCredential` type alongside its specific type). They are not
+// trust-governed credential types of their own, so they must be skipped when
+// validating issuers/types against the trust registry. Without this, a
+// spec-compliant W3C credential of type ["VerifiableCredential", "<specific>"]
+// would be rejected because no trusted-issuer entry exists for the base type.
+var baseCredentialTypes = map[string]bool{
+	"VerifiableCredential":   true,
+	"VerifiablePresentation": true,
+}
+
 var ErrorInvalidTil = errors.New("invalid_til_configured")
 var ErrorEmptyTilList = errors.New("empty_til_list")
 var ErrorNoTilForType = errors.New("no_til_defined_for_credential_type")
@@ -66,6 +78,15 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 
 		tilEntries, credentialSupported := til[credentialType]
 		if !credentialSupported {
+			// A spec-compliant W3C credential carries the generic base type
+			// (e.g. "VerifiableCredential") alongside its specific type. The
+			// base type is not a trust-governed type, so when it has no TIL
+			// configured we skip it instead of rejecting the whole credential.
+			// A base type that IS explicitly configured still gets validated.
+			if baseCredentialTypes[credentialType] {
+				logging.Log().Debugf("Skipping unconfigured base credential type %s.", credentialType)
+				continue
+			}
 			logging.Log().Debugf("No trusted issuers list configured for type %s", credentialType)
 			return false, ErrorNoTilForType
 		}
@@ -164,6 +185,13 @@ func verifyWithCredentialsConfig(verifiableCredential *common.Credential, creden
 	for _, credentialType := range verifiableCredential.Contents().Types {
 		config, exists := credentialsConfigMap[credentialType]
 		if !exists {
+			// The generic base type (e.g. "VerifiableCredential") is not a
+			// trust-governed type; when the issuer has no entry for it we skip
+			// it rather than rejecting the credential. An explicitly configured
+			// base type still gets validated.
+			if baseCredentialTypes[credentialType] {
+				continue
+			}
 			logging.Log().Warnf("The credential type %s is not allowed by the config %s.", credentialType, logging.PrettyPrintObject(credentialsConfigMap))
 			subjectAllowed = false
 			break
