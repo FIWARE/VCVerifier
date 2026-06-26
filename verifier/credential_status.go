@@ -52,28 +52,24 @@ type CredentialStatusValidationContext struct {
 
 // CredentialStatusValidationService is the ValidationService responsible for
 // enforcing credential revocation via W3C Bitstring Status List /
-// StatusList2021 credentials.
+// StatusList2021 credentials and IETF OAuth 2.0 Token Status Lists.
 //
-// The service is safe for concurrent use as long as the configured client is.
+// The service is safe for concurrent use as long as the configured clients are.
 type CredentialStatusValidationService struct {
-	client StatusListCredentialClient
-	clock  common.Clock
+	client     StatusListCredentialClient
+	ietfClient IETFStatusListClient
+	clock      common.Clock
 }
 
 // NewCredentialStatusValidationService constructs a ready-to-use validation
-// service backed by the supplied status-list credential client and clock.
-// The clock is retained for future use (for example to enforce the
-// `validFrom`/`validUntil` window on a fetched status-list credential) and
-// defaults to common.RealClock when nil.
-//
-// The service is returned by value so callers can register it through the
-// ValidationService interface in the same &value style used for every other
-// service in verifier.InitVerifier.
-func NewCredentialStatusValidationService(client StatusListCredentialClient, clock common.Clock) CredentialStatusValidationService {
+// service backed by the supplied status-list credential client, IETF status
+// list client, and clock. The clock is retained for future use and defaults
+// to common.RealClock when nil.
+func NewCredentialStatusValidationService(client StatusListCredentialClient, ietfClient IETFStatusListClient, clock common.Clock) CredentialStatusValidationService {
 	if clock == nil {
 		clock = common.RealClock{}
 	}
-	return CredentialStatusValidationService{client: client, clock: clock}
+	return CredentialStatusValidationService{client: client, ietfClient: ietfClient, clock: clock}
 }
 
 // ValidateVC enforces the per-credential-type revocation-list check against
@@ -83,7 +79,7 @@ func NewCredentialStatusValidationService(client StatusListCredentialClient, clo
 //   - casts the validation context to CredentialStatusValidationContext;
 //     returns ErrorCannotConverContext on any other type;
 //   - is a no-op (returns true, nil) when none of the credential's declared
-//     types opts in via config.CredentialStatus.Enabled == true;
+//     types has config.CredentialStatus.IsEnabled() == true;
 //   - extracts the `credentialStatus` field from the credential's raw JSON
 //     and parses it with common.ParseStatusListEntries;
 //   - returns ErrorStatusMissing when the credential must carry a status
@@ -111,6 +107,7 @@ func (s *CredentialStatusValidationService) ValidateVC(verifiableCredential *com
 
 	matchingConfigs := collectMatchingStatusConfigs(verifiableCredential.Contents().Types, statusContext.PerType)
 	if len(matchingConfigs) == 0 {
+		logging.Log().Debugf("No matching config for %s", verifiableCredential.Contents().Types)
 		// Feature off for every declared type → nothing to check.
 		return true, nil
 	}
@@ -126,7 +123,14 @@ func (s *CredentialStatusValidationService) ValidateVC(verifiableCredential *com
 		return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
 
+	// When no W3C credentialStatus entries are found, try the IETF Token
+	// Status List format which stores the reference in
+	// credentialSubject.status.status_list.
 	if len(entries) == 0 {
+		ietfEntry := s.extractIETFStatusEntry(verifiableCredential)
+		if ietfEntry != nil {
+			return s.validateIETFStatus(verifiableCredential, ietfEntry)
+		}
 		if requireStatus {
 			logging.Log().Warnf("Credential %s has no credentialStatus but RequireStatus is true", verifiableCredential.Contents().ID)
 			return false, ErrorStatusMissing
@@ -173,7 +177,53 @@ func (s *CredentialStatusValidationService) ValidateVC(verifiableCredential *com
 			return false, ErrorCredentialRevoked
 		}
 	}
+	logging.Log().Info("Successfully checked status.")
 
+	return true, nil
+}
+
+// extractIETFStatusEntry looks for an IETF Token Status List reference
+// inside the credential's subject(s). It returns the first matching
+// entry or nil when no IETF status information is present.
+func (s *CredentialStatusValidationService) extractIETFStatusEntry(cred *common.Credential) *common.IETFStatusEntry {
+	for _, subject := range cred.Contents().Subject {
+		if entry, ok := common.ParseIETFStatusEntry(subject.CustomFields); ok {
+			return &entry
+		}
+	}
+	return nil
+}
+
+// validateIETFStatus fetches the IETF Token Status List JWT referenced by
+// the entry and checks whether the bit at the entry's index is set.
+func (s *CredentialStatusValidationService) validateIETFStatus(cred *common.Credential, entry *common.IETFStatusEntry) (bool, error) {
+	logging.Log().Debugf("Checking IETF Token Status List at %s, index %d", entry.URI, entry.Idx)
+
+	if s.ietfClient == nil {
+		logging.Log().Warn("IETF status entry found but no IETF client configured")
+		return false, fmt.Errorf("%w: IETF status list client not configured", ErrorStatusListHttpFailure)
+	}
+
+	statusList, err := s.ietfClient.FetchIETF(entry.URI)
+	if err != nil {
+		return false, err
+	}
+
+	bitstring, err := common.DecodeIETFBitstring(statusList.Lst)
+	if err != nil {
+		return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+
+	set, err := common.IsIETFStatusSet(bitstring, entry.Idx, statusList.Bits)
+	if err != nil {
+		return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+	if set {
+		logging.Log().Infof("Credential %s is revoked (IETF status list, index=%d)", cred.Contents().ID, entry.Idx)
+		return false, ErrorCredentialRevoked
+	}
+
+	logging.Log().Info("Successfully checked IETF status.")
 	return true, nil
 }
 
@@ -188,7 +238,7 @@ func collectMatchingStatusConfigs(credentialTypes []string, perType map[string]c
 		if !found {
 			continue
 		}
-		if !cfg.Enabled {
+		if !cfg.IsEnabled() {
 			continue
 		}
 		matching = append(matching, cfg)

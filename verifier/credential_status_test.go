@@ -9,6 +9,7 @@ package verifier
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 )
+
+func boolPtr(v bool) *bool { return &v }
 
 // Named constants used throughout the test file. Pulling them out of the
 // table rows keeps the intent of each row obvious and removes magic values.
@@ -181,7 +184,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 		{
 			testName:        "Type not present in PerType is a no-op",
 			credential:      newCredentialWithStatus(t, statusValidationUnconfiguredType, bitstringStatusEntry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex)),
-			perType:         map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: true}},
+			perType:         map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
 			expectedResult:  true,
 			expectedError:   nil,
 			expectedNoFetch: true,
@@ -189,7 +192,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 		{
 			testName:        "Type present but Enabled=false is a no-op",
 			credential:      newCredentialWithStatus(t, statusValidationTestType, bitstringStatusEntry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex)),
-			perType:         map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: false}},
+			perType:         map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(false)}},
 			expectedResult:  true,
 			expectedError:   nil,
 			expectedNoFetch: true,
@@ -197,7 +200,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 		{
 			testName:        "Enabled, no credentialStatus, RequireStatus=false -> valid",
 			credential:      newCredentialWithStatus(t, statusValidationTestType, nil),
-			perType:         map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: true}},
+			perType:         map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
 			expectedResult:  true,
 			expectedError:   nil,
 			expectedNoFetch: true,
@@ -205,7 +208,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 		{
 			testName:        "Enabled, no credentialStatus, RequireStatus=true -> ErrorStatusMissing",
 			credential:      newCredentialWithStatus(t, statusValidationTestType, nil),
-			perType:         map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: true, RequireStatus: true}},
+			perType:         map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true), RequireStatus: true}},
 			expectedResult:  false,
 			expectedError:   ErrorStatusMissing,
 			expectedNoFetch: true,
@@ -213,7 +216,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 		{
 			testName:       "Revoked bit set -> ErrorCredentialRevoked",
 			credential:     newCredentialWithStatus(t, statusValidationTestType, bitstringStatusEntry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex)),
-			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: true}},
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
 			fixtures:       map[string]*common.Credential{statusValidationTestURL: revokedList},
 			expectedResult: false,
 			expectedError:  ErrorCredentialRevoked,
@@ -221,7 +224,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 		{
 			testName:       "Revoked bit clear -> valid",
 			credential:     newCredentialWithStatus(t, statusValidationTestType, bitstringStatusEntry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex)),
-			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: true}},
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
 			fixtures:       map[string]*common.Credential{statusValidationTestURL: clearList},
 			expectedResult: true,
 			expectedError:  nil,
@@ -230,7 +233,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 			testName:   "Status purpose not in AcceptedPurposes is skipped",
 			credential: newCredentialWithStatus(t, statusValidationTestType, bitstringStatusEntry(statusValidationTestURL, configModel.StatusPurposeSuspension, statusValidationTestIndex)),
 			perType: map[string]configModel.CredentialStatus{
-				statusValidationTestType: {Enabled: true, AcceptedPurposes: []string{configModel.StatusPurposeRevocation}},
+				statusValidationTestType: {Enabled: boolPtr(true), AcceptedPurposes: []string{configModel.StatusPurposeRevocation}},
 			},
 			expectedResult:  true,
 			expectedError:   nil,
@@ -239,7 +242,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 		{
 			testName:       "Fetch failure is propagated",
 			credential:     newCredentialWithStatus(t, statusValidationTestType, bitstringStatusEntry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex)),
-			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: true}},
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
 			fetchErr:       ErrorStatusListHttpFailure,
 			expectedResult: false,
 			expectedError:  ErrorStatusListHttpFailure,
@@ -247,7 +250,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 		{
 			testName:       "Malformed bitstring -> ErrorStatusListUnparseable",
 			credential:     newCredentialWithStatus(t, statusValidationTestType, bitstringStatusEntry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex)),
-			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: true}},
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
 			fixtures:       map[string]*common.Credential{statusValidationTestURL: malformedList},
 			expectedResult: false,
 			expectedError:  ErrorStatusListUnparseable,
@@ -260,7 +263,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 			}),
 			perType: map[string]configModel.CredentialStatus{
 				statusValidationTestType: {
-					Enabled:          true,
+					Enabled:          boolPtr(true),
 					AcceptedPurposes: []string{configModel.StatusPurposeRevocation, configModel.StatusPurposeSuspension},
 				},
 			},
@@ -276,7 +279,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
 			mock := &mockStatusListClient{credentials: tc.fixtures, err: tc.fetchErr}
-			service := NewCredentialStatusValidationService(mock, nil)
+			service := NewCredentialStatusValidationService(mock, nil, nil)
 
 			result, err := service.ValidateVC(tc.credential, CredentialStatusValidationContext{PerType: tc.perType})
 
@@ -304,7 +307,7 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 // ValidateVC(cred, ValidationContext) signature shared across services.
 func TestCredentialStatusValidationService_ContextMismatch(t *testing.T) {
 	mock := &mockStatusListClient{}
-	service := NewCredentialStatusValidationService(mock, nil)
+	service := NewCredentialStatusValidationService(mock, nil, nil)
 
 	cred := newCredentialWithStatus(t, statusValidationTestType, nil)
 
@@ -319,5 +322,134 @@ func TestCredentialStatusValidationService_ContextMismatch(t *testing.T) {
 	}
 	if len(mock.calls) != 0 {
 		t.Errorf("expected no fetches on context mismatch, got %d", len(mock.calls))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IETF Token Status List tests
+// ---------------------------------------------------------------------------
+
+// mockIETFStatusListClient is a test double for IETFStatusListClient.
+type mockIETFStatusListClient struct {
+	statusList *common.IETFStatusList
+	err        error
+	calls      []string
+}
+
+func (m *mockIETFStatusListClient) FetchIETF(uri string) (*common.IETFStatusList, error) {
+	m.calls = append(m.calls, uri)
+	return m.statusList, m.err
+}
+
+// encodeIETFTestBitstring returns base64url(zlib(bits)), the encoding the
+// IETF Token Status List spec requires on the `lst` field.
+func encodeIETFTestBitstring(t *testing.T, bits []byte) string {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	if _, err := w.Write(bits); err != nil {
+		t.Fatalf("zlib write failed: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("zlib close failed: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf.Bytes())
+}
+
+// newCredentialWithIETFStatus builds a credential whose credentialSubject
+// contains the IETF-format status reference.
+func newCredentialWithIETFStatus(t *testing.T, credentialType string, idx uint64, uri string) *common.Credential {
+	t.Helper()
+	subject := common.Subject{
+		CustomFields: common.CustomFields{
+			common.IETFStatusClaimKey: map[string]interface{}{
+				common.IETFStatusListKey: map[string]interface{}{
+					common.IETFStatusListIdx: float64(idx),
+					common.IETFStatusListURI: uri,
+				},
+			},
+		},
+	}
+	cred, err := common.CreateCredential(common.CredentialContents{
+		Types:   []string{credentialType},
+		Subject: []common.Subject{subject},
+	}, common.CustomFields{})
+	if err != nil {
+		t.Fatalf("CreateCredential failed: %v", err)
+	}
+	return cred
+}
+
+func TestCredentialStatusValidationService_IETF(t *testing.T) {
+	const testURI = "https://example.org/statuslists/test-list"
+
+	type test struct {
+		testName       string
+		credential     *common.Credential
+		perType        map[string]configModel.CredentialStatus
+		ietfList       *common.IETFStatusList
+		ietfErr        error
+		expectedResult bool
+		expectedError  error
+	}
+
+	// A list where index 0 is clear (valid).
+	clearBits := encodeIETFTestBitstring(t, []byte{0b00000000})
+	// A list where index 1 is set (invalid), with 1 bit per status, LSB-first.
+	revokedBits := encodeIETFTestBitstring(t, []byte{0b00000010})
+
+	tests := []test{
+		{
+			testName:       "IETF: clear bit -> valid",
+			credential:     newCredentialWithIETFStatus(t, statusValidationTestType, 0, testURI),
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+			ietfList:       &common.IETFStatusList{Bits: 1, Lst: clearBits},
+			expectedResult: true,
+			expectedError:  nil,
+		},
+		{
+			testName:       "IETF: set bit -> ErrorCredentialRevoked",
+			credential:     newCredentialWithIETFStatus(t, statusValidationTestType, 1, testURI),
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+			ietfList:       &common.IETFStatusList{Bits: 1, Lst: revokedBits},
+			expectedResult: false,
+			expectedError:  ErrorCredentialRevoked,
+		},
+		{
+			testName:       "IETF: fetch error is propagated",
+			credential:     newCredentialWithIETFStatus(t, statusValidationTestType, 0, testURI),
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+			ietfErr:        ErrorStatusListHttpFailure,
+			expectedResult: false,
+			expectedError:  ErrorStatusListHttpFailure,
+		},
+		{
+			testName:       "IETF: disabled config is a no-op",
+			credential:     newCredentialWithIETFStatus(t, statusValidationTestType, 0, testURI),
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(false)}},
+			expectedResult: true,
+			expectedError:  nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			w3cMock := &mockStatusListClient{}
+			ietfMock := &mockIETFStatusListClient{statusList: tc.ietfList, err: tc.ietfErr}
+			service := NewCredentialStatusValidationService(w3cMock, ietfMock, nil)
+
+			result, err := service.ValidateVC(tc.credential, CredentialStatusValidationContext{PerType: tc.perType})
+
+			if result != tc.expectedResult {
+				t.Errorf("expected result %v, got %v", tc.expectedResult, result)
+			}
+			if tc.expectedError == nil {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+			} else if !errors.Is(err, tc.expectedError) {
+				t.Errorf("expected error %v, got %v", tc.expectedError, err)
+			}
+		})
 	}
 }

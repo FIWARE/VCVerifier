@@ -355,13 +355,14 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 
 	// Construct the shared status-list credential client and the
 	// CredentialStatusValidationService. The service is always appended to
-	// the validation chain. When no credential has
-	// CredentialStatus.Enabled == true, the service's ValidateVC is a no-op
-	// so there is no performance impact for deployments that do not opt in.
+	// the validation chain. When a credential has
+	// CredentialStatus.IsEnabled() == false, the service's ValidateVC is a
+	// no-op for that type.
 	statusListHttpTimeout := time.Duration(verifierConfig.StatusListHttpTimeout) * time.Second
 	statusListCacheExpiry := time.Duration(verifierConfig.StatusListCacheExpiry) * time.Second
 	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry)
-	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, clock)
+	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry)
+	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, ietfStatusListClient, clock)
 
 	key, err := initPrivateKey(verifierConfig.KeyAlgorithm, verifierConfig.GenerateKey, verifierConfig.KeyPath)
 

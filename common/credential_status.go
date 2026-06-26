@@ -1,16 +1,19 @@
 // Package common contains shared types and helpers used across the VCVerifier
 // codebase. This file defines the data model and helpers for W3C Bitstring
 // Status List / StatusList2021 credentials referenced from a Verifiable
-// Credential's `credentialStatus` field.
+// Credential's `credentialStatus` field, as well as the IETF OAuth 2.0
+// Token Status List format (draft-ietf-oauth-status-list).
 //
 // References:
 //   - https://www.w3.org/TR/vc-bitstring-status-list/
 //   - https://www.w3.org/TR/2023/WD-vc-status-list-20230427/ (StatusList2021)
+//   - https://www.ietf.org/archive/id/draft-ietf-oauth-status-list-11.html
 package common
 
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -58,6 +61,28 @@ const (
 	// StatusListEntryKeyStatusSize is the optional bit size per status on the
 	// entry. Defaults to DefaultStatusSizeBits.
 	StatusListEntryKeyStatusSize = "statusSize"
+)
+
+// IETF Token Status List constants — keys and types used by the OAuth 2.0
+// Token Status List specification (draft-ietf-oauth-status-list).
+const (
+	// IETFStatusClaimKey is the top-level key inside credentialSubject that
+	// carries the IETF status reference.
+	IETFStatusClaimKey = "status"
+	// IETFStatusListKey is the nested key inside the status object.
+	IETFStatusListKey = "status_list"
+	// IETFStatusListIdx is the index key inside the status_list object.
+	IETFStatusListIdx = "idx"
+	// IETFStatusListURI is the URI key inside the status_list object.
+	IETFStatusListURI = "uri"
+	// IETFStatusListBits is the bits-per-status key in a fetched status list JWT payload.
+	IETFStatusListBits = "bits"
+	// IETFStatusListLst is the encoded-list key in a fetched status list JWT payload.
+	IETFStatusListLst = "lst"
+
+	// ContentTypeStatusListJWT is the Accept / Content-Type header for
+	// IETF Token Status List JWT responses.
+	ContentTypeStatusListJWT = "application/statuslist+jwt"
 )
 
 // Numeric defaults for status-list encoding.
@@ -339,6 +364,156 @@ func IsStatusSet(bitstring []byte, index uint64, statusSize int) (bool, error) {
 		bitInByte := bit % uint64(BitsPerByte)
 		// Most-significant-bit-first ordering within each byte.
 		mask := byte(1) << (uint64(BitsPerByte) - 1 - bitInByte)
+		if bitstring[byteIndex]&mask != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ---------------------------------------------------------------------------
+// IETF Token Status List helpers
+// ---------------------------------------------------------------------------
+
+// IETFStatusEntry represents a parsed status reference from the IETF
+// OAuth 2.0 Token Status List format. The entry is extracted from
+// `credentialSubject.status.status_list` with fields `idx` and `uri`.
+type IETFStatusEntry struct {
+	// Idx is the zero-based index into the status list bitstring.
+	Idx uint64
+	// URI is the URL of the status list resource to fetch.
+	URI string
+}
+
+// IETFStatusList represents the decoded payload of a fetched IETF Token
+// Status List JWT. The `lst` field is the base64url-encoded,
+// zlib-compressed bitstring; `bits` declares the number of bits per
+// status entry.
+type IETFStatusList struct {
+	// Bits is the number of bits per status entry (e.g. 1, 2, 4, 8).
+	Bits int
+	// Lst is the base64url-encoded, zlib-compressed bitstring.
+	Lst string
+}
+
+// ParseIETFStatusEntry extracts an IETFStatusEntry from the
+// `credentialSubject` map of a Verifiable Credential. The expected
+// structure is: `{ "status": { "status_list": { "idx": N, "uri": "..." } } }`.
+//
+// Returns (entry, true) on success, or (zero, false) when the required
+// structure is absent or malformed.
+func ParseIETFStatusEntry(credentialSubject map[string]interface{}) (IETFStatusEntry, bool) {
+	statusRaw, ok := credentialSubject[IETFStatusClaimKey]
+	if !ok || statusRaw == nil {
+		return IETFStatusEntry{}, false
+	}
+	statusMap, ok := statusRaw.(map[string]interface{})
+	if !ok {
+		return IETFStatusEntry{}, false
+	}
+	listRaw, ok := statusMap[IETFStatusListKey]
+	if !ok || listRaw == nil {
+		return IETFStatusEntry{}, false
+	}
+	listMap, ok := listRaw.(map[string]interface{})
+	if !ok {
+		return IETFStatusEntry{}, false
+	}
+
+	uri, ok := listMap[IETFStatusListURI].(string)
+	if !ok || uri == "" {
+		return IETFStatusEntry{}, false
+	}
+
+	idx, err := parseIETFIdx(listMap[IETFStatusListIdx])
+	if err != nil {
+		return IETFStatusEntry{}, false
+	}
+
+	return IETFStatusEntry{Idx: idx, URI: uri}, true
+}
+
+// parseIETFIdx converts the `idx` value (which may be a float64 from
+// JSON unmarshalling or an integer) to a uint64.
+func parseIETFIdx(raw interface{}) (uint64, error) {
+	switch v := raw.(type) {
+	case float64:
+		if v < 0 {
+			return 0, fmt.Errorf("idx must be non-negative")
+		}
+		return uint64(v), nil
+	case int:
+		if v < 0 {
+			return 0, fmt.Errorf("idx must be non-negative")
+		}
+		return uint64(v), nil
+	case int64:
+		if v < 0 {
+			return 0, fmt.Errorf("idx must be non-negative")
+		}
+		return uint64(v), nil
+	case uint64:
+		return v, nil
+	case string:
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("idx is not a valid unsigned integer: %v", err)
+		}
+		return n, nil
+	default:
+		return 0, fmt.Errorf("idx has unexpected type %T", raw)
+	}
+}
+
+// DecodeIETFBitstring decodes an IETF Token Status List bitstring.
+// The input is base64url-encoded, zlib (DEFLATE) compressed — note that
+// this differs from the W3C format which uses gzip compression.
+func DecodeIETFBitstring(encoded string) ([]byte, error) {
+	compressed, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		padded, padErr := base64.URLEncoding.DecodeString(encoded)
+		if padErr != nil {
+			return nil, fmt.Errorf("%w: base64url decode failed: %v", ErrorStatusListBitstringDecode, err)
+		}
+		compressed = padded
+	}
+
+	reader, err := zlib.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return nil, fmt.Errorf("%w: zlib reader init failed: %v", ErrorStatusListBitstringDecode, err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("%w: zlib inflate failed: %v", ErrorStatusListBitstringDecode, err)
+	}
+	return decoded, nil
+}
+
+// IsIETFStatusSet reports whether the status value at the given index is
+// non-zero in the IETF Token Status List bitstring. The IETF format uses
+// LSB-first bit ordering within each byte, unlike the W3C format which
+// uses MSB-first.
+func IsIETFStatusSet(bitstring []byte, index uint64, bitsPerStatus int) (bool, error) {
+	if bitsPerStatus <= 0 {
+		return false, fmt.Errorf("%w: got %d", ErrorStatusListInvalidStatusSize, bitsPerStatus)
+	}
+
+	startBit := index * uint64(bitsPerStatus)
+	endBitExclusive := startBit + uint64(bitsPerStatus)
+
+	totalBits := uint64(len(bitstring)) * uint64(BitsPerByte)
+	if endBitExclusive > totalBits {
+		return false, fmt.Errorf("%w: index %d with size %d exceeds bitstring of %d bits",
+			ErrorStatusListIndexOutOfRange, index, bitsPerStatus, totalBits)
+	}
+
+	for bit := startBit; bit < endBitExclusive; bit++ {
+		byteIndex := bit / uint64(BitsPerByte)
+		bitInByte := bit % uint64(BitsPerByte)
+		// LSB-first ordering within each byte (IETF spec).
+		mask := byte(1) << bitInByte
 		if bitstring[byteIndex]&mask != 0 {
 			return true, nil
 		}

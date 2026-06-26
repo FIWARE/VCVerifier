@@ -3,6 +3,7 @@ package common
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"encoding/base64"
 	"errors"
 	"testing"
@@ -316,5 +317,193 @@ func TestIsStatusSet_RoundTripWithDecodeBitstring(t *testing.T) {
 	}
 	if got {
 		t.Fatalf("expected index %d to be clear after round-trip", revokedIndex+1)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IETF Token Status List tests
+// ---------------------------------------------------------------------------
+
+// encodeIETFBitstring is a test helper that produces the base64url(zlib(raw))
+// encoding used by the IETF Token Status List format.
+func encodeIETFBitstring(t *testing.T, raw []byte) string {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	if _, err := w.Write(raw); err != nil {
+		t.Fatalf("zlib write failed: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("zlib close failed: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf.Bytes())
+}
+
+func TestParseIETFStatusEntry(t *testing.T) {
+	type testCase struct {
+		name    string
+		subject map[string]interface{}
+		wantOK  bool
+		want    IETFStatusEntry
+	}
+
+	tests := []testCase{
+		{
+			name: "valid IETF status entry",
+			subject: map[string]interface{}{
+				"status": map[string]interface{}{
+					"status_list": map[string]interface{}{
+						"idx": float64(42),
+						"uri": "https://example.org/statuslists/abc",
+					},
+				},
+			},
+			wantOK: true,
+			want:   IETFStatusEntry{Idx: 42, URI: "https://example.org/statuslists/abc"},
+		},
+		{
+			name:    "no status field",
+			subject: map[string]interface{}{"email": "test@example.org"},
+			wantOK:  false,
+		},
+		{
+			name: "missing uri",
+			subject: map[string]interface{}{
+				"status": map[string]interface{}{
+					"status_list": map[string]interface{}{
+						"idx": float64(0),
+					},
+				},
+			},
+			wantOK: false,
+		},
+		{
+			name: "missing status_list",
+			subject: map[string]interface{}{
+				"status": map[string]interface{}{
+					"other_key": "value",
+				},
+			},
+			wantOK: false,
+		},
+		{
+			name: "idx as integer zero",
+			subject: map[string]interface{}{
+				"status": map[string]interface{}{
+					"status_list": map[string]interface{}{
+						"idx": float64(0),
+						"uri": "https://example.org/statuslists/abc",
+					},
+				},
+			},
+			wantOK: true,
+			want:   IETFStatusEntry{Idx: 0, URI: "https://example.org/statuslists/abc"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseIETFStatusEntry(tc.subject)
+			if ok != tc.wantOK {
+				t.Fatalf("expected ok=%v, got ok=%v", tc.wantOK, ok)
+			}
+			if ok && got != tc.want {
+				t.Errorf("mismatch:\n got:  %#v\n want: %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDecodeIETFBitstring(t *testing.T) {
+	payload := []byte{0x00, 0x01, 0x80, 0xFF}
+	encoded := encodeIETFBitstring(t, payload)
+
+	decoded, err := DecodeIETFBitstring(encoded)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Equal(decoded, payload) {
+		t.Fatalf("round-trip mismatch:\n got:  %x\n want: %x", decoded, payload)
+	}
+}
+
+func TestDecodeIETFBitstring_Errors(t *testing.T) {
+	_, err := DecodeIETFBitstring("not*valid*base64")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrorStatusListBitstringDecode) {
+		t.Fatalf("expected ErrorStatusListBitstringDecode, got %v", err)
+	}
+}
+
+func TestIsIETFStatusSet(t *testing.T) {
+	// IETF uses LSB-first bit ordering.
+	// byte 0 = 0b00000010 -> bit 1 set (index 1 at 1 bit per status)
+	bitstring := []byte{0b00000010}
+
+	tests := []struct {
+		name          string
+		index         uint64
+		bitsPerStatus int
+		want          bool
+		wantErr       error
+	}{
+		{name: "index 0 clear", index: 0, bitsPerStatus: 1, want: false},
+		{name: "index 1 set", index: 1, bitsPerStatus: 1, want: true},
+		{name: "index 2 clear", index: 2, bitsPerStatus: 1, want: false},
+		{name: "out of range", index: 8, bitsPerStatus: 1, wantErr: ErrorStatusListIndexOutOfRange},
+		{name: "invalid bitsPerStatus", index: 0, bitsPerStatus: 0, wantErr: ErrorStatusListInvalidStatusSize},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := IsIETFStatusSet(bitstring, tc.index, tc.bitsPerStatus)
+			if tc.wantErr != nil {
+				if err == nil {
+					t.Fatalf("expected error %v, got nil", tc.wantErr)
+				}
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("IsIETFStatusSet(%d, %d) = %v, want %v", tc.index, tc.bitsPerStatus, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsIETFStatusSet_MultiBit(t *testing.T) {
+	// 2 bits per status, LSB-first:
+	// byte 0 = 0b11100100 → statuses: idx0=00 (valid), idx1=01 (invalid),
+	//                         idx2=10 (suspended), idx3=11 (app-specific)
+	bitstring := []byte{0b11100100}
+
+	tests := []struct {
+		name  string
+		index uint64
+		want  bool
+	}{
+		{name: "idx 0 valid (00)", index: 0, want: false},
+		{name: "idx 1 invalid (01)", index: 1, want: true},
+		{name: "idx 2 suspended (10)", index: 2, want: true},
+		{name: "idx 3 app-specific (11)", index: 3, want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := IsIETFStatusSet(bitstring, tc.index, 2)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("IsIETFStatusSet(%d, 2) = %v, want %v", tc.index, got, tc.want)
+			}
+		})
 	}
 }

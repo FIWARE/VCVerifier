@@ -469,21 +469,44 @@ configRepo:
 
 ### Credential revocation list
 
-The verifier can check incoming credentials against a
+The verifier can check incoming credentials against two revocation-list formats:
+
+**W3C Bitstring Status List / StatusList2021** — when a credential carries a
+top-level `credentialStatus` entry of type `BitstringStatusListEntry` or
+`StatusList2021Entry`, the verifier fetches the referenced status-list
+credential, decodes the gzip-compressed, base64-encoded bitstring (MSB-first
+bit ordering), and rejects the credential when the bit at its
+`statusListIndex` is set. See the
 [W3C Bitstring Status List](https://www.w3.org/TR/vc-bitstring-status-list/)
-or the legacy
+and
 [StatusList2021](https://www.w3.org/community/reports/credentials/CG-FINAL-vc-status-list-2021-20230102/)
-revocation list. When a credential carries a `credentialStatus` entry of type
-`BitstringStatusListEntry` or `StatusList2021Entry`, the verifier fetches the
-referenced status-list credential, decodes the bitstring, and rejects the
-credential when the bit at its `statusListIndex` is set.
+specifications.
+
+**IETF OAuth 2.0 Token Status List** — when a credential has no W3C
+`credentialStatus` but its `credentialSubject` contains a
+`status.status_list` object with `idx` (index) and `uri` (status-list
+endpoint) fields, the verifier fetches the referenced status-list JWT
+(Content-Type `application/statuslist+jwt`), decodes the zlib-compressed,
+base64url-encoded bitstring from the JWT payload's `status_list.lst` field
+(LSB-first bit ordering), and rejects the credential when the status value at
+the given index is non-zero. The `status_list.bits` field in the JWT payload
+controls how many bits represent each entry (1, 2, 4, or 8). See the
+[IETF Token Status List](https://datatracker.ietf.org/doc/draft-ietf-oauth-status-list/)
+specification. This format is produced by implementations such as the
+[token-status-link](https://github.com/adorsys/token-status-link) Keycloak
+plugin paired with a status-list server.
+
+Both formats are detected automatically — no configuration is needed to
+choose between them. When a credential carries W3C `credentialStatus`
+entries, those are checked. When no W3C entries are present, the verifier
+falls back to the IETF format. If neither format is found and `requireStatus`
+is `false` (the default), the credential passes validation.
 
 The check is configured **per credential type** — it is not a global switch —
-and is **off by default**. Credentials that do not opt in are validated
-exactly as before and no status-list requests are issued. The per-credential
-block sits next to `trustedParticipantsLists`, `trustedIssuersLists`,
-`holderVerification`, `requireCompliance`, and `jwtInclusion` inside each
-`credentials:` entry of a scope:
+and is **enabled by default**. The per-credential block sits next to
+`trustedParticipantsLists`, `trustedIssuersLists`, `holderVerification`,
+`requireCompliance`, and `jwtInclusion` inside each `credentials:` entry of a
+scope:
 
 ```yaml
 configRepo:
@@ -495,30 +518,30 @@ configRepo:
                     credentials:
                         -   type: CustomerCredential
                             # ... trustedParticipantsLists / trustedIssuersLists ...
-                            # Enable the revocation-list check for this credential type.
+                            # Revocation-list check for this credential type.
                             credentialStatus:
-                                # When false (default) no status-list lookup is performed.
+                                # Toggle the status-list check. Default: true.
                                 enabled: true
-                                # Status purposes this credential enforces. When empty,
-                                # defaults to ["revocation"]. Valid values are
-                                # "revocation" and "suspension".
+                                # Status purposes this credential enforces (W3C format
+                                # only). When empty, defaults to ["revocation"]. Valid
+                                # values are "revocation" and "suspension".
                                 acceptedPurposes:
                                     - revocation
-                                # Reject credentials of this type that do not carry a
-                                # credentialStatus entry. Defaults to false.
+                                # Reject credentials of this type that do not carry any
+                                # status entry (W3C or IETF). Defaults to false.
                                 requireStatus: false
 ```
 
 The shared HTTP client and in-memory cache used to fetch status-list
-credentials are parametrised globally on `verifier:`. These knobs do **not**
-enable the feature — they only tune the transport when at least one
-credential opts in:
+credentials (both W3C and IETF) are parametrised globally on `verifier:`.
+These knobs do **not** toggle the feature — they only tune the transport when
+at least one credential opts in:
 
 ```yaml
 verifier:
-    # TTL in seconds for cached status-list credentials. Default: 300.
+    # TTL in seconds for cached status-list credentials / JWTs. Default: 300.
     statusListCacheExpiry: 300
-    # Timeout in seconds for HTTP requests fetching a status-list credential.
+    # Timeout in seconds for HTTP requests fetching a status-list resource.
     # Default: 10.
     statusListHttpTimeout: 10
 ```

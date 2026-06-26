@@ -1,15 +1,19 @@
 package verifier
 
 // credential_status_client.go implements the cached HTTP client responsible
-// for fetching W3C Bitstring Status List / StatusList2021 credentials
-// referenced from a Verifiable Credential's `credentialStatus` entry.
+// for fetching status-list resources referenced from a Verifiable
+// Credential's status entry. It supports both:
+//   - W3C Bitstring Status List / StatusList2021 credentials
+//   - IETF OAuth 2.0 Token Status List JWTs (draft-ietf-oauth-status-list)
 //
-// The client keeps parsed status-list credentials in an in-memory cache so
-// the verifier does not re-fetch the same list on every presentation. TTL
-// and HTTP timeout are parametrised through config.Verifier
+// The client keeps parsed results in an in-memory cache so the verifier
+// does not re-fetch the same list on every presentation. TTL and HTTP
+// timeout are parametrised through config.Verifier
 // (StatusListCacheExpiry / StatusListHttpTimeout) — see config/config.go.
 
 import (
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -183,3 +187,163 @@ func parseStatusListCredentialBody(body []byte) (*common.Credential, error) {
 // interface. This protects callers who type against StatusListCredentialClient
 // from accidental signature drift.
 var _ StatusListCredentialClient = (*CachingStatusListClient)(nil)
+
+// ---------------------------------------------------------------------------
+// IETF Token Status List client
+// ---------------------------------------------------------------------------
+
+// IETFStatusListClient fetches IETF OAuth 2.0 Token Status List JWTs from
+// the URI declared in a credential's `status.status_list.uri` field.
+//
+// The response is a JWT with Content-Type `application/statuslist+jwt`,
+// optionally gzip-compressed (Content-Encoding: gzip). The JWT payload
+// contains `status_list.bits` and `status_list.lst` — the latter being a
+// base64url-encoded, zlib-compressed bitstring.
+type IETFStatusListClient interface {
+	// FetchIETF fetches and returns the parsed IETF status list from the
+	// given URI. Implementations may cache results internally.
+	FetchIETF(uri string) (*common.IETFStatusList, error)
+}
+
+// CachingIETFStatusListClient is the default IETFStatusListClient
+// implementation with in-memory caching.
+type CachingIETFStatusListClient struct {
+	httpClient *http.Client
+	cache      common.Cache
+	expiry     time.Duration
+}
+
+// NewCachingIETFStatusListClient constructs a CachingIETFStatusListClient.
+func NewCachingIETFStatusListClient(timeout time.Duration, cacheExpiry time.Duration) *CachingIETFStatusListClient {
+	return &CachingIETFStatusListClient{
+		httpClient: &http.Client{Timeout: timeout},
+		cache:      cache.New(cacheExpiry, StatusListCacheCleanupMultiplier*cacheExpiry),
+		expiry:     cacheExpiry,
+	}
+}
+
+// FetchIETF retrieves the IETF Token Status List JWT from the given URI.
+// The JWT is decoded (signature verification is intentionally deferred)
+// and the `status_list` payload is extracted and cached.
+func (c *CachingIETFStatusListClient) FetchIETF(uri string) (*common.IETFStatusList, error) {
+	if cached, hit := c.cache.Get(uri); hit {
+		logging.Log().Debugf("IETF status-list cache hit for %s", uri)
+		return cached.(*common.IETFStatusList), nil
+	}
+
+	req, err := http.NewRequest(http.MethodGet, uri, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListHttpFailure, err)
+	}
+	req.Header.Set("Accept", common.ContentTypeStatusListJWT)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListHttpFailure, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < statusListHTTPOKMin || resp.StatusCode >= statusListHTTPOKMaxExclusive {
+		return nil, fmt.Errorf("%w: unexpected status %d from %s", ErrorStatusListHttpFailure, resp.StatusCode, uri)
+	}
+
+	var bodyReader io.Reader = resp.Body
+	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+		gzReader, gzErr := gzip.NewReader(resp.Body)
+		if gzErr != nil {
+			return nil, fmt.Errorf("%w: gzip decode failed: %v", ErrorStatusListUnparseable, gzErr)
+		}
+		defer func() { _ = gzReader.Close() }()
+		bodyReader = gzReader
+	}
+
+	body, err := io.ReadAll(bodyReader)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListHttpFailure, err)
+	}
+
+	statusList, err := parseIETFStatusListJWT(string(body))
+	if err != nil {
+		return nil, err
+	}
+
+	c.cache.Set(uri, statusList, c.expiry)
+	logging.Log().Debugf("Cached IETF status-list for %s", uri)
+	return statusList, nil
+}
+
+// parseIETFStatusListJWT extracts the `status_list` payload from an IETF
+// Token Status List JWT without verifying the signature (status lists are
+// public resources). The JWT payload is the second dot-separated segment.
+func parseIETFStatusListJWT(jwtString string) (*common.IETFStatusList, error) {
+	parts := strings.Split(strings.TrimSpace(jwtString), ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("%w: expected 3 JWT parts, got %d", ErrorStatusListUnparseable, len(parts))
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		padded, padErr := base64.URLEncoding.DecodeString(parts[1])
+		if padErr != nil {
+			return nil, fmt.Errorf("%w: JWT payload base64 decode failed: %v", ErrorStatusListUnparseable, err)
+		}
+		payload = padded
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("%w: JWT payload JSON unmarshal failed: %v", ErrorStatusListUnparseable, err)
+	}
+
+	statusListRaw, ok := claims[common.IETFStatusListKey]
+	if !ok || statusListRaw == nil {
+		// Fall back to top-level keys (some implementations put bits/lst at the top level).
+		statusListRaw = claims
+	}
+
+	statusListMap, ok := statusListRaw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("%w: status_list is not a JSON object", ErrorStatusListUnparseable)
+	}
+
+	lst, ok := statusListMap[common.IETFStatusListLst].(string)
+	if !ok || lst == "" {
+		return nil, fmt.Errorf("%w: status_list.lst is missing or empty", ErrorStatusListUnparseable)
+	}
+
+	bits, err := parseIETFBits(statusListMap[common.IETFStatusListBits])
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+
+	return &common.IETFStatusList{Bits: bits, Lst: lst}, nil
+}
+
+// parseIETFBits converts the `bits` value from a status list JWT payload
+// to an int. JSON numbers arrive as float64.
+func parseIETFBits(raw interface{}) (int, error) {
+	switch v := raw.(type) {
+	case float64:
+		if v <= 0 {
+			return 0, fmt.Errorf("bits must be positive, got %v", v)
+		}
+		return int(v), nil
+	case int:
+		if v <= 0 {
+			return 0, fmt.Errorf("bits must be positive, got %d", v)
+		}
+		return v, nil
+	case int64:
+		if v <= 0 {
+			return 0, fmt.Errorf("bits must be positive, got %d", v)
+		}
+		return int(v), nil
+	case nil:
+		return common.DefaultStatusSizeBits, nil
+	default:
+		return 0, fmt.Errorf("bits has unexpected type %T", raw)
+	}
+}
+
+// Compile-time assertion.
+var _ IETFStatusListClient = (*CachingIETFStatusListClient)(nil)
