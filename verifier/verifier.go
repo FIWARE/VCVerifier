@@ -361,10 +361,10 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	// no-op for that type.
 	statusListHttpTimeout := time.Duration(verifierConfig.StatusListHttpTimeout) * time.Second
 	statusListCacheExpiry := time.Duration(verifierConfig.StatusListCacheExpiry) * time.Second
-	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry)
 	statusListDIDRegistry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
-	ietfJWTVerifier := NewStatusListJWTVerifier(statusListDIDRegistry)
-	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry, ietfJWTVerifier, clock)
+	statusListJWTVerifier := NewStatusListJWTVerifier(statusListDIDRegistry)
+	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier)
+	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, clock)
 	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, ietfStatusListClient, clock)
 
 	key, err := initPrivateKey(verifierConfig.KeyAlgorithm, verifierConfig.GenerateKey, verifierConfig.KeyPath)

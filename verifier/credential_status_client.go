@@ -123,9 +123,10 @@ type StatusListCredentialClient interface {
 // for the same URL and a configurable http.Client timeout to protect the
 // verifier from slow status-list issuers.
 type CachingStatusListClient struct {
-	httpClient *http.Client
-	cache      common.Cache
-	expiry     time.Duration
+	httpClient  *http.Client
+	cache       common.Cache
+	expiry      time.Duration
+	jwtVerifier StatusListJWTVerifier
 }
 
 // NewCachingStatusListClient constructs a CachingStatusListClient using the
@@ -135,11 +136,12 @@ type CachingStatusListClient struct {
 // The cache janitor's cleanup interval is derived from cacheExpiry via
 // StatusListCacheCleanupMultiplier so evicted entries are reaped on a cadence
 // that matches the rest of the codebase.
-func NewCachingStatusListClient(timeout time.Duration, cacheExpiry time.Duration) *CachingStatusListClient {
+func NewCachingStatusListClient(timeout time.Duration, cacheExpiry time.Duration, jwtVerifier StatusListJWTVerifier) *CachingStatusListClient {
 	return &CachingStatusListClient{
-		httpClient: &http.Client{Timeout: timeout},
-		cache:      cache.New(cacheExpiry, StatusListCacheCleanupMultiplier*cacheExpiry),
-		expiry:     cacheExpiry,
+		httpClient:  &http.Client{Timeout: timeout},
+		cache:       cache.New(cacheExpiry, StatusListCacheCleanupMultiplier*cacheExpiry),
+		expiry:      cacheExpiry,
+		jwtVerifier: jwtVerifier,
 	}
 }
 
@@ -183,7 +185,7 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 	}
 
 	logging.Log().Debugf("Received %d bytes from %s, parsing credential", len(body), url)
-	cred, err := parseStatusListCredentialBody(body)
+	cred, err := parseStatusListCredentialBody(body, c.jwtVerifier)
 	if err != nil {
 		logging.Log().Debugf("Failed to parse status-list credential from %s: %v", url, err)
 		return nil, err
@@ -208,7 +210,7 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 // A non-nil error is always wrapped with ErrorStatusListUnparseable so
 // callers can distinguish parse failures from transport failures with
 // errors.Is.
-func parseStatusListCredentialBody(body []byte) (*common.Credential, error) {
+func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifier) (*common.Credential, error) {
 	trimmed := strings.TrimSpace(string(body))
 	if len(trimmed) == 0 {
 		logging.Log().Debug("Status-list credential response body is empty")
@@ -231,6 +233,15 @@ func parseStatusListCredentialBody(body []byte) (*common.Credential, error) {
 	}
 
 	logging.Log().Debug("Parsing status-list credential as JWT")
+	if jwtVerifier != nil {
+		if _, err := jwtVerifier.VerifyStatusListJWT([]byte(trimmed)); err != nil {
+			logging.Log().Debugf("W3C status-list JWT signature verification failed: %v", err)
+			return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+		}
+		logging.Log().Debug("W3C status-list JWT signature verified")
+	} else {
+		logging.Log().Warn("No JWT verifier configured for W3C status list — skipping signature verification")
+	}
 	cred, err := parseUnsignedJWTCredential(trimmed)
 	if err != nil {
 		logging.Log().Debugf("JWT credential parse failed: %v", err)
