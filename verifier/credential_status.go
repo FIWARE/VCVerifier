@@ -120,6 +120,7 @@ func (s *CredentialStatusValidationService) ValidateVC(verifiableCredential *com
 
 	entries, err := common.ParseStatusListEntries(rawStatus)
 	if err != nil {
+		logging.Log().Debugf("Failed to parse credentialStatus entries: %v", err)
 		return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
 
@@ -127,6 +128,7 @@ func (s *CredentialStatusValidationService) ValidateVC(verifiableCredential *com
 	// Status List format which stores the reference in
 	// credentialSubject.status.status_list.
 	if len(entries) == 0 {
+		logging.Log().Debugf("No W3C credentialStatus entries found, checking for IETF status entry")
 		ietfEntry := s.extractIETFStatusEntry(verifiableCredential)
 		if ietfEntry != nil {
 			return s.validateIETFStatus(verifiableCredential, ietfEntry)
@@ -135,6 +137,7 @@ func (s *CredentialStatusValidationService) ValidateVC(verifiableCredential *com
 			logging.Log().Warnf("Credential %s has no credentialStatus but RequireStatus is true", verifiableCredential.Contents().ID)
 			return false, ErrorStatusMissing
 		}
+		logging.Log().Debugf("No status entries found and RequireStatus is false, skipping status check")
 		return true, nil
 	}
 
@@ -148,13 +151,16 @@ func (s *CredentialStatusValidationService) ValidateVC(verifiableCredential *com
 			continue
 		}
 
+		logging.Log().Debugf("Fetching status-list credential from %s (purpose=%s, index=%d)", entry.StatusListCredential, entry.StatusPurpose, entry.StatusListIndex)
 		statusCred, fetchErr := s.client.Fetch(entry.StatusListCredential)
 		if fetchErr != nil {
+			logging.Log().Debugf("Failed to fetch status-list credential from %s: %v", entry.StatusListCredential, fetchErr)
 			return false, fetchErr
 		}
 
 		encodedList, purpose, extractErr := extractStatusListFields(statusCred)
 		if extractErr != nil {
+			logging.Log().Debugf("Failed to extract status-list fields from credential at %s: %v", entry.StatusListCredential, extractErr)
 			return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, extractErr)
 		}
 
@@ -165,11 +171,13 @@ func (s *CredentialStatusValidationService) ValidateVC(verifiableCredential *com
 
 		bitstring, decodeErr := common.DecodeBitstring(encodedList)
 		if decodeErr != nil {
+			logging.Log().Debugf("Failed to decode bitstring from %s: %v", entry.StatusListCredential, decodeErr)
 			return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, decodeErr)
 		}
 
 		set, idxErr := common.IsStatusSet(bitstring, entry.StatusListIndex, entry.StatusSize)
 		if idxErr != nil {
+			logging.Log().Debugf("Failed to check status bit at index %d in %s: %v", entry.StatusListIndex, entry.StatusListCredential, idxErr)
 			return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, idxErr)
 		}
 		if set {
@@ -206,16 +214,19 @@ func (s *CredentialStatusValidationService) validateIETFStatus(cred *common.Cred
 
 	statusList, err := s.ietfClient.FetchIETF(entry.URI)
 	if err != nil {
+		logging.Log().Debugf("Failed to fetch IETF status list from %s: %v", entry.URI, err)
 		return false, err
 	}
 
 	bitstring, err := common.DecodeIETFBitstring(statusList.Lst)
 	if err != nil {
+		logging.Log().Debugf("Failed to decode IETF bitstring from %s: %v", entry.URI, err)
 		return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
 
 	set, err := common.IsIETFStatusSet(bitstring, entry.Idx, statusList.Bits)
 	if err != nil {
+		logging.Log().Debugf("Failed to check IETF status bit at index %d from %s: %v", entry.Idx, entry.URI, err)
 		return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
 	if set {
@@ -314,12 +325,23 @@ func isPurposeAccepted(purpose string, acceptedPurposes []string) bool {
 // credential subject can be either a single object or an array; both shapes
 // are supported here so issuers can follow either VC Data Model flavour.
 //
+// The credential must declare BitstringStatusListCredential or
+// StatusList2021Credential as one of its types; otherwise the function
+// returns an error to prevent accepting arbitrary credentials that happen
+// to contain an `encodedList` field.
+//
 // A non-nil error is returned when the credential does not expose an
 // `encodedList` string on at least one subject.
 func extractStatusListFields(statusCred *common.Credential) (encodedList string, statusPurpose string, err error) {
 	if statusCred == nil {
 		return "", "", fmt.Errorf("status-list credential is nil")
 	}
+
+	if !isStatusListCredentialType(statusCred.Contents().Types) {
+		return "", "", fmt.Errorf("%w: credential types %v do not include a supported status list type",
+			ErrorStatusListUnparseable, statusCred.Contents().Types)
+	}
+
 	raw := statusCred.ToRawJSON()
 	subjectRaw, ok := raw[common.VCKeyCredentialSubject]
 	if !ok || subjectRaw == nil {
@@ -344,6 +366,17 @@ func extractStatusListFields(statusCred *common.Credential) (encodedList string,
 	default:
 		return "", "", fmt.Errorf("status-list credential %q has unexpected type %T", common.VCKeyCredentialSubject, subjectRaw)
 	}
+}
+
+// isStatusListCredentialType returns true when the credential's type list
+// includes BitstringStatusListCredential or StatusList2021Credential.
+func isStatusListCredentialType(types []string) bool {
+	for _, t := range types {
+		if t == common.TypeBitstringStatusListCredential || t == common.TypeStatusList2021Credential {
+			return true
+		}
+	}
+	return false
 }
 
 // readEncodedListFromSubject extracts the encoded bitstring and optional

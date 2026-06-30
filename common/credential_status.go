@@ -7,7 +7,7 @@
 // References:
 //   - https://www.w3.org/TR/vc-bitstring-status-list/
 //   - https://www.w3.org/TR/2023/WD-vc-status-list-20230427/ (StatusList2021)
-//   - https://www.ietf.org/archive/id/draft-ietf-oauth-status-list-11.html
+//   - https://www.ietf.org/archive/id/draft-ietf-oauth-status-list-21.html
 package common
 
 import (
@@ -229,6 +229,8 @@ func parseStatusListEntry(obj map[string]interface{}) (StatusListEntry, error) {
 			return StatusListEntry{}, err
 		}
 		entry.StatusListIndex = parsed
+	} else {
+		return StatusListEntry{}, fmt.Errorf("%w: %q is required", ErrorStatusListEntryMalformed, StatusListEntryKeyStatusListIndex)
 	}
 	if sz, ok := obj[StatusListEntryKeyStatusSize]; ok && sz != nil {
 		parsed, err := parseStatusSize(sz)

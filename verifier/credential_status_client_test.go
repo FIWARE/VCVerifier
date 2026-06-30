@@ -127,9 +127,10 @@ func TestCachingStatusListClientTransportError(t *testing.T) {
 }
 
 // TestCachingStatusListClientAcceptHeader confirms the client advertises the
-// JSON-LD VC media type when fetching status-list credentials. This keeps
-// the client compatible with origins that serve different representations
-// based on content negotiation.
+// TestCachingStatusListClientAcceptHeader verifies that the client sends both
+// the JSON-LD and JWT VC media types when fetching status-list credentials.
+// This keeps the client compatible with issuers that perform strict content
+// negotiation and may serve either representation.
 func TestCachingStatusListClientAcceptHeader(t *testing.T) {
 	var received string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +142,9 @@ func TestCachingStatusListClientAcceptHeader(t *testing.T) {
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry)
 	_, err := client.Fetch(srv.URL)
 	require.NoError(t, err)
-	assert.Equal(t, ContentTypeCredentialJson, received)
+	assert.Equal(t, AcceptHeaderStatusListCredential, received)
+	assert.Contains(t, received, ContentTypeCredentialJson)
+	assert.Contains(t, received, ContentTypeCredentialJWT)
 }
 
 // ensureInterfaceSatisfied asserts at test compile time that the concrete

@@ -145,6 +145,15 @@ func TestParseStatusListEntries(t *testing.T) {
 			wantErr: ErrorStatusListEntryMalformed,
 		},
 		{
+			name: "missing statusListIndex",
+			input: map[string]interface{}{
+				StatusListEntryKeyType:                 TypeBitstringStatusListEntry,
+				StatusListEntryKeyStatusPurpose:        "revocation",
+				StatusListEntryKeyStatusListCredential: "https://example.org/status/1",
+			},
+			wantErr: ErrorStatusListEntryMalformed,
+		},
+		{
 			name: "invalid statusSize",
 			input: map[string]interface{}{
 				StatusListEntryKeyStatusListIndex: "0",

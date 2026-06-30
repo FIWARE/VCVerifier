@@ -24,6 +24,7 @@ import (
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
 	"github.com/fiware/VCVerifier/gaiax"
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/google/uuid"
 
@@ -361,7 +362,9 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	statusListHttpTimeout := time.Duration(verifierConfig.StatusListHttpTimeout) * time.Second
 	statusListCacheExpiry := time.Duration(verifierConfig.StatusListCacheExpiry) * time.Second
 	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry)
-	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry)
+	statusListDIDRegistry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
+	ietfJWTVerifier := NewStatusListJWTVerifier(statusListDIDRegistry)
+	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry, ietfJWTVerifier, clock)
 	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, ietfStatusListClient, clock)
 
 	key, err := initPrivateKey(verifierConfig.KeyAlgorithm, verifierConfig.GenerateKey, verifierConfig.KeyPath)
