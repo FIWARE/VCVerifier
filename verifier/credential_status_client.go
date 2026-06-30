@@ -642,13 +642,13 @@ func parseIETFStatusListPayload(payload []byte, expectedURI string, clock common
 	}
 
 	if ttlRaw, hasTTL := claims[jwtClaimTTL]; hasTTL {
-		ttlSeconds, ttlErr := parsePositiveSeconds(ttlRaw)
+		ttl, ttlErr := parsePositiveSeconds(ttlRaw)
 		if ttlErr != nil {
 			logging.Log().Debugf("Invalid ttl value: %v", ttlErr)
 			return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, ttlErr)
 		}
-		result.ttl = &ttlSeconds
-		logging.Log().Debugf("Status list JWT declares ttl=%v", ttlSeconds)
+		result.ttl = &ttl
+		logging.Log().Debugf("Status list JWT declares ttl=%v", ttl)
 	}
 
 	return result, nil
