@@ -120,21 +120,42 @@ type Credential struct {
 	// Configuration for the credential its inclusion into the JWT.
 	JwtInclusion JwtInclusion `json:"jwtInclusion" mapstructure:"jwtInclusion"`
 	// Per-credential configuration for the W3C Bitstring Status List /
-	// StatusList2021 revocation-list check. When omitted or disabled no
-	// revocation check is performed for credentials of this type, preserving
-	// prior behaviour for configurations that do not opt in.
+	// StatusList2021 revocation-list check. Defaults to an enabled
+	// CredentialStatus when omitted so that the revocation check is active
+	// unless explicitly disabled.
 	CredentialStatus CredentialStatus `json:"credentialStatus" mapstructure:"credentialStatus"`
 }
 
+func (c *Credential) UnmarshalJSON(data []byte) error {
+	type Alias Credential
+	aux := &struct{ *Alias }{Alias: (*Alias)(c)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if c.CredentialStatus.Enabled == nil {
+		t := true
+		c.CredentialStatus.Enabled = &t
+	}
+	return nil
+}
+
+func (c Credential) MarshalJSON() ([]byte, error) {
+	type Alias Credential
+	if c.CredentialStatus.Enabled == nil {
+		t := true
+		c.CredentialStatus.Enabled = &t
+	}
+	return json.Marshal((Alias)(c))
+}
+
 // CredentialStatus holds the per-credential-type configuration for the
-// status-list based revocation check. The zero-value disables the check, so
-// credentials that omit the block behave exactly as they did before the
-// feature was introduced.
+// status-list based revocation check. Defaults to enabled so that the
+// revocation check is active unless explicitly disabled.
 type CredentialStatus struct {
 	// Enabled toggles the revocation-list check for this credential type.
-	// When false (the default), no status-list lookup is performed for
-	// credentials of this type.
-	Enabled bool `json:"enabled" mapstructure:"enabled"`
+	// Defaults to true when absent so that status-list lookups are performed
+	// unless explicitly disabled.
+	Enabled *bool `json:"enabled,omitempty" mapstructure:"enabled"`
 	// AcceptedPurposes lists the status purposes this credential type enforces
 	// (for example "revocation" or "suspension"). When empty callers should
 	// fall back to DefaultAcceptedStatusPurposes(). The field is intentionally
@@ -145,6 +166,33 @@ type CredentialStatus struct {
 	// credentialStatus entry when set to true. Defaults to false so that
 	// credentials without status information are accepted.
 	RequireStatus bool `json:"requireStatus" mapstructure:"requireStatus"`
+}
+
+// IsEnabled returns true when Enabled is nil (absent) or explicitly true.
+func (cs *CredentialStatus) IsEnabled() bool {
+	return cs.Enabled == nil || *cs.Enabled
+}
+
+func (cs *CredentialStatus) UnmarshalJSON(data []byte) error {
+	type Alias CredentialStatus
+	aux := &struct{ *Alias }{Alias: (*Alias)(cs)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if cs.Enabled == nil {
+		t := true
+		cs.Enabled = &t
+	}
+	return nil
+}
+
+func (cs CredentialStatus) MarshalJSON() ([]byte, error) {
+	type Alias CredentialStatus
+	if cs.Enabled == nil {
+		t := true
+		cs.Enabled = &t
+	}
+	return json.Marshal((Alias)(cs))
 }
 
 type JwtInclusion struct {

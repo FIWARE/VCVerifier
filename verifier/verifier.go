@@ -24,6 +24,7 @@ import (
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
 	"github.com/fiware/VCVerifier/gaiax"
+	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/google/uuid"
 
@@ -355,13 +356,16 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 
 	// Construct the shared status-list credential client and the
 	// CredentialStatusValidationService. The service is always appended to
-	// the validation chain. When no credential has
-	// CredentialStatus.Enabled == true, the service's ValidateVC is a no-op
-	// so there is no performance impact for deployments that do not opt in.
+	// the validation chain. When a credential has
+	// CredentialStatus.IsEnabled() == false, the service's ValidateVC is a
+	// no-op for that type.
 	statusListHttpTimeout := time.Duration(verifierConfig.StatusListHttpTimeout) * time.Second
 	statusListCacheExpiry := time.Duration(verifierConfig.StatusListCacheExpiry) * time.Second
-	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry)
-	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, clock)
+	statusListDIDRegistry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
+	statusListJWTVerifier := NewStatusListJWTVerifier(statusListDIDRegistry)
+	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier)
+	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, clock)
+	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, ietfStatusListClient, clock)
 
 	key, err := initPrivateKey(verifierConfig.KeyAlgorithm, verifierConfig.GenerateKey, verifierConfig.KeyPath)
 

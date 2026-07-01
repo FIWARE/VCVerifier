@@ -68,7 +68,7 @@ func TestCachingStatusListClientFetch(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry)
+			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil)
 			cred, err := client.Fetch(srv.URL)
 
 			if tc.wantErr != nil {
@@ -94,7 +94,7 @@ func TestCachingStatusListClientCache(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry)
+	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil)
 
 	first, err := client.Fetch(srv.URL)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestCachingStatusListClientTransportError(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 
-	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry)
+	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil)
 	cred, err := client.Fetch(url)
 
 	require.Error(t, err)
@@ -127,9 +127,10 @@ func TestCachingStatusListClientTransportError(t *testing.T) {
 }
 
 // TestCachingStatusListClientAcceptHeader confirms the client advertises the
-// JSON-LD VC media type when fetching status-list credentials. This keeps
-// the client compatible with origins that serve different representations
-// based on content negotiation.
+// TestCachingStatusListClientAcceptHeader verifies that the client sends both
+// the JSON-LD and JWT VC media types when fetching status-list credentials.
+// This keeps the client compatible with issuers that perform strict content
+// negotiation and may serve either representation.
 func TestCachingStatusListClientAcceptHeader(t *testing.T) {
 	var received string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -138,10 +139,12 @@ func TestCachingStatusListClientAcceptHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry)
+	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil)
 	_, err := client.Fetch(srv.URL)
 	require.NoError(t, err)
-	assert.Equal(t, ContentTypeCredentialJson, received)
+	assert.Equal(t, AcceptHeaderStatusListCredential, received)
+	assert.Contains(t, received, ContentTypeCredentialJson)
+	assert.Contains(t, received, ContentTypeCredentialJWT)
 }
 
 // ensureInterfaceSatisfied asserts at test compile time that the concrete
@@ -150,3 +153,154 @@ func TestCachingStatusListClientAcceptHeader(t *testing.T) {
 // common.Credential here so static analysis doesn't drop the import.
 var _ StatusListCredentialClient = (*CachingStatusListClient)(nil)
 var _ = (*common.Credential)(nil)
+
+// ---------------------------------------------------------------------------
+// JWT signature verification tests
+// ---------------------------------------------------------------------------
+
+// mockJWTVerifier is a test double for StatusListJWTVerifier. It records
+// whether it was called and returns the configured error.
+type mockJWTVerifier struct {
+	called bool
+	err    error
+}
+
+func (m *mockJWTVerifier) VerifyStatusListJWT(_ []byte) ([]byte, error) {
+	m.called = true
+	return nil, m.err
+}
+
+// testStatusListVCJWT is a minimal JWT-encoded BitstringStatusListCredential
+// built with the shared buildFakeJWT helper (defined in presentation_parser_test.go).
+// The signature segment is a static placeholder — format checks pass without a
+// real key pair, which is sufficient for unit tests of the verifier wiring.
+var testStatusListVCJWT = buildFakeJWT(map[string]interface{}{
+	"iss": "did:example:issuer",
+	"jti": "https://example.com/status/1",
+	"vc": map[string]interface{}{
+		"@context": []string{"https://www.w3.org/2018/credentials/v1"},
+		"type":     []string{"VerifiableCredential", "BitstringStatusListCredential"},
+		"credentialSubject": map[string]interface{}{
+			"id":           "https://example.com/status/1#list",
+			"type":         "BitstringStatusList",
+			"statusPurpose": "revocation",
+			"encodedList":  "H4sIAAAAAAAA_2NgAAMAAAAEAAEAAAAA",
+		},
+	},
+})
+
+// TestParseStatusListCredentialBodyJWTVerification confirms that
+// parseStatusListCredentialBody calls the JWT verifier for non-JSON-LD
+// responses and respects its outcome.
+func TestParseStatusListCredentialBodyJWTVerification(t *testing.T) {
+	jwtBody := testStatusListVCJWT
+
+	tests := []struct {
+		name            string
+		body            string
+		verifier        *mockJWTVerifier
+		wantErr         error
+		wantVerifierHit bool
+	}{
+		{
+			name:            "verifier_failure_rejects_jwt",
+			body:            jwtBody,
+			verifier:        &mockJWTVerifier{err: ErrorStatusListUnparseable},
+			wantErr:         ErrorStatusListUnparseable,
+			wantVerifierHit: true,
+		},
+		{
+			name:            "verifier_success_proceeds_to_parse",
+			body:            jwtBody,
+			verifier:        &mockJWTVerifier{err: nil},
+			wantErr:         nil,
+			wantVerifierHit: true,
+		},
+		{
+			name:            "nil_verifier_skips_verification",
+			body:            jwtBody,
+			verifier:        nil,
+			wantErr:         nil,
+			wantVerifierHit: false,
+		},
+		{
+			name:            "jsonld_body_skips_verifier",
+			body:            testStatusListCredentialJSONLD,
+			verifier:        &mockJWTVerifier{err: ErrorStatusListUnparseable},
+			wantErr:         nil,
+			wantVerifierHit: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var verifier StatusListJWTVerifier
+			if tc.verifier != nil {
+				verifier = tc.verifier
+			}
+
+			cred, err := parseStatusListCredentialBody([]byte(tc.body), verifier)
+
+			if tc.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, cred)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, cred)
+			}
+
+			if tc.verifier != nil {
+				assert.Equal(t, tc.wantVerifierHit, tc.verifier.called, "verifier.called mismatch")
+			}
+		})
+	}
+}
+
+// TestCachingStatusListClientFetchJWTVerification exercises the Fetch path
+// end-to-end: the httptest server returns a JWT body, and the configured
+// verifier is consulted before the credential is accepted.
+func TestCachingStatusListClientFetchJWTVerification(t *testing.T) {
+	jwtBody := testStatusListVCJWT
+
+	tests := []struct {
+		name     string
+		verifier *mockJWTVerifier
+		wantErr  error
+	}{
+		{
+			name:     "verifier_rejects_jwt_body",
+			verifier: &mockJWTVerifier{err: ErrorStatusListUnparseable},
+			wantErr:  ErrorStatusListUnparseable,
+		},
+		{
+			name:     "verifier_accepts_jwt_body",
+			verifier: &mockJWTVerifier{err: nil},
+			wantErr:  nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", ContentTypeCredentialJWT)
+				_, _ = w.Write([]byte(jwtBody))
+			}))
+			defer srv.Close()
+
+			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, tc.verifier)
+			cred, err := client.Fetch(srv.URL)
+
+			if tc.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, cred)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, cred)
+			}
+
+			assert.True(t, tc.verifier.called, "verifier should have been called for JWT body")
+		})
+	}
+}

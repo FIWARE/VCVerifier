@@ -359,7 +359,7 @@ func (cc cacheBasedCredentialsConfig) GetCredentialStatusConfig(serviceIdentifie
 	if hit {
 		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
 		if ok {
-			logging.Log().Debugf("Found credential status config for %s - %v", credentialType, credential.CredentialStatus.Enabled)
+			logging.Log().Debugf("Found credential status config for %s - %v", credentialType, credential.CredentialStatus.IsEnabled())
 			return credential.CredentialStatus, nil
 		}
 	}
