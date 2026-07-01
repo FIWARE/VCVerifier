@@ -94,6 +94,10 @@ const (
 	BitsPerByte = 8
 )
 
+// validStatusSizeValues is the set of allowed values for `statusSize` in a
+// W3C Bitstring Status List entry, per the VC Bitstring Status List v1.0 spec.
+var validStatusSizeValues = map[int]bool{1: true, 2: true, 4: true, 8: true}
+
 // Typed errors returned by the helpers in this file. They are exported so
 // callers can match against them using `errors.Is`.
 var (
@@ -296,8 +300,8 @@ func parseStatusSize(raw interface{}) (int, error) {
 	default:
 		return 0, fmt.Errorf("%w: %q must be an integer, got %T", ErrorStatusListEntryMalformed, StatusListEntryKeyStatusSize, raw)
 	}
-	if size <= 0 {
-		return 0, fmt.Errorf("%w: %q must be positive, got %d", ErrorStatusListInvalidStatusSize, StatusListEntryKeyStatusSize, size)
+	if !validStatusSizeValues[size] {
+		return 0, fmt.Errorf("%w: %q must be one of {1, 2, 4, 8}, got %d", ErrorStatusListInvalidStatusSize, StatusListEntryKeyStatusSize, size)
 	}
 	return size, nil
 }
@@ -349,7 +353,7 @@ func DecodeBitstring(encoded string) ([]byte, error) {
 // covered by `bitstring`, and ErrorStatusListInvalidStatusSize when
 // `statusSize` is not a positive integer.
 func IsStatusSet(bitstring []byte, index uint64, statusSize int) (bool, error) {
-	if statusSize <= 0 {
+	if !validStatusSizeValues[statusSize] {
 		return false, fmt.Errorf("%w: got %d", ErrorStatusListInvalidStatusSize, statusSize)
 	}
 
