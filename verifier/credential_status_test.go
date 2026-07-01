@@ -386,11 +386,22 @@ type mockIETFStatusListClient struct {
 	statusList *common.IETFStatusList
 	err        error
 	calls      []string
+	// refreshedStatusList is returned after InvalidateIETF is called,
+	// simulating a fresh fetch with an updated list.
+	refreshedStatusList *common.IETFStatusList
+	invalidated         bool
 }
 
 func (m *mockIETFStatusListClient) FetchIETF(uri string) (*common.IETFStatusList, error) {
 	m.calls = append(m.calls, uri)
+	if m.invalidated && m.refreshedStatusList != nil {
+		return m.refreshedStatusList, m.err
+	}
 	return m.statusList, m.err
+}
+
+func (m *mockIETFStatusListClient) InvalidateIETF(uri string) {
+	m.invalidated = true
 }
 
 // encodeIETFTestBitstring returns base64url(zlib(bits)), the encoding the
@@ -501,6 +512,83 @@ func TestCredentialStatusValidationService_IETF(t *testing.T) {
 				}
 			} else if !errors.Is(err, tc.expectedError) {
 				t.Errorf("expected error %v, got %v", tc.expectedError, err)
+			}
+		})
+	}
+}
+
+func TestCredentialStatusValidationService_IETF_RetryOnOutOfRange(t *testing.T) {
+	testURI := "https://example.org/statuslists/test-list"
+
+	// The cached list has 1 byte (8 bits), so index 10 is out of range.
+	smallBits := encodeIETFTestBitstring(t, []byte{0b00000000})
+	// After a fresh fetch the list has 2 bytes (16 bits), covering index 10.
+	grownBits := encodeIETFTestBitstring(t, []byte{0b00000000, 0b00000000})
+
+	tests := []struct {
+		testName       string
+		index          uint64
+		initial        *common.IETFStatusList
+		refreshed      *common.IETFStatusList
+		expectedResult bool
+		expectedError  error
+		expectedCalls  int
+	}{
+		{
+			testName:       "retry succeeds after cache eviction",
+			index:          10,
+			initial:        &common.IETFStatusList{Bits: 1, Lst: smallBits},
+			refreshed:      &common.IETFStatusList{Bits: 1, Lst: grownBits},
+			expectedResult: true,
+			expectedError:  nil,
+			expectedCalls:  2,
+		},
+		{
+			testName:       "retry still out of range after fresh fetch",
+			index:          20,
+			initial:        &common.IETFStatusList{Bits: 1, Lst: smallBits},
+			refreshed:      &common.IETFStatusList{Bits: 1, Lst: grownBits},
+			expectedResult: false,
+			expectedError:  common.ErrorStatusListIndexOutOfRange,
+			expectedCalls:  2,
+		},
+		{
+			testName:       "no retry needed when index is in range",
+			index:          3,
+			initial:        &common.IETFStatusList{Bits: 1, Lst: smallBits},
+			refreshed:      nil,
+			expectedResult: true,
+			expectedError:  nil,
+			expectedCalls:  1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			ietfMock := &mockIETFStatusListClient{
+				statusList:          tc.initial,
+				refreshedStatusList: tc.refreshed,
+			}
+			service := NewCredentialStatusValidationService(nil, ietfMock, nil)
+			cred := newCredentialWithIETFStatus(t, statusValidationTestType, tc.index, testURI)
+			perType := map[string]configModel.CredentialStatus{
+				statusValidationTestType: {Enabled: boolPtr(true)},
+			}
+
+			result, err := service.ValidateVC(cred, CredentialStatusValidationContext{PerType: perType})
+
+			if result != tc.expectedResult {
+				t.Errorf("expected result %v, got %v", tc.expectedResult, result)
+			}
+			if tc.expectedError == nil {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+			} else if !errors.Is(err, tc.expectedError) {
+				t.Errorf("expected error %v, got %v", tc.expectedError, err)
+			}
+			if len(ietfMock.calls) != tc.expectedCalls {
+				t.Errorf("expected %d FetchIETF calls, got %d", tc.expectedCalls, len(ietfMock.calls))
 			}
 		})
 	}
