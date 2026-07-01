@@ -50,7 +50,7 @@ func TestServiceBackedCredentialsConfig_GetCredentialStatusConfig(t *testing.T) 
 	logging.Configure(LOGGING_CONFIG)
 
 	enabledStatus := config.CredentialStatus{
-		Enabled:          true,
+		Enabled:          boolPtr(true),
 		AcceptedPurposes: []string{config.StatusPurposeRevocation, config.StatusPurposeSuspension},
 		RequireStatus:    true,
 	}
@@ -134,11 +134,11 @@ func TestServiceBackedCredentialsConfig_GetCredentialStatusConfig(t *testing.T) 
 	}
 }
 
-// TestServiceBackedCredentialsConfig_GetCredentialStatusConfig_DefaultsAreOff
-// pins the critical "feature is off unless explicitly enabled" contract: a
-// credential with the default (zero) `CredentialStatus` must report Enabled ==
-// false so that the rest of the validation chain skips the revocation check.
-func TestServiceBackedCredentialsConfig_GetCredentialStatusConfig_DefaultsAreOff(t *testing.T) {
+// TestServiceBackedCredentialsConfig_GetCredentialStatusConfig_DefaultsAreOn
+// pins the contract: a credential with the default (zero) `CredentialStatus`
+// must report IsEnabled() == true so that the revocation-list check is active
+// by default.
+func TestServiceBackedCredentialsConfig_GetCredentialStatusConfig_DefaultsAreOn(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	seedServiceCache(t, newServiceWithCredentials(config.Credential{Type: testStatusCredentialType}))
@@ -147,7 +147,7 @@ func TestServiceBackedCredentialsConfig_GetCredentialStatusConfig_DefaultsAreOff
 	got, err := cc.GetCredentialStatusConfig(testStatusServiceID, testStatusScope, testStatusCredentialType)
 
 	assert.NoError(t, err)
-	assert.False(t, got.Enabled, "zero-value CredentialStatus must leave the revocation-list check disabled")
+	assert.True(t, got.IsEnabled(), "zero-value CredentialStatus must leave the revocation-list check enabled")
 	assert.Empty(t, got.AcceptedPurposes, "zero-value CredentialStatus must have no accepted purposes")
 	assert.False(t, got.RequireStatus, "zero-value CredentialStatus must not require a status entry")
 }

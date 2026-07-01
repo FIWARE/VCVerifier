@@ -17,6 +17,8 @@ import (
 
 var TRUE_VALUE bool = true
 
+func boolPtr(v bool) *bool { return &v }
+
 type MockHttpClient struct {
 	Answer string
 }
@@ -87,9 +89,9 @@ func Test_CredentialStatusDeserialisation(t *testing.T) {
 
 	tests := []test{
 		{
-			testName:                 "A credential without a credentialStatus block deserialises to a zero-value CredentialStatus with Enabled false.",
+			testName:                 "A credential without a credentialStatus block defaults to Enabled true.",
 			rawJSON:                  `{"type":"VerifiableCredential"}`,
-			expectedEnabled:          false,
+			expectedEnabled:          true,
 			expectedAcceptedPurposes: nil,
 			expectedRequireStatus:    false,
 		},
@@ -115,7 +117,7 @@ func Test_CredentialStatusDeserialisation(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.rawJSON), &credential); err != nil {
 				t.Fatalf("%s - failed to unmarshal JSON: %v", tc.testName, err)
 			}
-			assert.Equal(t, tc.expectedEnabled, credential.CredentialStatus.Enabled)
+			assert.Equal(t, tc.expectedEnabled, credential.CredentialStatus.IsEnabled())
 			assert.Equal(t, tc.expectedAcceptedPurposes, credential.CredentialStatus.AcceptedPurposes)
 			assert.Equal(t, tc.expectedRequireStatus, credential.CredentialStatus.RequireStatus)
 		})
@@ -135,9 +137,9 @@ func Test_CredentialStatusMapstructureDecoding(t *testing.T) {
 
 	tests := []test{
 		{
-			testName:                 "Missing credentialStatus key leaves zero-value CredentialStatus on the Credential.",
+			testName:                 "Missing credentialStatus key defaults to Enabled true.",
 			input:                    map[string]interface{}{"type": "VerifiableCredential"},
-			expectedEnabled:          false,
+			expectedEnabled:          true,
 			expectedAcceptedPurposes: nil,
 			expectedRequireStatus:    false,
 		},
@@ -182,7 +184,7 @@ func Test_CredentialStatusMapstructureDecoding(t *testing.T) {
 			if err := decoder.Decode(tc.input); err != nil {
 				t.Fatalf("%s - failed to decode: %v", tc.testName, err)
 			}
-			assert.Equal(t, tc.expectedEnabled, credential.CredentialStatus.Enabled)
+			assert.Equal(t, tc.expectedEnabled, credential.CredentialStatus.IsEnabled())
 			assert.Equal(t, tc.expectedAcceptedPurposes, credential.CredentialStatus.AcceptedPurposes)
 			assert.Equal(t, tc.expectedRequireStatus, credential.CredentialStatus.RequireStatus)
 		})
@@ -223,6 +225,7 @@ func Test_getServices(t *testing.T) {
 					TrustedParticipantsLists: []TrustedParticipantsList{{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}},
 					TrustedIssuersLists:      TrustedIssuersLists{{Type: "ebsi", Url: "https://til-pdc.ebsi.fiware.dev"}},
 					HolderVerification:       HolderVerification{Enabled: false, Claim: "subject"},
+					CredentialStatus:         CredentialStatus{Enabled: boolPtr(true)},
 				},
 			},
 			PresentationDefinition: &PresentationDefinition{

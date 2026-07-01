@@ -1656,7 +1656,7 @@ func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 
 	tests := []test{
 		{
-			testName: "Case A: no credential opts in so the status service is appended and its PerType entry is disabled.",
+			testName: "Case A: credential without explicit CredentialStatus defaults to enabled.",
 			services: []configModel.ConfiguredService{
 				{
 					Id: testStatusWiringServiceID,
@@ -1669,10 +1669,10 @@ func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 					},
 				},
 			},
-			expectedPerTypeEnabled: false,
+			expectedPerTypeEnabled: true,
 		},
 		{
-			testName: "Case B: at least one credential has CredentialStatus.Enabled=true so PerType reflects the opt-in.",
+			testName: "Case B: credential with explicit CredentialStatus.Enabled=true.",
 			services: []configModel.ConfiguredService{
 				{
 					Id: testStatusWiringServiceID,
@@ -1681,7 +1681,7 @@ func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 							Credentials: []configModel.Credential{
 								{
 									Type:             testStatusWiringCredentialType,
-									CredentialStatus: configModel.CredentialStatus{Enabled: true},
+									CredentialStatus: configModel.CredentialStatus{Enabled: boolPtr(true)},
 								},
 							},
 						},
@@ -1739,7 +1739,7 @@ func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 			assert.NoError(t, err, "%s - getCredentialStatusValidationContext returned an unexpected error", tc.testName)
 			perTypeEntry, present := ctx.PerType[testStatusWiringCredentialType]
 			assert.True(t, present, "%s - PerType must contain the configured credential type", tc.testName)
-			assert.Equal(t, tc.expectedPerTypeEnabled, perTypeEntry.Enabled, "%s - PerType Enabled flag mismatch", tc.testName)
+			assert.Equal(t, tc.expectedPerTypeEnabled, perTypeEntry.IsEnabled(), "%s - PerType Enabled flag mismatch", tc.testName)
 
 			// No matter whether any credential opted in, validating with an
 			// empty PerType context must be a no-op — this covers Case A's
