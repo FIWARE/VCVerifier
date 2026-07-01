@@ -204,6 +204,10 @@ func (s *CredentialStatusValidationService) extractIETFStatusEntry(cred *common.
 
 // validateIETFStatus fetches the IETF Token Status List JWT referenced by
 // the entry and checks whether the bit at the entry's index is set.
+// When the index falls outside the cached bitstring, the cache entry is
+// evicted and a fresh copy is fetched once before returning an error.
+// This handles the race where a credential is issued with a new index
+// that extends the list beyond the previously cached size.
 func (s *CredentialStatusValidationService) validateIETFStatus(cred *common.Credential, entry *common.IETFStatusEntry) (bool, error) {
 	logging.Log().Debugf("Checking IETF Token Status List at %s, index %d", entry.URI, entry.Idx)
 
@@ -212,6 +216,18 @@ func (s *CredentialStatusValidationService) validateIETFStatus(cred *common.Cred
 		return false, fmt.Errorf("%w: IETF status list client not configured", ErrorStatusListHttpFailure)
 	}
 
+	valid, err := s.checkIETFStatusList(cred, entry)
+	if err != nil && errors.Is(err, common.ErrorStatusListIndexOutOfRange) {
+		logging.Log().Debugf("Index %d out of range for cached status list at %s, retrying with fresh fetch", entry.Idx, entry.URI)
+		s.ietfClient.InvalidateIETF(entry.URI)
+		return s.checkIETFStatusList(cred, entry)
+	}
+	return valid, err
+}
+
+// checkIETFStatusList performs a single fetch-decode-check cycle for
+// an IETF Token Status List entry.
+func (s *CredentialStatusValidationService) checkIETFStatusList(cred *common.Credential, entry *common.IETFStatusEntry) (bool, error) {
 	statusList, err := s.ietfClient.FetchIETF(entry.URI)
 	if err != nil {
 		logging.Log().Debugf("Failed to fetch IETF status list from %s: %v", entry.URI, err)
@@ -227,6 +243,9 @@ func (s *CredentialStatusValidationService) validateIETFStatus(cred *common.Cred
 	set, err := common.IsIETFStatusSet(bitstring, entry.Idx, statusList.Bits)
 	if err != nil {
 		logging.Log().Debugf("Failed to check IETF status bit at index %d from %s: %v", entry.Idx, entry.URI, err)
+		if errors.Is(err, common.ErrorStatusListIndexOutOfRange) {
+			return false, err
+		}
 		return false, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
 	if set {
