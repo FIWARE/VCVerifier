@@ -270,6 +270,10 @@ type IETFStatusListClient interface {
 	// FetchIETF fetches and returns the parsed IETF status list from the
 	// given URI. Implementations may cache results internally.
 	FetchIETF(uri string) (*common.IETFStatusList, error)
+
+	// InvalidateIETF removes a cached status list entry so the next
+	// FetchIETF call retrieves a fresh copy from the origin.
+	InvalidateIETF(uri string)
 }
 
 // StatusListJWTVerifier verifies the signature of an IETF Token Status List
@@ -514,6 +518,12 @@ func (c *CachingIETFStatusListClient) FetchIETF(uri string) (*common.IETFStatusL
 	c.cache.Set(uri, result.statusList, cacheExpiry)
 	logging.Log().Debugf("Cached IETF status-list for %s (expiry=%v)", uri, cacheExpiry)
 	return result.statusList, nil
+}
+
+// InvalidateIETF removes the cached status list for the given URI so the
+// next FetchIETF call fetches a fresh copy from the origin server.
+func (c *CachingIETFStatusListClient) InvalidateIETF(uri string) {
+	c.cache.Delete(uri)
 }
 
 // verifyAndExtractPayload validates the JWT `typ` header, verifies the
