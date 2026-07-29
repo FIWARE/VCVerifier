@@ -6,12 +6,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Verificador OpenID4VC</title>
-    <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
+    <link rel="icon" type="image/x-icon" href="{{.prefix}}/static/img/favicon.ico">
     <meta name="wsUrl" content="{{.wsUrl}}">
     <meta name="qrDuration" content="{{.qrDuration}}">
     <meta name="qrExpireAt" content="{{.qrExpireAt}}">
-    <link href="/static/css/main.min.css" rel="stylesheet">
-    <script src="/static/js/app.js" defer> </script>
+    <meta name="basePath" content="{{.prefix}}">
+    <link href="{{.prefix}}/static/css/main.min.css" rel="stylesheet">
+    <script src="{{.prefix}}/static/js/app.js" defer> </script>
 </head>
 
 <body
@@ -21,7 +22,7 @@
         <div class="max-w-5xl mx-auto flex justify-between items-center">
             <div class="flex items-center">
                 <a href="https://www.fiware.org/" class="block">
-                    <img src="/static/img/logo.png" alt="FIWARE" class="h-10 w-auto object-contain hover:opacity-80" />
+                    <img src="{{.prefix}}/static/img/logo.png" alt="FIWARE" class="h-10 w-auto object-contain hover:opacity-80" />
                 </a>
             </div>
 

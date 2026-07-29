@@ -111,6 +111,7 @@ type Verifier interface {
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
 	GetRequestObject(state string) (jwt string, err error)
 	GetHost() string
+	GetPathPrefix() string
 	GetAuthorizationType(clientId string) string
 	GetDefaultScope(serviceIdentifier string) (string, error)
 	// ExchangeRefreshToken atomically consumes a refresh token and returns a
@@ -135,6 +136,8 @@ type ValidationService interface {
 type CredentialVerifier struct {
 	// host of the verifier
 	host string
+	// path prefix to be prepended to server-built URLs that are not derived from host
+	pathPrefix string
 	// did of the verifier
 	did string
 	// trusted-issuers-registry to be used for verification
@@ -391,34 +394,37 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		err = nil
 	}
 
+	pathPrefix := config.Server.NormalizedPathPrefix()
+
 	verifier = &CredentialVerifier{
-		(&config.Server).Host,
-		verifierConfig.Did,
-		verifierConfig.TirAddress,
-		key,
-		sessionCache,
-		tokenCache,
-		&randomGenerator{},
-		clock,
-		common.JwtTokenSigner{},
-		credentialsConfig,
-		[]ValidationService{
+		host:              strings.TrimSuffix((&config.Server).Host, "/") + pathPrefix,
+		pathPrefix:        pathPrefix,
+		did:               verifierConfig.Did,
+		tirAddress:        verifierConfig.TirAddress,
+		signingKey:        key,
+		sessionCache:      sessionCache,
+		tokenCache:        tokenCache,
+		nonceGenerator:    &randomGenerator{},
+		clock:             clock,
+		tokenSigner:       common.JwtTokenSigner{},
+		credentialsConfig: credentialsConfig,
+		validationServices: []ValidationService{
 			&credentialsVerifier,
 			&externalGaiaXValidator,
 			&trustedParticipantVerificationService,
 			&trustedIssuerVerificationService,
 			&credentialStatusVerificationService,
 		},
-		verifierConfig.KeyAlgorithm,
-		verifierConfig.SupportedModes,
-		&didSigningKey,
-		verifierConfig.ClientIdentification,
-		*verifierConfig,
-		time.Duration(verifierConfig.JwtExpiration) * time.Minute,
-		time.Duration(verifierConfig.SessionExpiry),
-		verifierConfig.RefreshToken.Enabled,
-		time.Duration(verifierConfig.RefreshToken.Expiration) * time.Minute,
-		nil, // refreshTokenRepo — set below when enabled
+		signingAlgorithm:       verifierConfig.KeyAlgorithm,
+		supportedRequestModes:  verifierConfig.SupportedModes,
+		requestSigningKey:      &didSigningKey,
+		clientIdentification:   verifierConfig.ClientIdentification,
+		verifierConfig:         *verifierConfig,
+		jwtExpiration:          time.Duration(verifierConfig.JwtExpiration) * time.Minute,
+		sessionDuration:        time.Duration(verifierConfig.SessionExpiry),
+		refreshTokenEnabled:    verifierConfig.RefreshToken.Enabled,
+		refreshTokenExpiration: time.Duration(verifierConfig.RefreshToken.Expiration) * time.Minute,
+		refreshTokenRepo:       nil, // set below when enabled
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
@@ -527,7 +533,7 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 		return authenticationRequest, err
 	}
 
-	authResponseUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
+	authResponseUri := fmt.Sprintf("%s://%s%s/api/v1/authentication_response", protocol, host, v.pathPrefix)
 	if requestProtocol == OPENID4VP_PROTOCOL {
 		return v.generateAuthenticationRequest(requestProtocol+"://", clientId, scope, authResponseUri, state, nonce, loginSession, requestMode)
 	} else {
@@ -1281,7 +1287,7 @@ func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string,
 		logging.Log().Warnf("Was not able to store the login session %s in cache.", logging.PrettyPrintObject(loginSession))
 		return authenticationRequest, err
 	}
-	authResponseUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
+	authResponseUri := fmt.Sprintf("%s://%s%s/api/v1/authentication_response", protocol, host, v.pathPrefix)
 
 	return v.generateAuthenticationRequest("openid4vp://", clientId, scope, authResponseUri, state, nonce, loginSession, requestMode)
 }
@@ -1300,7 +1306,7 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 		logging.Log().Warnf("Was not able to store the login session %s in cache.", logging.PrettyPrintObject(loginSession))
 		return authenticationRequest, err
 	}
-	redirectUri := fmt.Sprintf("%s://%s/api/v1/authentication_response", protocol, host)
+	redirectUri := fmt.Sprintf("%s://%s%s/api/v1/authentication_response", protocol, host, v.pathPrefix)
 
 	return v.generateAuthenticationRequest("openid4vp://", clientId, "", redirectUri, state, nonce, loginSession, requestMode)
 }
@@ -1628,6 +1634,10 @@ func loadCertChainFromPEM(path string) ([]*x509.Certificate, error) {
 
 func (v *CredentialVerifier) GetHost() string {
 	return v.host
+}
+
+func (v *CredentialVerifier) GetPathPrefix() string {
+	return v.pathPrefix
 }
 
 // IsRefreshTokenEnabled reports whether the refresh token feature is active.
