@@ -238,14 +238,14 @@ func AuthorizationEndpoint(c *gin.Context) {
 			return
 		}
 	case FRONTEND_V2:
-		redirect = buildFrontendV2Address(protocol, c.Request.Host, state, clientId, redirectUri, scope, nonce)
+		redirect = buildFrontendV2Address(protocol, c.Request.Host, getApiVerifier().GetPathPrefix(), state, clientId, redirectUri, scope, nonce)
 	}
 	c.Redirect(http.StatusFound, redirect)
 }
 
-func buildFrontendV2Address(protocol, host, state, clientId, redirectUri, scope, nonce string) string {
-	logging.Log().Debugf("%s://%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, state, clientId, redirectUri, scope, nonce)
-	return fmt.Sprintf("%s://%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, state, clientId, redirectUri, scope, nonce)
+func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri, scope, nonce string) string {
+	logging.Log().Debugf("%s://%s%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, prefix, state, clientId, redirectUri, scope, nonce)
+	return fmt.Sprintf("%s://%s%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=byReference", protocol, host, prefix, state, clientId, redirectUri, scope, nonce)
 }
 
 // GetToken - Token endpoint to exchange the authorization code with the actual JWT.

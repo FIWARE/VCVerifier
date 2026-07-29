@@ -113,9 +113,10 @@ func main() {
 		}
 	}
 
-	router := getRouter()
+	pathPrefix := configuration.Server.NormalizedPathPrefix()
+	router := getRouter(pathPrefix)
 
-	// health check
+	// health check - stays unprefixed regardless of pathPrefix
 	router.GET("/health", HealthReq)
 
 	allowedOrigins := ResolveAllowedOrigins(configuration.ConfigRepo.Services)
@@ -131,7 +132,7 @@ func main() {
 	//new template engine
 	router.HTMLRender = ginview.Default()
 	// static files for the frontend
-	router.Static("/static", configuration.Server.StaticDir)
+	router.Group(pathPrefix).Static("/static", configuration.Server.StaticDir)
 
 	templateDir := configuration.Server.TemplateDir
 	if templateDir != "" {
@@ -271,7 +272,7 @@ func getConfigRouter(db *sql.DB, repo database.ServiceRepository) *gin.Engine {
 }
 
 // initiate the router
-func getRouter() *gin.Engine {
+func getRouter(pathPrefix string) *gin.Engine {
 
 	// the openapi generated router uses the defaults, which we want to override to improve and configure logging
 	writer := logging.GetGinInternalWriter()
@@ -281,8 +282,9 @@ func getRouter() *gin.Engine {
 
 	router.Use(logging.GinHandlerFunc(), gin.Recovery())
 
+	group := router.Group(pathPrefix)
 	for _, route := range api.NewRouter().Routes() {
-		router.Handle(route.Method, route.Path, route.HandlerFunc)
+		group.Handle(route.Method, route.Path, route.HandlerFunc)
 	}
 
 	return router

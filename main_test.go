@@ -505,6 +505,47 @@ func TestResolveAllowedOrigins(t *testing.T) {
 	}
 }
 
+func TestGetRouter_MountsRoutesUnderPrefix(t *testing.T) {
+	router := getRouter("/myservice")
+
+	routes := router.Routes()
+	routeMap := make(map[string]bool)
+	for _, r := range routes {
+		routeMap[r.Method+" "+r.Path] = true
+	}
+
+	assert.True(t, routeMap["GET /myservice/.well-known/jwks"], "expected route to be registered under the prefix")
+	assert.False(t, routeMap["GET /.well-known/jwks"], "unprefixed route should not exist once a prefix is configured")
+}
+
+func TestGetRouter_NoPrefixMatchesTodayBehavior(t *testing.T) {
+	router := getRouter("")
+
+	routes := router.Routes()
+	routeMap := make(map[string]bool)
+	for _, r := range routes {
+		routeMap[r.Method+" "+r.Path] = true
+	}
+
+	assert.True(t, routeMap["GET /.well-known/jwks"], "with no prefix configured, routes should be registered at their bare paths")
+}
+
+func TestGetRouter_HealthAndMetricsStayUnprefixed(t *testing.T) {
+	router := getRouter("/myservice")
+	// registered the same way main() does: directly on the raw engine, not the prefixed group
+	router.GET("/health", HealthReq)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code, "/health must stay reachable at root")
+
+	req = httptest.NewRequest(http.MethodGet, "/myservice/health", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code, "/health must not additionally be available under the prefix")
+}
+
 // Ensure init() sets gin to test mode without interfering with other tests
 func init() {
 	gin.SetMode(gin.TestMode)

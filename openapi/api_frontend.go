@@ -79,7 +79,7 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 		return
 	}
 
-	c.HTML(http.StatusOK, "verifier_present_qr", gin.H{"qrcode": qr})
+	c.HTML(http.StatusOK, "verifier_present_qr", gin.H{"qrcode": qr, "prefix": getFrontendVerifier().GetPathPrefix()})
 }
 
 // VerifierLoginQr - Presents a qr as starting point for the auth process
@@ -153,6 +153,7 @@ func VerifierLoginQr(c *gin.Context) {
 		"qrExpireAt":  qrInfo.ExpireAt.UnixMilli(),
 		"qrDuration":  qrInfo.TotalDuration,
 		"authRequest": template.URL(qrInfo.AuthenticationRequest),
+		"prefix":      getFrontendVerifier().GetPathPrefix(),
 	})
 }
 
