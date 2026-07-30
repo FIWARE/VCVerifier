@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/fiware/VCVerifier/logging"
 )
@@ -107,6 +108,8 @@ type Server struct {
 	TemplateDir string `mapstructure:"templateDir" default:"views/"`
 	// directory of static files to be provided, f.e. to be used inside the templates
 	StaticDir string `mapstructure:"staticDir" default:"views/static/"`
+	// PathPrefix is prepended to all routes and static assets except /health and /metrics
+	PathPrefix string `mapstructure:"pathPrefix" default:""`
 
 	// ReadTimeout is the maximum duration for reading the entire request, including the body.
 	ReadTimeout int `mapstructure:"readTimeout" default:"5"`
@@ -116,6 +119,23 @@ type Server struct {
 	IdleTimeout int `mapstructure:"idleTimeout" default:"120"`
 	// ShutdownTimeout is the time allowed for active requests to finish during shutdown.
 	ShutdownTimeout int `mapstructure:"shutdownTimeout" default:"5"`
+}
+
+// NormalizedPathPrefix returns PathPrefix in a form safe to use both as a
+// gin.RouterGroup prefix and as a string-concatenation prefix for
+// server-built URLs. Unset ("") and an explicit "/" both mean "no prefix"
+// and normalize to "", the identity value for both use sites. Any other
+// value is trimmed of a trailing slash and given a leading slash if missing.
+func (s Server) NormalizedPathPrefix() string {
+	prefix := strings.TrimSpace(s.PathPrefix)
+	prefix = strings.TrimSuffix(prefix, "/")
+	if prefix == "" {
+		return ""
+	}
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	return prefix
 }
 
 // configuration for M2M interaction

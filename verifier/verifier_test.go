@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"math/big"
@@ -465,6 +466,70 @@ func TestStartSameDeviceFlow(t *testing.T) {
 		})
 	}
 
+}
+
+// extractResponseUri decodes the (unsigned) JWT payload embedded in a
+// REQUEST_MODE_BY_VALUE authentication request and returns its response_uri claim.
+func extractResponseUri(t *testing.T, authRequest string) string {
+	t.Helper()
+	parsed, err := url.Parse(authRequest)
+	if err != nil {
+		t.Fatalf("Was not able to parse authentication request as URL: %v", err)
+	}
+	request := parsed.Query().Get("request")
+	parts := strings.Split(request, ".")
+	if len(parts) < 2 {
+		t.Fatalf("Expected a JWT with at least header.payload, got %s", request)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("Was not able to base64-decode the JWT payload: %v", err)
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("Was not able to unmarshal the JWT payload: %v", err)
+	}
+	responseUri, _ := claims["response_uri"].(string)
+	return responseUri
+}
+
+func TestStartSameDeviceFlow_ResponseUriIncludesPathPrefix(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	testKey := getECDSAKey()
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
+	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
+
+	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-state", "/redirect", "", "", REQUEST_MODE_BY_VALUE, "", "")
+	assert.NoError(t, err)
+	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
+}
+
+func TestStartSiopFlow_ResponseUriIncludesPathPrefix(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	testKey := getECDSAKey()
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
+	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
+
+	authReq, err := verifier.StartSiopFlow("verifier.org", "https", "/redirect", "my-state", "", "", REQUEST_MODE_BY_VALUE)
+	assert.NoError(t, err)
+	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
+}
+
+func TestInitOid4VPCrossDevice_ResponseUriIncludesPathPrefix(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	testKey := getECDSAKey()
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
+	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
+
+	authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE)
+	assert.NoError(t, err)
+	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }
 
 type mockExternalSsiKit struct {
@@ -1062,6 +1127,12 @@ func getOpenIdProviderMetadataTests() []openIdProviderMetadataTest {
 				Issuer:                           verifierHost,
 				ScopesSupported:                  []string{},
 				IdTokenSigningAlgValuesSupported: []string{"EdDSA"}}},
+		{testName: "Test OIDC metadata with a path prefix baked into host", serviceIdentifier: "serviceId", host: verifierHost + "/myservice",
+			credentialScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {}}, mockConfigError: nil,
+			expectedOpenID: common.OpenIDProviderMetadata{
+				Issuer:                           verifierHost + "/myservice",
+				ScopesSupported:                  []string{},
+				IdTokenSigningAlgValuesSupported: []string{}}},
 	}
 }
 
@@ -1083,8 +1154,17 @@ func TestGetOpenIDConfiguration(t *testing.T) {
 			for _, alg := range tc.expectedOpenID.IdTokenSigningAlgValuesSupported {
 				assert.True(t, slices.Contains(actualOpenID.IdTokenSigningAlgValuesSupported, alg))
 			}
+			// the discovery doc derives everything from host, so a path prefix baked
+			// into host (as InitVerifier does) must propagate to every endpoint URL.
+			assert.Contains(t, actualOpenID.TokenEndpoint, tc.host)
+			assert.Contains(t, actualOpenID.JwksUri, tc.host)
 		})
 	}
+}
+
+func TestGetPathPrefix(t *testing.T) {
+	v := CredentialVerifier{pathPrefix: "/myservice"}
+	assert.Equal(t, "/myservice", v.GetPathPrefix())
 }
 
 func TestRemoveDuplicate(t *testing.T) {

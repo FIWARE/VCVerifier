@@ -59,7 +59,8 @@ class LocaleManager {
   async setLanguage(lang) {
     try {
       if (!this.cache.has(lang)) {
-        const response = await fetch(`/static/locales/${lang}.json`);
+        const basePath = document.querySelector('meta[name="basePath"]')?.getAttribute('content') || '';
+        const response = await fetch(`${basePath}/static/locales/${lang}.json`);
         const data = await response.json();
         this.cache.set(lang, data);
       }

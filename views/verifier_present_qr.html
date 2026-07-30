@@ -4,19 +4,20 @@
 <html>
     <head>
         <meta charset="utf-8" />
-        <link href="/static/css/w3pro.css" rel="stylesheet">
-        <link href="/static/css/mystyle.css" rel="stylesheet">
-        <link href="/static/css/prism.css" rel="stylesheet">
-    
+        <link href="{{.prefix}}/static/css/w3pro.css" rel="stylesheet">
+        <link href="{{.prefix}}/static/css/mystyle.css" rel="stylesheet">
+        <link href="{{.prefix}}/static/css/prism.css" rel="stylesheet">
+
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#919597">
+        <meta name="basePath" content="{{.prefix}}">
         <title>Credential Verifier</title>
-    
+
     </head>
-    
+
     <body>
         <div class="w3-bar w3-card color-primary w3-margin-bottom w3-large">
-            <a class="w3-bar-item w3-right" href="https://www.fiware.org/"><img src="/static/img/logo.png" alt="FIWARE" style="width:222px;height:50px;">
+            <a class="w3-bar-item w3-right" href="https://www.fiware.org/"><img src="{{.prefix}}/static/img/logo.png" alt="FIWARE" style="width:222px;height:50px;">
             </a>
         </div>
         <main class="w3-container w3-center">

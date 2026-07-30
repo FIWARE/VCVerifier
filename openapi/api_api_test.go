@@ -52,6 +52,7 @@ type mockVerifier struct {
 	mockExchangeExpiration  int64
 	mockExchangeRefresh     string
 	mockExchangeError       error
+	mockPathPrefix          string
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
@@ -88,6 +89,10 @@ func (mV *mockVerifier) GetOpenIDConfiguration(serviceIdentifier string) (metada
 }
 func (mV *mockVerifier) GetHost() string {
 	return ""
+}
+
+func (mV *mockVerifier) GetPathPrefix() string {
+	return mV.mockPathPrefix
 }
 
 // TODO
@@ -684,6 +689,25 @@ func TestGetPresentationFromQuery(t *testing.T) {
 			if !tc.expectedNonNil && parsed != nil {
 				t.Errorf("%s - Expected nil presentation (so caller can fall through) but got %v.", tc.testName, parsed)
 				return
+			}
+		})
+	}
+}
+
+func TestBuildFrontendV2Address(t *testing.T) {
+	tests := []struct {
+		testName string
+		prefix   string
+		want     string
+	}{
+		{testName: "No prefix configured, path is unchanged", prefix: "", want: "https://verifier.org/api/v2/loginQR?state=my-state&client_id=my-client&redirect_uri=https://wallet.example/callback&scope=&nonce=my-nonce&request_mode=byReference"},
+		{testName: "Prefix is inserted before the loginQR path", prefix: "/myservice", want: "https://verifier.org/myservice/api/v2/loginQR?state=my-state&client_id=my-client&redirect_uri=https://wallet.example/callback&scope=&nonce=my-nonce&request_mode=byReference"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce")
+			if actual != tc.want {
+				t.Errorf("%s - Expected %s but was %s", tc.testName, tc.want, actual)
 			}
 		})
 	}
