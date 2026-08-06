@@ -325,7 +325,9 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	sessionCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 	tokenCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 
-	credentialsVerifier := CredentialValidator{validationMode: config.Verifier.ValidationMode}
+	clock := common.RealClock{}
+
+	credentialsVerifier := CredentialValidator{validationMode: config.Verifier.ValidationMode, clock: clock}
 
 	externalGaiaXValidator := InitGaiaXRegistryValidationService(verifierConfig)
 
@@ -333,8 +335,6 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate the credentials config. Err: %v", err)
 	}
-
-	clock := common.RealClock{}
 
 	var tokenProvider tir.TokenProvider
 	if (&config.M2M).AuthEnabled {
