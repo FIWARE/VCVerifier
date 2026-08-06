@@ -3,6 +3,7 @@ package verifier
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
@@ -23,12 +24,15 @@ const (
 )
 
 var (
-	ErrorNoVerificationKey          = errors.New("no_verification_key")
-	ErrorNotAValidVerficationMethod = errors.New("not_a_valid_verfication_method")
-	ErrorNoOriginalCredential       = errors.New("no_original_credential_for_validation")
-	ErrorCredentialMissingIssuer    = errors.New("credential_missing_issuer")
-	ErrorCredentialMissingType      = errors.New("credential_missing_type")
-	ErrorCredentialNonBaseType      = errors.New("credential_contains_non_base_context_type")
+	ErrorNoVerificationKey               = errors.New("no_verification_key")
+	ErrorNotAValidVerficationMethod      = errors.New("not_a_valid_verfication_method")
+	ErrorNoOriginalCredential            = errors.New("no_original_credential_for_validation")
+	ErrorCredentialMissingIssuer         = errors.New("credential_missing_issuer")
+	ErrorCredentialMissingType           = errors.New("credential_missing_type")
+	ErrorCredentialNonBaseType           = errors.New("credential_contains_non_base_context_type")
+	ErrorCredentialExpired               = errors.New("credential_expired")
+	ErrorCredentialNotYetValid           = errors.New("credential_not_yet_valid")
+	ErrorCredentialInvalidValidityPeriod = errors.New("credential_invalid_validity_period")
 )
 
 var SupportedModes = []string{ValidationModeNone, ValidationModeCombined, ValidationModeJsonLd, ValidationModeBaseContext}
@@ -36,6 +40,15 @@ var SupportedModes = []string{ValidationModeNone, ValidationModeCombined, Valida
 // CredentialValidator validates credential content (not signatures — those are checked by JWTProofChecker).
 type CredentialValidator struct {
 	validationMode string
+	clock          common.Clock
+}
+
+// now returns the current time, falling back to time.Now() when no clock is injected.
+func (cv CredentialValidator) now() time.Time {
+	if cv.clock == nil {
+		return time.Now()
+	}
+	return cv.clock.Now()
 }
 
 // the jwt-vc standard defines multiple options for the kid-header, while the standard implementation only allows for absolute paths.
@@ -77,7 +90,11 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 }
 
 // ValidateVC validates credential content. Signature verification is handled separately by JWTProofChecker.
+// Temporal validity (validFrom/validUntil) is always enforced regardless of mode.
 func (cv CredentialValidator) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error) {
+	if ok, err := validateCredentialDates(verifiableCredential.Contents(), cv.now()); !ok {
+		return false, err
+	}
 
 	switch cv.validationMode {
 	case ValidationModeNone:
@@ -106,7 +123,7 @@ func validateCredentialContent(cred *common.Credential) (bool, error) {
 	return true, nil
 }
 
-// validateBaseContext checks that the credential uses only W3C base context types.
+// validateBaseContext checks that the credential uses only W3C base context types and is temporally valid.
 var baseContextTypes = map[string]bool{
 	TypeVerifiableCredential:   true,
 	TypeVerifiablePresentation: true,
@@ -123,6 +140,25 @@ func validateBaseContext(cred *common.Credential) (bool, error) {
 			logging.Log().Warnf("Credential validation failed: non-base-context type %s", t)
 			return false, ErrorCredentialNonBaseType
 		}
+	}
+	return true, nil
+}
+
+// validateCredentialDates checks validFrom and validUntil against now, both bounds inclusive:
+// the credential is valid for now in [validFrom, validUntil]. A zero-length validity period
+// (validFrom == validUntil) is always rejected. Either field being absent is not an error.
+func validateCredentialDates(contents common.CredentialContents, now time.Time) (bool, error) {
+	if contents.ValidFrom != nil && contents.ValidUntil != nil && contents.ValidFrom.Equal(*contents.ValidUntil) {
+		logging.Log().Warnf("Credential validation failed: zero-length validity period (validFrom == validUntil: %s)", contents.ValidFrom.Format(time.RFC3339))
+		return false, ErrorCredentialInvalidValidityPeriod
+	}
+	if contents.ValidFrom != nil && now.Before(*contents.ValidFrom) {
+		logging.Log().Warnf("Credential validation failed: not yet valid (validFrom: %s, now: %s)", contents.ValidFrom.Format(time.RFC3339), now.Format(time.RFC3339))
+		return false, ErrorCredentialNotYetValid
+	}
+	if contents.ValidUntil != nil && now.After(*contents.ValidUntil) {
+		logging.Log().Warnf("Credential validation failed: expired (validUntil: %s, now: %s)", contents.ValidUntil.Format(time.RFC3339), now.Format(time.RFC3339))
+		return false, ErrorCredentialExpired
 	}
 	return true, nil
 }
