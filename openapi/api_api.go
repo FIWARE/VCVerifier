@@ -720,27 +720,20 @@ func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentatio
 
 // checks if the presented token contains a single sd-jwt credential. Will be repackage to a presentation for further validation
 func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *common.Presentation, err error) {
-	claims, err := getSdJwtParser().Parse(vpToken)
+	sdJwtParser := getSdJwtParser()
+	claims, err := sdJwtParser.Parse(vpToken)
 	if err != nil {
 		logging.Log().Debugf("Was not a sdjwt. Err: %v", err)
 		return false, presentation, err
 	}
 	issuer, i_ok := claims[common.JWTClaimIss]
-	vct, vct_ok := claims[common.JWTClaimVct]
+	_, vct_ok := claims[common.JWTClaimVct]
 	if !i_ok || !vct_ok {
 		// Not an SD-JWT VC (missing iss or vct) — let other parsers handle it
 		logging.Log().Debugf("Token does not contain issuer(%v) or vct(%v), not an SD-JWT VC.", i_ok, vct_ok)
 		return false, presentation, nil
 	}
-	customFields := common.CustomFields{}
-	for k, v := range claims {
-		if k != common.JWTClaimIss && k != common.JWTClaimVct {
-			customFields[k] = v
-		}
-	}
-	subject := common.Subject{CustomFields: customFields}
-	contents := common.CredentialContents{Issuer: &common.Issuer{ID: issuer.(string)}, Types: []string{vct.(string)}, Subject: []common.Subject{subject}}
-	credential, err := common.CreateCredential(contents, common.CustomFields{})
+	credential, err := sdJwtParser.ClaimsToCredential(claims)
 	if err != nil {
 		logging.Log().Infof("Was not able to create credential from sdJwt. E: %v", err)
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidSdJwt)
