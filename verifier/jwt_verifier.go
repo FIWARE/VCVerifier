@@ -148,6 +148,7 @@ func validateBaseContext(cred *common.Credential) (bool, error) {
 // the credential is valid for now in [validFrom, validUntil]. A zero-length validity period
 // (validFrom == validUntil) is always rejected. Either field being absent is not an error.
 func validateCredentialDates(contents common.CredentialContents, now time.Time) (bool, error) {
+	logging.Log().Debugf("Validating credential dates: validFrom=%v, validUntil=%v, now=%v", contents.ValidFrom, contents.ValidUntil, now)
 	if contents.ValidFrom != nil && contents.ValidUntil != nil && contents.ValidFrom.Equal(*contents.ValidUntil) {
 		logging.Log().Warnf("Credential validation failed: zero-length validity period (validFrom == validUntil: %s)", contents.ValidFrom.Format(time.RFC3339))
 		return false, ErrorCredentialInvalidValidityPeriod

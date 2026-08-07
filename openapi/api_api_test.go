@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -543,6 +544,45 @@ func getValidSDJwtToken() string {
 
 func getNoVCVPToken() string {
 	return "ewogICJAY29udGV4dCI6IFsKICAgICJodHRwczovL3d3dy53My5vcmcvMjAxOC9jcmVkZW50aWFscy92MSIKICBdLAogICJ0eXBlIjogWwogICAgIlZlcmlmaWFibGVQcmVzZW50YXRpb24iCiAgXSwKICAiaWQiOiAiZWJjNmYxYzIiLAogICJob2xkZXIiOiB7CiAgICAiaWQiOiAiZGlkOmtleTp6Nk1rczltOWlmTHd5M0pXcUg0YzU3RWJCUVZTMlNwUkNqZmE3OXdIYjV2V002dmgiCiAgfSwKICAicHJvb2YiOiB7CiAgICAidHlwZSI6ICJKc29uV2ViU2lnbmF0dXJlMjAyMCIsCiAgICAiY3JlYXRvciI6ICJkaWQ6a2V5Ono2TWtzOW05aWZMd3kzSldxSDRjNTdFYkJRVlMyU3BSQ2pmYTc5d0hiNXZXTTZ2aCIsCiAgICAiY3JlYXRlZCI6ICIyMDIzLTAxLTA2VDA3OjUxOjM2WiIsCiAgICAidmVyaWZpY2F0aW9uTWV0aG9kIjogImRpZDprZXk6ejZNa3M5bTlpZkx3eTNKV3FINGM1N0ViQlFWUzJTcFJDamZhNzl3SGI1dldNNnZoI3o2TWtzOW05aWZMd3kzSldxSDRjNTdFYkJRVlMyU3BSQ2pmYTc5d0hiNXZXTTZ2aCIsCiAgICAiandzIjogImV5SmlOalFpT21aaGJITmxMQ0pqY21sMElqcGJJbUkyTkNKZExDSmhiR2NpT2lKRlpFUlRRU0o5Li42eFNxb1pqYTBOd2pGMGFmOVprbnF4M0NiaDlHRU51bkJmOUM4dUwydWxHZnd1czNVRk1fWm5oUGpXdEhQbC03MkU5cDNCVDVmMnB0Wm9Za3RNS3BEQSIKICB9Cn0"
+}
+
+func TestIsSdJWT_MapsValidityDates(t *testing.T) {
+	// Single SD-JWT VC token (not wrapped in a vp claim) — the shape produced when a
+	// wallet responds with {"<query_id>": ["<sd-jwt-vc>~<disclosures>~<kb-jwt>"]}.
+	header := map[string]interface{}{"alg": "ES256", "typ": "vc+sd-jwt"}
+	payload := map[string]interface{}{
+		"iss": "did:web:issuer.example.com",
+		"vct": "VerifiableCredential",
+		"iat": 1700000000,
+		"exp": 1800000000,
+	}
+	headerBytes, _ := json.Marshal(header)
+	payloadBytes, _ := json.Marshal(payload)
+	token := base64.RawURLEncoding.EncodeToString(headerBytes) + "." +
+		base64.RawURLEncoding.EncodeToString(payloadBytes) + ".fakesig~"
+
+	sdJwtParser = &verifier.ConfigurableSdJwtParser{}
+	recorder := httptest.NewRecorder()
+	testContext, _ := gin.CreateTestContext(recorder)
+
+	isSdJwt, presentation, err := isSdJWT(testContext, token)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if !isSdJwt {
+		t.Fatal("Expected token to be recognized as SD-JWT")
+	}
+	creds := presentation.Credentials()
+	if len(creds) != 1 {
+		t.Fatalf("Expected 1 credential, got %d", len(creds))
+	}
+	contents := creds[0].Contents()
+	if contents.ValidFrom == nil || contents.ValidFrom.Unix() != 1700000000 {
+		t.Errorf("Expected ValidFrom from iat, got %v", contents.ValidFrom)
+	}
+	if contents.ValidUntil == nil || contents.ValidUntil.Unix() != 1800000000 {
+		t.Errorf("Expected ValidUntil from exp, got %v", contents.ValidUntil)
+	}
 }
 
 func newTestProofChecker() *verifier.JWTProofChecker {

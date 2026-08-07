@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
@@ -178,6 +179,55 @@ func TestClaimsToCredential_MissingVct(t *testing.T) {
 	}
 }
 
+func TestClaimsToCredential_MapsValidityDates(t *testing.T) {
+	parser := &ConfigurableSdJwtParser{}
+	claims := map[string]interface{}{
+		"iss":  "did:web:issuer.example.com",
+		"vct":  "VerifiableCredential",
+		"name": "Alice",
+		"iat":  1700000000.0,
+		"exp":  1800000000.0,
+	}
+
+	cred, err := parser.ClaimsToCredential(claims)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	contents := cred.Contents()
+	if contents.ValidFrom == nil || contents.ValidFrom.Unix() != 1700000000 {
+		t.Errorf("Expected ValidFrom from iat, got %v", contents.ValidFrom)
+	}
+	if contents.ValidUntil == nil || contents.ValidUntil.Unix() != 1800000000 {
+		t.Errorf("Expected ValidUntil from exp, got %v", contents.ValidUntil)
+	}
+	// iat/exp should not leak into the subject's custom fields
+	if _, ok := contents.Subject[0].CustomFields["iat"]; ok {
+		t.Error("iat should not be in custom fields")
+	}
+	if _, ok := contents.Subject[0].CustomFields["exp"]; ok {
+		t.Error("exp should not be in custom fields")
+	}
+}
+
+func TestClaimsToCredential_NbfTakesPrecedenceOverIat(t *testing.T) {
+	parser := &ConfigurableSdJwtParser{}
+	claims := map[string]interface{}{
+		"iss": "did:web:issuer.example.com",
+		"vct": "VerifiableCredential",
+		"nbf": 1650000000.0,
+		"iat": 1700000000.0,
+	}
+
+	cred, err := parser.ClaimsToCredential(claims)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	contents := cred.Contents()
+	if contents.ValidFrom == nil || contents.ValidFrom.Unix() != 1650000000 {
+		t.Errorf("Expected ValidFrom from nbf, got %v", contents.ValidFrom)
+	}
+}
+
 // --- Tests for ParseWithSdJwt ---
 
 // helper to build a fake JWT token with a given payload
@@ -331,6 +381,58 @@ func TestParseWithSdJwt_RejectsUnverifiableVCSignature(t *testing.T) {
 	}
 }
 
+// --- Tests for JSON-LD VC parsing ---
+
+func TestParseJSONLDCredential_MapsV1IssuanceExpirationDates(t *testing.T) {
+	vcMap := map[string]interface{}{
+		"@context":       []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"type":           []interface{}{"VerifiableCredential"},
+		"issuer":         "did:web:issuer.example.com",
+		"issuanceDate":   "2023-11-14T22:13:20Z",
+		"expirationDate": "2023-11-16T01:20:00Z",
+		"credentialSubject": map[string]interface{}{
+			"id": "did:web:subject.example.com",
+		},
+	}
+
+	cred, err := parseJSONLDCredential(vcMap)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	contents := cred.Contents()
+	if contents.ValidFrom == nil || contents.ValidFrom.Format(time.RFC3339) != "2023-11-14T22:13:20Z" {
+		t.Errorf("Expected ValidFrom from issuanceDate, got %v", contents.ValidFrom)
+	}
+	if contents.ValidUntil == nil || contents.ValidUntil.Format(time.RFC3339) != "2023-11-16T01:20:00Z" {
+		t.Errorf("Expected ValidUntil from expirationDate, got %v", contents.ValidUntil)
+	}
+}
+
+func TestParseJSONLDCredential_MapsV2ValidFromValidUntil(t *testing.T) {
+	vcMap := map[string]interface{}{
+		"@context":   []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":       []interface{}{"VerifiableCredential"},
+		"issuer":     "did:web:issuer.example.com",
+		"validFrom":  "2023-11-14T22:13:20Z",
+		"validUntil": "2023-11-16T01:20:00Z",
+		"credentialSubject": map[string]interface{}{
+			"id": "did:web:subject.example.com",
+		},
+	}
+
+	cred, err := parseJSONLDCredential(vcMap)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	contents := cred.Contents()
+	if contents.ValidFrom == nil || contents.ValidFrom.Format(time.RFC3339) != "2023-11-14T22:13:20Z" {
+		t.Errorf("Expected ValidFrom from validFrom, got %v", contents.ValidFrom)
+	}
+	if contents.ValidUntil == nil || contents.ValidUntil.Format(time.RFC3339) != "2023-11-16T01:20:00Z" {
+		t.Errorf("Expected ValidUntil from validUntil, got %v", contents.ValidUntil)
+	}
+}
+
 // --- Tests for JSON-LD VP parsing ---
 
 func TestParseJSONLDPresentation(t *testing.T) {
@@ -409,6 +511,35 @@ func TestJwtClaimsToCredential(t *testing.T) {
 	}
 	if contents.ValidUntil == nil {
 		t.Error("Expected ValidUntil to be set")
+	}
+}
+
+func TestJwtClaimsToCredential_FallsBackToLegacyVcDates(t *testing.T) {
+	// No top-level nbf/iat/exp — a JWT-VC 1.0 style credential carrying
+	// issuanceDate/expirationDate inside the vc claim instead.
+	claims := map[string]interface{}{
+		"iss": "did:web:issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context":       []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":           []interface{}{"VerifiableCredential"},
+			"issuanceDate":   "2023-11-14T22:13:20Z",
+			"expirationDate": "2023-11-16T01:20:00Z",
+			"credentialSubject": map[string]interface{}{
+				"id": "did:web:subject.example.com",
+			},
+		},
+	}
+
+	cred, err := jwtClaimsToCredential(claims)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	contents := cred.Contents()
+	if contents.ValidFrom == nil || contents.ValidFrom.Format(time.RFC3339) != "2023-11-14T22:13:20Z" {
+		t.Errorf("Expected ValidFrom from legacy issuanceDate, got %v", contents.ValidFrom)
+	}
+	if contents.ValidUntil == nil || contents.ValidUntil.Format(time.RFC3339) != "2023-11-16T01:20:00Z" {
+		t.Errorf("Expected ValidUntil from legacy expirationDate, got %v", contents.ValidUntil)
 	}
 }
 
