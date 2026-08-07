@@ -44,6 +44,7 @@ type PresentationParser interface {
 type SdJwtParser interface {
 	Parse(tokenString string) (map[string]interface{}, error)
 	ParseWithSdJwt(tokenBytes []byte) (presentation *common.Presentation, err error)
+	ClaimsToCredential(claims map[string]interface{}) (credential *common.Credential, err error)
 }
 
 type ConfigurablePresentationParser struct {
@@ -304,6 +305,19 @@ func jwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, e
 		t := time.Unix(int64(exp), 0)
 		contents.ValidUntil = &t
 	}
+	// Fall back to issuanceDate/expirationDate embedded in the vc claim (JWT-VC 1.0 style,
+	// used before nbf/exp became the standard mapping for validity dates).
+	if vcClaim != nil {
+		if contents.ValidFrom == nil || contents.ValidUntil == nil {
+			legacyFrom, legacyUntil := common.ParseCredentialDates(vcClaim)
+			if contents.ValidFrom == nil {
+				contents.ValidFrom = legacyFrom
+			}
+			if contents.ValidUntil == nil {
+				contents.ValidUntil = legacyUntil
+			}
+		}
+	}
 
 	// Preserve cnf (confirmation) claim for cryptographic holder binding (RFC 7800).
 	if cnf, ok := claims[common.JWTClaimCnf]; ok {
@@ -430,6 +444,8 @@ func parseJSONLDCredential(vcMap map[string]interface{}) (*common.Credential, er
 		}
 	}
 
+	contents.ValidFrom, contents.ValidUntil = common.ParseCredentialDates(vcMap)
+
 	if subject, ok := vcMap[common.VCKeyCredentialSubject].(map[string]interface{}); ok {
 		s := common.Subject{CustomFields: common.CustomFields{}}
 		if id, ok := subject[common.JSONLDKeyID].(string); ok {
@@ -475,14 +491,28 @@ func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interfa
 		logging.Log().Warnf("Token does not contain issuer(%v) or vct(%v).", i_ok, vct_ok)
 		return credential, ErrorInvalidSdJwt
 	}
+	dateClaims := map[string]bool{common.JWTClaimNbf: true, common.JWTClaimIat: true, common.JWTClaimExp: true}
 	customFields := common.CustomFields{}
 	for k, v := range claims {
-		if k != common.JWTClaimIss && k != common.JWTClaimVct {
+		if k != common.JWTClaimIss && k != common.JWTClaimVct && !dateClaims[k] {
 			customFields[k] = v
 		}
 	}
 	subject := common.Subject{CustomFields: customFields}
 	contents := common.CredentialContents{Issuer: &common.Issuer{ID: issuer.(string)}, Types: []string{vct.(string)}, Subject: []common.Subject{subject}}
+
+	if nbf, ok := claims[common.JWTClaimNbf].(float64); ok {
+		t := time.Unix(int64(nbf), 0)
+		contents.ValidFrom = &t
+	} else if iat, ok := claims[common.JWTClaimIat].(float64); ok {
+		t := time.Unix(int64(iat), 0)
+		contents.ValidFrom = &t
+	}
+	if exp, ok := claims[common.JWTClaimExp].(float64); ok {
+		t := time.Unix(int64(exp), 0)
+		contents.ValidUntil = &t
+	}
+
 	return common.CreateCredential(contents, common.CustomFields{})
 }
 

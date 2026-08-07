@@ -5,6 +5,33 @@ import (
 	"time"
 )
 
+// ParseCredentialDates extracts validFrom/validUntil (VC Data Model 2.0) from a raw VC
+// JSON object, falling back to their VC Data Model 1.0/1.1 equivalents issuanceDate/
+// expirationDate when the 2.0 properties are absent.
+func ParseCredentialDates(raw JSONObject) (validFrom, validUntil *time.Time) {
+	if vf, ok := raw[VCKeyValidFrom].(string); ok {
+		if t, err := time.Parse(time.RFC3339, vf); err == nil {
+			validFrom = &t
+		}
+	} else if vf, ok := raw[VCKeyIssuanceDate].(string); ok {
+		if t, err := time.Parse(time.RFC3339, vf); err == nil {
+			validFrom = &t
+		}
+	}
+
+	if vu, ok := raw[VCKeyValidUntil].(string); ok {
+		if t, err := time.Parse(time.RFC3339, vu); err == nil {
+			validUntil = &t
+		}
+	} else if vu, ok := raw[VCKeyExpirationDate].(string); ok {
+		if t, err := time.Parse(time.RFC3339, vu); err == nil {
+			validUntil = &t
+		}
+	}
+
+	return validFrom, validUntil
+}
+
 // ParseCredentialJSON parses a Verifiable Credential from its JSON representation.
 func ParseCredentialJSON(data []byte) (*Credential, error) {
 	var raw JSONObject
@@ -36,27 +63,7 @@ func ParseCredentialJSON(data []byte) (*Credential, error) {
 		}
 	}
 
-	// validFrom (VC v2) or issuanceDate (VC v1)
-	if vf, ok := raw[VCKeyValidFrom].(string); ok {
-		if t, err := time.Parse(time.RFC3339, vf); err == nil {
-			contents.ValidFrom = &t
-		}
-	} else if vf, ok := raw[VCKeyIssuanceDate].(string); ok {
-		if t, err := time.Parse(time.RFC3339, vf); err == nil {
-			contents.ValidFrom = &t
-		}
-	}
-
-	// validUntil (VC v2) or expirationDate (VC v1)
-	if vu, ok := raw[VCKeyValidUntil].(string); ok {
-		if t, err := time.Parse(time.RFC3339, vu); err == nil {
-			contents.ValidUntil = &t
-		}
-	} else if vu, ok := raw[VCKeyExpirationDate].(string); ok {
-		if t, err := time.Parse(time.RFC3339, vu); err == nil {
-			contents.ValidUntil = &t
-		}
-	}
+	contents.ValidFrom, contents.ValidUntil = ParseCredentialDates(raw)
 
 	if cs, ok := raw[VCKeyCredentialSubject]; ok {
 		contents.Subject = parseSubjects(cs)
