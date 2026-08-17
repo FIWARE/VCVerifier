@@ -22,6 +22,7 @@ var ErrorNoValidationEndpoint = errors.New("no_validation_endpoint_configured")
 var ErrorNoValidationHost = errors.New("no_validation_host_configured")
 var ErrorInvalidSdJwt = errors.New("credential_is_not_sd_jwt")
 var ErrorPresentationNoCredentials = errors.New("presentation_not_contains_credentials")
+var ErrorPresentationNoHolder = errors.New("presentation_not_contains_holder")
 var ErrorInvalidProof = errors.New("invalid_vp_proof")
 var ErrorVCNotArray = errors.New("verifiable_credential_not_array")
 var ErrorInvalidJWTFormat = errors.New("invalid_jwt_format")
@@ -519,9 +520,11 @@ func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interfa
 func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentation *common.Presentation, err error) {
 	logging.Log().Debug("Parse with SD-Jwt")
 
-	tokenString := string(tokenBytes)
-	payloadString := strings.Split(tokenString, ".")[1]
-	payloadBytes, _ := base64.RawURLEncoding.DecodeString(payloadString)
+	payloadBytes, err := extractJWTPayload(tokenBytes)
+	if err != nil {
+		logging.Log().Warnf("Failed to extract the VP payload: %v", err)
+		return nil, err
+	}
 
 	var vpMap map[string]interface{}
 	if err := json.Unmarshal(payloadBytes, &vpMap); err != nil {
@@ -546,12 +549,28 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 		return nil, err
 	}
 
-	presentation.Holder = vp[common.VPKeyHolder].(string)
+	holder, ok := vp[common.VPKeyHolder].(string)
+	if !ok {
+		logging.Log().Warn("VP does not contain a string holder")
+		return nil, ErrorPresentationNoHolder
+	}
+	presentation.Holder = holder
+
+	vcArray, ok := vcs.([]interface{})
+	if !ok {
+		logging.Log().Warn("The verifiableCredential entry is not an array")
+		return nil, ErrorVCNotArray
+	}
 
 	// due to dcql, we only need to take care of presentations containing credentials of the same type.
-	for _, vc := range vcs.([]interface{}) {
-		logging.Log().Debugf("The vc %s", vc.(string))
-		parsed, err := sjp.Parse(vc.(string))
+	for _, vc := range vcArray {
+		vcString, ok := vc.(string)
+		if !ok {
+			logging.Log().Warn("The presentation contains a credential that is not an sd-jwt string")
+			return nil, ErrorInvalidSdJwt
+		}
+		logging.Log().Debugf("The vc %s", vcString)
+		parsed, err := sjp.Parse(vcString)
 		if err != nil {
 			logging.Log().Warnf("Failed to parse SD-JWT VC: %v", err)
 			return nil, err

@@ -276,6 +276,76 @@ func TestParseWithSdJwt_MalformedPayload(t *testing.T) {
 	}
 }
 
+// TestParseWithSdJwt_RejectsTokensWithoutPayloadSegment covers tokens that do not have a payload
+// segment at all. Such a token reaches the parser whenever decodeVpString cannot decode the vp_token
+// and hands the raw string over, e.g. for a base64 encoded dcql response - and must not panic.
+func TestParseWithSdJwt_RejectsTokensWithoutPayloadSegment(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+	}{
+		// base64 of {"mc-query":"a.b.c"}, the shape a padded dcql response degrades into
+		{"padded_base64_dcql_response", "eyJtYy1xdWVyeSI6ImEuYi5jIn0="},
+		{"empty_token", ""},
+		{"no_separator", "notajwt"},
+		{"header_only", "eyJhbGciOiJFUzI1NiJ9"},
+	}
+
+	parser := &ConfigurableSdJwtParser{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parser.ParseWithSdJwt([]byte(tc.token))
+			if err != ErrorInvalidJWTFormat {
+				t.Errorf("Expected ErrorInvalidJWTFormat, got %v", err)
+			}
+		})
+	}
+}
+
+func TestParseWithSdJwt_MissingHolder(t *testing.T) {
+	parser := &ConfigurableSdJwtParser{}
+	token := buildFakeJWT(map[string]interface{}{
+		"vp": map[string]interface{}{
+			"verifiableCredential": []interface{}{"some-sd-jwt"},
+		},
+	})
+
+	_, err := parser.ParseWithSdJwt([]byte(token))
+	if err != ErrorPresentationNoHolder {
+		t.Errorf("Expected ErrorPresentationNoHolder, got %v", err)
+	}
+}
+
+func TestParseWithSdJwt_VerifiableCredentialNotAnArray(t *testing.T) {
+	parser := &ConfigurableSdJwtParser{}
+	token := buildFakeJWT(map[string]interface{}{
+		"vp": map[string]interface{}{
+			"holder":               "did:web:holder",
+			"verifiableCredential": map[string]interface{}{"id": "urn:vc:1"},
+		},
+	})
+
+	_, err := parser.ParseWithSdJwt([]byte(token))
+	if err != ErrorVCNotArray {
+		t.Errorf("Expected ErrorVCNotArray, got %v", err)
+	}
+}
+
+func TestParseWithSdJwt_CredentialNotAString(t *testing.T) {
+	parser := &ConfigurableSdJwtParser{}
+	token := buildFakeJWT(map[string]interface{}{
+		"vp": map[string]interface{}{
+			"holder":               "did:web:holder",
+			"verifiableCredential": []interface{}{map[string]interface{}{"id": "urn:vc:1"}},
+		},
+	})
+
+	_, err := parser.ParseWithSdJwt([]byte(token))
+	if err != ErrorInvalidSdJwt {
+		t.Errorf("Expected ErrorInvalidSdJwt, got %v", err)
+	}
+}
+
 // --- Tests for VP signature verification ---
 
 // buildSignedJWT creates a properly signed JWT with the given payload using a random EC key.
