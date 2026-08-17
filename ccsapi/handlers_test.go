@@ -363,6 +363,41 @@ func TestGetService_Success(t *testing.T) {
 	assert.Equal(t, "default", resp.DefaultOidcScope)
 }
 
+func TestGetService_TrustedIssuersListsSerializeAsPlainURLs(t *testing.T) {
+	repo := &mockServiceRepository{
+		getServiceFn: func(_ context.Context, id string) (config.ConfiguredService, error) {
+			return config.ConfiguredService{
+				Id:               id,
+				DefaultOidcScope: "default",
+				ServiceScopes: map[string]config.ScopeEntry{
+					"default": {
+						Credentials: []config.Credential{{
+							Type: "VerifiableCredential",
+							TrustedIssuersLists: config.TrustedIssuersLists{
+								{Type: "ebsi-v5", Url: "https://til-v5.example.com"},
+								{Type: "ebsi", Url: "https://til-v3.example.com"},
+							},
+						}},
+					},
+				},
+			}, nil
+		},
+	}
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/service/my-service", nil)
+	setupRouter(repo).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	scopes := raw["oidcScopes"].(map[string]interface{})
+	credentials := scopes["default"].(map[string]interface{})["credentials"].([]interface{})
+	trustedIssuersLists := credentials[0].(map[string]interface{})["trustedIssuersLists"]
+	assert.Equal(t, []interface{}{"https://til-v5.example.com", "https://til-v3.example.com"}, trustedIssuersLists)
+}
+
 func TestGetService_NotFound(t *testing.T) {
 	repo := &mockServiceRepository{
 		getServiceFn: func(_ context.Context, _ string) (config.ConfiguredService, error) {

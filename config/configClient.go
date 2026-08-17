@@ -327,6 +327,22 @@ func (t *TrustedIssuersLists) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON always serializes as a plain array of URL strings, dropping the
+// per-entry Type. This is the API-facing representation: config.Credential
+// (and thus TrustedIssuersLists) is embedded directly in ccsapi request/response
+// bodies, and callers only need the endpoint URLs. Type is an internal-only
+// concern (dispatches between ebsi/ebsi-v5/gaia-x lookups, see
+// trustedparticipant.go) that is never surfaced over the API and is untouched
+// on the database persistence path, which round-trips through the separate
+// CredentialDB model instead of this type's JSON methods.
+func (t TrustedIssuersLists) MarshalJSON() ([]byte, error) {
+	urls := make([]string, len(t))
+	for i, entry := range t {
+		urls[i] = entry.Url
+	}
+	return json.Marshal(urls)
+}
+
 // trustedIssuersListsType is the reflect.Type for TrustedIssuersLists, cached
 // to avoid repeated reflect calls in the decode hook.
 var trustedIssuersListsType = reflect.TypeOf(TrustedIssuersLists{})
