@@ -2195,3 +2195,75 @@ func TestAuthenticationResponse_V5ValidationServices(t *testing.T) {
 		})
 	}
 }
+
+// TestGetHolderValidationContext verifies that one validation context is built per credential type with
+// holder verification enabled. Every enabled type has to survive: dropping one silently skips its holder
+// check in GenerateToken.
+func TestGetHolderValidationContext(t *testing.T) {
+
+	logging.Configure(LOGGING_CONFIG)
+
+	credentialsWithHolderVerification := func(credentials ...configModel.Credential) map[string]map[string]configModel.ScopeEntry {
+		return map[string]map[string]configModel.ScopeEntry{
+			"my-service": {"my-scope": configModel.ScopeEntry{Credentials: credentials}},
+		}
+	}
+	enabled := func(credentialType, claim string) configModel.Credential {
+		return configModel.Credential{Type: credentialType, HolderVerification: configModel.HolderVerification{Enabled: true, Claim: claim}}
+	}
+	disabled := func(credentialType string) configModel.Credential {
+		return configModel.Credential{Type: credentialType, HolderVerification: configModel.HolderVerification{Enabled: false}}
+	}
+
+	type test struct {
+		testName        string
+		mockScopes      map[string]map[string]configModel.ScopeEntry
+		mockError       error
+		credentialTypes []string
+		expectedClaims  []string
+		expectedError   error
+	}
+
+	configError := errors.New("config_error")
+
+	tests := []test{
+		{testName: "Every type with holder verification enabled should get its own context.",
+			mockScopes:      credentialsWithHolderVerification(enabled("TypeA", "subject"), enabled("TypeB", "sub.holder")),
+			credentialTypes: []string{"TypeA", "TypeB"},
+			expectedClaims:  []string{"subject", "sub.holder"}},
+		{testName: "Types with holder verification disabled should be skipped.",
+			mockScopes:      credentialsWithHolderVerification(enabled("TypeA", "subject"), disabled("TypeB"), enabled("TypeC", "otherClaim")),
+			credentialTypes: []string{"TypeA", "TypeB", "TypeC"},
+			expectedClaims:  []string{"subject", "otherClaim"}},
+		{testName: "If no type has holder verification enabled, no context should be created.",
+			mockScopes:      credentialsWithHolderVerification(disabled("TypeA"), disabled("TypeB")),
+			credentialTypes: []string{"TypeA", "TypeB"},
+			expectedClaims:  []string{}},
+		{testName: "If the config cannot be read, the error should be returned.",
+			mockScopes:      credentialsWithHolderVerification(enabled("TypeA", "subject")),
+			mockError:       configError,
+			credentialTypes: []string{"TypeA"},
+			expectedError:   configError},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			v := CredentialVerifier{credentialsConfig: mockCredentialConfig{mockScopes: tc.mockScopes, mockError: tc.mockError}}
+
+			validationContexts, err := v.getHolderValidationContext("my-service", "my-scope", tc.credentialTypes, "did:web:holder")
+
+			if tc.expectedError != nil {
+				assert.Equal(t, tc.expectedError, err)
+				return
+			}
+			assert.NoError(t, err)
+
+			claims := []string{}
+			for _, validationContext := range validationContexts {
+				claims = append(claims, validationContext.GetClaim())
+				assert.Equal(t, "did:web:holder", validationContext.GetHolder(), "every context should carry the presented holder")
+			}
+			assert.Equal(t, tc.expectedClaims, claims)
+		})
+	}
+}
