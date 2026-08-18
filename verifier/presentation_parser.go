@@ -22,7 +22,6 @@ var ErrorNoValidationEndpoint = errors.New("no_validation_endpoint_configured")
 var ErrorNoValidationHost = errors.New("no_validation_host_configured")
 var ErrorInvalidSdJwt = errors.New("credential_is_not_sd_jwt")
 var ErrorPresentationNoCredentials = errors.New("presentation_not_contains_credentials")
-var ErrorPresentationNoHolder = errors.New("presentation_not_contains_holder")
 var ErrorInvalidProof = errors.New("invalid_vp_proof")
 var ErrorVCNotArray = errors.New("verifiable_credential_not_array")
 var ErrorInvalidJWTFormat = errors.New("invalid_jwt_format")
@@ -549,12 +548,11 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 		return nil, err
 	}
 
-	holder, ok := vp[common.VPKeyHolder].(string)
-	if !ok {
-		logging.Log().Warn("VP does not contain a string holder")
-		return nil, ErrorPresentationNoHolder
+	// the holder is optional here, mirroring parseJSONLDPresentation and parseJWTPresentation. Holder binding
+	// for sd-jwts is done via the kb-jwt, not via this claim, so a missing one must not reject the presentation.
+	if holder, ok := vp[common.VPKeyHolder].(string); ok {
+		presentation.Holder = holder
 	}
-	presentation.Holder = holder
 
 	vcArray, ok := vcs.([]interface{})
 	if !ok {

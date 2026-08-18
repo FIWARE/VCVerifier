@@ -302,17 +302,32 @@ func TestParseWithSdJwt_RejectsTokensWithoutPayloadSegment(t *testing.T) {
 	}
 }
 
-func TestParseWithSdJwt_MissingHolder(t *testing.T) {
-	parser := &ConfigurableSdJwtParser{}
-	token := buildFakeJWT(map[string]interface{}{
-		"vp": map[string]interface{}{
-			"verifiableCredential": []interface{}{"some-sd-jwt"},
-		},
-	})
+// TestParseWithSdJwt_MissingHolderIsAccepted documents that the holder is optional, just like it is in
+// parseJSONLDPresentation and parseJWTPresentation. Wallets do not have to send it for sd-jwt presentations,
+// since holder binding is done via the kb-jwt.
+func TestParseWithSdJwt_MissingHolderIsAccepted(t *testing.T) {
+	tests := []struct {
+		name string
+		vp   map[string]interface{}
+	}{
+		{"absent_holder", map[string]interface{}{"verifiableCredential": []interface{}{}}},
+		{"non_string_holder", map[string]interface{}{"holder": map[string]interface{}{"not": "a string"}, "verifiableCredential": []interface{}{}}},
+	}
 
-	_, err := parser.ParseWithSdJwt([]byte(token))
-	if err != ErrorPresentationNoHolder {
-		t.Errorf("Expected ErrorPresentationNoHolder, got %v", err)
+	parser := &ConfigurableSdJwtParser{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := buildFakeJWT(map[string]interface{}{"vp": tc.vp})
+
+			presentation, err := parser.ParseWithSdJwt([]byte(token))
+			if err != nil {
+				t.Errorf("Expected no error, got %v", err)
+				return
+			}
+			if presentation.Holder != "" {
+				t.Errorf("Expected an empty holder, got %s", presentation.Holder)
+			}
+		})
 	}
 }
 
