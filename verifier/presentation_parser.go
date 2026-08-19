@@ -519,9 +519,11 @@ func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interfa
 func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentation *common.Presentation, err error) {
 	logging.Log().Debug("Parse with SD-Jwt")
 
-	tokenString := string(tokenBytes)
-	payloadString := strings.Split(tokenString, ".")[1]
-	payloadBytes, _ := base64.RawURLEncoding.DecodeString(payloadString)
+	payloadBytes, err := extractJWTPayload(tokenBytes)
+	if err != nil {
+		logging.Log().Warnf("Failed to extract the VP payload: %v", err)
+		return nil, err
+	}
 
 	var vpMap map[string]interface{}
 	if err := json.Unmarshal(payloadBytes, &vpMap); err != nil {
@@ -546,12 +548,27 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 		return nil, err
 	}
 
-	presentation.Holder = vp[common.VPKeyHolder].(string)
+	// the holder is optional here, mirroring parseJSONLDPresentation and parseJWTPresentation. Holder binding
+	// for sd-jwts is done via the kb-jwt, not via this claim, so a missing one must not reject the presentation.
+	if holder, ok := vp[common.VPKeyHolder].(string); ok {
+		presentation.Holder = holder
+	}
+
+	vcArray, ok := vcs.([]interface{})
+	if !ok {
+		logging.Log().Warn("The verifiableCredential entry is not an array")
+		return nil, ErrorVCNotArray
+	}
 
 	// due to dcql, we only need to take care of presentations containing credentials of the same type.
-	for _, vc := range vcs.([]interface{}) {
-		logging.Log().Debugf("The vc %s", vc.(string))
-		parsed, err := sjp.Parse(vc.(string))
+	for _, vc := range vcArray {
+		vcString, ok := vc.(string)
+		if !ok {
+			logging.Log().Warn("The presentation contains a credential that is not an sd-jwt string")
+			return nil, ErrorInvalidSdJwt
+		}
+		logging.Log().Debugf("The vc %s", vcString)
+		parsed, err := sjp.Parse(vcString)
 		if err != nil {
 			logging.Log().Warnf("Failed to parse SD-JWT VC: %v", err)
 			return nil, err
