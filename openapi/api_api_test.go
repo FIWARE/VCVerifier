@@ -675,7 +675,9 @@ func buildSignedVPToken(t *testing.T) string {
 //   - OID4VP draft 25+:    {"<query_id>": ["<presentation>", ...]}
 // Both must be accepted (backward-compatible). Inputs that are neither a query
 // map nor parseable as a single token must return (nil, nil) so the caller
-// falls through to the flat-string presentation parsing path.
+// falls through to the flat-string presentation parsing path. A token that is
+// base64, but not in the raw url-safe encoding OID4VP requires, must be rejected
+// with a 400 instead of falling through as an undecoded string.
 func TestGetPresentationFromQuery(t *testing.T) {
 
 	logging.Configure(LOGGING_CONFIG)
@@ -690,24 +692,28 @@ func TestGetPresentationFromQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to marshal draft 25+ query map: %v", err)
 	}
-	// clients that base64 encode the query map with a padding-emitting encoder(java, python) send a
-	// trailing '=', which used to be rejected and made the raw string fall through to the sd-jwt parser
+	// a spec-conform client base64url encodes the query map without padding
+	encodedStringShapeMap := base64.RawURLEncoding.EncodeToString(stringShapeMap)
+	// clients that encode it with a padding-emitting encoder(java, python) send a trailing '=' instead, which
+	// used to make the raw string fall through to the sd-jwt parser. It has to be reported, not compensated.
 	paddedStringShapeMap := base64.URLEncoding.EncodeToString(withBase64Padding(stringShapeMap))
-	paddedArrayShapeMap := base64.StdEncoding.EncodeToString(withBase64Padding(arrayShapeMap))
+	standardAlphabetArrayShapeMap := base64.StdEncoding.EncodeToString(withBase64Padding(arrayShapeMap))
 
 	type test struct {
 		testName       string
 		vpToken        string
 		expectedNonNil bool
+		expectedErr    error
 	}
 
 	tests := []test{
-		{"OID4VP drafts 22-24 single-string-shape query map should be parsed.", string(stringShapeMap), true},
-		{"OID4VP draft 25+ array-shape query map should be parsed.", string(arrayShapeMap), true},
-		{"A padded base64url encoded query map should be parsed.", paddedStringShapeMap, true},
-		{"A padded standard-base64 encoded query map should be parsed.", paddedArrayShapeMap, true},
-		{"A flat sd-jwt (no query map) should return nil so the caller falls through.", sdJwt, false},
-		{"A non-JSON token should return nil so the caller falls through.", "this-is-not-json", false},
+		{"OID4VP drafts 22-24 single-string-shape query map should be parsed.", string(stringShapeMap), true, nil},
+		{"OID4VP draft 25+ array-shape query map should be parsed.", string(arrayShapeMap), true, nil},
+		{"A raw base64url encoded query map should be parsed.", encodedStringShapeMap, true, nil},
+		{"A padded base64url encoded query map should be rejected.", paddedStringShapeMap, false, ErrorInvalidTokenEncoding},
+		{"A standard-alphabet base64 encoded query map should be rejected.", standardAlphabetArrayShapeMap, false, ErrorInvalidTokenEncoding},
+		{"A flat sd-jwt (no query map) should return nil so the caller falls through.", sdJwt, false, nil},
+		{"A non-JSON token should return nil so the caller falls through.", "this-is-not-json", false, nil},
 	}
 
 	for _, tc := range tests {
@@ -724,6 +730,16 @@ func TestGetPresentationFromQuery(t *testing.T) {
 
 			parsed, parseErr := getPresentationFromQuery(testContext, tc.vpToken)
 
+			if tc.expectedErr != nil {
+				if parseErr != tc.expectedErr {
+					t.Errorf("%s - Expected error %v but was %v", tc.testName, tc.expectedErr, parseErr)
+					return
+				}
+				if recorder.Code != http.StatusBadRequest {
+					t.Errorf("%s - Expected the request to be answered with a 400 but was %d.", tc.testName, recorder.Code)
+				}
+				return
+			}
 			if parseErr != nil {
 				t.Errorf("%s - Unexpected error: %v", tc.testName, parseErr)
 				return
@@ -777,25 +793,30 @@ func TestDecodeVpString(t *testing.T) {
 	decoded := []byte{0xfb, 0xff, 0xbe, 0x2a}
 
 	type test struct {
-		testName string
-		vpToken  string
-		expected []byte
+		testName    string
+		vpToken     string
+		expected    []byte
+		expectedErr error
 	}
 
 	tests := []test{
-		{"Raw base64url should be decoded.", base64.RawURLEncoding.EncodeToString(decoded), decoded},
-		{"Padded base64url should be decoded.", base64.URLEncoding.EncodeToString(decoded), decoded},
-		{"Raw standard base64 should be decoded.", base64.RawStdEncoding.EncodeToString(decoded), decoded},
-		{"Padded standard base64 should be decoded.", base64.StdEncoding.EncodeToString(decoded), decoded},
-		{"A compact jwt should be returned unchanged.", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig", []byte("eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig")},
-		{"An sd-jwt should be returned unchanged.", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig~disclosure~", []byte("eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig~disclosure~")},
-		{"A plain json query map should be returned unchanged.", `{"lpc-query":"a.b.c"}`, []byte(`{"lpc-query":"a.b.c"}`)},
-		{"A non-base64 string should be returned unchanged.", "this-is-not-base64!", []byte("this-is-not-base64!")},
+		{"Raw base64url, the only encoding OID4VP allows, should be decoded.", base64.RawURLEncoding.EncodeToString(decoded), decoded, nil},
+		{"Padded base64url should be rejected.", base64.URLEncoding.EncodeToString(decoded), nil, ErrorInvalidTokenEncoding},
+		{"Raw standard base64 should be rejected.", base64.RawStdEncoding.EncodeToString(decoded), nil, ErrorInvalidTokenEncoding},
+		{"Padded standard base64 should be rejected.", base64.StdEncoding.EncodeToString(decoded), nil, ErrorInvalidTokenEncoding},
+		{"A compact jwt should be returned unchanged.", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig", []byte("eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig"), nil},
+		{"An sd-jwt should be returned unchanged.", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig~disclosure~", []byte("eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig~disclosure~"), nil},
+		{"A plain json query map should be returned unchanged.", `{"lpc-query":"a.b.c"}`, []byte(`{"lpc-query":"a.b.c"}`), nil},
+		{"A non-base64 string should be returned unchanged.", "this-is-not-base64!", []byte("this-is-not-base64!"), nil},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
-			actual := decodeVpString(tc.vpToken)
+			actual, err := decodeVpString(tc.vpToken)
+			if err != tc.expectedErr {
+				t.Errorf("%s - Expected error %v but was %v", tc.testName, tc.expectedErr, err)
+				return
+			}
 			if !bytes.Equal(actual, tc.expected) {
 				t.Errorf("%s - Expected %s but was %s", tc.testName, tc.expected, actual)
 			}
