@@ -750,13 +750,18 @@ func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *common
 	return true, presentation, nil
 }
 
-// decodeVpString - In newer versions of OID4VP the token is not encoded as a whole but only its segments separately. This function covers the older and newer versions
+// decodeVpString - In newer versions of OID4VP the token is not encoded as a whole but only its segments separately. This function covers the older and newer versions.
+// While the spec asks for raw(unpadded) base64url, clients do emit padded and/or standard-alphabet base64 - e.g. javas Base64.getUrlEncoder() without withoutPadding()
+// or pythons base64.b64encode() - so all four variants are accepted. A token that is not base64 at all(a compact JWT, an SD-JWT or a plain json dcql response) is
+// returned unchanged, since '.', '~', '{', '"' and ':' are not part of any base64 alphabet and thus can never be decoded by accident.
 func decodeVpString(vpToken string) (tokenBytes []byte) {
-	tokenBytes, err := base64.RawURLEncoding.DecodeString(vpToken)
-	if err != nil {
-		return []byte(vpToken)
+	for _, encoding := range []*base64.Encoding{base64.RawURLEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.StdEncoding} {
+		if decodedBytes, err := encoding.DecodeString(vpToken); err == nil {
+			return decodedBytes
+		}
 	}
-	return tokenBytes
+	logging.Log().Debugf("The token is not base64 encoded, using it as is.")
+	return []byte(vpToken)
 }
 
 func handleAuthenticationResponse(c *gin.Context, state string, presentation *common.Presentation) {

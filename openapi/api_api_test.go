@@ -690,6 +690,10 @@ func TestGetPresentationFromQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to marshal draft 25+ query map: %v", err)
 	}
+	// clients that base64 encode the query map with a padding-emitting encoder(java, python) send a
+	// trailing '=', which used to be rejected and made the raw string fall through to the sd-jwt parser
+	paddedStringShapeMap := base64.URLEncoding.EncodeToString(withBase64Padding(stringShapeMap))
+	paddedArrayShapeMap := base64.StdEncoding.EncodeToString(withBase64Padding(arrayShapeMap))
 
 	type test struct {
 		testName       string
@@ -700,6 +704,8 @@ func TestGetPresentationFromQuery(t *testing.T) {
 	tests := []test{
 		{"OID4VP drafts 22-24 single-string-shape query map should be parsed.", string(stringShapeMap), true},
 		{"OID4VP draft 25+ array-shape query map should be parsed.", string(arrayShapeMap), true},
+		{"A padded base64url encoded query map should be parsed.", paddedStringShapeMap, true},
+		{"A padded standard-base64 encoded query map should be parsed.", paddedArrayShapeMap, true},
 		{"A flat sd-jwt (no query map) should return nil so the caller falls through.", sdJwt, false},
 		{"A non-JSON token should return nil so the caller falls through.", "this-is-not-json", false},
 	}
@@ -748,6 +754,50 @@ func TestBuildFrontendV2Address(t *testing.T) {
 			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce")
 			if actual != tc.want {
 				t.Errorf("%s - Expected %s but was %s", tc.testName, tc.want, actual)
+			}
+		})
+	}
+}
+
+// withBase64Padding appends json-insignificant whitespace until the length is not a multiple of 3, so
+// that encoding the result is guaranteed to emit '=' padding regardless of the fixture that is used.
+func withBase64Padding(raw []byte) []byte {
+	for len(raw)%3 == 0 {
+		raw = append(raw, ' ')
+	}
+	return raw
+}
+
+func TestDecodeVpString(t *testing.T) {
+
+	logging.Configure(LOGGING_CONFIG)
+
+	// 4 bytes, so the encodings emit padding, and chosen so that the standard alphabet uses '+' and '/'
+	// where the url-safe one uses '-' and '_' - the four encodings therefore produce four distinct strings
+	decoded := []byte{0xfb, 0xff, 0xbe, 0x2a}
+
+	type test struct {
+		testName string
+		vpToken  string
+		expected []byte
+	}
+
+	tests := []test{
+		{"Raw base64url should be decoded.", base64.RawURLEncoding.EncodeToString(decoded), decoded},
+		{"Padded base64url should be decoded.", base64.URLEncoding.EncodeToString(decoded), decoded},
+		{"Raw standard base64 should be decoded.", base64.RawStdEncoding.EncodeToString(decoded), decoded},
+		{"Padded standard base64 should be decoded.", base64.StdEncoding.EncodeToString(decoded), decoded},
+		{"A compact jwt should be returned unchanged.", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig", []byte("eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig")},
+		{"An sd-jwt should be returned unchanged.", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig~disclosure~", []byte("eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJtZSJ9.sig~disclosure~")},
+		{"A plain json query map should be returned unchanged.", `{"lpc-query":"a.b.c"}`, []byte(`{"lpc-query":"a.b.c"}`)},
+		{"A non-base64 string should be returned unchanged.", "this-is-not-base64!", []byte("this-is-not-base64!")},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			actual := decodeVpString(tc.vpToken)
+			if !bytes.Equal(actual, tc.expected) {
+				t.Errorf("%s - Expected %s but was %s", tc.testName, tc.expected, actual)
 			}
 		})
 	}
