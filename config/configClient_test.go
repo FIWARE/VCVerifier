@@ -368,6 +368,56 @@ func TestTrustedIssuersLists_UnmarshalJSON(t *testing.T) {
 	}
 }
 
+func TestTrustedIssuersLists_MarshalJSON(t *testing.T) {
+	type testCase struct {
+		name     string
+		input    TrustedIssuersLists
+		expected string
+	}
+
+	tests := []testCase{
+		{
+			name: "mixed types collapse to plain URLs",
+			input: TrustedIssuersLists{
+				{Type: "ebsi-v5", Url: "https://v5.example.com"},
+				{Type: "ebsi", Url: "https://v3.example.com"},
+			},
+			expected: `["https://v5.example.com","https://v3.example.com"]`,
+		},
+		{
+			name:     "empty list",
+			input:    TrustedIssuersLists{},
+			expected: `[]`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := json.Marshal(tc.input)
+			assert.NoError(t, err)
+			assert.JSONEq(t, tc.expected, string(got))
+		})
+	}
+}
+
+// TestTrustedIssuersLists_RoundTripAsymmetry documents that the API-facing
+// serialization is intentionally asymmetric: reading (UnmarshalJSON) still
+// accepts the structured {type,url} format so non-default types can be
+// configured, but writing (MarshalJSON) always collapses to plain URLs.
+// Keeping Unmarshal permissive avoids a breaking change for existing callers
+// that send the structured format.
+func TestTrustedIssuersLists_RoundTripAsymmetry(t *testing.T) {
+	input := `[{"type":"ebsi-v5","url":"https://v5.example.com"}]`
+
+	var parsed TrustedIssuersLists
+	assert.NoError(t, json.Unmarshal([]byte(input), &parsed))
+	assert.Equal(t, "ebsi-v5", parsed[0].Type)
+
+	out, err := json.Marshal(parsed)
+	assert.NoError(t, err)
+	assert.JSONEq(t, `["https://v5.example.com"]`, string(out))
+}
+
 func TestTrustedIssuersListsDecodeHook(t *testing.T) {
 	hook := TrustedIssuersListsDecodeHook()
 
