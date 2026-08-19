@@ -1123,20 +1123,20 @@ outer:
 	return nil
 }
 
-func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope string, credentialTypes []string, holder string) (validationContext []HolderValidationContext, err error) {
-	validationContexts := []HolderValidationContext{}
+func (v *CredentialVerifier) getHolderValidationContext(clientId string, scope string, credentialTypes []string, holder string) (validationContexts []HolderValidationContext, err error) {
+	validationContexts = []HolderValidationContext{}
 	for _, credentialType := range credentialTypes {
 		isEnabled, claim, err := v.credentialsConfig.GetHolderVerification(clientId, scope, credentialType)
 		if err != nil {
 			logging.Log().Warnf("Was not able to get valid holder verification config for client %s, scope %s and type %s. Err: %v", clientId, scope, credentialType, err)
-			return validationContext, err
+			return nil, err
 		}
 		if !isEnabled {
 			continue
 		}
-		validationContexts = append(validationContext, HolderValidationContext{claim: claim, holder: holder})
+		validationContexts = append(validationContexts, HolderValidationContext{claim: claim, holder: holder})
 	}
-	return validationContexts, err
+	return validationContexts, nil
 }
 
 func (v *CredentialVerifier) getTrustRegistriesValidationContext(clientId string, credentialTypes []string, scope string) (verificationContext TrustRegistriesValidationContext, err error) {
