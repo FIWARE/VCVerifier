@@ -53,6 +53,7 @@ var ErrorMessageNoToken = ErrorMessage{"no_token_provided", "Authentication requ
 var ErrorMessageNoPresentationSubmission = ErrorMessage{"no_presentation_submission_provided", "Authentication requires a presentation submission provided as a form parameter."}
 var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback address has to be provided as query-parameter."}
 var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could not be decoded."}
+var ErrorMessageInvalidTokenEncoding = ErrorMessage{"invalid_token", "The vp_token has to be base64url encoded without padding."}
 var ErrorMessageUnableToDecodeCredential = ErrorMessage{"invalid_token", "Could not read the credential(s) inside the token."}
 var ErrorMessageUnableToDecodeHolder = ErrorMessage{"invalid_token", "Could not read the holder inside the token."}
 var ErrorMessageNoSuchSession = ErrorMessage{"no_session", "Session with the requested id is not available."}
@@ -67,6 +68,8 @@ var ErrorMessageInvalidSubjectTokenType = ErrorMessage{"invalid_subject_token_ty
 var ErrorMessageInvalidRequestedTokenType = ErrorMessage{"invalid_requested_token_type", "Token exchange is only supported for requesting tokens of type urn:ietf:params:oauth:token-type:access_token."}
 var ErrorMessageNoRefreshToken = ErrorMessage{"no_refresh_token_provided", "Refresh token requests require a refresh_token."}
 var ErrorMessageInvalidRefreshToken = ErrorMessage{"invalid_refresh_token", "The provided refresh token is invalid or expired."}
+
+var ErrorInvalidTokenEncoding = errors.New("invalid_token_encoding")
 
 func getApiVerifier() verifier.Verifier {
 	if apiVerifier == nil {
@@ -633,7 +636,12 @@ func extractVpFromToken(c *gin.Context, vpToken string) (parsedPresentation *com
 }
 
 func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *common.Presentation, err error) {
-	tokenBytes := decodeVpString(vpToken)
+	tokenBytes, err := decodeVpString(vpToken)
+	if err != nil {
+		logging.Log().Infof("Was not able to decode the token %s. Err: %v", vpToken, err)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidTokenEncoding)
+		return nil, err
+	}
 
 	isSdJWT, parsedPresentation, err := isSdJWT(c, vpToken)
 	if isSdJWT && err != nil {
@@ -670,7 +678,12 @@ func tokenToPresentation(c *gin.Context, vpToken string) (parsedPresentation *co
 }
 
 func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentation *common.Presentation, err error) {
-	tokenBytes := decodeVpString(vpToken)
+	tokenBytes, err := decodeVpString(vpToken)
+	if err != nil {
+		logging.Log().Infof("Was not able to decode the token %s. Err: %v", vpToken, err)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidTokenEncoding)
+		return nil, err
+	}
 
 	// First, try the OID4VP drafts 22-24 shape:
 	//   {"<query_id>": "<single-presentation>"}
@@ -750,13 +763,23 @@ func isSdJWT(c *gin.Context, vpToken string) (isSdJwt bool, presentation *common
 	return true, presentation, nil
 }
 
-// decodeVpString - In newer versions of OID4VP the token is not encoded as a whole but only its segments separately. This function covers the older and newer versions
-func decodeVpString(vpToken string) (tokenBytes []byte) {
-	tokenBytes, err := base64.RawURLEncoding.DecodeString(vpToken)
-	if err != nil {
-		return []byte(vpToken)
+// decodeVpString - In newer versions of OID4VP the token is not encoded as a whole but only its segments separately. This function covers the older and newer versions.
+// OID4VP requires the vp_token to be base64url encoded without padding, thus only base64.RawURLEncoding is accepted. A token that is not base64 at all(a compact JWT,
+// an SD-JWT or a plain json dcql response) is returned unchanged, since '.', '~', '{', '"' and ':' are part of no base64 alphabet and thus can never be decoded by
+// accident. A token that decodes only with padding or only with the standard alphabet is none of those either, so instead of handing the still-encoded string on as
+// an opaque failure further down the parsers, it is reported as the malformed request that it is.
+func decodeVpString(vpToken string) (tokenBytes []byte, err error) {
+	if decodedBytes, decodeErr := base64.RawURLEncoding.DecodeString(vpToken); decodeErr == nil {
+		return decodedBytes, nil
 	}
-	return tokenBytes
+	for _, encoding := range []*base64.Encoding{base64.URLEncoding, base64.RawStdEncoding, base64.StdEncoding} {
+		if _, decodeErr := encoding.DecodeString(vpToken); decodeErr == nil {
+			logging.Log().Warnf("The vp_token is base64 encoded, but not with the raw(unpadded) url-safe alphabet required by OID4VP.")
+			return nil, ErrorInvalidTokenEncoding
+		}
+	}
+	logging.Log().Debugf("The token is not base64 encoded, using it as is.")
+	return []byte(vpToken), nil
 }
 
 func handleAuthenticationResponse(c *gin.Context, state string, presentation *common.Presentation) {
