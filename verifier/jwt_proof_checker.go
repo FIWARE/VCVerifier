@@ -16,6 +16,9 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jws"
 )
 
+// httpsIssuerPrefix is the URL scheme prefix used to identify HTTPS-based credential issuers.
+const httpsIssuerPrefix = "https://"
+
 const DidElsiPrefix = "did:elsi:"
 const DidPartsSeparator = ":"
 const JWSHeaderX5C = "x5c"
@@ -28,11 +31,17 @@ var ErrorCertHeaderEmpty = errors.New("cert_header_is_empty")
 var ErrorPemDecodeFailed = errors.New("failed_to_decode_pem_from_header")
 var ErrorIssuerValidationFailed = errors.New("isser_validation_failed")
 
+// ErrorHttpsIssuerNotSupported indicates that the JWT has an HTTPS-based issuer but
+// no HttpsIssuerResolver is configured to handle it.
+var ErrorHttpsIssuerNotSupported = errors.New("https_issuer_not_supported")
+
 // JWTProofChecker verifies JWT signatures using DID-resolved keys.
-// Supports standard DID methods via the did.Registry and optionally did:elsi via JAdES.
+// Supports standard DID methods via the did.Registry, did:elsi via JAdES,
+// and HTTPS-based issuer identifiers via HttpsIssuerResolver.
 type JWTProofChecker struct {
 	registry       *did.Registry
 	jAdESValidator jades.JAdESValidator
+	httpsResolver  HttpsIssuerResolver
 }
 
 func NewJWTProofChecker(registry *did.Registry, jAdESValidator jades.JAdESValidator) *JWTProofChecker {
@@ -40,6 +49,15 @@ func NewJWTProofChecker(registry *did.Registry, jAdESValidator jades.JAdESValida
 		registry:       registry,
 		jAdESValidator: jAdESValidator,
 	}
+}
+
+// WithHttpsResolver sets the HttpsIssuerResolver for verifying JWTs from HTTPS-based
+// credential issuers. When set, JWTs with an iss claim starting with "https://" are
+// verified using the resolver's discovered keys instead of DID resolution.
+// Returns the checker to allow method chaining.
+func (jpc *JWTProofChecker) WithHttpsResolver(resolver HttpsIssuerResolver) *JWTProofChecker {
+	jpc.httpsResolver = resolver
+	return jpc
 }
 
 // VerifyJWT verifies the JWT signature using DID-resolved keys and returns the payload.
@@ -88,6 +106,11 @@ func (jpc *JWTProofChecker) VerifyJWTAndReturnKey(token []byte) ([]byte, jwk.Key
 		return payload, nil, err
 	}
 
+	// Handle HTTPS-based issuer identifiers via metadata discovery
+	if isHttpsIssuer(issuerDID) {
+		return jpc.verifyHttpsIssuerJWT(token, issuerDID, kid, headers)
+	}
+
 	// Resolve DID → public key
 	key, err := jpc.resolveKey(issuerDID, kid)
 	if err != nil {
@@ -98,6 +121,34 @@ func (jpc *JWTProofChecker) VerifyJWTAndReturnKey(token []byte) ([]byte, jwk.Key
 	payload, err := jws.Verify(token, jws.WithKey(alg, key))
 	if err != nil {
 		logging.Log().Warnf("JWT signature verification failed for %s: %v", issuerDID, err)
+		return nil, nil, err
+	}
+	return payload, key, nil
+}
+
+// isHttpsIssuer returns true if the issuer identifier is an HTTPS URL.
+func isHttpsIssuer(issuer string) bool {
+	return strings.HasPrefix(issuer, httpsIssuerPrefix)
+}
+
+// verifyHttpsIssuerJWT verifies a JWT whose issuer is an HTTPS URL by resolving the
+// signing key via the configured HttpsIssuerResolver and then verifying the JWS signature.
+func (jpc *JWTProofChecker) verifyHttpsIssuerJWT(token []byte, issuerURL string, kid string, headers jws.Headers) ([]byte, jwk.Key, error) {
+	if jpc.httpsResolver == nil {
+		logging.Log().Warnf("HTTPS issuer %s encountered but no HttpsIssuerResolver configured", issuerURL)
+		return nil, nil, ErrorHttpsIssuerNotSupported
+	}
+
+	key, err := jpc.httpsResolver.ResolveIssuerKey(issuerURL, kid)
+	if err != nil {
+		logging.Log().Warnf("Failed to resolve key for HTTPS issuer %s: %v", issuerURL, err)
+		return nil, nil, err
+	}
+
+	alg, _ := headers.Algorithm()
+	payload, err := jws.Verify(token, jws.WithKey(alg, key))
+	if err != nil {
+		logging.Log().Warnf("JWT signature verification failed for HTTPS issuer %s: %v", issuerURL, err)
 		return nil, nil, err
 	}
 	return payload, key, nil

@@ -16,6 +16,7 @@ import (
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/hellofresh/health-go/v5"
 	"github.com/lestrrat-go/jwx/v3/jwk"
+	cache "github.com/patrickmn/go-cache"
 )
 
 var ErrorNoValidationEndpoint = errors.New("no_validation_endpoint_configured")
@@ -112,7 +113,12 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 		}
 	}
 
-	checker := NewJWTProofChecker(registry, jAdESValidator)
+	// Create the HTTPS issuer resolver for metadata-based key discovery.
+	// Uses a dedicated cache with the same cleanup pattern as other verifier caches.
+	httpsResolverCache := cache.New(DefaultJwksCacheTTL, 2*DefaultJwksCacheTTL)
+	httpsResolver := NewCachingHttpsIssuerResolver(httpsResolverCache, DefaultJwksCacheTTL)
+
+	checker := NewJWTProofChecker(registry, jAdESValidator).WithHttpsResolver(httpsResolver)
 	globalProofChecker = checker
 	presentationParser = &ConfigurablePresentationParser{ProofChecker: checker}
 	sdJwtParser = &ConfigurableSdJwtParser{
