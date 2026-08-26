@@ -1,0 +1,44 @@
+server:
+  port: 3000
+  staticDir: "views/static"
+  templateDir: "views/"
+
+logging:
+  level: "DEBUG"
+  jsonLogging: true
+  logRequests: true
+
+verifier:
+  did: "did:key:somekey"
+  tirAddress: "https://test.dev/trusted_issuer/v3/issuers/"
+
+m2m:
+  authEnabled: false
+
+configRepo:
+  services:
+    - id: testServiceHttps
+      defaultOidcScope: httpsScope
+      oidcScopes:
+        httpsScope:
+          credentials:
+            - type: EmployeeCredential
+              trustedParticipantsLists:
+                - type: ebsi
+                  url: https://tir-pdc.ebsi.fiware.dev
+                - type: ebsi
+                  url: https://issuer.example.com
+              trustedIssuersLists:
+                - type: ebsi
+                  url: https://til-pdc.ebsi.fiware.dev
+                - type: ebsi
+                  url: https://issuer.example.com
+          presentationDefinition:
+            id: https-pd
+            input_descriptors:
+              - id: https-descriptor
+                constraints:
+                  fields:
+                    - id: https-field
+                      path:
+                        - $.vc.my.claim
