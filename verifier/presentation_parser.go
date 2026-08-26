@@ -27,6 +27,11 @@ var ErrorVCNotArray = errors.New("verifiable_credential_not_array")
 var ErrorInvalidJWTFormat = errors.New("invalid_jwt_format")
 var ErrorCnfKeyMismatch = errors.New("cnf_key_does_not_match_vp_signer")
 
+// ErrorUnsignedPresentation is returned when a JSON-LD Verifiable
+// Presentation has no proof member. An unsigned VP cannot be trusted and
+// must be rejected.
+var ErrorUnsignedPresentation = errors.New("unsigned_presentation_not_accepted")
+
 // allow singleton access to the parser
 var presentationParser PresentationParser
 
@@ -140,10 +145,13 @@ func buildAddress(host, path string) string {
 }
 
 // ParsePresentation parses a VP from JWT or JSON-LD format.
+// JSON-LD VPs are currently rejected because LD-proof verification is not yet
+// implemented (see IMPLEMENTATION_PLAN.md Steps 5-7). JWT VPs are verified via
+// the configured JWTProofChecker.
 func (cpp *ConfigurablePresentationParser) ParsePresentation(tokenBytes []byte) (*common.Presentation, error) {
 	trimmed := strings.TrimSpace(string(tokenBytes))
 	if len(trimmed) > 0 && trimmed[0] == '{' {
-		return parseJSONLDPresentation([]byte(trimmed))
+		return cpp.parseJSONLDPresentation([]byte(trimmed))
 	}
 	return cpp.parseJWTPresentation(tokenBytes)
 }
@@ -344,47 +352,32 @@ func stringFromMap(m map[string]interface{}, key string) string {
 	return ""
 }
 
-// parseJSONLDPresentation parses a JSON-LD VP (no proof verification).
-func parseJSONLDPresentation(data []byte) (*common.Presentation, error) {
+// jsonldVPProofKey is the JSON key for the proof member in a JSON-LD VP.
+const jsonldVPProofKey = "proof"
+
+// parseJSONLDPresentation rejects JSON-LD VPs because Linked Data Proof
+// verification is not yet implemented. This fail-closed approach prevents
+// unsigned or unverifiable JSON-LD VPs from being silently accepted.
+//
+// VPs with a "proof" member return ErrorInvalidProof (the proof cannot be
+// verified until LDProofChecker is available — see Steps 5-7). VPs without
+// a proof return ErrorUnsignedPresentation.
+//
+// Once LD-proof verification is implemented this method will verify the
+// VP proof and parse embedded VCs with signature checking.
+func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) (*common.Presentation, error) {
 	var vpMap map[string]interface{}
 	if err := json.Unmarshal(data, &vpMap); err != nil {
 		return nil, err
 	}
 
-	pres, _ := common.NewPresentation()
-	if holder, ok := vpMap[common.VPKeyHolder].(string); ok {
-		pres.Holder = holder
+	// Fail closed: reject JSON-LD VPs that cannot be cryptographically verified.
+	if _, hasProof := vpMap[jsonldVPProofKey]; hasProof {
+		logging.Log().Warn("JSON-LD VP contains a proof member but LD-proof verification is not yet supported — rejecting")
+		return nil, ErrorInvalidProof
 	}
-
-	vcsRaw, ok := vpMap[common.VPKeyVerifiableCredential]
-	if !ok {
-		return pres, nil
-	}
-
-	vcList, ok := vcsRaw.([]interface{})
-	if !ok {
-		return pres, nil
-	}
-
-	for _, vc := range vcList {
-		switch v := vc.(type) {
-		case string:
-			logging.Log().Warn("JWT VC embedded in JSON-LD VP — parsing without signature verification")
-			cred, err := parseUnsignedJWTCredential(v)
-			if err != nil {
-				return nil, err
-			}
-			pres.AddCredentials(cred)
-		case map[string]interface{}:
-			cred, err := parseJSONLDCredential(v)
-			if err != nil {
-				return nil, err
-			}
-			pres.AddCredentials(cred)
-		}
-	}
-
-	return pres, nil
+	logging.Log().Warn("JSON-LD VP has no proof — unsigned presentations are not accepted")
+	return nil, ErrorUnsignedPresentation
 }
 
 // extractJWTPayload decodes the payload from a JWT without signature verification.

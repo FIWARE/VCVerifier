@@ -53,11 +53,11 @@ func TestCachingStatusListClientFetch(t *testing.T) {
 		response serverResp
 		wantErr  error
 	}{
-		{name: "ok_jsonld", response: serverResp{http.StatusOK, testStatusListCredentialJSONLD}, wantErr: nil},
+		{name: "jsonld_rejected", response: serverResp{http.StatusOK, testStatusListCredentialJSONLD}, wantErr: ErrorStatusListJSONLDProofUnsupported},
 		{name: "http_5xx", response: serverResp{http.StatusInternalServerError, "boom"}, wantErr: ErrorStatusListHttpFailure},
 		{name: "http_4xx", response: serverResp{http.StatusNotFound, "missing"}, wantErr: ErrorStatusListHttpFailure},
 		{name: "unparseable_body", response: serverResp{http.StatusOK, "not json at all"}, wantErr: ErrorStatusListUnparseable},
-		{name: "unparseable_json_fragment", response: serverResp{http.StatusOK, "{not:valid"}, wantErr: ErrorStatusListUnparseable},
+		{name: "unparseable_json_fragment", response: serverResp{http.StatusOK, "{not:valid"}, wantErr: ErrorStatusListJSONLDProofUnsupported},
 		{name: "empty_body", response: serverResp{http.StatusOK, ""}, wantErr: ErrorStatusListUnparseable},
 	}
 	for _, tc := range tests {
@@ -85,12 +85,15 @@ func TestCachingStatusListClientFetch(t *testing.T) {
 
 // TestCachingStatusListClientCache verifies that a second call to Fetch for
 // the same URL is served from the cache and does not hit the origin again.
+// Uses a JWT body since JSON-LD status list credentials are now rejected
+// (LD-proof verification is not yet supported).
 func TestCachingStatusListClientCache(t *testing.T) {
 	var hits int32
+	jwtBody := testStatusListVCJWT
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
-		w.Header().Set("Content-Type", ContentTypeCredentialJson)
-		_, _ = w.Write([]byte(testStatusListCredentialJSONLD))
+		w.Header().Set("Content-Type", ContentTypeCredentialJWT)
+		_, _ = w.Write([]byte(jwtBody))
 	}))
 	defer srv.Close()
 
@@ -126,16 +129,17 @@ func TestCachingStatusListClientTransportError(t *testing.T) {
 	assert.Nil(t, cred)
 }
 
-// TestCachingStatusListClientAcceptHeader confirms the client advertises the
 // TestCachingStatusListClientAcceptHeader verifies that the client sends both
 // the JSON-LD and JWT VC media types when fetching status-list credentials.
 // This keeps the client compatible with issuers that perform strict content
 // negotiation and may serve either representation.
 func TestCachingStatusListClientAcceptHeader(t *testing.T) {
 	var received string
+	jwtBody := testStatusListVCJWT
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received = r.Header.Get("Accept")
-		_, _ = w.Write([]byte(testStatusListCredentialJSONLD))
+		w.Header().Set("Content-Type", ContentTypeCredentialJWT)
+		_, _ = w.Write([]byte(jwtBody))
 	}))
 	defer srv.Close()
 
@@ -224,10 +228,10 @@ func TestParseStatusListCredentialBodyJWTVerification(t *testing.T) {
 			wantVerifierHit: false,
 		},
 		{
-			name:            "jsonld_body_skips_verifier",
+			name:            "jsonld_body_rejected_without_ld_proof_support",
 			body:            testStatusListCredentialJSONLD,
 			verifier:        &mockJWTVerifier{err: ErrorStatusListUnparseable},
-			wantErr:         nil,
+			wantErr:         ErrorStatusListJSONLDProofUnsupported,
 			wantVerifierHit: false,
 		},
 	}
@@ -301,6 +305,46 @@ func TestCachingStatusListClientFetchJWTVerification(t *testing.T) {
 			}
 
 			assert.True(t, tc.verifier.called, "verifier should have been called for JWT body")
+		})
+	}
+}
+
+// TestParseStatusListCredentialBody_RejectsJSONLD verifies that JSON-LD
+// status list credentials are rejected because LD-proof verification is not
+// yet supported. This prevents MITM attacks where an attacker could serve a
+// forged JSON-LD status list credential to suppress revocation status.
+func TestParseStatusListCredentialBody_RejectsJSONLD(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "standard_jsonld_status_list",
+			body: testStatusListCredentialJSONLD,
+		},
+		{
+			name: "minimal_jsonld_object",
+			body: `{"@context": ["https://www.w3.org/ns/credentials/v2"], "type": ["VerifiableCredential"]}`,
+		},
+		{
+			name: "jsonld_with_proof",
+			body: `{
+				"@context": ["https://www.w3.org/ns/credentials/v2"],
+				"type": ["VerifiableCredential", "BitstringStatusListCredential"],
+				"proof": {
+					"type": "JsonWebSignature2020",
+					"jws": "eyJhbGciOiJFZERTQSJ9..test"
+				}
+			}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cred, err := parseStatusListCredentialBody([]byte(tc.body), nil)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrorStatusListJSONLDProofUnsupported)
+			assert.Nil(t, cred)
 		})
 	}
 }

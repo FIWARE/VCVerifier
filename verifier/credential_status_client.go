@@ -77,6 +77,11 @@ var (
 	// is not a recognisable Verifiable Credential (neither a JSON-LD object
 	// nor a decodable JWT).
 	ErrorStatusListUnparseable = errors.New("status_list_unparseable")
+	// ErrorStatusListJSONLDProofUnsupported is returned when a status list
+	// credential is in JSON-LD format. LD-proof verification is not yet
+	// implemented, so JSON-LD status list credentials cannot be trusted.
+	// This prevents MITM attacks on status-list resolution.
+	ErrorStatusListJSONLDProofUnsupported = errors.New("json_ld_status_list_proof_verification_not_supported")
 	// ErrorStatusListSubjectMismatch is returned when the `sub` claim of a
 	// fetched IETF Token Status List JWT does not match the `uri` from the
 	// credential's status reference, per draft-ietf-oauth-status-list §8.3
@@ -199,17 +204,18 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 // parseStatusListCredentialBody decodes a status-list credential response
 // body into a *common.Credential.
 //
-// Two transport encodings are accepted:
-//   - JSON-LD: a response body starting with `{` is unmarshalled and handed
-//     to parseJSONLDCredential (the existing VC parser helper).
-//   - JWT: any other non-empty body is treated as a JWS and parsed via
-//     parseUnsignedJWTCredential — status-list credentials are public by
-//     nature so signature verification is intentionally deferred to higher
-//     layers that enforce trust registry lookups.
+// Two transport encodings are handled:
+//   - JSON-LD: a response body starting with `{` is rejected with
+//     ErrorStatusListJSONLDProofUnsupported because LD-proof verification
+//     is not yet implemented. Accepting unverified JSON-LD would allow
+//     MITM attacks on revocation status (see Steps 5-8 of the plan).
+//   - JWT: any other non-empty body is treated as a JWS. When a
+//     StatusListJWTVerifier is provided the signature is verified;
+//     otherwise an error is returned.
 //
-// A non-nil error is always wrapped with ErrorStatusListUnparseable so
-// callers can distinguish parse failures from transport failures with
-// errors.Is.
+// Parse failures are wrapped with ErrorStatusListUnparseable; JSON-LD
+// rejections are wrapped with ErrorStatusListJSONLDProofUnsupported.
+// Callers can distinguish failure types with errors.Is.
 func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifier) (*common.Credential, error) {
 	trimmed := strings.TrimSpace(string(body))
 	if len(trimmed) == 0 {
@@ -218,18 +224,15 @@ func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifie
 	}
 
 	if trimmed[0] == '{' {
-		logging.Log().Debug("Parsing status-list credential as JSON-LD")
-		var vcMap map[string]interface{}
-		if err := json.Unmarshal([]byte(trimmed), &vcMap); err != nil {
-			logging.Log().Debugf("JSON-LD unmarshal failed: %v", err)
-			return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
-		}
-		cred, err := parseJSONLDCredential(vcMap)
-		if err != nil {
-			logging.Log().Debugf("JSON-LD credential parse failed: %v", err)
-			return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
-		}
-		return cred, nil
+		// Fail closed: reject JSON-LD status list credentials because LD-proof
+		// verification is not yet implemented. Accepting unverified JSON-LD
+		// status list credentials would allow MITM attackers to forge revocation
+		// status. Once LDProofChecker is available (see Steps 5-8 of the
+		// implementation plan), this path will verify the proof and accept
+		// valid credentials.
+		logging.Log().Warn("JSON-LD status list credential proof verification is not yet supported — rejecting")
+		return nil, fmt.Errorf("%w: JSON-LD status list credentials cannot be verified without LD-proof support",
+			ErrorStatusListJSONLDProofUnsupported)
 	}
 
 	logging.Log().Debug("Parsing status-list credential as JWT")
