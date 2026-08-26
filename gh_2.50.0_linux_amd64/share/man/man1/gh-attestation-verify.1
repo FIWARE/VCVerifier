@@ -1,0 +1,144 @@
+.nh
+.TH "GH-ATTESTATION-VERIFY" "1" "May 2024" "GitHub CLI 2.50.0" "GitHub CLI manual"
+
+.SH NAME
+.PP
+gh-attestation-verify - Verify an artifact's integrity using attestations
+
+
+.SH SYNOPSIS
+.PP
+\fBgh attestation verify [<file-path> | oci://<image-uri>] [--owner | --repo] [flags]\fR
+
+
+.SH DESCRIPTION
+.SS NOTE: This feature is currently in beta, and subject to change.
+.PP
+Verify the integrity and provenance of an artifact using its associated
+cryptographically signed attestations.
+
+.PP
+The command requires either:
+* a file path to an artifact, or
+* a container image URI (e.g. \fBoci://<image-uri>\fR)
+  * (note that if you provide an OCI URL, you must already be authenticated with
+its container registry)
+
+.PP
+In addition, the command requires either:
+* the \fB--repo\fR flag (e.g. --repo github/example).
+* the \fB--owner\fR flag (e.g. --owner github), or
+
+.PP
+The \fB--repo\fR flag value must match the name of the GitHub repository
+that the artifact is linked with.
+
+.PP
+The \fB--owner\fR flag value must match the name of the GitHub organization
+that the artifact's linked repository belongs to.
+
+.PP
+By default, the verify command will attempt to fetch attestations associated
+with the provided artifact from the GitHub API. If you would prefer to verify
+the artifact using attestations stored on disk (c.f. the \fBdownload\fR command),
+provide a path to the \fB--bundle\fR flag.
+
+.PP
+To see the full results that are generated upon successful verification, i.e.
+for use with a policy engine, provide the \fB--json-result\fR flag.
+
+.PP
+The attestation's certificate's Subject Alternative Name (SAN) identifies the entity
+responsible for creating the attestation, which most of the time will be a GitHub
+Actions workflow file located inside your repository. By default, this command uses
+either the \fB--repo\fR or the \fB--owner\fR flag value to validate the SAN.
+
+.PP
+However, if you generate attestations with a reusable workflow then the SAN will
+identify the reusable workflow – which may or may not be located inside your \fB--repo\fR
+or \fB--owner\fR\&. In these situations, you can use the \fB--cert-identity\fR or
+\fB--cert-identity-regex\fR flags to specify the reusable workflow's URI.
+
+.PP
+For more policy verification options, see the other available flags.
+
+
+.SH OPTIONS
+.TP
+\fB-b\fR, \fB--bundle\fR \fB<string>\fR
+Path to bundle on disk, either a single bundle in a JSON file or a JSON lines file with multiple bundles
+
+.TP
+\fB--cert-identity\fR \fB<string>\fR
+Enforce that the certificate's subject alternative name matches the provided value exactly
+
+.TP
+\fB-i\fR, \fB--cert-identity-regex\fR \fB<string>\fR
+Enforce that the certificate's subject alternative name matches the provided regex
+
+.TP
+\fB--cert-oidc-issuer\fR \fB<string> (default "https://token.actions.githubusercontent.com")\fR
+Issuer of the OIDC token
+
+.TP
+\fB--custom-trusted-root\fR \fB<string>\fR
+Path to a custom trustedroot.json file to use for verification
+
+.TP
+\fB--deny-self-hosted-runners\fR
+Fail verification for attestations generated on self-hosted runners
+
+.TP
+\fB-d\fR, \fB--digest-alg\fR \fB<string> (default "sha256")\fR
+The algorithm used to compute a digest of the artifact: {sha256|sha512}
+
+.TP
+\fB--format\fR \fB<string>\fR
+Output format: {json}
+
+.TP
+\fB-q\fR, \fB--jq\fR \fB<expression>\fR
+Filter JSON output using a jq expression
+
+.TP
+\fB-L\fR, \fB--limit\fR \fB<int> (default 30)\fR
+Maximum number of attestations to fetch
+
+.TP
+\fB--no-public-good\fR
+Only verify attestations signed with GitHub's Sigstore instance
+
+.TP
+\fB-o\fR, \fB--owner\fR \fB<string>\fR
+GitHub organization to scope attestation lookup by
+
+.TP
+\fB--predicate-type\fR \fB<string>\fR
+Filter attestations by provided predicate type
+
+.TP
+\fB-R\fR, \fB--repo\fR \fB<string>\fR
+Repository name in the format /
+
+.TP
+\fB-t\fR, \fB--template\fR \fB<string>\fR
+Format JSON output using a Go template; see "gh help formatting"
+
+
+.SH EXAMPLE
+.EX
+# Verify a local artifact linked with a repository
+$ gh attestation verify example.bin --repo github/example
+
+# Verify a local artifact linked with an organization
+$ gh attestation verify example.bin --owner github
+
+# Verify an OCI image using locally stored attestations
+$ gh attestation verify oci://<image-uri> --owner github --bundle sha256:foo.jsonl
+
+.EE
+
+
+.SH SEE ALSO
+.PP
+\fBgh-attestation(1)\fR
