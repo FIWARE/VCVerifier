@@ -44,12 +44,12 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
 
 - **`verifier/`** — Core package (~1500 lines in `verifier.go`). Session management, JWT creation (RS256/ES256), QR code generation, nonce/state management. Request object modes: `urlEncoded`, `byValue`, `byReference`. Also contains:
   - `presentation_parser.go` — Parses VP tokens (JSON-LD and SD-JWT formats), JSON-LD document loading with caching
-  - `jwt_verifier.go` — VC validation with modes: `none`, `combined`, `jsonLd`, `baseContext`. DID verification method resolution for did:key, did:web, did:jwk
+  - `jwt_verifier.go` — VC content validation with modes: `none`, `combined`, `jsonLd`, `baseContext` (note: `combined` and `jsonLd` currently only check field presence, not real JSON-LD validation). DID verification method resolution for did:key, did:web, did:jwk
   - `trustedissuer.go` / `trustedparticipant.go` — EBSI registry verification
   - `compliance.go` — Policy compliance checking (signatures, dates, etc.)
   - `holder.go` — Holder verification
   - `gaiax.go` — Gaia-X compliance checks
-  - `elsi_proof_checker.go` — JAdES signature validation for did:elsi
+  - `jwt_proof_checker.go` — JWT signature verification via DID-resolved keys; also handles did:elsi via JAdES
   - `credentialsConfig.go` — Credential configuration management
   - `caching_client.go` — HTTP caching layer
 
@@ -104,11 +104,18 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
 - **JWT signing**: RS256 or ES256 via `tokenSigner.Sign()` with `v.signingKey` (jwk.Key). Claims include issuer, audience, expiration (`jwtExpiration` duration), issuedAt, optional subject/nonce, and credential data.
 - **Three grant types**: `authorization_code` (exchanges code for cached JWT), `vp_token` (direct VP token validation + JWT generation), `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693 token exchange via VP token).
 
+## Known Gaps
+
+- **JSON-LD / `ldp_vc` proof verification is not implemented.** JSON-LD credentials and presentations are parsed structurally but no Linked Data Proof (Data Integrity / `JsonWebSignature2020`) is ever cryptographically checked. The `parseJSONLDPresentation` function explicitly documents "no proof verification". Only JWT-based signatures are verified (via `JWTProofChecker`). See ticket #54 for the remediation plan.
+- **`validationMode: combined` and `jsonLd`** do not perform real JSON-LD validation — they only check that issuer and type fields are present. They are deprecated but still accepted.
+- **`verifier/caching_client.go`** (`NewCachingDocumentLoader`) has no production callers since trustbloc removal.
+
 ## Key Dependencies
 
-- **trustbloc/vc-go, did-go, kms-go** — VC verification, DID resolution, key management
 - **gin-gonic/gin** — HTTP framework
 - **lestrrat-go/jwx/v3** — JWT/JWS/JWK handling
-- **piprate/json-gold** — JSON-LD processing
+- **piprate/json-gold** — JSON-LD processing (URDNA2015 canonicalization, document loading)
 - **gookit/config** — Configuration management
 - **foolin/goview** — Template rendering for Gin
+- **patrickmn/go-cache** — In-memory cache with expiration (used for sessions, TIR results, document loader cache)
+- **fiware/VCVerifier/did** — Custom DID resolution: did:key, did:web, did:jwk via `did.Registry`
