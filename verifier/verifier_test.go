@@ -2267,3 +2267,468 @@ func TestGetHolderValidationContext(t *testing.T) {
 		})
 	}
 }
+
+// createMockCredentialsWithHttpsIssuer creates credential config entries where the
+// trusted participant and trusted issuer lists contain HTTPS issuer URLs for
+// direct URL matching (used in integration-level tests for HTTPS-based issuers).
+func createMockCredentialsWithHttpsIssuer(serviceId, scope, credentialType, httpsIssuerURL string) map[string]map[string]configModel.ScopeEntry {
+	credential := configModel.Credential{
+		Type:                     credentialType,
+		TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: httpsIssuerURL}},
+		TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: httpsIssuerURL}},
+	}
+
+	entry := configModel.ScopeEntry{Credentials: []configModel.Credential{credential}}
+
+	return map[string]map[string]configModel.ScopeEntry{serviceId: {scope: entry}}
+}
+
+// getVCWithHttpsIssuer creates a test credential where the Issuer.ID is an HTTPS URL
+// instead of a DID. This simulates a credential issued by an HTTPS-based issuer.
+func getVCWithHttpsIssuer(issuerURL string) *common.Credential {
+	testTime, _ := time.Parse(time.RFC3339, "2022-11-23T15:23:13Z")
+	vc, _ := common.CreateCredential(
+		common.CredentialContents{
+			Context: []string{
+				"https://www.w3.org/2018/credentials/v1",
+				"https://happypets.fiware.io/2022/credentials/employee/v1",
+			},
+			ID: "https://happypets.fiware.io/credential/25159389-8dd17b796ac0",
+			Types: []string{
+				"VerifiableCredential",
+				"CustomerCredential",
+			},
+			Issuer:     &common.Issuer{ID: issuerURL},
+			ValidFrom:  &testTime,
+			ValidUntil: &testTime,
+			Subject: []common.Subject{
+				{
+					ID: "holder-subject",
+					CustomFields: map[string]interface{}{
+						"type":   "gx:NaturalParticipent",
+						"target": "did:ebsi:packetdelivery",
+					},
+				},
+			},
+		},
+		common.CustomFields{},
+	)
+	return vc
+}
+
+// getVPWithHttpsIssuer creates a test presentation containing a credential from
+// an HTTPS-based issuer. Used in integration-level tests for AuthenticationResponse.
+func getVPWithHttpsIssuer(issuerURL string) common.Presentation {
+	credentials := []*common.Credential{getVCWithHttpsIssuer(issuerURL)}
+	vp, _ := common.NewPresentation(common.WithCredentials(credentials...))
+	return *vp
+}
+
+// TestAuthenticationResponseHttpsIssuer verifies the full AuthenticationResponse
+// flow when the credential issuer is identified by an HTTPS URL rather than a DID.
+// The trust validation services (TrustedParticipantValidationService and
+// TrustedIssuerValidationService) accept the HTTPS issuer via URL matching
+// against the configured trust lists.
+func TestAuthenticationResponseHttpsIssuer(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const httpsIssuerURL = "https://issuer.example.com"
+
+	type httpsAuthTest struct {
+		testName         string
+		issuerURL        string
+		trustedURL       string
+		sameDevice       bool
+		expectedError    error
+		expectedResponse Response
+	}
+
+	tests := []httpsAuthTest{
+		{
+			testName:         "HTTPS issuer matching trusted URL should succeed (same device).",
+			issuerURL:        httpsIssuerURL,
+			trustedURL:       httpsIssuerURL,
+			sameDevice:       true,
+			expectedError:    nil,
+			expectedResponse: Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"},
+		},
+		{
+			testName:         "HTTPS issuer matching wildcard trusted URL should succeed.",
+			issuerURL:        httpsIssuerURL,
+			trustedURL:       "*",
+			sameDevice:       true,
+			expectedError:    nil,
+			expectedResponse: Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"},
+		},
+		{
+			testName:      "HTTPS issuer not matching any trusted URL should fail at participant validation.",
+			issuerURL:     httpsIssuerURL,
+			trustedURL:    "https://other-issuer.example.com",
+			sameDevice:    true,
+			expectedError: ErrorInvalidCredential,
+		},
+	}
+
+	for _, tc := range tests {
+		trueOption := true
+		t.Run(tc.testName, func(t *testing.T) {
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+			sessionCache.sessions["login-state"] = loginSession{
+				version:       SAME_DEVICE,
+				callback:      "https://myhost.org/callback",
+				sessionId:     "my-session",
+				clientId:      "clientId",
+				requestObject: "requestObjectJwt",
+			}
+
+			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+
+			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			testKey, _ := jwk.Import(ecdsaKey)
+			_ = jwk.AssignKeyID(testKey)
+
+			nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
+
+			credentialsConfig := mockCredentialConfig{
+				mockScopes: map[string]map[string]configModel.ScopeEntry{
+					"clientId": {
+						"": {
+							Credentials: []configModel.Credential{
+								{
+									Type:                     "CustomerCredential",
+									TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: tc.trustedURL}},
+									TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: tc.trustedURL}},
+									JwtInclusion:             configModel.JwtInclusion{Enabled: &trueOption},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			// Use real TrustedParticipantValidationService (no mock) — the HTTPS
+			// issuer path does not require external registry clients, only URL matching.
+			tpvs := &TrustedParticipantValidationService{}
+			tivs := &TrustedIssuerValidationService{}
+			validationServices := []ValidationService{tpvs, tivs}
+
+			cv := CredentialVerifier{
+				did:                  "did:key:verifier",
+				signingKey:           testKey,
+				tokenCache:           &tokenCache,
+				sessionCache:         &sessionCache,
+				nonceGenerator:       &nonceGenerator,
+				validationServices:   validationServices,
+				clock:                mockClock{},
+				credentialsConfig:    credentialsConfig,
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			vp := getVPWithHttpsIssuer(tc.issuerURL)
+			sameDeviceResponse, err := cv.AuthenticationResponse("login-state", &vp)
+
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError,
+					"Expected error %v but got %v", tc.expectedError, err)
+				return
+			}
+			assert.NoError(t, err, "AuthenticationResponse should succeed for HTTPS issuer")
+			assert.Equal(t, tc.expectedResponse, sameDeviceResponse,
+				"Response should match expected for HTTPS issuer")
+
+			// Verify a token was cached
+			_, found := tokenCache.tokens[sameDeviceResponse.Code]
+			assert.True(t, found, "Token should be cached after successful authentication")
+		})
+	}
+}
+
+// TestGetTrustRegistriesValidationContextWithHttpsIssuerURLs verifies that
+// getTrustRegistriesValidationContext correctly propagates HTTPS issuer URLs
+// from the credential configuration through to the returned validation context.
+func TestGetTrustRegistriesValidationContextWithHttpsIssuerURLs(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const httpsIssuerURL = "https://issuer.example.com"
+	const didBasedURL = "https://tir.ebsi.fiware.dev"
+
+	type contextTest struct {
+		testName              string
+		credentialTypes       []string
+		mockScopes            map[string]map[string]configModel.ScopeEntry
+		expectedTILCount      map[string]int
+		expectedTPLCount      map[string]int
+		expectedIssuerURLs    map[string][]string
+		expectedPartURLs      map[string][]string
+		expectedError         error
+	}
+
+	tests := []contextTest{
+		{
+			testName:        "HTTPS issuer URLs should be propagated in trusted issuers list",
+			credentialTypes: []string{"CustomerCredential"},
+			mockScopes: map[string]map[string]configModel.ScopeEntry{
+				"serviceId": {
+					"testScope": {
+						Credentials: []configModel.Credential{
+							{
+								Type:                     "CustomerCredential",
+								TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: httpsIssuerURL}},
+								TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: httpsIssuerURL}},
+							},
+						},
+					},
+				},
+			},
+			expectedTILCount:   map[string]int{"CustomerCredential": 1},
+			expectedTPLCount:   map[string]int{"CustomerCredential": 1},
+			expectedIssuerURLs: map[string][]string{"CustomerCredential": {httpsIssuerURL}},
+			expectedPartURLs:   map[string][]string{"CustomerCredential": {httpsIssuerURL}},
+		},
+		{
+			testName:        "Mixed HTTPS and DID-based URLs should both be propagated",
+			credentialTypes: []string{"CustomerCredential"},
+			mockScopes: map[string]map[string]configModel.ScopeEntry{
+				"serviceId": {
+					"testScope": {
+						Credentials: []configModel.Credential{
+							{
+								Type: "CustomerCredential",
+								TrustedParticipantsLists: []configModel.TrustedParticipantsList{
+									{Type: "ebsi", Url: didBasedURL},
+									{Type: "ebsi", Url: httpsIssuerURL},
+								},
+								TrustedIssuersLists: configModel.TrustedIssuersLists{
+									{Type: "ebsi", Url: didBasedURL},
+									{Type: "ebsi", Url: httpsIssuerURL},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedTILCount:   map[string]int{"CustomerCredential": 2},
+			expectedTPLCount:   map[string]int{"CustomerCredential": 2},
+			expectedIssuerURLs: map[string][]string{"CustomerCredential": {didBasedURL, httpsIssuerURL}},
+			expectedPartURLs:   map[string][]string{"CustomerCredential": {didBasedURL, httpsIssuerURL}},
+		},
+		{
+			testName:        "Wildcard trusted issuer URL should be propagated",
+			credentialTypes: []string{"CustomerCredential"},
+			mockScopes: map[string]map[string]configModel.ScopeEntry{
+				"serviceId": {
+					"testScope": {
+						Credentials: []configModel.Credential{
+							{
+								Type:                     "CustomerCredential",
+								TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: "*"}},
+								TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: "*"}},
+							},
+						},
+					},
+				},
+			},
+			expectedTILCount:   map[string]int{"CustomerCredential": 1},
+			expectedTPLCount:   map[string]int{"CustomerCredential": 1},
+			expectedIssuerURLs: map[string][]string{"CustomerCredential": {"*"}},
+			expectedPartURLs:   map[string][]string{"CustomerCredential": {"*"}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			cv := CredentialVerifier{
+				credentialsConfig: mockCredentialConfig{
+					mockScopes: tc.mockScopes,
+				},
+			}
+
+			ctx, err := cv.getTrustRegistriesValidationContext("serviceId", tc.credentialTypes, "testScope")
+
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError)
+				return
+			}
+			assert.NoError(t, err)
+
+			// Verify trusted issuers lists
+			til := ctx.GetTrustedIssuersLists()
+			for credType, expectedCount := range tc.expectedTILCount {
+				assert.Len(t, til[credType], expectedCount,
+					"TIL count mismatch for credential type %s", credType)
+			}
+			for credType, expectedURLs := range tc.expectedIssuerURLs {
+				actualURLs := make([]string, len(til[credType]))
+				for i, entry := range til[credType] {
+					actualURLs[i] = entry.Url
+				}
+				assert.Equal(t, expectedURLs, actualURLs,
+					"TIL URLs mismatch for credential type %s", credType)
+			}
+
+			// Verify trusted participants lists
+			tpl := ctx.GetTrustedParticipantLists()
+			for credType, expectedCount := range tc.expectedTPLCount {
+				assert.Len(t, tpl[credType], expectedCount,
+					"TPL count mismatch for credential type %s", credType)
+			}
+			for credType, expectedURLs := range tc.expectedPartURLs {
+				actualURLs := make([]string, len(tpl[credType]))
+				for i, entry := range tpl[credType] {
+					actualURLs[i] = entry.Url
+				}
+				assert.Equal(t, expectedURLs, actualURLs,
+					"TPL URLs mismatch for credential type %s", credType)
+			}
+		})
+	}
+}
+
+// TestAuthenticationResponseHttpsIssuerCrossDevice verifies that the
+// AuthenticationResponse flow handles cross-device sessions correctly
+// when the credential issuer is HTTPS-based.
+func TestAuthenticationResponseHttpsIssuerCrossDevice(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const httpsIssuerURL = "https://issuer.example.com"
+
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	sessionCache.sessions["login-state"] = loginSession{
+		version:       CROSS_DEVICE_V1,
+		callback:      "https://myhost.org/callback",
+		sessionId:     "my-session",
+		clientId:      "clientId",
+		requestObject: "requestObjectJwt",
+	}
+
+	trueOption := true
+	tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+	httpClient = mockHttpClient{nil, nil}
+
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	testKey, _ := jwk.Import(ecdsaKey)
+	_ = jwk.AssignKeyID(testKey)
+
+	nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
+
+	credentialsConfig := mockCredentialConfig{
+		mockScopes: map[string]map[string]configModel.ScopeEntry{
+			"clientId": {
+				"": {
+					Credentials: []configModel.Credential{
+						{
+							Type:                     "CustomerCredential",
+							TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: httpsIssuerURL}},
+							TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: httpsIssuerURL}},
+							JwtInclusion:             configModel.JwtInclusion{Enabled: &trueOption},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	tpvs := &TrustedParticipantValidationService{}
+	tivs := &TrustedIssuerValidationService{}
+
+	cv := CredentialVerifier{
+		did:                  "did:key:verifier",
+		signingKey:           testKey,
+		tokenCache:           &tokenCache,
+		sessionCache:         &sessionCache,
+		nonceGenerator:       &nonceGenerator,
+		validationServices:   []ValidationService{tpvs, tivs},
+		clock:                mockClock{},
+		credentialsConfig:    credentialsConfig,
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+	}
+
+	vp := getVPWithHttpsIssuer(httpsIssuerURL)
+	_, err := cv.AuthenticationResponse("login-state", &vp)
+
+	assert.NoError(t, err, "AuthenticationResponse should succeed for cross-device HTTPS issuer")
+
+	// Verify callback was called correctly
+	expectedCallback := getRequest("https://myhost.org/callback?code=authCode&state=my-session")
+	assert.Equal(t, expectedCallback, lastRequest,
+		"Cross-device callback URL should contain auth code and state")
+}
+
+// TestAuthenticationResponseMultipleHttpsIssuers verifies that when a VP contains
+// multiple credentials from different HTTPS-based issuers, the validation flow
+// correctly handles each one via URL matching against the configured trust lists.
+func TestAuthenticationResponseMultipleHttpsIssuers(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const httpsIssuerURL1 = "https://issuer-one.example.com"
+	const httpsIssuerURL2 = "https://issuer-two.example.com"
+
+	// Create a VP with two credentials from different HTTPS-based issuers.
+	httpsVC1 := getVCWithHttpsIssuer(httpsIssuerURL1)
+	httpsVC2 := getVCWithHttpsIssuer(httpsIssuerURL2)
+
+	vp, _ := common.NewPresentation(common.WithCredentials(httpsVC1, httpsVC2))
+
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	sessionCache.sessions["login-state"] = loginSession{
+		version:       SAME_DEVICE,
+		callback:      "https://myhost.org/callback",
+		sessionId:     "my-session",
+		clientId:      "clientId",
+		requestObject: "requestObjectJwt",
+	}
+
+	trueOption := true
+	tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	testKey, _ := jwk.Import(ecdsaKey)
+	_ = jwk.AssignKeyID(testKey)
+
+	nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
+
+	// Configure both HTTPS issuer URLs as trusted.
+	credentialsConfig := mockCredentialConfig{
+		mockScopes: map[string]map[string]configModel.ScopeEntry{
+			"clientId": {
+				"": {
+					Credentials: []configModel.Credential{
+						{
+							Type: "CustomerCredential",
+							TrustedParticipantsLists: []configModel.TrustedParticipantsList{
+								{Type: "ebsi", Url: httpsIssuerURL1},
+								{Type: "ebsi", Url: httpsIssuerURL2},
+							},
+							TrustedIssuersLists: configModel.TrustedIssuersLists{
+								{Type: "ebsi", Url: httpsIssuerURL1},
+								{Type: "ebsi", Url: httpsIssuerURL2},
+							},
+							JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	tpvs := &TrustedParticipantValidationService{}
+	tivs := &TrustedIssuerValidationService{}
+
+	cv := CredentialVerifier{
+		did:                  "did:key:verifier",
+		signingKey:           testKey,
+		tokenCache:           &tokenCache,
+		sessionCache:         &sessionCache,
+		nonceGenerator:       &nonceGenerator,
+		validationServices:   []ValidationService{tpvs, tivs},
+		clock:                mockClock{},
+		credentialsConfig:    credentialsConfig,
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+	}
+
+	sameDeviceResponse, err := cv.AuthenticationResponse("login-state", vp)
+
+	assert.NoError(t, err, "AuthenticationResponse should succeed with multiple HTTPS issuers")
+	assert.Equal(t, SAME_DEVICE, sameDeviceResponse.FlowVersion)
+	assert.Equal(t, "https://myhost.org/callback", sameDeviceResponse.RedirectTarget)
+}
