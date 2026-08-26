@@ -64,7 +64,19 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 		return false, ErrorEmptyTilList
 	}
 
+	issuerID := verifiableCredential.Contents().Issuer.ID
 	til := trustContext.GetTrustedIssuersLists()
+
+	// HTTPS-URL-based issuers are validated by URL matching against the
+	// configured trusted issuer URLs. Cryptographic trust was already
+	// established during JWT signature verification (via HTTPS metadata
+	// discovery and JWKS). No EBSI attribute-based validation or external
+	// registry lookup is needed.
+	if isHttpsIssuer(issuerID) {
+		return tpvs.validateHttpsIssuer(issuerID, til)
+	}
+
+	// DID-based issuers continue through the existing type-based dispatch.
 	for _, credentialType := range verifiableCredential.Contents().Types {
 		isWildcard, err := isWildcardTil(til[credentialType])
 		if isWildcard {
@@ -101,7 +113,7 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 
 		// Try ebsi (v3/v4) endpoints first.
 		if len(ebsiURLs) > 0 {
-			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuer(ebsiURLs, verifiableCredential.Contents().Issuer.ID)
+			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuer(ebsiURLs, issuerID)
 			if err != nil {
 				logging.Log().Warnf("Was not able to validate trusted issuer via ebsi. Err: %v", err)
 				return false, err
@@ -110,7 +122,7 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 
 		// If not found via ebsi, try ebsi-v5 endpoints.
 		if !exist && len(ebsiV5URLs) > 0 {
-			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuerV5(ebsiV5URLs, verifiableCredential.Contents().Issuer.ID)
+			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuerV5(ebsiV5URLs, issuerID)
 			if err != nil {
 				logging.Log().Warnf("Was not able to validate trusted issuer via ebsi-v5. Err: %v", err)
 				return false, err
@@ -133,6 +145,23 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 	}
 
 	return true, err
+}
+
+// validateHttpsIssuer checks whether an HTTPS-URL-based issuer matches any
+// of the configured trusted issuer URLs across all credential types. The
+// wildcard URL ("*") matches any HTTPS issuer. Returns (true, nil) when the
+// issuer is found, or (false, ErrorNoTilDefined) otherwise.
+func (tpvs *TrustedIssuerValidationService) validateHttpsIssuer(issuerID string, til map[string][]configModel.TrustedIssuersList) (bool, error) {
+	for credType, tilEntries := range til {
+		for _, entry := range tilEntries {
+			if matchesHttpsIssuerURL(issuerID, entry.Url) {
+				logging.Log().Debugf("HTTPS issuer %s matched trusted issuer URL %s for type %s.", issuerID, entry.Url, credType)
+				return true, nil
+			}
+		}
+	}
+	logging.Log().Warnf("HTTPS issuer %s did not match any configured trusted issuer URL.", issuerID)
+	return false, ErrorNoTilDefined
 }
 
 // isWildcardTil checks whether the given TIL list contains the wildcard

@@ -50,19 +50,40 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 		return true, err
 	}
 
+	issuerID := verifiableCredential.Contents().Issuer.ID
+
+	// HTTPS-URL-based issuers are validated by URL matching against the
+	// configured trusted participant URLs. Cryptographic trust was already
+	// established during JWT signature verification (via HTTPS metadata
+	// discovery and JWKS). This check applies regardless of the trust list
+	// Type — an HTTPS issuer is never looked up in an external registry.
+	if isHttpsIssuer(issuerID) {
+		for _, listEntries := range trustContext.GetTrustedParticipantLists() {
+			for _, participantList := range listEntries {
+				if matchesHttpsIssuerURL(issuerID, participantList.Url) {
+					logging.Log().Debugf("HTTPS issuer %s matched trusted participant URL %s.", issuerID, participantList.Url)
+					return true, err
+				}
+			}
+		}
+		logging.Log().Warnf("HTTPS issuer %s did not match any configured trusted participant URL.", issuerID)
+		return false, ErrorInvalidCredential
+	}
+
+	// DID-based issuers continue through the existing type-based dispatch.
 	for _, listEntries := range trustContext.GetTrustedParticipantLists() {
 		for _, participantList := range listEntries {
 			if participantList.Type == typeEbsi {
 				logging.Log().Debug("Check at ebsi.")
-				result = tpvs.tirClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
+				result = tpvs.tirClient.IsTrustedParticipant(participantList.Url, issuerID)
 			}
 			if participantList.Type == typeEbsiV5 {
 				logging.Log().Debug("Check at ebsi-v5.")
-				result = tpvs.tirClient.IsTrustedParticipantV5(participantList.Url, verifiableCredential.Contents().Issuer.ID)
+				result = tpvs.tirClient.IsTrustedParticipantV5(participantList.Url, issuerID)
 			}
 			if participantList.Type == typeGaiaX {
 				logging.Log().Debug("Check at gaia-x.")
-				result = tpvs.gaiaXClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
+				result = tpvs.gaiaXClient.IsTrustedParticipant(participantList.Url, issuerID)
 			}
 			if result {
 				return result, err
@@ -71,4 +92,14 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 	}
 
 	return false, ErrorInvalidCredential
+}
+
+// matchesHttpsIssuerURL checks whether an HTTPS issuer URL matches a
+// configured trusted URL. The wildcard value "*" matches any issuer.
+// Otherwise an exact string match is performed.
+func matchesHttpsIssuerURL(issuerURL, trustedURL string) bool {
+	if trustedURL == WILDCARD_TIL {
+		return true
+	}
+	return issuerURL == trustedURL
 }

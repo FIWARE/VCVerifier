@@ -244,10 +244,18 @@ type ClaimInclusion struct {
 	NewKey string `json:"newKey" mapstructure:"newKey"`
 }
 
+// TrustedParticipantsList represents a single trusted participants registry
+// endpoint with an associated type. The Url field can be an external registry
+// endpoint URL (for "ebsi", "ebsi-v5", or "gaia-x" types) or an HTTPS issuer
+// URL for direct URL-matching of HTTPS-based credential issuers.
+// The wildcard value "*" matches any issuer.
 type TrustedParticipantsList struct {
-	// Type of praticipants list to be used - either gaia-x or ebsi
+	// Type of participants list to be used — "ebsi", "ebsi-v5", or "gaia-x".
+	// For HTTPS-based issuers the type is ignored; trust is determined by URL matching.
 	Type string `json:"type" mapstructure:"type"`
-	// url of the list
+	// Url of the trusted participants registry endpoint, or an HTTPS issuer URL
+	// for direct matching of HTTPS-based credential issuers. Use "*" to trust
+	// any issuer.
 	Url string `json:"url" mapstructure:"url"`
 }
 
@@ -283,11 +291,16 @@ func (t *TrustedParticipantsLists) UnmarshalJSON(data []byte) error {
 
 // TrustedIssuersList represents a single trusted issuers registry endpoint
 // with an associated type (e.g. "ebsi", "ebsi-v5"). Mirrors
-// TrustedParticipantsList for issuers.
+// TrustedParticipantsList for issuers. The Url field can be an external
+// registry endpoint URL or an HTTPS issuer URL for direct URL-matching
+// of HTTPS-based credential issuers. The wildcard value "*" matches any issuer.
 type TrustedIssuersList struct {
 	// Type of issuers list to be used — "ebsi" for v3/v4, "ebsi-v5" for v5.
+	// For HTTPS-based issuers the type is ignored; trust is determined by URL matching.
 	Type string `json:"type" mapstructure:"type"`
-	// Url of the trusted issuers registry endpoint.
+	// Url of the trusted issuers registry endpoint, or an HTTPS issuer URL
+	// for direct matching of HTTPS-based credential issuers. Use "*" to trust
+	// any issuer.
 	Url string `json:"url" mapstructure:"url"`
 }
 
