@@ -328,6 +328,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	clock := common.RealClock{}
 
 	credentialsVerifier := CredentialValidator{validationMode: config.Verifier.ValidationMode, clock: clock}
+	WarnDeprecatedMode(config.Verifier.ValidationMode)
 
 	externalGaiaXValidator := InitGaiaXRegistryValidationService(verifierConfig)
 
