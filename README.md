@@ -111,17 +111,17 @@ verifier:
     did:
     # identification of the verifier in communication with wallets
     clientIdentification:
-        # identification used by the verifier when requesting authorization. Can be a did, but also methods like x509_san_dns
+        # identification used by the verifier when requesting authorization, following the OIDC4VP client identifier prefixes(see https://openid.net/specs/openid-4-verifiable-presentations-1_0.html). Can be a did (e.g. "did:web:..."), an x509_san_dns entry ("x509_san_dns:<hostname>") or a redirect_uri entry ("redirect_uri:<the verifier's own callback url>"). Only redirect_uri works with the "urlEncoded" request mode, see "Request modes" below - it is the only scheme whose requests must NOT be signed.
         id:
-        # path to the signing key(in pem format) for request object. Needs to correspond with the id
+        # path to the signing key(in pem format) for request object. Needs to correspond with the id. Not used (and not needed) for the "redirect_uri" id scheme, since that scheme is never signed.
         keyPath:
-        # algorithm to be used for signing the request. Needs to match the signing key
+        # algorithm to be used for signing the request. Needs to match the signing key. Not used for the "redirect_uri" id scheme.
         requestKeyAlgorithm:
-        # depending on the id type, the certificate chain needs to be included in the object(f.e. in case of x509_san_dns)
+        # depending on the id type, the certificate chain needs to be included in the object(f.e. in case of x509_san_dns). Not used for the "redirect_uri" id scheme.
         certificatePath:
-        # Kid used when key certificate does not include it. If both are missing, id is used
+        # Kid used when key certificate does not include it. If both are missing, id is used. Not used for the "redirect_uri" id scheme.
         kid:
-    # supported modes for requesting authentication. in case of byReference and byValue, the clientIdentification needs to be properly configured
+    # supported modes for requesting authentication. in case of byReference and byValue, the clientIdentification needs to be properly configured(signing key required). urlEncoded is the only mode that does not sign the request, and the only one compatible with the "redirect_uri" id scheme above.
     supportedModes: ["urlEncoded", "byReference","byValue"]
     # address of the (ebsi-compliant) trusted-issuers-registry to be used for verifying the issuer of a received credential
     tirAddress:
@@ -578,15 +578,26 @@ The mode can be set during the intial requests, by sending the parameter "reques
 
 #### urlEncoded
 
+The only mode where the request is **not** signed — every parameter (including `presentation_definition`/`dcql_query`, when configured) is inlined as a plain query parameter instead of being wrapped in a JWT. Because nothing is fetched separately and nothing is base64-encoded into a compact JWT, the resulting URI/QR-code is larger than with `byValue`/`byReference`.
+
+This is the **only mode compatible with the `redirect_uri` [client identifier prefix](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html)** (as opposed to e.g. `did:...` or `x509_san_dns:...`). Per the OIDC4VP spec, requests using `redirect_uri` as client identifier scheme cannot be signed, since there is no key/certificate for the wallet to verify a signature against — the wallet's only trust check is that the response is sent back to the exact URI embedded in `client_id`.
+
+To use it:
+* set `clientIdentification.id` to `redirect_uri:` followed by the verifier's own callback URL, exactly as it will be sent as `response_uri` — for this verifier that's always `<host><pathPrefix>/api/v1/authentication_response`, e.g. `redirect_uri:https://verifier.org/api/v1/authentication_response`.
+* `keyPath`, `requestKeyAlgorithm` and `certificatePath` are **not needed** for this mode (no signing, no `x5c` header) — they only matter if `byValue`/`byReference` are also listed in `supportedModes` for other wallets.
+* make sure `"urlEncoded"` is included in `supportedModes`, and either pass `requestMode=urlEncoded` on the initial request or make it the default.
+
+Trade-off: `redirect_uri` gives up the cryptographic proof of the verifier's identity that `did:...`/`x509_san_dns:...` provide — use it only when the wallet you need to support doesn't implement a signed scheme (some do not, see wallet compatibility notes below), or as a fallback for wallets you don't fully control.
+
 Example:
 ```
-    openid4vp://?response_type=vp_token&response_mode=direct_post&client_id=did:key:verifier&redirect_uri=https://verifier.org/api/v1/authentication_response&state=randomState&nonce=randomNonce
+    openid4vp://?response_type=vp_token&response_mode=direct_post&client_id=redirect_uri:https://verifier.org/api/v1/authentication_response&response_uri=https://verifier.org/api/v1/authentication_response&state=randomState&nonce=randomNonce
 ```
 
 #### byValue
 Example:
 ```
-    openid4vp://?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJwcmVzZW50YXRpb25fZGVmaW5pdGlvbiI6eyJpZCI6IiIsImlucHV0X2Rlc2NyaXB0b3JzIjpudWxsLCJmb3JtYXQiOm51bGx9LCJyZWRpcmVjdF91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJzY29wZSI6Im9wZW5pZCIsInN0YXRlIjoicmFuZG9tU3RhdGUifQ.Z0xv_E9vvhRN2nBeKQ49LgH8lkjkX-weR7R5eCmX9ebGr1aE8_6usa2PO9nJ4LRv8oWMg0q9fsQ2x5DTYbvLdA
+    openid4vp://?client_id=did:key:verifier&request=eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJwcmVzZW50YXRpb25fZGVmaW5pdGlvbiI6eyJpZCI6IiIsImlucHV0X2Rlc2NyaXB0b3JzIjpudWxsLCJmb3JtYXQiOm51bGx9LCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJzY29wZSI6Im9wZW5pZCIsInN0YXRlIjoicmFuZG9tU3RhdGUifQ.Z0xv_E9vvhRN2nBeKQ49LgH8lkjkX-weR7R5eCmX9ebGr1aE8_6usa2PO9nJ4LRv8oWMg0q9fsQ2x5DTYbvLdA
 ```
 Decoded:
 ```json
@@ -604,7 +615,7 @@ Decoded:
     "input_descriptors": null,
     "format": null
   },
-  "redirect_uri": "https://verifier.org/api/v1/authbyValentication_response",
+  "response_uri": "https://verifier.org/api/v1/authentication_response",
   "response_type": "vp_token",
   "scope": "openid",
   "state": "randomState"

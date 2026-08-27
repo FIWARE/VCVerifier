@@ -468,6 +468,105 @@ func TestStartSameDeviceFlow(t *testing.T) {
 
 }
 
+func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
+	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	verifier := CredentialVerifier{
+		host:                 "verifier.org",
+		did:                  "did:key:verifier",
+		sessionCache:         &sessionCache,
+		nonceGenerator:       &nonceGenerator,
+		tokenSigner:          mockTokenSigner{},
+		clock:                mockClock{},
+		credentialsConfig:    credentialsConfig,
+		clientIdentification: configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
+	}
+
+	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-random-session-id", "/redirect", "", "", REQUEST_MODE_URL_ENCODED, "", "")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	base, query, found := strings.Cut(authReq, "?")
+	if !found {
+		t.Fatalf("Expected a query string in %s", authReq)
+	}
+	if base != "https://verifier.org/redirect" {
+		t.Errorf("Expected base https://verifier.org/redirect, got %s", base)
+	}
+
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Was not able to parse the query string %s: %v", query, err)
+	}
+	assert.Equal(t, "vp_token", values.Get("response_type"))
+	assert.Equal(t, "direct_post", values.Get("response_mode"))
+	assert.Equal(t, "redirect_uri:https://verifier.org/api/v1/authentication_response", values.Get("client_id"))
+	assert.Equal(t, "https://verifier.org/api/v1/authentication_response", values.Get("response_uri"))
+	assert.Equal(t, "my-random-session-id", values.Get("state"))
+	assert.Equal(t, "randomNonce", values.Get("nonce"))
+	assert.Empty(t, values.Get("presentation_definition"))
+	assert.Empty(t, values.Get("dcql_query"))
+
+	// no signed request object is generated/cached for this mode
+	cachedSession := sessionCache.sessions["my-random-session-id"]
+	assert.Empty(t, cachedSession.requestObject)
+}
+
+func TestCreateAuthenticationRequestUrlEncoded_IncludesPresentationDefinitionAndDcql(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	pd := &configModel.PresentationDefinition{Id: "my-pd"}
+	requireHolderBinding := true
+	dcql := &configModel.DCQL{Credentials: []configModel.CredentialQuery{{Id: "my-cred", RequireCryptographicHolderBinding: &requireHolderBinding}}}
+	credentialsConfig := mockCredentialConfig{
+		mockScopes: map[string]map[string]configModel.ScopeEntry{
+			"my-client": {"my-scope": {PresentationDefinition: pd, DCQL: dcql}},
+		},
+	}
+	verifier := CredentialVerifier{
+		credentialsConfig:    credentialsConfig,
+		clientIdentification: configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
+	}
+
+	authReq, err := verifier.createAuthenticationRequestUrlEncoded("openid4vp://", "https://verifier.org/api/v1/authentication_response", "my-state", "my-client", "my-scope", "my-nonce")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	_, query, _ := strings.Cut(authReq, "?")
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Was not able to parse the query string %s: %v", query, err)
+	}
+
+	var gotPd configModel.PresentationDefinition
+	if err := json.Unmarshal([]byte(values.Get("presentation_definition")), &gotPd); err != nil {
+		t.Fatalf("presentation_definition was not valid JSON: %v", err)
+	}
+	assert.Equal(t, *pd, gotPd)
+
+	var gotDcql configModel.DCQL
+	if err := json.Unmarshal([]byte(values.Get("dcql_query")), &gotDcql); err != nil {
+		t.Fatalf("dcql_query was not valid JSON: %v", err)
+	}
+	assert.Equal(t, *dcql, gotDcql)
+}
+
+func TestCreateAuthenticationRequestUrlEncoded_PropagatesConfigError(t *testing.T) {
+	configError := errors.New("config_error")
+	credentialsConfig := mockCredentialConfig{mockError: configError}
+	verifier := CredentialVerifier{credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/cb"}}
+
+	_, err := verifier.createAuthenticationRequestUrlEncoded("openid4vp://", "https://verifier.org/cb", "state", "client", "scope", "nonce")
+	if err != configError {
+		t.Errorf("Expected %v, got %v", configError, err)
+	}
+}
+
 // extractResponseUri decodes the (unsigned) JWT payload embedded in a
 // REQUEST_MODE_BY_VALUE authentication request and returns its response_uri claim.
 func extractResponseUri(t *testing.T, authRequest string) string {
