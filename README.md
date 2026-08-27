@@ -129,12 +129,19 @@ verifier:
     sessionExpiry: 30
     # scope(e.g. type of credential) to be requested from the wallet. if not configured, not specific scope will be requested.
     requestScope:
-    # Validation mode for validating the vcs. Does not touch verification, just content validation.
+    # Validation mode for credential content validation. This controls structural
+	# checks only — it does NOT affect cryptographic signature verification.
 	# applicable modes:
-	# * `none`: No validation, just swallow everything
-	# * `combined`: ld and schema validation
-	# * `jsonLd`: uses JSON-LD parser for validation
-	# * `baseContext`: validates that only the fields and values (when applicable)are present in the document. No extra fields are allowed (outside of credentialSubject).
+	# * `none`: No content validation beyond temporal checks (validFrom/validUntil).
+	#   Default. Recommended for most deployments.
+	# * `combined`: DEPRECATED — checks only that issuer and type fields are present.
+	#   Does NOT perform real JSON-LD or JSON-Schema validation despite the name.
+	#   A startup warning is logged when this mode is configured.
+	# * `jsonLd`: DEPRECATED — identical to `combined`; checks only field presence,
+	#   not actual JSON-LD processing. A startup warning is logged when configured.
+	#   Both `combined` and `jsonLd` will be removed in a future release.
+	# * `baseContext`: validates that the credential uses only W3C base-context types
+	#   (VerifiableCredential, VerifiablePresentation) and has an issuer.
 	# Default is set to `none` to ensure backwards compatibility
     validationMode:
     # algorithm to be used for the jwt signatures - currently supported: RS256 and ES256, default is RS256
