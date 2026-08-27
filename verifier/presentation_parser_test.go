@@ -859,3 +859,277 @@ func TestVerifyCnfBinding_NoCnf(t *testing.T) {
 		t.Errorf("Expected no error when cnf is absent, got %v", err)
 	}
 }
+
+// --- Tests for JSON-LD credential proof population ---
+
+func TestParseJSONLDCredential_PopulatesProofs(t *testing.T) {
+	type test struct {
+		testName   string
+		vcMap      map[string]interface{}
+		wantProofs int
+		wantType   string
+		wantErr    bool
+	}
+
+	tests := []test{
+		{
+			testName: "VC with single JWS proof",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:web:issuer.example.com",
+				"credentialSubject": map[string]interface{}{
+					"id":   "did:web:subject.example.com",
+					"name": "Alice",
+				},
+				"proof": map[string]interface{}{
+					"type":               "JsonWebSignature2020",
+					"created":            "2024-01-01T00:00:00Z",
+					"verificationMethod": "did:web:issuer.example.com#key-1",
+					"jws":                "eyJhbGciOiJQUzI1NiJ9..sig",
+					"proofPurpose":       "assertionMethod",
+				},
+			},
+			wantProofs: 1,
+			wantType:   "JsonWebSignature2020",
+			wantErr:    false,
+		},
+		{
+			testName: "VC with DataIntegrityProof",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:key:z6Mktest",
+				"credentialSubject": map[string]interface{}{
+					"id": "did:web:subject.example.com",
+				},
+				"proof": map[string]interface{}{
+					"type":               "DataIntegrityProof",
+					"created":            "2024-06-15T12:00:00Z",
+					"verificationMethod": "did:key:z6Mktest#z6Mktest",
+					"proofValue":         "z3FXQjecWufY46...",
+					"cryptosuite":        "eddsa-rdfc-2022",
+					"proofPurpose":       "assertionMethod",
+				},
+			},
+			wantProofs: 1,
+			wantType:   "DataIntegrityProof",
+			wantErr:    false,
+		},
+		{
+			testName: "VC with multiple proofs",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:web:issuer.example.com",
+				"credentialSubject": map[string]interface{}{
+					"id": "did:web:subject.example.com",
+				},
+				"proof": []interface{}{
+					map[string]interface{}{
+						"type":               "JsonWebSignature2020",
+						"created":            "2024-01-01T00:00:00Z",
+						"verificationMethod": "did:web:issuer.example.com#key-1",
+						"jws":                "eyJ..sig1",
+					},
+					map[string]interface{}{
+						"type":               "DataIntegrityProof",
+						"verificationMethod": "did:web:issuer.example.com#key-2",
+						"proofValue":         "zProofValue2",
+						"cryptosuite":        "ecdsa-rdfc-2019",
+					},
+				},
+			},
+			wantProofs: 2,
+			wantType:   "JsonWebSignature2020",
+			wantErr:    false,
+		},
+		{
+			testName: "VC without proof — no proofs populated",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:web:issuer.example.com",
+				"credentialSubject": map[string]interface{}{
+					"id": "did:web:subject.example.com",
+				},
+			},
+			wantProofs: 0,
+			wantErr:    false,
+		},
+		{
+			testName: "VC with invalid proof — missing type",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:web:issuer.example.com",
+				"credentialSubject": map[string]interface{}{
+					"id": "did:web:subject.example.com",
+				},
+				"proof": map[string]interface{}{
+					"jws": "eyJ..sig",
+				},
+			},
+			wantProofs: 0,
+			wantErr:    true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			cred, err := parseJSONLDCredential(tc.vcMap)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("Expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Expected no error, got %v", err)
+			}
+
+			proofs := cred.Proofs()
+			if len(proofs) != tc.wantProofs {
+				t.Errorf("Expected %d proofs, got %d", tc.wantProofs, len(proofs))
+			}
+			if tc.wantProofs > 0 && proofs[0].Type != tc.wantType {
+				t.Errorf("Expected first proof type %s, got %s", tc.wantType, proofs[0].Type)
+			}
+		})
+	}
+}
+
+func TestParseJSONLDCredential_ProofFieldsPreserved(t *testing.T) {
+	vcMap := map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer":   "did:web:issuer.example.com",
+		"credentialSubject": map[string]interface{}{
+			"id": "did:web:subject.example.com",
+		},
+		"proof": map[string]interface{}{
+			"type":               "JsonWebSignature2020",
+			"created":            "2024-01-01T00:00:00Z",
+			"verificationMethod": "did:web:issuer.example.com#key-1",
+			"jws":                "eyJhbGciOiJQUzI1NiJ9..sig",
+			"proofPurpose":       "assertionMethod",
+		},
+	}
+
+	cred, err := parseJSONLDCredential(vcMap)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	proofs := cred.Proofs()
+	if len(proofs) != 1 {
+		t.Fatalf("Expected 1 proof, got %d", len(proofs))
+	}
+	p := proofs[0]
+	if p.Created != "2024-01-01T00:00:00Z" {
+		t.Errorf("Expected created 2024-01-01T00:00:00Z, got %s", p.Created)
+	}
+	if p.VerificationMethod != "did:web:issuer.example.com#key-1" {
+		t.Errorf("Expected verificationMethod, got %s", p.VerificationMethod)
+	}
+	if p.ProofPurpose != "assertionMethod" {
+		t.Errorf("Expected proofPurpose assertionMethod, got %s", p.ProofPurpose)
+	}
+	if p.JWS != "eyJhbGciOiJQUzI1NiJ9..sig" {
+		t.Errorf("Expected JWS, got %s", p.JWS)
+	}
+}
+
+func TestParseJSONLDCredential_RawJSONPreserved(t *testing.T) {
+	vcMap := map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer":   "did:web:issuer.example.com",
+		"credentialSubject": map[string]interface{}{
+			"id": "did:web:subject.example.com",
+		},
+		"proof": map[string]interface{}{
+			"type":               "JsonWebSignature2020",
+			"verificationMethod": "did:web:issuer.example.com#key-1",
+			"jws":                "eyJ..sig",
+		},
+	}
+
+	cred, err := parseJSONLDCredential(vcMap)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	raw := cred.ToRawJSON()
+	if raw == nil {
+		t.Fatal("Expected raw JSON to be preserved, got nil")
+	}
+	// The raw JSON should include the proof member for canonicalization purposes.
+	if _, ok := raw["proof"]; !ok {
+		t.Error("Expected proof key in raw JSON for canonicalization")
+	}
+}
+
+// TestParseJSONLDPresentation_ProofParsedBeforeRejection verifies that proof
+// parsing happens correctly before the fail-closed rejection. This ensures
+// invalid proof structure is caught early (not just rejected generically).
+func TestParseJSONLDPresentation_ProofParsedBeforeRejection(t *testing.T) {
+	type test struct {
+		testName string
+		vpJSON   string
+		wantErr  error
+	}
+
+	tests := []test{
+		{
+			testName: "valid proof format — rejected as unverifiable",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"proof": {
+					"type": "JsonWebSignature2020",
+					"created": "2024-01-01T00:00:00Z",
+					"verificationMethod": "did:web:holder.example.com#key-1",
+					"jws": "eyJhbGciOiJQUzI1NiJ9..sig"
+				}
+			}`,
+			wantErr: ErrorInvalidProof,
+		},
+		{
+			testName: "malformed proof — missing type returns parse error",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"proof": {
+					"jws": "eyJ..sig"
+				}
+			}`,
+			wantErr: common.ErrorLDProofMissingType,
+		},
+		{
+			testName: "malformed proof — no signature returns parse error",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"proof": {
+					"type": "JsonWebSignature2020",
+					"created": "2024-01-01T00:00:00Z"
+				}
+			}`,
+			wantErr: common.ErrorLDProofNoSignature,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
+			_, err := parser.ParsePresentation([]byte(tc.vpJSON))
+			if err == nil {
+				t.Fatal("Expected error, got nil")
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("Expected error %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
