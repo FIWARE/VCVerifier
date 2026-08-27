@@ -3,6 +3,7 @@ package verifier
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/fiware/VCVerifier/did"
@@ -61,6 +62,59 @@ func (kr *VdrKeyResolver) ResolvePublicKeyFromDID(kid string) (key jwk.Key, err 
 
 	logging.Log().Warnf("KeyId %s not found in verification methods.", keyID)
 	return nil, ErrorInvalidJWT
+}
+
+// didElsiMethodPrefix is the prefix for did:elsi DIDs. JAdES is JWS-based
+// and does not apply to Linked Data Proofs.
+const didElsiMethodPrefix = "did:elsi:"
+
+// ErrorDidElsiNotSupportedForLDProof is returned when a did:elsi verification
+// method is encountered in an LD-proof context. JAdES is JWS-based and does
+// not apply to Linked Data Proofs.
+var ErrorDidElsiNotSupportedForLDProof = errors.New("did_elsi_not_supported_for_ld_proofs")
+
+// ResolveKeyFromDID resolves a DID to a public JWK key by querying the
+// given did.Registry. The didStr is the full DID (e.g., "did:key:z6Mk..."),
+// and kid is the key identifier used to select the correct verification
+// method from the DID document (e.g., "did:key:z6Mk...#z6Mk...").
+//
+// This function is shared between JWTProofChecker and LDProofChecker to
+// avoid duplicating DID-to-key resolution logic.
+func ResolveKeyFromDID(registry *did.Registry, didStr string, kid string) (jwk.Key, error) {
+	docRes, err := registry.Resolve(didStr)
+	if err != nil {
+		logging.Log().Warnf("Failed to resolve DID %s: %v", didStr, err)
+		return nil, err
+	}
+
+	for _, vm := range docRes.DIDDocument.VerificationMethod {
+		if compareVerificationMethod(kid, vm.ID) {
+			key := vm.JSONWebKey()
+			if key == nil {
+				return nil, ErrorNoVerificationKey
+			}
+			return key, nil
+		}
+	}
+
+	logging.Log().Warnf("No matching verification method for kid=%s in DID=%s", kid, didStr)
+	return nil, ErrorNoVerificationKey
+}
+
+// ExtractDIDAndFragment splits a verification method URI into a DID and a
+// key ID (kid). For example, "did:key:z6Mk...#z6Mk..." returns
+// ("did:key:z6Mk...", "did:key:z6Mk...#z6Mk..."). If no fragment is
+// present, the full string is returned as both the DID and the kid.
+func ExtractDIDAndFragment(verificationMethod string) (didStr string, kid string) {
+	if idx := strings.Index(verificationMethod, "#"); idx > 0 {
+		return verificationMethod[:idx], verificationMethod
+	}
+	return verificationMethod, verificationMethod
+}
+
+// IsDidElsi returns true if the given DID string uses the did:elsi method.
+func IsDidElsi(didStr string) bool {
+	return strings.HasPrefix(didStr, didElsiMethodPrefix)
 }
 
 func (kr *VdrKeyResolver) ExtractKIDFromJWT(tokenString string) (string, error) {
