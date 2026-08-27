@@ -2267,3 +2267,132 @@ func TestGetHolderValidationContext(t *testing.T) {
 		})
 	}
 }
+
+// --- verifyVPSignatureIfRequired: JSON-LD VP path tests ---
+
+// testServiceID and testScope are shared constants for holder binding test configs.
+const testServiceID = "test-client"
+const testScope = "openid"
+const testCredentialType = "VerifiableCredential"
+
+// TestVerifyVPSignatureIfRequired_JSONLDVPs uses table-driven tests to verify
+// that verifyVPSignatureIfRequired handles JSON-LD VPs correctly. It covers:
+// - No holder binding required: always succeeds
+// - Holder binding required with HolderKey present: succeeds
+// - Holder binding required with HolderKey absent: returns ErrorHolderBindingMissingKey
+// - No LD proofs and no raw token (JWT VP path): no-op
+func TestVerifyVPSignatureIfRequired_JSONLDVPs(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	// Generate a JWK for use as a holder key.
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	assert.NoError(t, err)
+	holderJWK, err := jwk.Import(&ecKey.PublicKey)
+	assert.NoError(t, err)
+
+	type testCase struct {
+		name              string
+		holderRequired    bool
+		hasProofs         bool
+		hasHolderKey      bool
+		expectedErr       error
+	}
+
+	tests := []testCase{
+		{
+			name:           "no_holder_binding_required_with_ld_proofs",
+			holderRequired: false,
+			hasProofs:      true,
+			hasHolderKey:   false,
+			expectedErr:    nil,
+		},
+		{
+			name:           "holder_binding_required_with_holder_key_present",
+			holderRequired: true,
+			hasProofs:      true,
+			hasHolderKey:   true,
+			expectedErr:    nil,
+		},
+		{
+			name:           "holder_binding_required_without_holder_key",
+			holderRequired: true,
+			hasProofs:      true,
+			hasHolderKey:   false,
+			expectedErr:    ErrorHolderBindingMissingKey,
+		},
+		{
+			name:           "no_proofs_no_raw_token_jwt_path_noop",
+			holderRequired: true,
+			hasProofs:      false,
+			hasHolderKey:   false,
+			expectedErr:    nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Set up mock credentials config with holder verification as required.
+			mockScopes := createMockCredentials(
+				testServiceID, testScope, testCredentialType,
+				"https://tir.example.com", "sub", tc.holderRequired,
+			)
+
+			verifier := CredentialVerifier{
+				credentialsConfig: mockCredentialConfig{mockScopes: mockScopes},
+			}
+
+			// Build a presentation with optional LD proofs and holder key.
+			pres, _ := common.NewPresentation()
+			if tc.hasProofs {
+				pres.Proofs = []*common.LDProof{{
+					Type:               common.ProofTypeJsonWebSignature2020,
+					VerificationMethod: "did:web:holder.example.com#key-1",
+					JWS:                "dummy-jws-value",
+				}}
+			}
+			if tc.hasHolderKey {
+				pres.SetHolderKey(holderJWK)
+			}
+
+			err := verifier.verifyVPSignatureIfRequired(
+				testServiceID,
+				[]string{testScope},
+				[]string{testCredentialType},
+				pres,
+			)
+
+			if tc.expectedErr != nil {
+				assert.ErrorIs(t, err, tc.expectedErr, "expected %v, got %v", tc.expectedErr, err)
+			} else {
+				assert.NoError(t, err, "expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestVerifyVPSignatureIfRequired_ConfigError verifies that a credentials config
+// error is propagated correctly when checking JSON-LD VP holder binding.
+func TestVerifyVPSignatureIfRequired_ConfigError(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	verifier := CredentialVerifier{
+		credentialsConfig: mockCredentialConfig{
+			mockScopes: createMockCredentials(testServiceID, testScope, testCredentialType, "https://tir.example.com", "sub", true),
+			mockError:  errors.New("config unavailable"),
+		},
+	}
+
+	pres, _ := common.NewPresentation()
+	pres.Proofs = []*common.LDProof{{
+		Type: common.ProofTypeJsonWebSignature2020,
+		JWS:  "dummy-jws",
+	}}
+
+	err := verifier.verifyVPSignatureIfRequired(
+		testServiceID,
+		[]string{testScope},
+		[]string{testCredentialType},
+		pres,
+	)
+	assert.ErrorIs(t, err, ErrorVerficationContextSetup)
+}

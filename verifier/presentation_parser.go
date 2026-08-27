@@ -40,6 +40,19 @@ var ErrorCnfKeyMismatch = errors.New("cnf_key_does_not_match_vp_signer")
 // must be rejected.
 var ErrorUnsignedPresentation = errors.New("unsigned_presentation_not_accepted")
 
+// ErrorProofChallengeMismatch is returned when a JSON-LD VP proof's challenge
+// field does not match the expected session nonce, indicating a potential
+// replay attack.
+var ErrorProofChallengeMismatch = errors.New("vp_proof_challenge_mismatch")
+
+// ErrorProofDomainMismatch is returned when a JSON-LD VP proof's domain
+// field does not match the expected verifier audience/client ID.
+var ErrorProofDomainMismatch = errors.New("vp_proof_domain_mismatch")
+
+// ErrorHolderBindingMissingKey is returned when holder binding is required
+// but the JSON-LD VP has no holder key from LD-proof verification.
+var ErrorHolderBindingMissingKey = errors.New("holder_binding_required_but_no_key_available")
+
 // allow singleton access to the parser
 var presentationParser PresentationParser
 
@@ -515,6 +528,52 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 	}
 
 	return pres, nil
+}
+
+// VerifyLDVPProofBinding checks the semantic bindings of JSON-LD VP proofs:
+// challenge (replay prevention via session nonce) and domain (audience binding).
+//
+// If expectedChallenge is non-empty, at least one VP-level proof must have a
+// matching Challenge field. A proof with a Challenge that does not match the
+// expected value returns ErrorProofChallengeMismatch. If no proof carries the
+// expected challenge, ErrorProofChallengeMismatch is also returned.
+//
+// If expectedDomain is non-empty and a proof carries a Domain field, the domain
+// must match expectedDomain or ErrorProofDomainMismatch is returned.
+//
+// If the presentation has no LD proofs, the check is a no-op (returns nil).
+func VerifyLDVPProofBinding(pres *common.Presentation, expectedChallenge, expectedDomain string) error {
+	if len(pres.Proofs) == 0 {
+		return nil
+	}
+
+	challengeMatched := false
+	for _, proof := range pres.Proofs {
+		// Check challenge binding (replay prevention).
+		if expectedChallenge != "" && proof.Challenge != "" {
+			if proof.Challenge != expectedChallenge {
+				logging.Log().Warnf("VP proof challenge %q does not match expected nonce %q", proof.Challenge, expectedChallenge)
+				return ErrorProofChallengeMismatch
+			}
+			challengeMatched = true
+		}
+
+		// Check domain binding (audience verification).
+		if expectedDomain != "" && proof.Domain != "" {
+			if proof.Domain != expectedDomain {
+				logging.Log().Warnf("VP proof domain %q does not match expected domain %q", proof.Domain, expectedDomain)
+				return ErrorProofDomainMismatch
+			}
+		}
+	}
+
+	// If a challenge was expected, at least one proof must have provided it.
+	if expectedChallenge != "" && !challengeMatched {
+		logging.Log().Warn("VP proof challenge expected but not found in any proof")
+		return ErrorProofChallengeMismatch
+	}
+
+	return nil
 }
 
 // extractJWTPayload decodes the payload from a JWT without signature verification.
