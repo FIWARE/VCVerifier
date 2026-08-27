@@ -54,6 +54,7 @@ type mockVerifier struct {
 	mockExchangeRefresh     string
 	mockExchangeError       error
 	mockPathPrefix          string
+	mockDefaultRequestMode  string
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
@@ -94,6 +95,10 @@ func (mV *mockVerifier) GetHost() string {
 
 func (mV *mockVerifier) GetPathPrefix() string {
 	return mV.mockPathPrefix
+}
+
+func (mV *mockVerifier) GetDefaultRequestMode() string {
+	return mV.mockDefaultRequestMode
 }
 
 // TODO
@@ -673,6 +678,7 @@ func buildSignedVPToken(t *testing.T) string {
 // TestGetPresentationFromQuery exercises both shapes of the DCQL vp_token map:
 //   - OID4VP drafts 22-24: {"<query_id>": "<single-presentation>"}
 //   - OID4VP draft 25+:    {"<query_id>": ["<presentation>", ...]}
+//
 // Both must be accepted (backward-compatible). Inputs that are neither a query
 // map nor parseable as a single token must return (nil, nil) so the caller
 // falls through to the flat-string presentation parsing path. A token that is
@@ -767,11 +773,19 @@ func TestBuildFrontendV2Address(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
-			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce")
+			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "byReference")
 			if actual != tc.want {
 				t.Errorf("%s - Expected %s but was %s", tc.testName, tc.want, actual)
 			}
 		})
+	}
+}
+
+func TestBuildFrontendV2Address_UsesProvidedRequestMode(t *testing.T) {
+	actual := buildFrontendV2Address("https", "verifier.org", "", "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "urlEncoded")
+	want := "https://verifier.org/api/v2/loginQR?state=my-state&client_id=my-client&redirect_uri=https://wallet.example/callback&scope=&nonce=my-nonce&request_mode=urlEncoded"
+	if actual != want {
+		t.Errorf("Expected %s but was %s", want, actual)
 	}
 }
 
