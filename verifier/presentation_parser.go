@@ -16,7 +16,15 @@ import (
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/hellofresh/health-go/v5"
 	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/piprate/json-gold/ld"
 )
+
+// ldDocLoaderCacheTTL is the TTL for cached JSON-LD context documents.
+const ldDocLoaderCacheTTL = 1 * time.Hour
+
+// ldDocLoaderCacheCleanup is the interval for removing expired entries from
+// the JSON-LD document loader cache.
+const ldDocLoaderCacheCleanup = 10 * time.Minute
 
 var ErrorNoValidationEndpoint = errors.New("no_validation_endpoint_configured")
 var ErrorNoValidationHost = errors.New("no_validation_host_configured")
@@ -41,6 +49,9 @@ var sdJwtParser SdJwtParser
 // globalProofChecker is the shared proof checker for deferred VP signature verification.
 var globalProofChecker *JWTProofChecker
 
+// globalLDProofChecker is the shared LD proof checker for JSON-LD VP/VC verification.
+var globalLDProofChecker *LDProofChecker
+
 // parser interface
 type PresentationParser interface {
 	ParsePresentation(tokenBytes []byte) (*common.Presentation, error)
@@ -53,7 +64,8 @@ type SdJwtParser interface {
 }
 
 type ConfigurablePresentationParser struct {
-	ProofChecker *JWTProofChecker
+	ProofChecker   *JWTProofChecker
+	LDProofChecker *LDProofChecker
 }
 
 type ConfigurableSdJwtParser struct {
@@ -73,6 +85,11 @@ func GetSdJwtParser() SdJwtParser {
 // GetProofChecker returns the shared JWT proof checker for VP signature verification.
 func GetProofChecker() *JWTProofChecker {
 	return globalProofChecker
+}
+
+// GetLDProofChecker returns the shared LD proof checker for JSON-LD VP/VC verification.
+func GetLDProofChecker() *LDProofChecker {
+	return globalLDProofChecker
 }
 
 /**
@@ -119,7 +136,21 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 
 	checker := NewJWTProofChecker(registry, jAdESValidator)
 	globalProofChecker = checker
-	presentationParser = &ConfigurablePresentationParser{ProofChecker: checker}
+
+	// Set up the caching document loader for JSON-LD context resolution and
+	// create the LDProofChecker for verifying Linked Data Proofs on VPs/VCs.
+	docLoader := common.NewCachingDocumentLoader(
+		ld.NewDefaultDocumentLoader(http.DefaultClient),
+		ldDocLoaderCacheTTL,
+		ldDocLoaderCacheCleanup,
+	)
+	ldChecker := NewLDProofChecker(registry, docLoader)
+	globalLDProofChecker = ldChecker
+
+	presentationParser = &ConfigurablePresentationParser{
+		ProofChecker:   checker,
+		LDProofChecker: ldChecker,
+	}
 	sdJwtParser = &ConfigurableSdJwtParser{
 		ProofChecker: checker,
 	}
@@ -355,16 +386,15 @@ func stringFromMap(m map[string]interface{}, key string) string {
 // jsonldVPProofKey is the JSON key for the proof member in a JSON-LD VP.
 const jsonldVPProofKey = "proof"
 
-// parseJSONLDPresentation rejects JSON-LD VPs because Linked Data Proof
-// verification is not yet implemented. This fail-closed approach prevents
-// unsigned or unverifiable JSON-LD VPs from being silently accepted.
+// parseJSONLDPresentation parses a JSON-LD Verifiable Presentation and
+// verifies its Linked Data Proof(s) using the configured LDProofChecker.
 //
-// VPs with a "proof" member return ErrorInvalidProof (the proof cannot be
-// verified until LDProofChecker is available — see Steps 5-7). VPs without
-// a proof return ErrorUnsignedPresentation.
+// If the LDProofChecker is not configured, VPs with proofs are rejected
+// (fail-closed). VPs without proofs are always rejected.
 //
-// Once LD-proof verification is implemented this method will verify the
-// VP proof and parse embedded VCs with signature checking.
+// For each embedded VC that carries its own LD proof(s), those proofs are
+// also verified. JWT VCs embedded in a JSON-LD VP are verified via the
+// JWTProofChecker (same as before).
 func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) (*common.Presentation, error) {
 	var vpMap map[string]interface{}
 	if err := json.Unmarshal(data, &vpMap); err != nil {
@@ -373,21 +403,118 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 
 	// Extract VP-level proofs if present.
 	proofRaw, hasProof := vpMap[jsonldVPProofKey]
-	if hasProof {
-		proofs, err := common.ParseLDProofs(proofRaw)
-		if err != nil {
-			logging.Log().Warnf("Failed to parse LD proofs on JSON-LD VP: %v", err)
-			return nil, err
-		}
+	if !hasProof {
+		logging.Log().Warn("JSON-LD VP has no proof — unsigned presentations are not accepted")
+		return nil, ErrorUnsignedPresentation
+	}
 
-		// Fail closed: proofs were parsed but LD-proof verification is not yet
-		// implemented (see Steps 5-7). Reject until LDProofChecker is available.
-		_ = proofs // Will be attached to the presentation once verification is wired.
-		logging.Log().Warn("JSON-LD VP contains a proof member but LD-proof verification is not yet supported — rejecting")
+	proofs, err := common.ParseLDProofs(proofRaw)
+	if err != nil {
+		logging.Log().Warnf("Failed to parse LD proofs on JSON-LD VP: %v", err)
+		return nil, err
+	}
+
+	if len(proofs) == 0 {
+		logging.Log().Warn("JSON-LD VP has empty proof array — unsigned presentations are not accepted")
+		return nil, ErrorUnsignedPresentation
+	}
+
+	// Fail closed when no LDProofChecker is available.
+	if cpp.LDProofChecker == nil {
+		logging.Log().Warn("JSON-LD VP has a proof but LDProofChecker is not configured — rejecting")
 		return nil, ErrorInvalidProof
 	}
-	logging.Log().Warn("JSON-LD VP has no proof — unsigned presentations are not accepted")
-	return nil, ErrorUnsignedPresentation
+
+	// Build the document bytes WITHOUT the proof member for verification
+	// (the proof is excluded from canonicalization input).
+	vpWithoutProof := make(map[string]interface{}, len(vpMap))
+	for k, v := range vpMap {
+		if k != jsonldVPProofKey {
+			vpWithoutProof[k] = v
+		}
+	}
+	vpDocBytes, err := json.Marshal(vpWithoutProof)
+	if err != nil {
+		return nil, err
+	}
+
+	pres, _ := common.NewPresentation()
+
+	// Verify each VP-level proof and capture the signer key from the first
+	// valid proof for downstream holder binding.
+	var holderKey jwk.Key
+	for _, proof := range proofs {
+		key, verifyErr := cpp.LDProofChecker.VerifyPresentation(vpDocBytes, proof)
+		if verifyErr != nil {
+			return nil, verifyErr
+		}
+		if holderKey == nil {
+			holderKey = key
+		}
+	}
+	if holderKey != nil {
+		pres.SetHolderKey(holderKey)
+	}
+	pres.Proofs = proofs
+
+	// Extract holder from the VP map.
+	if holder, ok := vpMap[common.VPKeyHolder].(string); ok {
+		pres.Holder = holder
+	}
+
+	// Parse embedded VCs.
+	vcsRaw, ok := vpMap[common.VPKeyVerifiableCredential]
+	if !ok {
+		return pres, nil
+	}
+
+	vcList, ok := vcsRaw.([]interface{})
+	if !ok {
+		return nil, ErrorVCNotArray
+	}
+
+	for _, vc := range vcList {
+		switch v := vc.(type) {
+		case string:
+			// JWT VC embedded in a JSON-LD VP — verify via JWTProofChecker.
+			cred, credErr := cpp.parseJWTCredential([]byte(v))
+			if credErr != nil {
+				return nil, credErr
+			}
+			if holderKey != nil {
+				if bindErr := verifyCnfBinding(cred, holderKey); bindErr != nil {
+					return nil, bindErr
+				}
+			}
+			pres.AddCredentials(cred)
+		case map[string]interface{}:
+			cred, credErr := parseJSONLDCredential(v)
+			if credErr != nil {
+				return nil, credErr
+			}
+			// Verify LD proofs on the credential if present.
+			if len(cred.Proofs()) > 0 {
+				vcWithoutProof := make(map[string]interface{}, len(v))
+				for k, val := range v {
+					if k != jsonldVPProofKey {
+						vcWithoutProof[k] = val
+					}
+				}
+				vcDocBytes, marshalErr := json.Marshal(vcWithoutProof)
+				if marshalErr != nil {
+					return nil, marshalErr
+				}
+				for _, vcProof := range cred.Proofs() {
+					if vcVerifyErr := cpp.LDProofChecker.VerifyCredential(vcDocBytes, vcProof); vcVerifyErr != nil {
+						return nil, vcVerifyErr
+					}
+				}
+			}
+			pres.AddCredentials(cred)
+		}
+	}
+
+	return pres, nil
 }
 
 // extractJWTPayload decodes the payload from a JWT without signature verification.
