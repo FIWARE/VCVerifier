@@ -68,7 +68,7 @@ func TestCachingStatusListClientFetch(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil)
+			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
 			cred, err := client.Fetch(srv.URL)
 
 			if tc.wantErr != nil {
@@ -97,7 +97,7 @@ func TestCachingStatusListClientCache(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil)
+	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
 
 	first, err := client.Fetch(srv.URL)
 	require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestCachingStatusListClientTransportError(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 
-	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil)
+	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
 	cred, err := client.Fetch(url)
 
 	require.Error(t, err)
@@ -143,7 +143,7 @@ func TestCachingStatusListClientAcceptHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil)
+	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
 	_, err := client.Fetch(srv.URL)
 	require.NoError(t, err)
 	assert.Equal(t, AcceptHeaderStatusListCredential, received)
@@ -243,7 +243,7 @@ func TestParseStatusListCredentialBodyJWTVerification(t *testing.T) {
 				verifier = tc.verifier
 			}
 
-			cred, err := parseStatusListCredentialBody([]byte(tc.body), verifier)
+			cred, err := parseStatusListCredentialBody([]byte(tc.body), verifier, nil)
 
 			if tc.wantErr != nil {
 				require.Error(t, err)
@@ -292,7 +292,7 @@ func TestCachingStatusListClientFetchJWTVerification(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, tc.verifier)
+			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, tc.verifier, nil)
 			cred, err := client.Fetch(srv.URL)
 
 			if tc.wantErr != nil {
@@ -341,7 +341,7 @@ func TestParseStatusListCredentialBody_RejectsJSONLD(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cred, err := parseStatusListCredentialBody([]byte(tc.body), nil)
+			cred, err := parseStatusListCredentialBody([]byte(tc.body), nil, nil)
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrorStatusListJSONLDProofUnsupported)
 			assert.Nil(t, cred)

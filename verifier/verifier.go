@@ -336,6 +336,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate the credentials config. Err: %v", err)
 	}
+	WarnLDPVCFormat(config.ConfigRepo.Services)
 
 	var tokenProvider tir.TokenProvider
 	if (&config.M2M).AuthEnabled {
@@ -367,7 +368,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	statusListCacheExpiry := time.Duration(verifierConfig.StatusListCacheExpiry) * time.Second
 	statusListDIDRegistry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
 	statusListJWTVerifier := NewStatusListJWTVerifier(statusListDIDRegistry)
-	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier)
+	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, nil)
 	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, clock)
 	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, ietfStatusListClient, clock)
 
