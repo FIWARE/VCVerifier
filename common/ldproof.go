@@ -16,6 +16,13 @@ import (
 const (
 	LDProofKeyCreated            = "created"
 	LDProofKeyVerificationMethod = "verificationMethod"
+	LDProofKeyProofPurpose       = "proofPurpose"
+	LDProofKeyChallenge          = "challenge"
+	LDProofKeyDomain             = "domain"
+	LDProofKeyProofValue         = "proofValue"
+	LDProofKeyCryptosuite        = "cryptosuite"
+	LDProofKeyJWS                = "jws"
+	LDProofKeyType               = "type"
 )
 
 // JWS header keys.
@@ -37,14 +44,31 @@ var (
 	ErrorLDProofCanonDoc   = errors.New("failed_to_canonicalize_document")
 	ErrorLDProofCanonProof = errors.New("failed_to_canonicalize_proof_options")
 	ErrorLDProofSign       = errors.New("failed_to_sign")
+
+	// ErrorLDProofMissingType is returned when a proof map has no "type" field.
+	ErrorLDProofMissingType = errors.New("ld_proof_missing_type")
+
+	// ErrorLDProofInvalidFormat is returned when a proof value is neither a map nor a slice of maps.
+	ErrorLDProofInvalidFormat = errors.New("ld_proof_invalid_format")
+
+	// ErrorLDProofNoSignature is returned when a proof has neither "jws" nor "proofValue".
+	ErrorLDProofNoSignature = errors.New("ld_proof_no_signature")
 )
 
-// LDProof represents a Linked Data Proof attached to a Verifiable Presentation.
+// LDProof represents a Linked Data Proof (Data Integrity Proof) attached to a
+// Verifiable Credential or Verifiable Presentation.
+// It covers both JsonWebSignature2020 (JWS-based) and newer Data Integrity
+// suites (proofValue-based). See https://www.w3.org/TR/vc-data-integrity/.
 type LDProof struct {
 	Type               string `json:"type"`
 	Created            string `json:"created"`
 	VerificationMethod string `json:"verificationMethod"`
-	JWS                string `json:"jws"`
+	JWS                string `json:"jws,omitempty"`
+	ProofPurpose       string `json:"proofPurpose,omitempty"`
+	Challenge          string `json:"challenge,omitempty"`
+	Domain             string `json:"domain,omitempty"`
+	ProofValue         string `json:"proofValue,omitempty"`
+	Cryptosuite        string `json:"cryptosuite,omitempty"`
 }
 
 // LDSigner signs data for use in Linked Data Proofs.
@@ -62,7 +86,91 @@ type LinkedDataProofContext struct {
 	DocumentLoader     ld.DocumentLoader
 }
 
-// AddLinkedDataProof creates a JsonWebSignature2020 linked data proof and attaches it to the presentation.
+// ParseLDProof extracts an LDProof from a JSON map. It handles both
+// JsonWebSignature2020 (JWS-based) and newer Data Integrity suites
+// (proofValue-based). Returns an error if the map has no "type" field or
+// contains neither "jws" nor "proofValue".
+func ParseLDProof(proofMap map[string]interface{}) (*LDProof, error) {
+	proofType, ok := proofMap[LDProofKeyType].(string)
+	if !ok || proofType == "" {
+		return nil, ErrorLDProofMissingType
+	}
+
+	proof := &LDProof{
+		Type: proofType,
+	}
+
+	if v, ok := proofMap[LDProofKeyCreated].(string); ok {
+		proof.Created = v
+	}
+	if v, ok := proofMap[LDProofKeyVerificationMethod].(string); ok {
+		proof.VerificationMethod = v
+	}
+	if v, ok := proofMap[LDProofKeyJWS].(string); ok {
+		proof.JWS = v
+	}
+	if v, ok := proofMap[LDProofKeyProofPurpose].(string); ok {
+		proof.ProofPurpose = v
+	}
+	if v, ok := proofMap[LDProofKeyChallenge].(string); ok {
+		proof.Challenge = v
+	}
+	if v, ok := proofMap[LDProofKeyDomain].(string); ok {
+		proof.Domain = v
+	}
+	if v, ok := proofMap[LDProofKeyProofValue].(string); ok {
+		proof.ProofValue = v
+	}
+	if v, ok := proofMap[LDProofKeyCryptosuite].(string); ok {
+		proof.Cryptosuite = v
+	}
+
+	// A valid proof must carry at least one signature field.
+	if proof.JWS == "" && proof.ProofValue == "" {
+		return nil, ErrorLDProofNoSignature
+	}
+
+	return proof, nil
+}
+
+// ParseLDProofs parses one or more LD proofs from a raw JSON value.
+// The value may be a single proof map or an array of proof maps.
+// Returns nil (no error) when proofRaw is nil.
+func ParseLDProofs(proofRaw interface{}) ([]*LDProof, error) {
+	if proofRaw == nil {
+		return nil, nil
+	}
+
+	switch v := proofRaw.(type) {
+	case map[string]interface{}:
+		p, err := ParseLDProof(v)
+		if err != nil {
+			return nil, err
+		}
+		return []*LDProof{p}, nil
+
+	case []interface{}:
+		proofs := make([]*LDProof, 0, len(v))
+		for _, item := range v {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, ErrorLDProofInvalidFormat
+			}
+			p, err := ParseLDProof(m)
+			if err != nil {
+				return nil, err
+			}
+			proofs = append(proofs, p)
+		}
+		return proofs, nil
+
+	default:
+		return nil, ErrorLDProofInvalidFormat
+	}
+}
+
+// AddLinkedDataProof creates a JsonWebSignature2020 linked data proof and
+// appends it to the presentation's Proofs slice.
 func (p *Presentation) AddLinkedDataProof(ctx *LinkedDataProofContext) error {
 	// Marshal VP to JSON (without proof)
 	vpJSON, err := p.MarshalJSON()
@@ -132,12 +240,13 @@ func (p *Presentation) AddLinkedDataProof(ctx *LinkedDataProofContext) error {
 	sigB64 := base64.RawURLEncoding.EncodeToString(sig)
 	jws := headerB64 + ".." + sigB64
 
-	p.Proof = &LDProof{
+	proof := &LDProof{
 		Type:               ctx.SignatureType,
 		Created:            created,
 		VerificationMethod: ctx.VerificationMethod,
 		JWS:                jws,
 	}
+	p.Proofs = append(p.Proofs, proof)
 
 	return nil
 }

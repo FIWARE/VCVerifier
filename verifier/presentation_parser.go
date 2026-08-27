@@ -371,8 +371,18 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 		return nil, err
 	}
 
-	// Fail closed: reject JSON-LD VPs that cannot be cryptographically verified.
-	if _, hasProof := vpMap[jsonldVPProofKey]; hasProof {
+	// Extract VP-level proofs if present.
+	proofRaw, hasProof := vpMap[jsonldVPProofKey]
+	if hasProof {
+		proofs, err := common.ParseLDProofs(proofRaw)
+		if err != nil {
+			logging.Log().Warnf("Failed to parse LD proofs on JSON-LD VP: %v", err)
+			return nil, err
+		}
+
+		// Fail closed: proofs were parsed but LD-proof verification is not yet
+		// implemented (see Steps 5-7). Reject until LDProofChecker is available.
+		_ = proofs // Will be attached to the presentation once verification is wired.
 		logging.Log().Warn("JSON-LD VP contains a proof member but LD-proof verification is not yet supported — rejecting")
 		return nil, ErrorInvalidProof
 	}
@@ -465,6 +475,17 @@ func parseJSONLDCredential(vcMap map[string]interface{}) (*common.Credential, er
 		return nil, err
 	}
 	cred.SetRawJSON(vcMap)
+
+	// Extract LD proofs from the credential, if present.
+	if proofRaw, hasProof := vcMap[common.VPKeyProof]; hasProof {
+		proofs, err := common.ParseLDProofs(proofRaw)
+		if err != nil {
+			logging.Log().Warnf("Failed to parse LD proofs on JSON-LD credential: %v", err)
+			return nil, err
+		}
+		cred.SetProofs(proofs)
+	}
+
 	return cred, nil
 }
 
