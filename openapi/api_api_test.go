@@ -158,18 +158,18 @@ func TestGetToken(t *testing.T) {
 		{testName: "If no auth code is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessageNoCode},
 		{testName: "If no redirect uri is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", expectedStatusCode: 400, expectedError: ErrorMessageInvalidTokenRequest},
 		{testName: "If the verify returns an error, a 403 should be answerd.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockError: errors.New("invalid"), expectedStatusCode: 403, expectedError: ErrorMessage{}},
-		{testName: "If no valid scope is provided, the request should be executed in the default scope.", proofCheck: false, testVPToken: getValidVPToken(), testGrantType: "vp_token", expectedStatusCode: 200},
+		{testName: "If no valid scope is provided, the request should be executed in the default scope.", proofCheck: false, testVPToken: getValidVPTokenJWT(), testGrantType: "vp_token", expectedStatusCode: 200},
 
-		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT"}},
+		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT"}},
 		{testName: "If a valid signed vp_token request is received a token should be responded.", proofCheck: true, testGrantType: "vp_token", testVPToken: buildSignedVPToken(t), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT"}},
 		{testName: "If no valid vp_token is provided, the request should fail.", proofCheck: false, testGrantType: "vp_token", testScope: "tir_read", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
 		// token-exchange
-		{testName: "If a valid token-exchange request is received a token should be responded.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
-		{testName: "If a token-exchange request is received without resource, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoResource},
-		{testName: "If a token-exchange request is received with invalid subject_token_type, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "invalid_type", expectedStatusCode: 400, expectedError: ErrorMessageInvalidSubjectTokenType},
-		{testName: "If a token-exchange request is received with invalid requested_token_type, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", testRequestedTokenType: "invalid_type", expectedStatusCode: 400, expectedError: ErrorMessageInvalidRequestedTokenType},
+		{testName: "If a valid token-exchange request is received a token should be responded.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
+		{testName: "If a token-exchange request is received without resource, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoResource},
+		{testName: "If a token-exchange request is received with invalid subject_token_type, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "invalid_type", expectedStatusCode: 400, expectedError: ErrorMessageInvalidSubjectTokenType},
+		{testName: "If a token-exchange request is received with invalid requested_token_type, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", testRequestedTokenType: "invalid_type", expectedStatusCode: 400, expectedError: ErrorMessageInvalidRequestedTokenType},
 		{testName: "If a token-exchange request is received without subject_token, it should fail.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 400, expectedError: ErrorMessageNoToken},
-		{testName: "If a token-exchange request is received without scope, the default scope should be used.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 200},
+		{testName: "If a token-exchange request is received without scope, the default scope should be used.", proofCheck: false, testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPTokenJWT(), testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", expectedStatusCode: 200},
 		// refresh_token grant type
 		{testName: "If a valid refresh_token request is received, new tokens should be returned.", testGrantType: "refresh_token", testRefreshToken: "valid-refresh-token", mockExchangeJWT: "newJWT", mockExchangeExpiration: 300, mockExchangeRefresh: "rotated-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 300, AccessToken: "newJWT", IdToken: "newJWT", RefreshToken: "rotated-refresh-token"}},
 		{testName: "If no refresh_token is provided in a refresh_token request, a 400 should be returned.", testGrantType: "refresh_token", expectedStatusCode: 400, expectedError: ErrorMessageNoRefreshToken},
@@ -177,16 +177,16 @@ func TestGetToken(t *testing.T) {
 		// authorization_code with refresh token enabled
 		{testName: "If refresh tokens are enabled, authorization_code response includes refresh_token.", testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshToken: "new-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", RefreshToken: "new-refresh-token"}},
 		// vp_token with refresh token enabled
-		{testName: "If refresh tokens are enabled, vp_token response includes refresh_token.", testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshToken: "new-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT", RefreshToken: "new-refresh-token"}},
+		{testName: "If refresh tokens are enabled, vp_token response includes refresh_token.", testGrantType: "vp_token", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshToken: "new-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT", RefreshToken: "new-refresh-token"}},
 		// token-exchange with refresh token enabled
-		{testName: "If refresh tokens are enabled, token-exchange response includes refresh_token.", testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshToken: "new-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, RefreshToken: "new-refresh-token"}},
+		{testName: "If refresh tokens are enabled, token-exchange response includes refresh_token.", testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshToken: "new-refresh-token", expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, RefreshToken: "new-refresh-token"}},
 		// refresh token disabled — verify no refresh_token in existing grant type responses
 		{testName: "If refresh tokens are disabled, authorization_code response omits refresh_token.", testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: false, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT"}},
-		{testName: "If refresh tokens are disabled, vp_token response omits refresh_token.", testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: false, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT"}},
-		{testName: "If refresh tokens are disabled, token-exchange response omits refresh_token.", testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: false, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
+		{testName: "If refresh tokens are disabled, vp_token response omits refresh_token.", testGrantType: "vp_token", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: false, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT"}},
+		{testName: "If refresh tokens are disabled, token-exchange response omits refresh_token.", testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: false, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
 		// non-fatal CreateRefreshToken error — access token returned without refresh_token
-		{testName: "If CreateRefreshToken fails for vp_token, access token is still returned.", testGrantType: "vp_token", testVPToken: getValidVPToken(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshTokenError: errors.New("db write failed"), expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT"}},
-		{testName: "If CreateRefreshToken fails for token-exchange, access token is still returned.", testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPToken(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshTokenError: errors.New("db write failed"), expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
+		{testName: "If CreateRefreshToken fails for vp_token, access token is still returned.", testGrantType: "vp_token", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshTokenError: errors.New("db write failed"), expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT"}},
+		{testName: "If CreateRefreshToken fails for token-exchange, access token is still returned.", testGrantType: "urn:ietf:params:oauth:grant-type:token-exchange", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", testResource: "my-client-id", testSubjectTokenType: "urn:eu:oidf:vp_token", mockJWTString: "theJWT", mockExpiration: 10, mockRefreshEnabled: true, mockRefreshTokenError: errors.New("db write failed"), expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN}},
 	}
 
 	for _, tc := range tests {
@@ -380,23 +380,26 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 	}
 
 	tests := []test{
-		{"If a same-device flow is authenticated, a valid redirect should be returned.", true, "my-state", getValidVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
+		{"If a same-device flow is authenticated, a valid redirect should be returned.", true, "my-state", getValidVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
 		{"If a same-device flow is authenticated with an SdJwt, a valid redirect should be returned.", true, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
-		{"If a cross-device flow is authenticated, a simple ok should be returned.", false, "my-state", getValidVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 200, "", ErrorMessage{}},
+		{"If a cross-device flow is authenticated, a simple ok should be returned.", false, "my-state", getValidVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 200, "", ErrorMessage{}},
 		{"If a cross-device flow is authenticated with an SdJwt, a simple ok should be returned.", false, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 200, "", ErrorMessage{}},
-		{"If the same-device flow responds an error, a 400 should be returend", true, "my-state", getValidVPToken(), errors.New("verification_error"), verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessage{Summary: "verification_error"}},
-		{"If no state is provided, a 400 should be returned.", true, "", getValidVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageNoState},
+		{"If the same-device flow responds an error, a 400 should be returend", true, "my-state", getValidVPTokenJWT(), errors.New("verification_error"), verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessage{Summary: "verification_error"}},
+		{"If no state is provided, a 400 should be returned.", true, "", getValidVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageNoState},
 		{"If an no token is provided, a 400 should be returned.", true, "my-state", "", nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessageNoToken},
-		{"If a token with no credentials is provided, a redirect should still occur.", true, "my-state", getNoVCVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 302, "/?state=&code=", ErrorMessage{}},
-		{"If a token with a non-string holder is provided, a redirect should still occur.", true, "my-state", getNoHolderVPToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 302, "/?state=&code=", ErrorMessage{}},
+		{"If a token with no credentials is provided, a redirect should still occur.", true, "my-state", getNoVCVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 302, "/?state=&code=", ErrorMessage{}},
+		{"If a token with a non-string holder is provided, a redirect should still occur.", true, "my-state", getNoHolderVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 302, "/?state=&code=", ErrorMessage{}},
 	}
 
 	for _, tc := range tests {
 
 		t.Run(tc.testName, func(t *testing.T) {
 
-			presentationParser = &verifier.ConfigurablePresentationParser{
-				ProofChecker: newTestProofChecker()}
+			// These tests exercise handler routing / redirect logic, not
+			// proof verification, so the presentation parser is configured
+			// WITHOUT a ProofChecker. JWT payloads are extracted without
+			// signature verification, matching the original test intent.
+			presentationParser = &verifier.ConfigurablePresentationParser{}
 			sdJwtParser = &verifier.ConfigurableSdJwtParser{
 				ProofChecker: newTestProofChecker()}
 
@@ -534,16 +537,74 @@ func TestVerifierAPIStartSIOP(t *testing.T) {
 	}
 }
 
-func getValidVPToken() string {
-	return "eyJ0eXBlIjpbIlZlcmlmaWFibGVQcmVzZW50YXRpb24iXSwidmVyaWZpYWJsZUNyZWRlbnRpYWwiOlsiZXlKaGJHY2lPaUpGVXpJMU5pSXNJblI1Y0NJZ09pQWlTbGRVSWl3aWEybGtJaUE2SUNKa2FXUTZhMlY1T25wRWJtRmxWbGhVVGxGNVpEbFFaSE5oVmpOaGIySkdhMDFaYmxSMlNsSmplVFJCVVZKSWRVVTJaMUZ0T1ZOdFYwUWlmUS5leUp1WW1ZaU9qRTNNRGM1T0RRek1UQXNJbXAwYVNJNkluVnlhVHAxZFdsa09tTmlOV1k1WmpGakxUQXhOMkl0TkdRME5DMDRORFl4TFRjeVpETXlNMlJoT0RSalppSXNJbWx6Y3lJNkltUnBaRHByWlhrNmVrUnVZV1ZXV0ZST1VYbGtPVkJrYzJGV00yRnZZa1pyVFZsdVZIWktVbU41TkVGUlVraDFSVFpuVVcwNVUyMVhSQ0lzSW5OMVlpSTZJblZ5YmpwMWRXbGtPbVF5TUdZd09URmhMVGt4Wm1RdE5EZGhNaTA0WVRnM0xUUTFZamcyTURJMFltVTVaU0lzSW5aaklqcDdJblI1Y0dVaU9sc2lWbVZ5YVdacFlXSnNaVU55WldSbGJuUnBZV3dpWFN3aWFYTnpkV1Z5SWpvaVpHbGtPbXRsZVRwNlJHNWhaVlpZVkU1UmVXUTVVR1J6WVZZellXOWlSbXROV1c1VWRrcFNZM2swUVZGU1NIVkZObWRSYlRsVGJWZEVJaXdpYVhOemRXRnVZMlZFWVhSbElqb3hOekEzT1RnME16RXdPREV5TENKcFpDSTZJblZ5YVRwMWRXbGtPbU5pTldZNVpqRmpMVEF4TjJJdE5HUTBOQzA0TkRZeExUY3laRE15TTJSaE9EUmpaaUlzSW1OeVpXUmxiblJwWVd4VGRXSnFaV04wSWpwN0ltWnBjbk4wVG1GdFpTSTZJa2hoY0hCNVVHVjBjeUlzSW5KdmJHVnpJanBiZXlKdVlXMWxjeUk2V3lKSFQweEVYME5WVTFSUFRVVlNJaXdpVTFSQlRrUkJVa1JmUTFWVFZFOU5SVklpWFN3aWRHRnlaMlYwSWpvaVpHbGtPbXRsZVRwNk5rMXJjMVUyZEUxbVltRkVlblpoVW1VMWIwWkZOR1ZhVkZaVVZqUklTazAwWm0xUlYxZEhjMFJIVVZaelJYSWlmVjBzSW1aaGJXbHNlVTVoYldVaU9pSlFjbWx0WlNJc0ltbGtJam9pZFhKdU9uVjFhV1E2WkRJd1pqQTVNV0V0T1RGbVpDMDBOMkV5TFRoaE9EY3RORFZpT0RZd01qUmlaVGxsSWl3aWMzVmlhbVZqZEVScFpDSTZJbVJwWkRwM1pXSTZaRzl0WlMxdFlYSnJaWFJ3YkdGalpTNXZjbWNpTENKbmVEcHNaV2RoYkU1aGJXVWlPaUprYjIxbExXMWhjbXRsZEhCc1lXTmxMbTl5WnlJc0ltVnRZV2xzSWpvaWNISnBiV1V0ZFhObGNrQm9ZWEJ3ZVhCbGRITXViM0puSW4wc0lrQmpiMjUwWlhoMElqcGJJbWgwZEhCek9pOHZkM2QzTG5jekxtOXlaeTh5TURFNEwyTnlaV1JsYm5ScFlXeHpMM1l4SWwxOWZRLlBqSVEtdEh5Zy1UZEdGTFVld1BreWc0cTJVODFkUGhpNG4wV3dXZ05KRGx3VW5mbk5OV1BIUkpDWlJnckQxMmFVYmRhakgtRlRkYTE3N21VRUd5RGZnIl0sImhvbGRlciI6ImRpZDp1c2VyOmdvbGQiLCJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvMjAxOC9jcmVkZW50aWFscy92MSJdfQ"
+// buildJWTVPToken creates a JWT VP with the given payload (no signature
+// verification — the payload is base64url-encoded without a real signature).
+// Use for tests that exercise HTTP handler logic, not proof verification.
+func buildJWTVPToken(payload map[string]interface{}) string {
+	header := map[string]interface{}{"alg": "ES256", "typ": "JWT"}
+	headerBytes, _ := json.Marshal(header)
+	payloadBytes, _ := json.Marshal(payload)
+	return base64.RawURLEncoding.EncodeToString(headerBytes) + "." +
+		base64.RawURLEncoding.EncodeToString(payloadBytes) + ".fakesig"
+}
+
+// buildFakeVCJWT returns a fake JWT VC token (no real signature) containing
+// standard credential claims. Suitable for tests that don't verify VC proof.
+func buildFakeVCJWT() string {
+	header := map[string]interface{}{"alg": "ES256", "typ": "JWT", "kid": "did:key:test#key-1"}
+	payload := map[string]interface{}{
+		"iss": "did:key:test",
+		"nbf": 1707984310,
+		"jti": "urn:uuid:cb5f9f1c-017b-4d44-8461-72d323da84cf",
+		"vc": map[string]interface{}{
+			"type":           []string{"VerifiableCredential"},
+			"issuer":         "did:key:test",
+			"issuanceDate":   1707984310812,
+			"@context":       []string{"https://www.w3.org/2018/credentials/v1"},
+			"id":             "urn:uuid:cb5f9f1c-017b-4d44-8461-72d323da84cf",
+			"credentialSubject": map[string]interface{}{
+				"firstName":  "HappyPets",
+				"familyName": "Prime",
+				"email":      "prime-user@happypets.org",
+			},
+		},
+	}
+	headerBytes, _ := json.Marshal(header)
+	payloadBytes, _ := json.Marshal(payload)
+	return base64.RawURLEncoding.EncodeToString(headerBytes) + "." +
+		base64.RawURLEncoding.EncodeToString(payloadBytes) + ".fakesig"
+}
+
+// getValidVPTokenJWT returns a JWT-format VP token containing one VC.
+// Unlike the old getValidVPToken (base64 JSON-LD), this produces a JWT VP
+// that will be parsed by parseJWTPresentation rather than the now-rejected
+// JSON-LD path.
+func getValidVPTokenJWT() string {
+	return buildJWTVPToken(map[string]interface{}{
+		"iss": "did:user:gold",
+		"vp": map[string]interface{}{
+			"@context":             []string{"https://www.w3.org/2018/credentials/v1"},
+			"type":                 []string{"VerifiablePresentation"},
+			"holder":               "did:user:gold",
+			"verifiableCredential": []interface{}{buildFakeVCJWT()},
+		},
+	})
 }
 
 func getValidSDJwtToken() string {
 	return "eyJhbGciOiJFUzI1NiIsInR5cCIgOiAidmMrc2Qtand0Iiwia2lkIiA6ICJkaWQ6a2V5OnpEbmFlYzVmYnZkNzhjUms1UUo0elpvVnhtU1hLVUg1S1ZHblVFQjR6UnJ5elFtY3kifQ.eyJfc2QiOlsiNDdhOS1uaU9TT3B0RjZ2eXJoUlgyN3ZPVkFJZGFJSmlYR1Zpd1hJNGJ6OCIsIjdXbUhfbXFEVHV0Z3hKX1RWOXh2Q3V0MDVJYkRwTnhRRDRyZm1DUlk5aEUiLCJDUmFOT2hia2t3TUJQXzFmRWNDcEtVcjl3Rm5BbGd5VXQySnpSVUtTZXQ4IiwiUUJ0TG1LRnpDMHEyYTZGVXJJVTdBdzRoXzNheElfaVc1bms0YXA1T3hLTSIsIlJRMktXdXJRTWt1VHdEaE1OZFdjNU5yYkc3djlyOGw5MHU1Rkp6Smh3Z0kiLCJhU2pvZFNGdkR3dWtLdERVcjhzVkVhMGZtdnhvSmVtaXM5b1RyaVFVQ3pnIiwiZThIUkpES194X3k2WDVzZmlhY2RhZWlMWDNfR2RDUXdVRjFKaWpsZXRVUSIsIm5EZDZra25Cb3Bxak9JOU42enB3R3hRYk1YSy02Z0xKSG5mYXgxR0hCOGsiLCJvRi14cG1JM2NlRUN6b2xtVXRSQ2w4SmV4WExIRzAwdDhLRE1KSWdqRFZnIiwib3FuWklsM1ZXODh2QS1BZWdPM2EzSnFxbHBOS0FSbFphWEpvbm1UenpXdyIsInBPUm8yUldMTzhmVENGTUhOeTY5NXNJd1ZYZ0R0aG9IUElnc2NXT2s4Vk0iLCJ4ckZiQWZfc0IzOGhzVjV2T2t6Mmh4TFlWdVNOZTJvTlI0UVl3dXRqdmMwIl0sIl9zZF9hbGciOiJzaGEtMjU2IiwidmN0IjoiQ2l0aXplbkNyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6a2V5OnpEbmFlYzVmYnZkNzhjUms1UUo0elpvVnhtU1hLVUg1S1ZHblVFQjR6UnJ5elFtY3kiLCJlbWFpbCI6ImNpdGl6ZW5AY2l0eS5vcmcifQ.2_f_wirBJNccecvp6t-Gowx38qWq8ErYrg3aqrjsxJ09EphPhE-KeisJ9LIoldSU2VjFkiOjGpUr9rHl_YCJhg~WyJhdzVrS3FkLWFxN29QMS0zR1IzLWN3IiwgImZpcnN0TmFtZSIsICJUZXN0Il0~"
 }
 
-func getNoVCVPToken() string {
-	return "ewogICJAY29udGV4dCI6IFsKICAgICJodHRwczovL3d3dy53My5vcmcvMjAxOC9jcmVkZW50aWFscy92MSIKICBdLAogICJ0eXBlIjogWwogICAgIlZlcmlmaWFibGVQcmVzZW50YXRpb24iCiAgXSwKICAiaWQiOiAiZWJjNmYxYzIiLAogICJob2xkZXIiOiB7CiAgICAiaWQiOiAiZGlkOmtleTp6Nk1rczltOWlmTHd5M0pXcUg0YzU3RWJCUVZTMlNwUkNqZmE3OXdIYjV2V002dmgiCiAgfSwKICAicHJvb2YiOiB7CiAgICAidHlwZSI6ICJKc29uV2ViU2lnbmF0dXJlMjAyMCIsCiAgICAiY3JlYXRvciI6ICJkaWQ6a2V5Ono2TWtzOW05aWZMd3kzSldxSDRjNTdFYkJRVlMyU3BSQ2pmYTc5d0hiNXZXTTZ2aCIsCiAgICAiY3JlYXRlZCI6ICIyMDIzLTAxLTA2VDA3OjUxOjM2WiIsCiAgICAidmVyaWZpY2F0aW9uTWV0aG9kIjogImRpZDprZXk6ejZNa3M5bTlpZkx3eTNKV3FINGM1N0ViQlFWUzJTcFJDamZhNzl3SGI1dldNNnZoI3o2TWtzOW05aWZMd3kzSldxSDRjNTdFYkJRVlMyU3BSQ2pmYTc5d0hiNXZXTTZ2aCIsCiAgICAiandzIjogImV5SmlOalFpT21aaGJITmxMQ0pqY21sMElqcGJJbUkyTkNKZExDSmhiR2NpT2lKRlpFUlRRU0o5Li42eFNxb1pqYTBOd2pGMGFmOVprbnF4M0NiaDlHRU51bkJmOUM4dUwydWxHZnd1czNVRk1fWm5oUGpXdEhQbC03MkU5cDNCVDVmMnB0Wm9Za3RNS3BEQSIKICB9Cn0"
+// getNoVCVPTokenJWT returns a JWT-format VP token with no verifiable credentials.
+func getNoVCVPTokenJWT() string {
+	return buildJWTVPToken(map[string]interface{}{
+		"iss": "did:key:z6Mks9m9ifLwy3JWqH4c57EbBQVS2SpRCjfa79wHb5vWM6vh",
+		"vp": map[string]interface{}{
+			"@context": []string{"https://www.w3.org/2018/credentials/v1"},
+			"type":     []string{"VerifiablePresentation"},
+			"holder":   map[string]interface{}{"id": "did:key:z6Mks9m9ifLwy3JWqH4c57EbBQVS2SpRCjfa79wHb5vWM6vh"},
+		},
+	})
 }
 
 func TestIsSdJWT_MapsValidityDates(t *testing.T) {
@@ -824,6 +885,16 @@ func TestDecodeVpString(t *testing.T) {
 	}
 }
 
-func getNoHolderVPToken() string {
-	return "ewogICJAY29udGV4dCI6IFsKICAgICJodHRwczovL3d3dy53My5vcmcvMjAxOC9jcmVkZW50aWFscy92MSIKICBdLAogICJ0eXBlIjogWwogICAgIlZlcmlmaWFibGVQcmVzZW50YXRpb24iCiAgXSwKICAidmVyaWZpYWJsZUNyZWRlbnRpYWwiOiBbCiAgICB7CiAgICAgICJ0eXBlcyI6IFsKICAgICAgICAiUGFja2V0RGVsaXZlcnlTZXJ2aWNlIiwKICAgICAgICAiVmVyaWZpYWJsZUNyZWRlbnRpYWwiCiAgICAgIF0sCiAgICAgICJAY29udGV4dCI6IFsKICAgICAgICAiaHR0cHM6Ly93d3cudzMub3JnLzIwMTgvY3JlZGVudGlhbHMvdjEiLAogICAgICAgICJodHRwczovL3czaWQub3JnL3NlY3VyaXR5L3N1aXRlcy9qd3MtMjAyMC92MSIKICAgICAgXSwKICAgICAgImNyZWRlbnRpYWxzU3ViamVjdCI6IHt9LAogICAgICAiYWRkaXRpb25hbFByb3AxIjoge30KICAgIH0KICBdLAogICJpZCI6ICJlYmM2ZjFjMiIsCiAgImhvbGRlciI6IHsKICAgICJub3RhIjogImhvbGRlciIKICB9LAogICJwcm9vZiI6IHsKICAgICJ0eXBlIjogIkpzb25XZWJTaWduYXR1cmUyMDIwIiwKICAgICJjcmVhdG9yIjogImRpZDprZXk6ejZNa3M5bTlpZkx3eTNKV3FINGM1N0ViQlFWUzJTcFJDamZhNzl3SGI1dldNNnZoIiwKICAgICJjcmVhdGVkIjogIjIwMjMtMDEtMDZUMDc6NTE6MzZaIiwKICAgICJ2ZXJpZmljYXRpb25NZXRob2QiOiAiZGlkOmtleTp6Nk1rczltOWlmTHd5M0pXcUg0YzU3RWJCUVZTMlNwUkNqZmE3OXdIYjV2V002dmgjejZNa3M5bTlpZkx3eTNKV3FINGM1N0ViQlFWUzJTcFJDamZhNzl3SGI1dldNNnZoIiwKICAgICJqd3MiOiAiZXlKaU5qUWlPbVpoYkhObExDSmpjbWwwSWpwYkltSTJOQ0pkTENKaGJHY2lPaUpGWkVSVFFTSjkuLjZ4U3FvWmphME53akYwYWY5WmtucXgzQ2JoOUdFTnVuQmY5Qzh1TDJ1bEdmd3VzM1VGTV9abmhQald0SFBsLTcyRTlwM0JUNWYycHRab1lrdE1LcERBIgogIH0KfQ"
+// getNoHolderVPTokenJWT returns a JWT-format VP token where the holder is
+// a JSON object (not a plain string). Tests that the handler tolerates
+// non-string holders gracefully.
+func getNoHolderVPTokenJWT() string {
+	return buildJWTVPToken(map[string]interface{}{
+		"vp": map[string]interface{}{
+			"@context": []string{"https://www.w3.org/2018/credentials/v1"},
+			"type":     []string{"VerifiablePresentation"},
+			"holder":   map[string]interface{}{"nota": "holder"},
+			"verifiableCredential": []interface{}{buildFakeVCJWT()},
+		},
+	})
 }

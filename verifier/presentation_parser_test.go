@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -518,38 +519,193 @@ func TestParseJSONLDCredential_MapsV2ValidFromValidUntil(t *testing.T) {
 	}
 }
 
-// --- Tests for JSON-LD VP parsing ---
+// --- Tests for JSON-LD VP parsing (fail-closed) ---
 
-func TestParseJSONLDPresentation(t *testing.T) {
+// TestParseJSONLDPresentation_FailClosed verifies that JSON-LD VPs are
+// rejected because LD-proof verification is not yet implemented. This is the
+// primary security fix: an unsigned VP must not be silently accepted, and a
+// VP with an LD proof must be rejected until verification is available.
+func TestParseJSONLDPresentation_FailClosed(t *testing.T) {
+	type test struct {
+		testName string
+		vpJSON   string
+		wantErr  error
+	}
+
+	tests := []test{
+		{
+			testName: "unsigned_vp_rejected",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"holder": "did:web:holder.example.com",
+				"verifiableCredential": [{
+					"@context": ["https://www.w3.org/2018/credentials/v1"],
+					"type": ["VerifiableCredential"],
+					"issuer": "did:web:issuer.example.com",
+					"credentialSubject": {
+						"id": "did:web:subject.example.com",
+						"name": "Alice"
+					}
+				}]
+			}`,
+			wantErr: ErrorUnsignedPresentation,
+		},
+		{
+			testName: "vp_with_ld_proof_rejected",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"holder": "did:web:holder.example.com",
+				"proof": {
+					"type": "JsonWebSignature2020",
+					"created": "2023-01-01T00:00:00Z",
+					"verificationMethod": "did:web:holder.example.com#key-1",
+					"jws": "eyJhbGciOiJFZERTQSJ9..test"
+				},
+				"verifiableCredential": [{
+					"@context": ["https://www.w3.org/2018/credentials/v1"],
+					"type": ["VerifiableCredential"],
+					"issuer": "did:web:issuer.example.com",
+					"credentialSubject": {
+						"id": "did:web:subject.example.com",
+						"name": "Alice"
+					}
+				}]
+			}`,
+			wantErr: ErrorInvalidProof,
+		},
+		{
+			testName: "vp_with_array_proof_rejected",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"holder": "did:web:holder.example.com",
+				"proof": [{
+					"type": "JsonWebSignature2020",
+					"created": "2023-01-01T00:00:00Z",
+					"verificationMethod": "did:web:holder.example.com#key-1",
+					"jws": "eyJhbGciOiJFZERTQSJ9..test"
+				}],
+				"verifiableCredential": []
+			}`,
+			wantErr: ErrorInvalidProof,
+		},
+		{
+			testName: "empty_vp_no_proof_rejected",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"]
+			}`,
+			wantErr: ErrorUnsignedPresentation,
+		},
+		{
+			testName: "invalid_json_rejected",
+			vpJSON:   `{not valid json`,
+			wantErr:  nil, // any JSON parse error
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
+			_, err := parser.ParsePresentation([]byte(tc.vpJSON))
+			if err == nil {
+				t.Fatal("Expected error, got nil")
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Errorf("Expected error %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestParseJSONLDPresentation_NilProofChecker verifies that JSON-LD VPs are
+// also rejected when no ProofChecker is configured. The fail-closed behavior
+// is independent of the proof checker.
+func TestParseJSONLDPresentation_NilProofChecker(t *testing.T) {
 	vpJSON := `{
 		"@context": ["https://www.w3.org/2018/credentials/v1"],
 		"type": ["VerifiablePresentation"],
-		"holder": "did:web:holder.example.com",
-		"verifiableCredential": [{
-			"@context": ["https://www.w3.org/2018/credentials/v1"],
-			"type": ["VerifiableCredential"],
-			"issuer": "did:web:issuer.example.com",
-			"credentialSubject": {
-				"id": "did:web:subject.example.com",
-				"name": "Alice"
-			}
-		}]
+		"holder": "did:web:holder.example.com"
 	}`
 
-	parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
-	pres, err := parser.ParsePresentation([]byte(vpJSON))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.ParsePresentation([]byte(vpJSON))
+	if !errors.Is(err, ErrorUnsignedPresentation) {
+		t.Errorf("Expected ErrorUnsignedPresentation, got %v", err)
+	}
+}
+
+// TestParseJWTCredential_VerifiesEmbeddedVCSignature demonstrates that
+// parseJWTCredential (the method used for JWT VCs embedded in VPs) uses
+// the ProofChecker to verify signatures. Once LD-proof verification is
+// implemented and JSON-LD VPs are accepted, this method will be used to
+// verify JWT VCs embedded in JSON-LD VPs.
+func TestParseJWTCredential_VerifiesEmbeddedVCSignature(t *testing.T) {
+	type test struct {
+		testName string
+		token    []byte
+		wantErr  bool
+	}
+
+	vcPayload := map[string]interface{}{
+		"iss": "did:web:unreachable.issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context":          []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":              []interface{}{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com"},
+		},
+	}
+
+	tests := []test{
+		{
+			testName: "signed_vc_with_unresolvable_did_rejected",
+			token:    buildSignedJWT(t, "did:web:unreachable.issuer.example.com#key-1", vcPayload),
+			wantErr:  true,
+		},
+		{
+			testName: "fake_signature_vc_rejected",
+			token:    []byte(buildFakeJWT(vcPayload)),
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
+			_, err := parser.parseJWTCredential(tc.token)
+			if tc.wantErr && err == nil {
+				t.Error("Expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("Expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestParseJWTCredential_FallsBackWithoutProofChecker verifies that when
+// no ProofChecker is configured, parseJWTCredential falls back to unsigned
+// payload extraction. This is the current behavior for status list JWT
+// credentials.
+func TestParseJWTCredential_FallsBackWithoutProofChecker(t *testing.T) {
+	vcPayload := map[string]interface{}{
+		"iss": "did:web:issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context":          []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":              []interface{}{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com"},
+		},
+	}
+
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	cred, err := parser.parseJWTCredential([]byte(buildFakeJWT(vcPayload)))
 	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
+		t.Fatalf("Expected no error with nil ProofChecker, got %v", err)
 	}
-	if pres.Holder != "did:web:holder.example.com" {
-		t.Errorf("Expected holder did:web:holder.example.com, got %s", pres.Holder)
-	}
-	creds := pres.Credentials()
-	if len(creds) != 1 {
-		t.Fatalf("Expected 1 credential, got %d", len(creds))
-	}
-	if creds[0].Contents().Issuer.ID != "did:web:issuer.example.com" {
-		t.Errorf("Expected issuer did:web:issuer.example.com, got %s", creds[0].Contents().Issuer.ID)
+	if cred.Contents().Issuer.ID != "did:web:issuer.example.com" {
+		t.Errorf("Expected issuer did:web:issuer.example.com, got %s", cred.Contents().Issuer.ID)
 	}
 }
 
