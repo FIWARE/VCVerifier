@@ -47,6 +47,12 @@ const REQUEST_MODE_URL_ENCODED = "urlEncoded"
 const REQUEST_MODE_BY_VALUE = "byValue"
 const REQUEST_MODE_BY_REFERENCE = "byReference"
 const REQUEST_OBJECT_TYP = "oauth-authz-req+jwt"
+
+// qrCodePixelsPerModule is the fixed size (in pixels) of a single QR code "module".
+// Passed as a negative size to qrcode.Encode, it makes the rendered image grow with
+// the content instead of scaling a fixed canvas, keeping modules scannable regardless
+// of how large the encoded authentication request is.
+const qrCodePixelsPerModule = 6
 const (
 	CROSS_DEVICE_V1 = iota
 	CROSS_DEVICE_V2
@@ -483,7 +489,12 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 		return qr, err
 	}
 
-	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, 256)
+	// A negative size tells go-qrcode to render at a fixed number of pixels per module
+	// instead of scaling a fixed canvas, so the image grows with the content instead of
+	// the modules shrinking below what a phone camera can resolve (relevant for
+	// REQUEST_MODE_URL_ENCODED, whose inlined presentation_definition/dcql_query can push
+	// the QR to a much higher version than byValue/byReference ever need).
+	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, -qrCodePixelsPerModule)
 	base64Img := base64.StdEncoding.EncodeToString(png)
 	base64Img = "data:image/png;base64," + base64Img
 
@@ -511,7 +522,12 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 		return qrInfo, err
 	}
 
-	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, 256)
+	// A negative size tells go-qrcode to render at a fixed number of pixels per module
+	// instead of scaling a fixed canvas, so the image grows with the content instead of
+	// the modules shrinking below what a phone camera can resolve (relevant for
+	// REQUEST_MODE_URL_ENCODED, whose inlined presentation_definition/dcql_query can push
+	// the QR to a much higher version than byValue/byReference ever need).
+	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, -qrCodePixelsPerModule)
 	base64Img := base64.StdEncoding.EncodeToString(png)
 	base64Img = "data:image/png;base64," + base64Img
 

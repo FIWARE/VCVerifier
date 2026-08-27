@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"image/png"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -273,7 +274,7 @@ func (msc *mockSessionCache) Delete(k string) {
 
 func (msc *mockSessionCache) GetWithExpiration(k string) (interface{}, time.Time, bool) {
 	v, found := msc.sessions[k]
-	return v, <-time.After(5 * time.Second), found
+	return v, time.Time{}, found
 }
 
 func (mtc *mockTokenCache) Add(k string, x interface{}, d time.Duration) error {
@@ -469,6 +470,79 @@ func TestStartSameDeviceFlow(t *testing.T) {
 		})
 	}
 
+}
+
+// decodeQRPixelWidth extracts the width (in pixels) of a "data:image/png;base64,..." QR image,
+// as returned by ReturnLoginQR/ReturnLoginQRV2.
+func decodeQRPixelWidth(t *testing.T, dataUri string) int {
+	t.Helper()
+	encoded, found := strings.CutPrefix(dataUri, "data:image/png;base64,")
+	if !found {
+		t.Fatalf("Expected a data:image/png;base64, URI, got %s", dataUri)
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("Was not able to base64-decode the QR image: %v", err)
+	}
+	img, err := png.Decode(strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatalf("Was not able to decode the QR PNG: %v", err)
+	}
+	return img.Bounds().Dx()
+}
+
+// TestReturnLoginQRV2_ScalesWithContent guards against reintroducing a fixed-size QR canvas:
+// a request with a large inlined dcql_query (as REQUEST_MODE_URL_ENCODED produces) needs far
+// more QR modules than a bare request, and squeezing that into a fixed pixel size makes the
+// QR unscannable (each module shrinks below what a phone camera can resolve).
+func TestReturnLoginQRV2_ScalesWithContent(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	newVerifier := func(scopes map[string]map[string]configModel.ScopeEntry) CredentialVerifier {
+		return CredentialVerifier{
+			host:                  "verifier.org",
+			did:                   "did:key:verifier",
+			sessionCache:          &mockSessionCache{sessions: map[string]loginSession{}},
+			nonceGenerator:        &mockNonceGenerator{staticValues: []string{"randomNonce"}},
+			tokenSigner:           mockTokenSigner{},
+			clock:                 mockClock{},
+			credentialsConfig:     mockCredentialConfig{mockScopes: scopes},
+			supportedRequestModes: []string{REQUEST_MODE_URL_ENCODED},
+			clientIdentification:  configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
+		}
+	}
+
+	small := newVerifier(createMockCredentials("", "", "", "", "", false))
+	smallQr, err := small.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "small-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	// Mirrors the shape of a real, moderately-sized DCQL query (a couple of credential
+	// format alternatives with a few claims each) - enough to meaningfully raise the QR
+	// version without exceeding a QR code's absolute capacity.
+	largeDcql := &configModel.DCQL{Credentials: make([]configModel.CredentialQuery, 3)}
+	for i := range largeDcql.Credentials {
+		largeDcql.Credentials[i] = configModel.CredentialQuery{
+			Id: "some-fairly-long-credential-query-identifier-to-pad-things-out",
+			Claims: []configModel.ClaimsQuery{
+				{Path: []interface{}{"firstName"}},
+				{Path: []interface{}{"lastName"}},
+				{Path: []interface{}{"roles"}},
+			},
+		}
+	}
+	large := newVerifier(map[string]map[string]configModel.ScopeEntry{"": {"": {DCQL: largeDcql}}})
+	largeQr, err := large.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "large-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	smallWidth := decodeQRPixelWidth(t, smallQr.QR)
+	largeWidth := decodeQRPixelWidth(t, largeQr.QR)
+	if largeWidth <= smallWidth {
+		t.Errorf("Expected the QR for the larger request to render wider than the smaller one, got small=%dpx large=%dpx", smallWidth, largeWidth)
+	}
 }
 
 func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
