@@ -2,6 +2,7 @@ package tir
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
+	"github.com/piprate/json-gold/ld"
 )
 
 type mockFileAccessor struct {
@@ -40,7 +42,15 @@ func TestTokenProvider_GetToken(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
-			tokenProvider := M2MTokenProvider{tokenEncoder: Base64TokenEncoder{}, signingKey: tc.testKey, clock: common.RealClock{}, verificationMethod: "JsonWebKey2020", signatureType: "JsonWebSignature2020", keyType: "RSAPS256"}
+			tokenProvider := M2MTokenProvider{
+				tokenEncoder:       Base64TokenEncoder{},
+				signingKey:         tc.testKey,
+				clock:              common.RealClock{},
+				verificationMethod: "JsonWebKey2020",
+				signatureType:      "JsonWebSignature2020",
+				keyType:            "RSAPS256",
+				documentLoader:     ld.NewDefaultDocumentLoader(http.DefaultClient),
+			}
 
 			token, err := tokenProvider.GetToken(tc.testCredential, "myAudience")
 			if tc.expectedError && err == nil {
@@ -66,6 +76,41 @@ func TestTokenProvider_GetToken(t *testing.T) {
 				t.Errorf("%s - Token should contain a proof.", tc.testName)
 			}
 		})
+	}
+}
+
+// mockDocumentLoader records calls and delegates to a real default loader.
+type mockDocumentLoader struct {
+	delegate  ld.DocumentLoader
+	callCount int
+}
+
+func (m *mockDocumentLoader) LoadDocument(u string) (*ld.RemoteDocument, error) {
+	m.callCount++
+	return m.delegate.LoadDocument(u)
+}
+
+func TestTokenProvider_GetToken_UsesInjectedDocumentLoader(t *testing.T) {
+	mock := &mockDocumentLoader{
+		delegate: ld.NewDefaultDocumentLoader(http.DefaultClient),
+	}
+
+	tokenProvider := M2MTokenProvider{
+		tokenEncoder:       Base64TokenEncoder{},
+		signingKey:         getRandomRsaKey(),
+		clock:              common.RealClock{},
+		verificationMethod: "JsonWebKey2020",
+		signatureType:      "JsonWebSignature2020",
+		keyType:            KeyTypeRSAPS256,
+		documentLoader:     mock,
+	}
+
+	_, err := tokenProvider.GetToken(getTestAuthCredential(), "myAudience")
+	if err != nil {
+		t.Fatalf("Expected no error but got: %v", err)
+	}
+	if mock.callCount == 0 {
+		t.Error("Expected the injected document loader to be called at least once during signing")
 	}
 }
 
