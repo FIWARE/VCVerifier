@@ -78,10 +78,18 @@ var (
 	// nor a decodable JWT).
 	ErrorStatusListUnparseable = errors.New("status_list_unparseable")
 	// ErrorStatusListJSONLDProofUnsupported is returned when a status list
-	// credential is in JSON-LD format. LD-proof verification is not yet
-	// implemented, so JSON-LD status list credentials cannot be trusted.
-	// This prevents MITM attacks on status-list resolution.
+	// credential is in JSON-LD format and no LDProofChecker is available to
+	// verify the Linked Data Proof. This prevents MITM attacks on
+	// status-list resolution.
 	ErrorStatusListJSONLDProofUnsupported = errors.New("json_ld_status_list_proof_verification_not_supported")
+	// ErrorStatusListJSONLDProofMissing is returned when a JSON-LD status
+	// list credential does not contain a proof member, even though an
+	// LDProofChecker is available.
+	ErrorStatusListJSONLDProofMissing = errors.New("json_ld_status_list_credential_missing_proof")
+	// ErrorStatusListJSONLDProofInvalid is returned when the Linked Data
+	// Proof on a JSON-LD status list credential fails cryptographic
+	// verification.
+	ErrorStatusListJSONLDProofInvalid = errors.New("json_ld_status_list_credential_proof_invalid")
 	// ErrorStatusListSubjectMismatch is returned when the `sub` claim of a
 	// fetched IETF Token Status List JWT does not match the `uri` from the
 	// credential's status reference, per draft-ietf-oauth-status-list §8.3
@@ -127,26 +135,36 @@ type StatusListCredentialClient interface {
 // implementation. It uses patrickmn/go-cache to avoid repeated network calls
 // for the same URL and a configurable http.Client timeout to protect the
 // verifier from slow status-list issuers.
+// CachingStatusListClient fetches and caches W3C Bitstring Status List
+// credentials. It supports both JWT-encoded and JSON-LD-encoded status list
+// credentials. JSON-LD credentials are accepted only when an LDProofChecker
+// is configured and the credential carries a valid Linked Data Proof.
 type CachingStatusListClient struct {
-	httpClient  *http.Client
-	cache       common.Cache
-	expiry      time.Duration
-	jwtVerifier StatusListJWTVerifier
+	httpClient     *http.Client
+	cache          common.Cache
+	expiry         time.Duration
+	jwtVerifier    StatusListJWTVerifier
+	ldProofChecker *LDProofChecker
 }
 
 // NewCachingStatusListClient constructs a CachingStatusListClient using the
-// supplied HTTP timeout and cache TTL. Both values are typically taken from
-// config.Verifier.StatusListHttpTimeout / config.Verifier.StatusListCacheExpiry.
+// supplied HTTP timeout, cache TTL, optional JWT verifier, and optional
+// LD-proof checker.
+//
+// Passing nil for jwtVerifier skips JWT signature verification (a warning is
+// logged). Passing nil for ldProofChecker causes all JSON-LD status list
+// credentials to be rejected (fail-closed).
 //
 // The cache janitor's cleanup interval is derived from cacheExpiry via
 // StatusListCacheCleanupMultiplier so evicted entries are reaped on a cadence
 // that matches the rest of the codebase.
-func NewCachingStatusListClient(timeout time.Duration, cacheExpiry time.Duration, jwtVerifier StatusListJWTVerifier) *CachingStatusListClient {
+func NewCachingStatusListClient(timeout time.Duration, cacheExpiry time.Duration, jwtVerifier StatusListJWTVerifier, ldProofChecker *LDProofChecker) *CachingStatusListClient {
 	return &CachingStatusListClient{
-		httpClient:  &http.Client{Timeout: timeout},
-		cache:       cache.New(cacheExpiry, StatusListCacheCleanupMultiplier*cacheExpiry),
-		expiry:      cacheExpiry,
-		jwtVerifier: jwtVerifier,
+		httpClient:     &http.Client{Timeout: timeout},
+		cache:          cache.New(cacheExpiry, StatusListCacheCleanupMultiplier*cacheExpiry),
+		expiry:         cacheExpiry,
+		jwtVerifier:    jwtVerifier,
+		ldProofChecker: ldProofChecker,
 	}
 }
 
@@ -190,7 +208,15 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 	}
 
 	logging.Log().Debugf("Received %d bytes from %s, parsing credential", len(body), url)
-	cred, err := parseStatusListCredentialBody(body, c.jwtVerifier)
+	// Resolve the LDProofChecker lazily: at construction time (InitVerifier)
+	// the presentation parser may not be initialized yet, so the field may
+	// be nil. Fall back to the globally-registered checker that becomes
+	// available after InitPresentationParser.
+	ldChecker := c.ldProofChecker
+	if ldChecker == nil {
+		ldChecker = GetLDProofChecker()
+	}
+	cred, err := parseStatusListCredentialBody(body, c.jwtVerifier, ldChecker)
 	if err != nil {
 		logging.Log().Debugf("Failed to parse status-list credential from %s: %v", url, err)
 		return nil, err
@@ -205,18 +231,20 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 // body into a *common.Credential.
 //
 // Two transport encodings are handled:
-//   - JSON-LD: a response body starting with `{` is rejected with
-//     ErrorStatusListJSONLDProofUnsupported because LD-proof verification
-//     is not yet implemented. Accepting unverified JSON-LD would allow
-//     MITM attacks on revocation status (see Steps 5-8 of the plan).
+//   - JSON-LD: a response body starting with `{` is accepted when an
+//     LDProofChecker is provided and the credential carries a valid Linked
+//     Data Proof. Without a checker or without a proof the credential is
+//     rejected (fail-closed) to prevent MITM attacks on revocation status.
 //   - JWT: any other non-empty body is treated as a JWS. When a
 //     StatusListJWTVerifier is provided the signature is verified;
-//     otherwise an error is returned.
+//     otherwise a warning is logged but parsing proceeds.
 //
 // Parse failures are wrapped with ErrorStatusListUnparseable; JSON-LD
-// rejections are wrapped with ErrorStatusListJSONLDProofUnsupported.
+// rejections use ErrorStatusListJSONLDProofUnsupported (no checker),
+// ErrorStatusListJSONLDProofMissing (no proof member), or
+// ErrorStatusListJSONLDProofInvalid (proof verification failed).
 // Callers can distinguish failure types with errors.Is.
-func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifier) (*common.Credential, error) {
+func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifier, ldProofChecker *LDProofChecker) (*common.Credential, error) {
 	trimmed := strings.TrimSpace(string(body))
 	if len(trimmed) == 0 {
 		logging.Log().Debug("Status-list credential response body is empty")
@@ -224,15 +252,7 @@ func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifie
 	}
 
 	if trimmed[0] == '{' {
-		// Fail closed: reject JSON-LD status list credentials because LD-proof
-		// verification is not yet implemented. Accepting unverified JSON-LD
-		// status list credentials would allow MITM attackers to forge revocation
-		// status. Once LDProofChecker is available (see Steps 5-8 of the
-		// implementation plan), this path will verify the proof and accept
-		// valid credentials.
-		logging.Log().Warn("JSON-LD status list credential proof verification is not yet supported — rejecting")
-		return nil, fmt.Errorf("%w: JSON-LD status list credentials cannot be verified without LD-proof support",
-			ErrorStatusListJSONLDProofUnsupported)
+		return parseJSONLDStatusListCredential([]byte(trimmed), ldProofChecker)
 	}
 
 	logging.Log().Debug("Parsing status-list credential as JWT")
@@ -248,6 +268,71 @@ func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifie
 	cred, err := parseUnsignedJWTCredential(trimmed)
 	if err != nil {
 		logging.Log().Debugf("JWT credential parse failed: %v", err)
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+	return cred, nil
+}
+
+// parseJSONLDStatusListCredential parses and verifies a JSON-LD encoded
+// status list credential. If ldProofChecker is nil, the credential is rejected
+// (fail-closed). If the credential does not carry a proof member, it is also
+// rejected. Otherwise the Linked Data Proof is cryptographically verified.
+func parseJSONLDStatusListCredential(body []byte, ldProofChecker *LDProofChecker) (*common.Credential, error) {
+	if ldProofChecker == nil {
+		logging.Log().Warn("No LDProofChecker configured — rejecting JSON-LD status list credential")
+		return nil, fmt.Errorf("%w: JSON-LD status list credentials cannot be verified without LD-proof support",
+			ErrorStatusListJSONLDProofUnsupported)
+	}
+
+	// Parse the body as a JSON map to extract the proof and credential fields.
+	var docMap map[string]interface{}
+	if err := json.Unmarshal(body, &docMap); err != nil {
+		logging.Log().Debugf("JSON-LD status list credential is not valid JSON: %v", err)
+		return nil, fmt.Errorf("%w: invalid JSON: %v", ErrorStatusListUnparseable, err)
+	}
+
+	// Extract and parse the proof member.
+	proofRaw, hasProof := docMap["proof"]
+	if !hasProof || proofRaw == nil {
+		logging.Log().Warn("JSON-LD status list credential has no proof — rejecting")
+		return nil, fmt.Errorf("%w: credential does not contain a proof member",
+			ErrorStatusListJSONLDProofMissing)
+	}
+
+	proofs, err := common.ParseLDProofs(proofRaw)
+	if err != nil {
+		logging.Log().Debugf("Failed to parse proof on JSON-LD status list credential: %v", err)
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListJSONLDProofInvalid, err)
+	}
+	if len(proofs) == 0 {
+		logging.Log().Warn("JSON-LD status list credential proof array is empty — rejecting")
+		return nil, fmt.Errorf("%w: credential proof array is empty",
+			ErrorStatusListJSONLDProofMissing)
+	}
+
+	// Strip the proof from the document for canonicalization.
+	delete(docMap, "proof")
+	docBytes, err := json.Marshal(docMap)
+	if err != nil {
+		logging.Log().Debugf("Failed to marshal proof-stripped JSON-LD status list credential: %v", err)
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+
+	// Verify each proof.
+	for i, proof := range proofs {
+		if verifyErr := ldProofChecker.VerifyCredential(docBytes, proof); verifyErr != nil {
+			logging.Log().Debugf("JSON-LD status list credential proof %d verification failed: %v", i, verifyErr)
+			return nil, fmt.Errorf("%w: proof %d: %v", ErrorStatusListJSONLDProofInvalid, i, verifyErr)
+		}
+	}
+	logging.Log().Debug("JSON-LD status list credential proof(s) verified successfully")
+
+	// Parse the credential structure. Re-add the proof to the map so
+	// parseJSONLDCredential can attach it to the resulting Credential.
+	docMap["proof"] = proofRaw
+	cred, err := parseJSONLDCredential(docMap)
+	if err != nil {
+		logging.Log().Debugf("Failed to parse JSON-LD status list credential fields: %v", err)
 		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
 	return cred, nil
