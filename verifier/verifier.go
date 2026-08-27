@@ -935,6 +935,16 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	}
 	loginSession := loginSessionInterface.(loginSession)
 
+	// Verify challenge/domain binding for JSON-LD VPs. The session nonce
+	// must appear as proof.challenge (replay prevention), and the verifier's
+	// client ID is checked against proof.domain (audience binding).
+	if len(verifiablePresentation.Proofs) > 0 {
+		if bindErr := VerifyLDVPProofBinding(verifiablePresentation, loginSession.nonce, v.clientIdentification.Id); bindErr != nil {
+			logging.Log().Warnf("JSON-LD VP proof binding verification failed for session %s: %v", state, bindErr)
+			return sameDevice, bindErr
+		}
+	}
+
 	credentialsByType, _ := extractCredentialTypes(verifiablePresentation)
 	trustedChain, _ := verifyChain(verifiablePresentation.Credentials())
 	var credentialsToBeIncluded []map[string]interface{}
@@ -1087,12 +1097,21 @@ func (v *CredentialVerifier) GetRequestObject(state string) (jwt string, err err
 	return loginSession.requestObject, err
 }
 
-// verifyVPSignatureIfRequired verifies the VP JWT signature only when the service config
+// verifyVPSignatureIfRequired verifies the VP signature when the service config
 // requires holder binding for at least one credential type in the presentation.
-// It is a no-op when the presentation carries no raw token (non-SD-JWT VP path).
+//
+// For SD-JWT VPs (rawToken != nil), the JWT signature is verified via the global
+// JWTProofChecker. For JSON-LD VPs (LD proofs present), the proof was already
+// verified during parsing — this method checks that a holder key is available.
+// For JWT VPs (neither rawToken nor LD proofs), the proof was already verified
+// during parsing, so this is a no-op.
 func (v *CredentialVerifier) verifyVPSignatureIfRequired(clientId string, scopes []string, credentialTypes []string, presentation *common.Presentation) error {
 	rawToken := presentation.RawToken()
-	if rawToken == nil {
+	hasLDProofs := len(presentation.Proofs) > 0
+
+	// If there's no raw token and no LD proofs, the VP signature was already
+	// verified during parsing (JWT VP path). Nothing more to do.
+	if rawToken == nil && !hasLDProofs {
 		return nil
 	}
 
@@ -1116,6 +1135,17 @@ outer:
 		return nil
 	}
 
+	// JSON-LD VP path: holder binding is established via the LD-proof signer key
+	// set during parsing. If the key is missing, reject.
+	if hasLDProofs {
+		if presentation.HolderKey() == nil {
+			logging.Log().Warn("Holder binding required but JSON-LD VP has no holder key from LD-proof verification")
+			return ErrorHolderBindingMissingKey
+		}
+		return nil
+	}
+
+	// SD-JWT VP path: verify the VP JWT signature.
 	_, _, err := GetProofChecker().VerifyJWTAndReturnKey(rawToken)
 	if err != nil {
 		logging.Log().Warnf("VP JWT holder binding verification failed: %v", err)

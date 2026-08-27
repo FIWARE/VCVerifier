@@ -16,6 +16,8 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	ljwk "github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateConfig(t *testing.T) {
@@ -1469,4 +1471,193 @@ func TestResolveKeyFromDID_NoMatchingKey(t *testing.T) {
 	if !errors.Is(err, ErrorNoVerificationKey) {
 		t.Errorf("Expected ErrorNoVerificationKey, got %v", err)
 	}
+}
+
+// --- VerifyLDVPProofBinding tests ---
+
+// TestVerifyLDVPProofBinding verifies challenge and domain binding for
+// JSON-LD VP proofs using table-driven tests.
+func TestVerifyLDVPProofBinding(t *testing.T) {
+	expectedChallenge := "session-nonce-abc123"
+	expectedDomain := "did:key:verifier"
+
+	type bindingTest struct {
+		name              string
+		proofs            []*common.LDProof
+		expectedChallenge string
+		expectedDomain    string
+		expectedErr       error
+	}
+
+	tests := []bindingTest{
+		{
+			name:              "correct challenge and domain",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: expectedChallenge, Domain: expectedDomain}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+		{
+			name:              "correct challenge, no domain in proof",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: expectedChallenge}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+		{
+			name:              "wrong challenge",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: "wrong-nonce"}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    "",
+			expectedErr:       ErrorProofChallengeMismatch,
+		},
+		{
+			name:              "missing challenge when expected",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020"}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    "",
+			expectedErr:       ErrorProofChallengeMismatch,
+		},
+		{
+			name:              "wrong domain",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: expectedChallenge, Domain: "did:key:attacker"}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       ErrorProofDomainMismatch,
+		},
+		{
+			name:              "no challenge expected, skip check",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: "any-value"}},
+			expectedChallenge: "",
+			expectedDomain:    "",
+			expectedErr:       nil,
+		},
+		{
+			name:              "no domain expected, skip domain check",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Domain: "any-domain"}},
+			expectedChallenge: "",
+			expectedDomain:    "",
+			expectedErr:       nil,
+		},
+		{
+			name:              "no proofs, no-op",
+			proofs:            nil,
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+		{
+			name:              "empty proofs slice, no-op",
+			proofs:            []*common.LDProof{},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+		{
+			name: "multiple proofs, first has correct challenge",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge},
+				{Type: "JsonWebSignature2020"},
+			},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    "",
+			expectedErr:       nil,
+		},
+		{
+			name: "multiple proofs, second has wrong challenge",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge},
+				{Type: "JsonWebSignature2020", Challenge: "wrong-nonce"},
+			},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    "",
+			expectedErr:       ErrorProofChallengeMismatch,
+		},
+		{
+			name: "multiple proofs, one has wrong domain",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge, Domain: expectedDomain},
+				{Type: "JsonWebSignature2020", Domain: "did:key:attacker"},
+			},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       ErrorProofDomainMismatch,
+		},
+		{
+			name:              "correct domain, no challenge expected",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Domain: expectedDomain}},
+			expectedChallenge: "",
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pres, _ := common.NewPresentation()
+			pres.Proofs = tc.proofs
+
+			err := VerifyLDVPProofBinding(pres, tc.expectedChallenge, tc.expectedDomain)
+			if tc.expectedErr != nil {
+				assert.ErrorIs(t, err, tc.expectedErr, "expected error %v, got %v", tc.expectedErr, err)
+			} else {
+				assert.NoError(t, err, "expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestVerifyLDVPProofBinding_HolderKeyPropagation verifies that after parsing a
+// JSON-LD VP with a valid LD proof, the presentation's HolderKey is set to the
+// LD-proof signer key.
+func TestVerifyLDVPProofBinding_HolderKeyPropagation(t *testing.T) {
+	// Generate a key pair for signing and set up test infrastructure.
+	privKey, _, pubJWK := generateTestECKeys(t)
+	signer := &testES256Signer{key: privKey}
+	docLoader := newTestDocumentLoader()
+	verificationMethodID := "did:web:holder.example.com#key-1"
+	registry := createMockRegistry(t, "web", verificationMethodID, pubJWK)
+
+	// Create and sign a VP using the shared test helpers.
+	pres := createTestVP()
+	vpJSON, _ := signPresentation(t, pres, signer, verificationMethodID, docLoader)
+
+	// Set up a parser with the real LDProofChecker and mock JWTProofChecker.
+	ldChecker := NewLDProofChecker(registry, docLoader)
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: ldChecker,
+	}
+
+	result, err := parser.ParsePresentation(vpJSON)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Holder key should be set from the LD-proof verification.
+	holderKey := result.HolderKey()
+	assert.NotNil(t, holderKey, "HolderKey should be set after LD-proof verification")
+
+	// The proof should be populated.
+	require.Len(t, result.Proofs, 1)
+	assert.Equal(t, common.ProofTypeJsonWebSignature2020, result.Proofs[0].Type)
+
+	// Since AddLinkedDataProof doesn't add challenge/domain, the parsed proof
+	// won't have them. Simulate a VP from a wallet that included challenge/domain
+	// by setting them on the parsed proofs and then testing VerifyLDVPProofBinding.
+	challenge := "test-nonce-123"
+	domain := "did:web:verifier"
+	result.Proofs[0].Challenge = challenge
+	result.Proofs[0].Domain = domain
+
+	// VerifyLDVPProofBinding should accept with matching challenge/domain.
+	err = VerifyLDVPProofBinding(result, challenge, domain)
+	assert.NoError(t, err)
+
+	// VerifyLDVPProofBinding should reject with wrong challenge.
+	err = VerifyLDVPProofBinding(result, "wrong-nonce", domain)
+	assert.ErrorIs(t, err, ErrorProofChallengeMismatch)
+
+	// VerifyLDVPProofBinding should reject with wrong domain.
+	err = VerifyLDVPProofBinding(result, challenge, "wrong-domain")
+	assert.ErrorIs(t, err, ErrorProofDomainMismatch)
 }
