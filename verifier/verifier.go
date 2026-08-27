@@ -23,8 +23,8 @@ import (
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
-	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/did"
+	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/google/uuid"
 
@@ -336,7 +336,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate the credentials config. Err: %v", err)
 	}
-	WarnLDPVCFormat(config.ConfigRepo.Services)
+	WarnLDPVCFormat(config.ConfigRepo.Services, verifierConfig.ClientIdentification.Id)
 
 	var tokenProvider tir.TokenProvider
 	if (&config.M2M).AuthEnabled {
@@ -368,7 +368,9 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	statusListCacheExpiry := time.Duration(verifierConfig.StatusListCacheExpiry) * time.Second
 	statusListDIDRegistry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
 	statusListJWTVerifier := NewStatusListJWTVerifier(statusListDIDRegistry)
-	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, nil)
+	// GetLDProofChecker() is populated by InitPresentationParser, which
+	// main.go runs before InitVerifier.
+	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, GetLDProofChecker())
 	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, clock)
 	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, ietfStatusListClient, clock)
 
@@ -657,6 +659,15 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 
 	if err := v.verifyVPSignatureIfRequired(clientId, scopes, credentialTypes, verifiablePresentation); err != nil {
 		return 0, "", err
+	}
+
+	// Audience binding for JSON-LD VPs. Unlike the authorization-code flow
+	// there is no server-issued nonce for the vp_token and token-exchange
+	// grants, so no challenge can be required here — the domain still has to
+	// name this verifier.
+	if bindErr := VerifyLDVPProofBinding(verifiablePresentation, "", v.clientIdentification.Id); bindErr != nil {
+		logging.Log().Warnf("JSON-LD VP proof binding verification failed for client %s: %v", clientId, bindErr)
+		return 0, "", bindErr
 	}
 
 	// Go through all requested scopes and create a verification context
@@ -1136,11 +1147,17 @@ outer:
 		return nil
 	}
 
-	// JSON-LD VP path: holder binding is established via the LD-proof signer key
-	// set during parsing. If the key is missing, reject.
+	// JSON-LD VP path: parsing already required the VP proof to be created by
+	// the DID named in `holder` (see LDProofChecker.VerifyPresentation), so a
+	// holder key here means the presenter proved control of the holder DID.
+	// Both the key and the holder itself must be present.
 	if hasLDProofs {
 		if presentation.HolderKey() == nil {
 			logging.Log().Warn("Holder binding required but JSON-LD VP has no holder key from LD-proof verification")
+			return ErrorHolderBindingMissingKey
+		}
+		if presentation.Holder == "" {
+			logging.Log().Warn("Holder binding required but JSON-LD VP declares no holder")
 			return ErrorHolderBindingMissingKey
 		}
 		return nil

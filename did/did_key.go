@@ -101,9 +101,13 @@ func (k *KeyVDR) Read(didStr string) (*DocResolution, error) {
 
 	logging.Log().Debugf("Successfully resolved did:key %s with type %s", baseDID, vmType)
 
+	// did:key documents expose their single key for every verification
+	// relationship, per the did:key method specification.
 	doc := &Doc{
 		ID:                 baseDID,
 		VerificationMethod: []VerificationMethod{*vm},
+		Authentication:     []string{vmID},
+		AssertionMethod:    []string{vmID},
 	}
 
 	return &DocResolution{DIDDocument: doc}, nil

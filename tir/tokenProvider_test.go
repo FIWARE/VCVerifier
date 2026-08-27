@@ -18,6 +18,11 @@ import (
 	"github.com/piprate/json-gold/ld"
 )
 
+// testVerificationMethod is an absolute DID URL. A relative value (such as
+// the bare "JsonWebKey2020" default) is dropped during JSON-LD expansion and
+// would therefore not be covered by the proof signature.
+const testVerificationMethod = "did:web:test.org#key-1"
+
 type mockFileAccessor struct {
 	files  map[string][]byte
 	errors map[string]error
@@ -46,7 +51,7 @@ func TestTokenProvider_GetToken(t *testing.T) {
 				tokenEncoder:       Base64TokenEncoder{},
 				signingKey:         tc.testKey,
 				clock:              common.RealClock{},
-				verificationMethod: "JsonWebKey2020",
+				verificationMethod: testVerificationMethod,
 				signatureType:      "JsonWebSignature2020",
 				keyType:            "RSAPS256",
 				documentLoader:     ld.NewDefaultDocumentLoader(http.DefaultClient),
@@ -99,7 +104,7 @@ func TestTokenProvider_GetToken_UsesInjectedDocumentLoader(t *testing.T) {
 		tokenEncoder:       Base64TokenEncoder{},
 		signingKey:         getRandomRsaKey(),
 		clock:              common.RealClock{},
-		verificationMethod: "JsonWebKey2020",
+		verificationMethod: testVerificationMethod,
 		signatureType:      "JsonWebSignature2020",
 		keyType:            KeyTypeRSAPS256,
 		documentLoader:     mock,

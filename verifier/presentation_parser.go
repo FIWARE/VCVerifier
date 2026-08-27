@@ -40,6 +40,11 @@ var ErrorCnfKeyMismatch = errors.New("cnf_key_does_not_match_vp_signer")
 // must be rejected.
 var ErrorUnsignedPresentation = errors.New("unsigned_presentation_not_accepted")
 
+// ErrorUnsignedCredential is returned when a JSON-LD Verifiable Credential
+// carries no Linked Data Proof. Accepting it would let anybody put arbitrary
+// claims — under an arbitrary issuer — into an otherwise valid presentation.
+var ErrorUnsignedCredential = errors.New("unsigned_credential_not_accepted")
+
 // ErrorProofChallengeMismatch is returned when a JSON-LD VP proof's challenge
 // field does not match the expected session nonce, indicating a potential
 // replay attack.
@@ -150,12 +155,17 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 	checker := NewJWTProofChecker(registry, jAdESValidator)
 	globalProofChecker = checker
 
-	// Set up the caching document loader for JSON-LD context resolution and
-	// create the LDProofChecker for verifying Linked Data Proofs on VPs/VCs.
-	docLoader := common.NewCachingDocumentLoader(
-		ld.NewDefaultDocumentLoader(http.DefaultClient),
-		ldDocLoaderCacheTTL,
-		ldDocLoaderCacheCleanup,
+	// Set up the document loader for JSON-LD context resolution and create
+	// the LDProofChecker for verifying Linked Data Proofs on VPs/VCs. The
+	// contexts that proof canonicalization depends on are served from the
+	// binary, so a slow or hostile context host cannot influence — or block —
+	// signature verification. Everything else is fetched and cached.
+	docLoader := common.NewVerificationDocumentLoader(
+		common.NewCachingDocumentLoader(
+			ld.NewDefaultDocumentLoader(http.DefaultClient),
+			ldDocLoaderCacheTTL,
+			ldDocLoaderCacheCleanup,
+		),
 	)
 	ldChecker := NewLDProofChecker(registry, docLoader)
 	globalLDProofChecker = ldChecker
@@ -188,10 +198,11 @@ func buildAddress(host, path string) string {
 	return strings.TrimSuffix(host, "/") + "/" + strings.TrimPrefix(path, "/")
 }
 
-// ParsePresentation parses a VP from JWT or JSON-LD format.
-// JSON-LD VPs are currently rejected because LD-proof verification is not yet
-// implemented (see IMPLEMENTATION_PLAN.md Steps 5-7). JWT VPs are verified via
-// the configured JWTProofChecker.
+// ParsePresentation parses a VP from either JWT or JSON-LD format and
+// verifies it. JWT VPs are verified via the configured JWTProofChecker,
+// JSON-LD VPs via the configured LDProofChecker. Both paths are fail-closed:
+// an unsigned presentation, an unsigned embedded credential, or a missing
+// checker leads to rejection.
 func (cpp *ConfigurablePresentationParser) ParsePresentation(tokenBytes []byte) (*common.Presentation, error) {
 	trimmed := strings.TrimSpace(string(tokenBytes))
 	if len(trimmed) > 0 && trimmed[0] == '{' {
@@ -260,7 +271,10 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 			}
 			pres.AddCredentials(cred)
 		case map[string]interface{}:
-			cred, err := parseJSONLDCredential(v)
+			// A JSON-LD credential inside a JWT VP still needs its own LD
+			// proof verified — the VP signature says nothing about who
+			// issued the credentials it carries.
+			cred, err := cpp.parseAndVerifyJSONLDCredential(v)
 			if err != nil {
 				return nil, err
 			}
@@ -396,18 +410,16 @@ func stringFromMap(m map[string]interface{}, key string) string {
 	return ""
 }
 
-// jsonldVPProofKey is the JSON key for the proof member in a JSON-LD VP.
-const jsonldVPProofKey = "proof"
-
 // parseJSONLDPresentation parses a JSON-LD Verifiable Presentation and
 // verifies its Linked Data Proof(s) using the configured LDProofChecker.
 //
 // If the LDProofChecker is not configured, VPs with proofs are rejected
 // (fail-closed). VPs without proofs are always rejected.
 //
-// For each embedded VC that carries its own LD proof(s), those proofs are
-// also verified. JWT VCs embedded in a JSON-LD VP are verified via the
-// JWTProofChecker (same as before).
+// Every embedded JSON-LD VC must carry its own LD proof, created by the
+// credential's issuer — the VP signature says nothing about who issued the
+// credentials it carries. JWT VCs embedded in a JSON-LD VP are verified via
+// the JWTProofChecker.
 func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) (*common.Presentation, error) {
 	var vpMap map[string]interface{}
 	if err := json.Unmarshal(data, &vpMap); err != nil {
@@ -415,7 +427,7 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 	}
 
 	// Extract VP-level proofs if present.
-	proofRaw, hasProof := vpMap[jsonldVPProofKey]
+	proofRaw, hasProof := vpMap[common.VPKeyProof]
 	if !hasProof {
 		logging.Log().Warn("JSON-LD VP has no proof — unsigned presentations are not accepted")
 		return nil, ErrorUnsignedPresentation
@@ -442,7 +454,7 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 	// (the proof is excluded from canonicalization input).
 	vpWithoutProof := make(map[string]interface{}, len(vpMap))
 	for k, v := range vpMap {
-		if k != jsonldVPProofKey {
+		if k != common.VPKeyProof {
 			vpWithoutProof[k] = v
 		}
 	}
@@ -453,11 +465,17 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 
 	pres, _ := common.NewPresentation()
 
+	// The holder has to be known before the proofs are checked: the VP proof
+	// is only meaningful when it was created by the holder it claims.
+	if holder, ok := vpMap[common.VPKeyHolder].(string); ok {
+		pres.Holder = holder
+	}
+
 	// Verify each VP-level proof and capture the signer key from the first
 	// valid proof for downstream holder binding.
 	var holderKey jwk.Key
 	for _, proof := range proofs {
-		key, verifyErr := cpp.LDProofChecker.VerifyPresentation(vpDocBytes, proof)
+		key, verifyErr := cpp.LDProofChecker.VerifyPresentation(vpDocBytes, proof, pres.Holder)
 		if verifyErr != nil {
 			return nil, verifyErr
 		}
@@ -469,11 +487,6 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 		pres.SetHolderKey(holderKey)
 	}
 	pres.Proofs = proofs
-
-	// Extract holder from the VP map.
-	if holder, ok := vpMap[common.VPKeyHolder].(string); ok {
-		pres.Holder = holder
-	}
 
 	// Parse embedded VCs.
 	vcsRaw, ok := vpMap[common.VPKeyVerifiableCredential]
@@ -501,27 +514,9 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 			}
 			pres.AddCredentials(cred)
 		case map[string]interface{}:
-			cred, credErr := parseJSONLDCredential(v)
+			cred, credErr := cpp.parseAndVerifyJSONLDCredential(v)
 			if credErr != nil {
 				return nil, credErr
-			}
-			// Verify LD proofs on the credential if present.
-			if len(cred.Proofs()) > 0 {
-				vcWithoutProof := make(map[string]interface{}, len(v))
-				for k, val := range v {
-					if k != jsonldVPProofKey {
-						vcWithoutProof[k] = val
-					}
-				}
-				vcDocBytes, marshalErr := json.Marshal(vcWithoutProof)
-				if marshalErr != nil {
-					return nil, marshalErr
-				}
-				for _, vcProof := range cred.Proofs() {
-					if vcVerifyErr := cpp.LDProofChecker.VerifyCredential(vcDocBytes, vcProof); vcVerifyErr != nil {
-						return nil, vcVerifyErr
-					}
-				}
 			}
 			pres.AddCredentials(cred)
 		}
@@ -530,24 +525,79 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 	return pres, nil
 }
 
+// parseAndVerifyJSONLDCredential parses a JSON-LD credential from its raw map
+// and verifies every Linked Data Proof it carries against the credential's
+// own issuer.
+//
+// The check is fail-closed in three ways: a credential without any proof is
+// rejected (ErrorUnsignedCredential), a credential with a proof but no
+// configured LDProofChecker is rejected (ErrorInvalidProof), and a proof that
+// was not created by the claimed issuer is rejected by the checker.
+func (cpp *ConfigurablePresentationParser) parseAndVerifyJSONLDCredential(vcMap map[string]interface{}) (*common.Credential, error) {
+	cred, err := parseJSONLDCredential(vcMap)
+	if err != nil {
+		return nil, err
+	}
+
+	proofs := cred.Proofs()
+	if len(proofs) == 0 {
+		logging.Log().Warn("JSON-LD credential has no proof — unsigned credentials are not accepted")
+		return nil, ErrorUnsignedCredential
+	}
+
+	if cpp.LDProofChecker == nil {
+		logging.Log().Warn("JSON-LD credential has a proof but LDProofChecker is not configured — rejecting")
+		return nil, ErrorInvalidProof
+	}
+
+	issuer := ""
+	if credentialIssuer := cred.Contents().Issuer; credentialIssuer != nil {
+		issuer = credentialIssuer.ID
+	}
+
+	// The proof is computed over the credential without its proof member.
+	vcWithoutProof := make(map[string]interface{}, len(vcMap))
+	for k, val := range vcMap {
+		if k != common.VPKeyProof {
+			vcWithoutProof[k] = val
+		}
+	}
+	vcDocBytes, err := json.Marshal(vcWithoutProof)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, vcProof := range proofs {
+		if err := cpp.LDProofChecker.VerifyCredential(vcDocBytes, vcProof, issuer); err != nil {
+			return nil, err
+		}
+	}
+
+	return cred, nil
+}
+
 // VerifyLDVPProofBinding checks the semantic bindings of JSON-LD VP proofs:
 // challenge (replay prevention via session nonce) and domain (audience binding).
 //
-// If expectedChallenge is non-empty, at least one VP-level proof must have a
-// matching Challenge field. A proof with a Challenge that does not match the
-// expected value returns ErrorProofChallengeMismatch. If no proof carries the
-// expected challenge, ErrorProofChallengeMismatch is also returned.
+// Both checks treat an absent field as a mismatch rather than as "nothing to
+// check": if expectedChallenge is non-empty, at least one VP-level proof must
+// carry exactly that challenge, and if expectedDomain is non-empty, at least
+// one proof must carry exactly that domain. Otherwise an attacker could opt
+// out of either binding simply by omitting the field.
 //
-// If expectedDomain is non-empty and a proof carries a Domain field, the domain
-// must match expectedDomain or ErrorProofDomainMismatch is returned.
+// Both fields are covered by the proof signature (see
+// common.VerifyLinkedDataProof), so a captured presentation cannot be
+// re-pointed at another session or another verifier.
 //
-// If the presentation has no LD proofs, the check is a no-op (returns nil).
+// If the presentation has no LD proofs, the check is a no-op (returns nil) —
+// JWT and SD-JWT presentations are bound through their own mechanisms.
 func VerifyLDVPProofBinding(pres *common.Presentation, expectedChallenge, expectedDomain string) error {
 	if len(pres.Proofs) == 0 {
 		return nil
 	}
 
 	challengeMatched := false
+	domainMatched := false
 	for _, proof := range pres.Proofs {
 		// Check challenge binding (replay prevention).
 		if expectedChallenge != "" && proof.Challenge != "" {
@@ -564,6 +614,7 @@ func VerifyLDVPProofBinding(pres *common.Presentation, expectedChallenge, expect
 				logging.Log().Warnf("VP proof domain %q does not match expected domain %q", proof.Domain, expectedDomain)
 				return ErrorProofDomainMismatch
 			}
+			domainMatched = true
 		}
 	}
 
@@ -571,6 +622,12 @@ func VerifyLDVPProofBinding(pres *common.Presentation, expectedChallenge, expect
 	if expectedChallenge != "" && !challengeMatched {
 		logging.Log().Warn("VP proof challenge expected but not found in any proof")
 		return ErrorProofChallengeMismatch
+	}
+
+	// The same holds for the domain — an omitted domain is not a free pass.
+	if expectedDomain != "" && !domainMatched {
+		logging.Log().Warnf("VP proof domain %q expected but not found in any proof", expectedDomain)
+		return ErrorProofDomainMismatch
 	}
 
 	return nil

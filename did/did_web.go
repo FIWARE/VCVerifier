@@ -120,6 +120,8 @@ func parseDIDDocument(data []byte) (*Doc, error) {
 	var raw struct {
 		ID                 string            `json:"id"`
 		VerificationMethod []json.RawMessage `json:"verificationMethod"`
+		Authentication     []json.RawMessage `json:"authentication"`
+		AssertionMethod    []json.RawMessage `json:"assertionMethod"`
 	}
 
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -137,7 +139,49 @@ func parseDIDDocument(data []byte) (*Doc, error) {
 		doc.VerificationMethod = append(doc.VerificationMethod, *vm)
 	}
 
+	authentication, err := parseVerificationRelationship(doc, raw.Authentication)
+	if err != nil {
+		logging.Log().Infof("Failed to parse authentication relationship in DID document %s: %v", raw.ID, err)
+		return nil, err
+	}
+	doc.Authentication = authentication
+
+	assertionMethod, err := parseVerificationRelationship(doc, raw.AssertionMethod)
+	if err != nil {
+		logging.Log().Infof("Failed to parse assertionMethod relationship in DID document %s: %v", raw.ID, err)
+		return nil, err
+	}
+	doc.AssertionMethod = assertionMethod
+
 	return doc, nil
+}
+
+// parseVerificationRelationship resolves the entries of a verification
+// relationship array into verification method IDs. Entries may either be a
+// string reference to a method defined elsewhere in the document, or an
+// embedded verification method — embedded methods are appended to the
+// document so they can be resolved like any other.
+func parseVerificationRelationship(doc *Doc, entries []json.RawMessage) ([]string, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		var reference string
+		if err := json.Unmarshal(entry, &reference); err == nil {
+			ids = append(ids, reference)
+			continue
+		}
+
+		vm, err := parseVerificationMethod(entry)
+		if err != nil {
+			return nil, err
+		}
+		doc.VerificationMethod = append(doc.VerificationMethod, *vm)
+		ids = append(ids, vm.ID)
+	}
+	return ids, nil
 }
 
 // parseVerificationMethod parses a single verification method from JSON.

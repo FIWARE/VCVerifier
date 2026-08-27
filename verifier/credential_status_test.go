@@ -78,6 +78,10 @@ type mockStatusListClient struct {
 	credentials map[string]*common.Credential
 	err         error
 	calls       []string
+	// issuers records the expected issuer each Fetch was called with, so
+	// tests can assert the status list is bound to the referencing
+	// credential's issuer.
+	issuers []string
 }
 
 // Fetch implements StatusListCredentialClient. When err is non-nil it is
@@ -86,8 +90,9 @@ type mockStatusListClient struct {
 // yields a distinct error that would fail any subsequent assertion — this
 // guards against silent "revoked" false-positives caused by typos in the
 // table rows.
-func (m *mockStatusListClient) Fetch(url string) (*common.Credential, error) {
+func (m *mockStatusListClient) Fetch(url string, expectedIssuer string) (*common.Credential, error) {
 	m.calls = append(m.calls, url)
+	m.issuers = append(m.issuers, expectedIssuer)
 	if m.err != nil {
 		return nil, m.err
 	}

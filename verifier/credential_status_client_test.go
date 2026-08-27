@@ -69,7 +69,7 @@ func TestCachingStatusListClientFetch(t *testing.T) {
 			defer srv.Close()
 
 			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
-			cred, err := client.Fetch(srv.URL)
+			cred, err := client.Fetch(srv.URL, "")
 
 			if tc.wantErr != nil {
 				require.Error(t, err)
@@ -99,11 +99,11 @@ func TestCachingStatusListClientCache(t *testing.T) {
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
 
-	first, err := client.Fetch(srv.URL)
+	first, err := client.Fetch(srv.URL, "")
 	require.NoError(t, err)
 	require.NotNil(t, first)
 
-	second, err := client.Fetch(srv.URL)
+	second, err := client.Fetch(srv.URL, "")
 	require.NoError(t, err)
 	require.NotNil(t, second)
 
@@ -122,7 +122,7 @@ func TestCachingStatusListClientTransportError(t *testing.T) {
 	srv.Close()
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
-	cred, err := client.Fetch(url)
+	cred, err := client.Fetch(url, "")
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrorStatusListHttpFailure)
@@ -144,7 +144,7 @@ func TestCachingStatusListClientAcceptHeader(t *testing.T) {
 	defer srv.Close()
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
-	_, err := client.Fetch(srv.URL)
+	_, err := client.Fetch(srv.URL, "")
 	require.NoError(t, err)
 	assert.Equal(t, AcceptHeaderStatusListCredential, received)
 	assert.Contains(t, received, ContentTypeCredentialJson)
@@ -185,10 +185,10 @@ var testStatusListVCJWT = buildFakeJWT(map[string]interface{}{
 		"@context": []string{"https://www.w3.org/2018/credentials/v1"},
 		"type":     []string{"VerifiableCredential", "BitstringStatusListCredential"},
 		"credentialSubject": map[string]interface{}{
-			"id":           "https://example.com/status/1#list",
-			"type":         "BitstringStatusList",
+			"id":            "https://example.com/status/1#list",
+			"type":          "BitstringStatusList",
 			"statusPurpose": "revocation",
-			"encodedList":  "H4sIAAAAAAAA_2NgAAMAAAAEAAEAAAAA",
+			"encodedList":   "H4sIAAAAAAAA_2NgAAMAAAAEAAEAAAAA",
 		},
 	},
 })
@@ -293,7 +293,7 @@ func TestCachingStatusListClientFetchJWTVerification(t *testing.T) {
 			defer srv.Close()
 
 			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, tc.verifier, nil)
-			cred, err := client.Fetch(srv.URL)
+			cred, err := client.Fetch(srv.URL, "")
 
 			if tc.wantErr != nil {
 				require.Error(t, err)

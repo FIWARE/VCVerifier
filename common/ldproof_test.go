@@ -82,80 +82,19 @@ func (s *failingSigner) Sign(_ []byte) ([]byte, error) {
 
 // --- Test Document Loader ---
 
-// testDocLoader is a mock ld.DocumentLoader that serves pre-loaded contexts.
-type testDocLoader struct {
-	docs map[string]*ld.RemoteDocument
-}
-
-// LoadDocument returns a pre-loaded document for the given URL, or an error.
-func (l *testDocLoader) LoadDocument(u string) (*ld.RemoteDocument, error) {
-	if doc, ok := l.docs[u]; ok {
-		return doc, nil
-	}
-	return nil, fmt.Errorf("test: document not found: %s", u)
-}
-
-// newTestDocumentLoader creates a document loader with a minimal W3C credentials
-// v1 context that defines the terms needed for VP canonicalization.
+// newTestDocumentLoader returns a document loader that serves the real,
+// vendored W3C credentials/v1 and JsonWebSignature2020 contexts. Using the
+// genuine contexts is deliberate: a hand-written stand-in that defines the
+// proof terms at the top level would make proof options look covered by the
+// signature when, against the real context, they are not.
+//
+// Any other URL is rejected so no test can depend on the network.
 func newTestDocumentLoader() ld.DocumentLoader {
-	// Minimal W3C Verifiable Credentials v1 context defining the terms used
-	// in Verifiable Presentations and LD proofs.
-	credentialsV1Context := map[string]interface{}{
-		"@context": map[string]interface{}{
-			"@version": 1.1,
-			"id":       "@id",
-			"type":     "@type",
-			"VerifiablePresentation": map[string]interface{}{
-				"@id": "https://www.w3.org/2018/credentials#VerifiablePresentation",
-			},
-			"VerifiableCredential": map[string]interface{}{
-				"@id": "https://www.w3.org/2018/credentials#VerifiableCredential",
-			},
-			"verifiableCredential": map[string]interface{}{
-				"@id":        "https://www.w3.org/2018/credentials#verifiableCredential",
-				"@type":      "@id",
-				"@container": "@graph",
-			},
-			"holder": map[string]interface{}{
-				"@id":   "https://www.w3.org/2018/credentials#holder",
-				"@type": "@id",
-			},
-			"credentialSubject": map[string]interface{}{
-				"@id":   "https://www.w3.org/2018/credentials#credentialSubject",
-				"@type": "@id",
-			},
-			"issuer": map[string]interface{}{
-				"@id":   "https://www.w3.org/2018/credentials#issuer",
-				"@type": "@id",
-			},
-			"JsonWebSignature2020": map[string]interface{}{
-				"@id": "https://w3id.org/security#JsonWebSignature2020",
-			},
-			"created": map[string]interface{}{
-				"@id":   "http://purl.org/dc/terms/created",
-				"@type": "http://www.w3.org/2001/XMLSchema#dateTime",
-			},
-			"verificationMethod": map[string]interface{}{
-				"@id":   "https://w3id.org/security#verificationMethod",
-				"@type": "@id",
-			},
-			"proofPurpose": map[string]interface{}{
-				"@id":   "https://w3id.org/security#proofPurpose",
-				"@type": "@vocab",
-			},
-			"challenge": "https://w3id.org/security#challenge",
-			"domain":    "https://w3id.org/security#domain",
-		},
+	loader, err := NewEmbeddedContextLoader(nil)
+	if err != nil {
+		panic(fmt.Sprintf("test: failed to load embedded JSON-LD contexts: %v", err))
 	}
-
-	return &testDocLoader{
-		docs: map[string]*ld.RemoteDocument{
-			ContextCredentialsV1: {
-				DocumentURL: ContextCredentialsV1,
-				Document:    credentialsV1Context,
-			},
-		},
-	}
+	return loader
 }
 
 // --- Test Key Helpers ---
@@ -801,33 +740,33 @@ func TestVerifyLinkedDataProof_Negative(t *testing.T) {
 			wantErr:   ErrorLDProofMalformedJWS,
 		},
 		{
-			name:    "algorithm key type mismatch - ES256 key with PS256 header",
-			docJSON: validJSON,
-			proof:   validProof, // PS256-signed
-			publicKey: ecPubJWK,  // EC key, but proof was signed with PS256
+			name:      "algorithm key type mismatch - ES256 key with PS256 header",
+			docJSON:   validJSON,
+			proof:     validProof, // PS256-signed
+			publicKey: ecPubJWK,   // EC key, but proof was signed with PS256
 			loader:    loader,
 			wantErr:   ErrorLDProofAlgMismatch,
 		},
 		{
 			name:      "algorithm key type mismatch - RSA key with ES256 header",
 			docJSON:   validJSON,
-			proof:     ecProof,    // ES256-signed
-			publicKey: rsaPubJWK,  // RSA key, but proof was signed with ES256
+			proof:     ecProof,   // ES256-signed
+			publicKey: rsaPubJWK, // RSA key, but proof was signed with ES256
 			loader:    loader,
 			wantErr:   ErrorLDProofAlgMismatch,
 		},
 		{
-			name:    "wrong verification key",
-			docJSON: validJSON,
-			proof:   validProof,
+			name:      "wrong verification key",
+			docJSON:   validJSON,
+			proof:     validProof,
 			publicKey: wrongPubJWK,
 			loader:    loader,
 			wantErr:   ErrorLDProofVerifySignature,
 		},
 		{
-			name:    "tampered document content",
-			docJSON: tamperDocumentHolder(t, validJSON),
-			proof:   validProof,
+			name:      "tampered document content",
+			docJSON:   tamperDocumentHolder(t, validJSON),
+			proof:     validProof,
 			publicKey: rsaPubJWK,
 			loader:    loader,
 			wantErr:   ErrorLDProofVerifySignature,
@@ -846,9 +785,9 @@ func TestVerifyLinkedDataProof_Negative(t *testing.T) {
 			wantErr:   ErrorLDProofVerifySignature,
 		},
 		{
-			name:    "invalid document JSON",
-			docJSON: []byte("not valid json{{{"),
-			proof:   validProof,
+			name:      "invalid document JSON",
+			docJSON:   []byte("not valid json{{{"),
+			proof:     validProof,
 			publicKey: rsaPubJWK,
 			loader:    loader,
 			wantErr:   ErrorLDProofVerifyMarshal,
@@ -1319,4 +1258,193 @@ func TestVerifyLinkedDataProof_ES256_IEEESignatureFormat(t *testing.T) {
 	s := new(big.Int).SetBytes(sigBytes[p256KeySize:])
 	assert.True(t, r.Sign() > 0, "r should be positive")
 	assert.True(t, s.Sign() > 0, "s should be positive")
+}
+
+// --- Proof-options coverage and context handling ---
+
+// TestEnsureSuiteContext verifies that the JsonWebSignature2020 suite context
+// is added to every shape of @context value and never duplicated.
+func TestEnsureSuiteContext(t *testing.T) {
+	tests := []struct {
+		name  string
+		input interface{}
+		want  interface{}
+	}{
+		{
+			name:  "nil_context",
+			input: nil,
+			want:  []interface{}{ContextSecuritySuiteJWS2020},
+		},
+		{
+			name:  "single_string",
+			input: ContextCredentialsV1,
+			want:  []interface{}{ContextCredentialsV1, ContextSecuritySuiteJWS2020},
+		},
+		{
+			name:  "string_already_the_suite",
+			input: ContextSecuritySuiteJWS2020,
+			want:  ContextSecuritySuiteJWS2020,
+		},
+		{
+			name:  "slice_without_suite",
+			input: []interface{}{ContextCredentialsV1},
+			want:  []interface{}{ContextCredentialsV1, ContextSecuritySuiteJWS2020},
+		},
+		{
+			name:  "slice_with_suite_unchanged",
+			input: []interface{}{ContextCredentialsV1, ContextSecuritySuiteJWS2020},
+			want:  []interface{}{ContextCredentialsV1, ContextSecuritySuiteJWS2020},
+		},
+		{
+			name:  "string_slice_without_suite",
+			input: []string{ContextCredentialsV1},
+			want:  []string{ContextCredentialsV1, ContextSecuritySuiteJWS2020},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, EnsureSuiteContext(tc.input))
+		})
+	}
+}
+
+// TestProofOptionsAreCoveredBySignature is the direct regression test for the
+// bug where the canonicalized proof options collapsed to a single type
+// triple: with the suite context in place every proof field has to show up in
+// the canonical form, and tampering with any of them must break the
+// signature.
+func TestProofOptionsAreCoveredBySignature(t *testing.T) {
+	loader := newTestDocumentLoader()
+	privKey, pubJWK := generateTestES256Material(t)
+
+	now := time.Now()
+	pres := &Presentation{
+		Context: []string{ContextCredentialsV1},
+		Type:    []string{TypeVerifiablePresentation},
+		Holder:  "did:web:holder.example.com",
+	}
+	err := pres.AddLinkedDataProof(&LinkedDataProofContext{
+		Created:            &now,
+		SignatureType:      ProofTypeJsonWebSignature2020,
+		Algorithm:          "ES256",
+		VerificationMethod: "did:web:holder.example.com#key-1",
+		Signer:             &es256TestSigner{key: privKey},
+		DocumentLoader:     loader,
+		ProofPurpose:       ProofPurposeAuthentication,
+		Challenge:          "session-nonce-AAA",
+		Domain:             "https://verifier.example.com",
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, pres.Context, ContextSecuritySuiteJWS2020,
+		"signing must add the suite context to the presentation")
+
+	vpJSON, err := pres.MarshalJSON()
+	require.NoError(t, err)
+	var vpMap JSONObject
+	require.NoError(t, json.Unmarshal(vpJSON, &vpMap))
+	delete(vpMap, VPKeyProof)
+	docBytes, err := json.Marshal(vpMap)
+	require.NoError(t, err)
+
+	proof := pres.Proofs[0]
+	require.NoError(t, VerifyLinkedDataProof(docBytes, proof, pubJWK, loader),
+		"the untouched proof must verify")
+
+	tests := []struct {
+		name   string
+		tamper func(p *LDProof)
+	}{
+		{name: "challenge", tamper: func(p *LDProof) { p.Challenge = "other-nonce" }},
+		{name: "domain", tamper: func(p *LDProof) { p.Domain = "https://attacker.example.com" }},
+		{name: "created", tamper: func(p *LDProof) { p.Created = "1999-01-01T00:00:00Z" }},
+		{name: "proofPurpose", tamper: func(p *LDProof) { p.ProofPurpose = ProofPurposeAssertionMethod }},
+		{name: "verificationMethod", tamper: func(p *LDProof) { p.VerificationMethod = "did:web:attacker.example.com#key-1" }},
+	}
+
+	for _, tc := range tests {
+		t.Run("tampered_"+tc.name, func(t *testing.T) {
+			tampered := *proof
+			tc.tamper(&tampered)
+			err := VerifyLinkedDataProof(docBytes, &tampered, pubJWK, loader)
+			require.Error(t, err, "changing %s must invalidate the proof", tc.name)
+			assert.ErrorIs(t, err, ErrorLDProofVerifySignature)
+		})
+	}
+}
+
+// TestVerifyLinkedDataProof_CurveMismatch verifies the explicit EC curve
+// cross-check: an ES256 proof must not be accepted with a P-384 key.
+func TestVerifyLinkedDataProof_CurveMismatch(t *testing.T) {
+	loader := newTestDocumentLoader()
+	privKey, _ := generateTestES256Material(t)
+
+	now := time.Now()
+	pres := &Presentation{
+		Context: []string{ContextCredentialsV1},
+		Type:    []string{TypeVerifiablePresentation},
+		Holder:  "did:web:holder.example.com",
+	}
+	require.NoError(t, pres.AddLinkedDataProof(&LinkedDataProofContext{
+		Created:            &now,
+		SignatureType:      ProofTypeJsonWebSignature2020,
+		Algorithm:          "ES256",
+		VerificationMethod: "did:web:holder.example.com#key-1",
+		Signer:             &es256TestSigner{key: privKey},
+		DocumentLoader:     loader,
+		ProofPurpose:       ProofPurposeAuthentication,
+	}))
+
+	vpJSON, err := pres.MarshalJSON()
+	require.NoError(t, err)
+	var vpMap JSONObject
+	require.NoError(t, json.Unmarshal(vpJSON, &vpMap))
+	delete(vpMap, VPKeyProof)
+	docBytes, err := json.Marshal(vpMap)
+	require.NoError(t, err)
+
+	p384Key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	p384JWK, err := jwk.Import(&p384Key.PublicKey)
+	require.NoError(t, err)
+
+	err = VerifyLinkedDataProof(docBytes, pres.Proofs[0], p384JWK, loader)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorLDProofCurveMismatch)
+}
+
+// es256TestSigner signs with ECDSA P-256/SHA-256 and returns the IEEE P1363
+// (r||s) form the ES256 JWS algorithm expects.
+type es256TestSigner struct {
+	key *ecdsa.PrivateKey
+}
+
+// es256CoordinateSize is the byte length of an ES256 signature coordinate.
+const es256CoordinateSize = 32
+
+// Sign implements LDSigner.
+func (s *es256TestSigner) Sign(data []byte) ([]byte, error) {
+	digest := sha256.Sum256(data)
+	r, sv, err := ecdsa.Sign(rand.Reader, s.key, digest[:])
+	if err != nil {
+		return nil, err
+	}
+	rBytes := r.Bytes()
+	sBytes := sv.Bytes()
+	sig := make([]byte, es256CoordinateSize*2)
+	copy(sig[es256CoordinateSize-len(rBytes):es256CoordinateSize], rBytes)
+	copy(sig[2*es256CoordinateSize-len(sBytes):], sBytes)
+	return sig, nil
+}
+
+// generateTestES256Material returns a fresh P-256 private key and its public
+// JWK.
+func generateTestES256Material(t *testing.T) (*ecdsa.PrivateKey, jwk.Key) {
+	t.Helper()
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	pubJWK, err := jwk.Import(&privKey.PublicKey)
+	require.NoError(t, err)
+	return privKey, pubJWK
 }
