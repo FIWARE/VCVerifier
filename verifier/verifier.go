@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -23,8 +24,8 @@ import (
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
-	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/did"
+	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/google/uuid"
 
@@ -42,6 +43,7 @@ import (
 	"github.com/valyala/fasttemplate"
 )
 
+const REQUEST_MODE_URL_ENCODED = "urlEncoded"
 const REQUEST_MODE_BY_VALUE = "byValue"
 const REQUEST_MODE_BY_REFERENCE = "byReference"
 const REQUEST_OBJECT_TYP = "oauth-authz-req+jwt"
@@ -1313,6 +1315,14 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 
 func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId string, scope string, redirectUri string, state string, nonce string, loginSession loginSession, requestMode string) (authenticationRequest string, err error) {
 	switch requestMode {
+	case REQUEST_MODE_URL_ENCODED:
+		authenticationRequest, err = v.createAuthenticationRequestUrlEncoded(base, redirectUri, state, clientId, scope, nonce)
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the url-encoded authentication request. Error: %v", err)
+		} else {
+			logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
+		}
+		return authenticationRequest, err
 	case REQUEST_MODE_BY_VALUE:
 		authenticationRequest, err = v.createAuthenticationRequestByValue(base, redirectUri, state, clientId, scope, nonce)
 		if err != nil {
@@ -1488,6 +1498,53 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 }
 
 // creates an authenticationRequest string from the given parameters
+// createAuthenticationRequestUrlEncoded builds an unsigned authentication request, with all
+// parameters(including presentation_definition/dcql_query) inlined as plain query parameters
+// on the request URI, instead of wrapped in a signed JWT. This is the only valid transport for
+// the "redirect_uri" client_id scheme, since that scheme cannot be used with signed requests
+// (there is no certificate/DID for the wallet to verify the signature against). It produces a
+// larger QR/URI than "byValue"/"byReference", since nothing is fetched separately or embedded
+// as a compact JWT — see README.md for the resulting trade-off.
+func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, response_uri string, state string, clientId string, scope string, nonce string) (request string, err error) {
+	values := url.Values{}
+	values.Set("response_type", "vp_token")
+	values.Set("response_mode", "direct_post")
+	values.Set("client_id", v.clientIdentification.Id)
+	values.Set("response_uri", response_uri)
+	values.Set("state", state)
+	if nonce != "" {
+		values.Set("nonce", nonce)
+	}
+
+	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
+	if err != nil {
+		return request, err
+	}
+	if presentationDefinition != nil {
+		pdJSON, err := json.Marshal(presentationDefinition)
+		if err != nil {
+			return request, err
+		}
+		values.Set("presentation_definition", string(pdJSON))
+	}
+
+	dcql, err := v.credentialsConfig.GetDcqlQuery(clientId, scope)
+	if err != nil {
+		return request, err
+	}
+	if dcql != nil {
+		dcqlJSON, err := json.Marshal(dcql)
+		if err != nil {
+			return request, err
+		}
+		values.Set("dcql_query", string(dcqlJSON))
+	} else {
+		logging.Log().Debugf("No dcql configured for %s - %s.", clientId, scope)
+	}
+
+	return base + "?" + values.Encode(), nil
+}
+
 func (v *CredentialVerifier) createAuthenticationRequestByValue(base string, response_uri string, state string, clientId string, scope string, nonce string) (request string, err error) {
 
 	// We use a template to generate the final string
