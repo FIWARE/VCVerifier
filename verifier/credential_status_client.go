@@ -54,7 +54,7 @@ const (
 	// StatusListCacheCleanupMultiplier scales the configured cache expiry to
 	// obtain the go-cache janitor cleanup interval. A value of 2 matches the
 	// 2×expiry pattern used by the existing caches in common/cache.go and
-	// verifier/caching_client.go.
+	// common/caching_document_loader.go.
 	StatusListCacheCleanupMultiplier = 2
 
 	// statusListHTTPOKMin and statusListHTTPOKMaxExclusive define the

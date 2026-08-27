@@ -16,6 +16,18 @@ import (
 	"github.com/piprate/json-gold/ld"
 )
 
+// newDefaultCachingDocumentLoader creates a caching document loader backed
+// by the default HTTP-based JSON-LD loader. Callers that need a custom
+// underlying loader (e.g. for testing) can construct one directly via
+// common.NewCachingDocumentLoader.
+func newDefaultCachingDocumentLoader() ld.DocumentLoader {
+	return common.NewCachingDocumentLoader(
+		ld.NewDefaultDocumentLoader(http.DefaultClient),
+		common.DefaultDocumentCacheTTL,
+		common.DefaultDocumentCacheCleanup,
+	)
+}
+
 /**
  * Global file accessor
  */
@@ -42,6 +54,8 @@ type TokenProvider interface {
 	GetAuthCredential() (vc *common.Credential, err error)
 }
 
+// M2MTokenProvider creates machine-to-machine tokens by signing
+// Verifiable Presentations with an RSA private key.
 type M2MTokenProvider struct {
 	// encodes the token according to the configuration
 	tokenEncoder TokenEncoder
@@ -59,6 +73,10 @@ type M2MTokenProvider struct {
 	keyType string
 	// did of the token provider
 	did string
+	// documentLoader is used for JSON-LD context resolution when
+	// adding linked data proofs. A caching loader avoids redundant
+	// network fetches on the M2M signing hot path.
+	documentLoader ld.DocumentLoader
 }
 
 type TokenEncoder interface {
@@ -100,7 +118,17 @@ func InitM2MTokenProvider(config *configModel.Configuration, clock common.Clock)
 		return tokenProvider, err
 	}
 	logging.Log().Debug("Successfully initialized the M2MTokenProvider.")
-	return M2MTokenProvider{tokenEncoder: Base64TokenEncoder{}, authCredential: vc, signingKey: privateKey, did: config.Verifier.Did, clock: clock, verificationMethod: m2mConfig.VerificationMethod, keyType: config.M2M.KeyType, signatureType: config.M2M.SignatureType}, err
+	return M2MTokenProvider{
+		tokenEncoder:       Base64TokenEncoder{},
+		authCredential:     vc,
+		signingKey:         privateKey,
+		did:                config.Verifier.Did,
+		clock:              clock,
+		verificationMethod: m2mConfig.VerificationMethod,
+		keyType:            config.M2M.KeyType,
+		signatureType:      config.M2M.SignatureType,
+		documentLoader:     newDefaultCachingDocumentLoader(),
+	}, err
 }
 
 func (tokenProvider M2MTokenProvider) GetAuthCredential() (vc *common.Credential, err error) {
@@ -156,7 +184,7 @@ func (tp M2MTokenProvider) signVerifiablePresentation(authCredential *common.Cre
 		Algorithm:          keyTypeToAlgorithm(tp.keyType),
 		VerificationMethod: tp.verificationMethod,
 		Signer:             NewRS256Signer(tp.signingKey),
-		DocumentLoader:     ld.NewDefaultDocumentLoader(http.DefaultClient),
+		DocumentLoader:     tp.documentLoader,
 	})
 
 	if err != nil {
