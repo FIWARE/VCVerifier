@@ -62,6 +62,13 @@ refetch per `MinJwksRefetchInterval` (1 minute). A rotated key is therefore
 picked up without waiting out the cache TTL, while unknown key ids cannot
 drive the outbound request rate.
 
+A refetch that fails keeps the cached keys — the issuer answered a moment ago,
+and replacing them with a failure would break verification for keys that still
+work — but it still moves the refetch window (`postponeRefetch`), carrying over
+what is left of the entry's lifetime so writing it back does not extend the
+cache indefinitely. Without that, the rate limit would be defeated in exactly
+the case it exists for.
+
 ### Outbound request restrictions
 
 Everything the resolver fetches is chosen by whoever presented the token: the
@@ -78,8 +85,14 @@ unauthenticated input and is confined accordingly:
   `maxMetadataRedirects` (5) are followed.
 - Response bodies are read through an `io.LimitReader` bounded to
   `maxMetadataResponseBytes` (1 MiB).
-- Every request carries a context with the resolver's timeout
-  (`httpClientTimeout`, 10s).
+- At most `maxAuthorizationServers` (5) entries of `authorization_servers` are
+  tried. The list comes from the issuer, and host pinning does not help here —
+  the issuer's own host is exactly the one an attacker controls — so an
+  unbounded walk would let one metadata document drive thousands of requests.
+- Each request is bounded by `httpClientTimeout` (10s) **and** the whole
+  resolution by `resolutionTimeout` (30s), so the number of hops a document
+  asks for cannot extend the total. The caller's context is honoured, so once
+  it reaches down from the request handlers a disconnect will abort the work.
 
 ```yaml
 verifier:

@@ -50,8 +50,21 @@ const (
 	// naming random key ids.
 	MinJwksRefetchInterval = 1 * time.Minute
 
-	// httpClientTimeout is the maximum duration for HTTP requests made by the resolver.
+	// httpClientTimeout is the maximum duration of a single HTTP request made
+	// by the resolver.
 	httpClientTimeout = 10 * time.Second
+
+	// resolutionTimeout is the maximum duration of one issuer resolution as a
+	// whole. Discovery can involve several requests — metadata, authorization
+	// server metadata, JWKS — and how many is decided by documents the issuer
+	// serves, so the per-request timeout alone leaves the total unbounded.
+	resolutionTimeout = 30 * time.Second
+
+	// maxAuthorizationServers caps how many entries of a credential issuer's
+	// `authorization_servers` are tried. RFC 8414 deployments name one; the
+	// list comes from the issuer itself, so an unbounded walk would let a
+	// hostile document turn one token into thousands of outbound requests.
+	maxAuthorizationServers = 5
 
 	// maxMetadataResponseBytes bounds the size of a metadata or JWKS response body.
 	// The endpoints are attacker-reachable, so an unbounded read would let a hostile
@@ -166,8 +179,11 @@ type jwksCacheEntry struct {
 	keySet jwk.Set
 	// err is the failure resolution ended in; nil for a positive entry.
 	err error
-	// fetchedAt is when the entry was produced, used to rate-limit refetches.
-	fetchedAt time.Time
+	// nextRefetchAt is the earliest time at which an unknown kid may trigger a
+	// refetch for this issuer. It is stored rather than derived from the time
+	// of the fetch, so that a refetch which fails can push the window out
+	// without pretending the cached key set is newer than it is.
+	nextRefetchAt time.Time
 }
 
 // CachingHttpsIssuerResolver implements HttpsIssuerResolver with a caching layer
@@ -198,8 +214,10 @@ func NewCachingHttpsIssuerResolver(cache common.Cache, cacheTTL time.Duration) *
 		cacheTTL = DefaultJwksCacheTTL
 	}
 	return &CachingHttpsIssuerResolver{
+		// The per-request timeout is applied through the request context in
+		// fetchJSON, so that it is bounded by the overall resolution deadline
+		// as well; a client-level Timeout would duplicate the shorter of the two.
 		httpClient: &http.Client{
-			Timeout:       httpClientTimeout,
 			CheckRedirect: restrictRedirects,
 		},
 		cache:           cache,
@@ -256,13 +274,14 @@ func (r *CachingHttpsIssuerResolver) ResolveIssuerKeys(ctx context.Context, issu
 	if err != nil {
 		return nil, err
 	}
-	cacheKey := canonicalIssuerID(issuerURL)
+	cacheKey := issuerCacheKey(issuerBase)
 
 	// Set when a usable key set is already cached and only the requested kid is
 	// missing from it, so a failing rotation refetch does not discard it.
 	var cachedKeySet jwk.Set
+	var cachedExpiration time.Time
 
-	if entry, found := r.cachedEntry(cacheKey); found {
+	if entry, expiration, found := r.cachedEntry(cacheKey); found {
 		if entry.err != nil {
 			logging.Log().Debugf("Using cached resolution failure for issuer %s: %v", issuerURL, entry.err)
 			return nil, entry.err
@@ -277,22 +296,31 @@ func (r *CachingHttpsIssuerResolver) ResolveIssuerKeys(ctx context.Context, issu
 		}
 		logging.Log().Debugf("Cached JWKS for issuer %s does not contain kid %q, refetching", issuerURL, kid)
 		cachedKeySet = entry.keySet
+		cachedExpiration = expiration
 	}
 
-	keySet, declaredMaxAge, err := r.resolveKeySet(ctx, issuerURL, issuerBase)
+	// One deadline for the whole discovery, however many hops the issuer's
+	// documents ask for.
+	resolutionCtx, cancel := context.WithTimeout(ctx, resolutionTimeout)
+	defer cancel()
+
+	keySet, declaredMaxAge, err := r.resolveKeySet(resolutionCtx, issuerURL, issuerBase)
 	if err != nil {
 		if cachedKeySet != nil {
 			// The issuer was reachable a moment ago; keep what it served then
 			// rather than replacing it with a failure the next token would hit.
+			// The refetch window still has to move, otherwise every following
+			// token naming an unknown kid would retry immediately.
 			logging.Log().Warnf("Refetch for issuer %s failed, keeping the cached JWKS: %v", issuerURL, err)
+			r.postponeRefetch(cacheKey, cachedKeySet, cachedExpiration)
 			return nil, ErrorIssuerKeyNotFound
 		}
-		r.cache.Set(cacheKey, jwksCacheEntry{err: err, fetchedAt: r.clock.Now()}, r.failureCacheTTL)
+		r.cache.Set(cacheKey, jwksCacheEntry{err: err, nextRefetchAt: r.nextRefetchAt()}, r.failureCacheTTL)
 		return nil, err
 	}
 
 	ttl := r.jwksTTL(declaredMaxAge)
-	r.cache.Set(cacheKey, jwksCacheEntry{keySet: keySet, fetchedAt: r.clock.Now()}, ttl)
+	r.cache.Set(cacheKey, jwksCacheEntry{keySet: keySet, nextRefetchAt: r.nextRefetchAt()}, ttl)
 	logging.Log().Debugf("Cached JWKS for issuer %s for %s (keys: %d)", issuerURL, ttl, keySet.Len())
 
 	return selectCandidateKeys(keySet, kid)
@@ -399,8 +427,15 @@ func (r *CachingHttpsIssuerResolver) resolveViaFallbackPath(ctx context.Context,
 		return nil, 0, ErrorIssuerJwksNotFound
 	}
 
+	authorizationServers := metadata.AuthorizationServers
+	if len(authorizationServers) > maxAuthorizationServers {
+		logging.Log().Warnf("Issuer %s lists %d authorization servers, only the first %d are tried",
+			issuerURL, len(authorizationServers), maxAuthorizationServers)
+		authorizationServers = authorizationServers[:maxAuthorizationServers]
+	}
+
 	// Try each authorization server until we find one with a valid JWKS
-	for _, authServerURL := range metadata.AuthorizationServers {
+	for _, authServerURL := range authorizationServers {
 		allowedAuthServerURL, err := r.allowedMetadataURL(issuerBase, authServerURL)
 		if err != nil {
 			logging.Log().Warnf("Ignoring authorization server %s of issuer %s: %v", authServerURL, issuerURL, err)
@@ -534,23 +569,46 @@ func (r *CachingHttpsIssuerResolver) jwksTTL(declaredMaxAge time.Duration) time.
 }
 
 // cachedEntry returns the cache entry for the given issuer, if one is present
-// and of the expected type.
-func (r *CachingHttpsIssuerResolver) cachedEntry(cacheKey string) (jwksCacheEntry, bool) {
-	cached, found := r.cache.Get(cacheKey)
+// and of the expected type, together with the time it expires. A zero
+// expiration means the entry does not expire.
+func (r *CachingHttpsIssuerResolver) cachedEntry(cacheKey string) (jwksCacheEntry, time.Time, bool) {
+	cached, expiration, found := r.cache.GetWithExpiration(cacheKey)
 	if !found {
-		return jwksCacheEntry{}, false
+		return jwksCacheEntry{}, time.Time{}, false
 	}
 	entry, ok := cached.(jwksCacheEntry)
 	if !ok {
-		return jwksCacheEntry{}, false
+		return jwksCacheEntry{}, time.Time{}, false
 	}
-	return entry, true
+	return entry, expiration, true
 }
 
-// mayRefetch reports whether a cached entry is old enough for a rotation
-// refetch to be allowed.
+// mayRefetch reports whether the refetch window of a cached entry has opened.
 func (r *CachingHttpsIssuerResolver) mayRefetch(entry jwksCacheEntry) bool {
-	return !r.clock.Now().Before(entry.fetchedAt.Add(MinJwksRefetchInterval))
+	return !r.clock.Now().Before(entry.nextRefetchAt)
+}
+
+// nextRefetchAt is the point from which the next rotation refetch is allowed.
+func (r *CachingHttpsIssuerResolver) nextRefetchAt() time.Time {
+	return r.clock.Now().Add(MinJwksRefetchInterval)
+}
+
+// postponeRefetch re-arms the refetch window of an existing key set after a
+// refetch failed, keeping the keys and what is left of their cache lifetime.
+//
+// The remaining lifetime has to be carried over explicitly: writing the entry
+// back restarts the TTL, which would keep a key set alive indefinitely as long
+// as unknown key ids keep arriving. An entry that is at (or past) its
+// expiration is left to expire instead.
+func (r *CachingHttpsIssuerResolver) postponeRefetch(cacheKey string, keySet jwk.Set, expiration time.Time) {
+	remaining := r.cacheTTL
+	if !expiration.IsZero() {
+		remaining = time.Until(expiration)
+		if remaining <= 0 {
+			return
+		}
+	}
+	r.cache.Set(cacheKey, jwksCacheEntry{keySet: keySet, nextRefetchAt: r.nextRefetchAt()}, remaining)
 }
 
 // allowedMetadataURL validates a URL taken from a metadata document against the
@@ -605,6 +663,12 @@ func parseIssuerURL(issuerURL string) (*url.URL, error) {
 	if parsed.Host == "" {
 		return nil, fmt.Errorf("%w: %s has no host", ErrorInvalidIssuerURL, issuerURL)
 	}
+	// An identifier carrying userinfo would have those credentials sent to the
+	// well-known endpoint, and it is not an identifier any issuer legitimately
+	// publishes.
+	if parsed.User != nil {
+		return nil, fmt.Errorf("%w: %s carries userinfo", ErrorInvalidIssuerURL, parsed.Redacted())
+	}
 	return parsed, nil
 }
 
@@ -648,12 +712,29 @@ func assertIssuerMatches(expectedIssuer, metadataIssuer, endpoint string) error 
 	return nil
 }
 
-// canonicalIssuerID normalizes an issuer identifier for comparison and cache
-// lookups. Only a trailing slash is removed — `https://example.com` and
+// canonicalIssuerID normalizes an issuer identifier for the RFC 8414 Section
+// 3.3 comparison. Only a trailing slash is removed — `https://example.com` and
 // `https://example.com/` denote the same issuer — everything else is left
-// untouched so two genuinely different identifiers never collapse into one.
+// untouched, because that comparison is otherwise an exact string match.
 func canonicalIssuerID(issuerID string) string {
 	return strings.TrimSuffix(issuerID, "/")
+}
+
+// issuerCacheKey is the key an issuer's resolved keys are cached under. Scheme
+// and host are case-insensitive per RFC 3986, so they are lowercased to keep
+// `https://Example.com` and `https://example.com` from occupying two entries
+// and costing two resolutions. The path keeps its case — it is case-sensitive
+// — and only a trailing slash is dropped, matching canonicalIssuerID.
+//
+// This is deliberately a different function from canonicalIssuerID: relaxing
+// the identity comparison the same way would go beyond what RFC 8414 allows.
+func issuerCacheKey(issuerBase *url.URL) string {
+	normalized := *issuerBase
+	normalized.Scheme = strings.ToLower(issuerBase.Scheme)
+	normalized.Host = strings.ToLower(issuerBase.Host)
+	normalized.Path = strings.TrimSuffix(issuerBase.Path, "/")
+	normalized.RawPath = ""
+	return normalized.String()
 }
 
 // selectCandidateKeys returns the keys of a JWKS that may verify a signature.

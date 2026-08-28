@@ -1270,8 +1270,10 @@ func TestResolveIssuerKeys_FailedRefetchKeepsCachedKeys(t *testing.T) {
 	jwksBytes := marshalJWKSet(t, keySet)
 
 	metadataAvailable := true
+	var requestCount atomic.Int32
 	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
 		if !metadataAvailable {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -1304,10 +1306,92 @@ func TestResolveIssuerKeys_FailedRefetchKeepsCachedKeys(t *testing.T) {
 
 	_, err = resolver.ResolveIssuerKeys(context.Background(), serverURL, "unknown-key")
 	assert.ErrorIs(t, err, ErrorIssuerKeyNotFound)
+	requestsAfterFailedRefetch := requestCount.Load()
+
+	// A further unknown kid within the interval must not trigger another
+	// resolution: a failed refetch has to re-arm the rate limit, otherwise
+	// every token naming a random kid becomes an outbound request.
+	_, err = resolver.ResolveIssuerKeys(context.Background(), serverURL, "another-unknown-key")
+	assert.ErrorIs(t, err, ErrorIssuerKeyNotFound)
+	assert.Equal(t, requestsAfterFailedRefetch, requestCount.Load(),
+		"a failed refetch must not open the refetch window for every following token")
 
 	// The known key must still verify — the failed refetch may not have
 	// replaced the cached set with a negative entry.
 	key, err := resolveFirstIssuerKey(resolver, serverURL, "known-key")
 	assert.NoError(t, err)
 	assert.NotNil(t, key)
+
+	// Once the interval has passed again, a refetch is attempted anew.
+	clock.advance(MinJwksRefetchInterval)
+	_, err = resolver.ResolveIssuerKeys(context.Background(), serverURL, "unknown-key")
+	assert.ErrorIs(t, err, ErrorIssuerKeyNotFound)
+	assert.Greater(t, requestCount.Load(), requestsAfterFailedRefetch,
+		"the refetch window must open again after the interval")
+}
+
+// TestResolveIssuerKeys_CapsAuthorizationServers verifies that only the first
+// maxAuthorizationServers entries of a credential issuer's metadata are tried,
+// so a hostile document cannot turn one token into an unbounded series of
+// outbound requests.
+func TestResolveIssuerKeys_CapsAuthorizationServers(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	const advertisedAuthServers = 50
+
+	var authServerRequests atomic.Int32
+	var issuerURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == WellKnownOIDCCredentialIssuer:
+			authServers := make([]string, 0, advertisedAuthServers)
+			for i := 0; i < advertisedAuthServers; i++ {
+				authServers = append(authServers, fmt.Sprintf("%s/as-%d", issuerURL, i))
+			}
+			list, err := json.Marshal(authServers)
+			require.NoError(t, err)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer": %q, "authorization_servers": %s}`, issuerURL, list)))
+		case strings.HasPrefix(r.URL.Path, WellKnownOAuthAuthzServer):
+			// Every authorization server is reachable but useless.
+			authServerRequests.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	issuerURL = server.URL
+
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+	keys, err := resolver.ResolveIssuerKeys(context.Background(), issuerURL, "any-key")
+	assert.ErrorIs(t, err, ErrorIssuerMetadataNotFound)
+	assert.Nil(t, keys)
+	assert.Equal(t, int32(maxAuthorizationServers), authServerRequests.Load(),
+		"at most %d authorization servers may be tried", maxAuthorizationServers)
+}
+
+// TestResolveIssuerKeys_HonoursCallerContext verifies that the caller's context
+// bounds the resolution: a context that is already done stops the work instead
+// of running through the discovery hops.
+func TestResolveIssuerKeys_HonoursCallerContext(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	keys, err := resolver.ResolveIssuerKeys(ctx, server.URL, "any-key")
+	assert.ErrorIs(t, err, ErrorIssuerMetadataNotFound)
+	assert.Nil(t, keys)
+	assert.Equal(t, int32(0), requestCount.Load(), "a cancelled context must not reach the issuer")
 }
