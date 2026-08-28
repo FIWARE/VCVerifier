@@ -44,14 +44,16 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
 
 - **`verifier/`** — Core package (~1500 lines in `verifier.go`). Session management, JWT creation (RS256/ES256), QR code generation, nonce/state management. Request object modes: `urlEncoded`, `byValue`, `byReference`. Also contains:
   - `presentation_parser.go` — Parses VP tokens (JSON-LD and SD-JWT formats), JSON-LD document loading with caching
-  - `jwt_verifier.go` — VC validation with modes: `none`, `combined`, `jsonLd`, `baseContext`. DID verification method resolution for did:key, did:web, did:jwk
+  - `jwt_verifier.go` — VC content validation with modes: `none`, `combined`, `jsonLd`, `baseContext` (note: `combined` and `jsonLd` currently only check field presence, not real JSON-LD validation). DID verification method resolution for did:key, did:web, did:jwk
   - `trustedissuer.go` / `trustedparticipant.go` — EBSI registry verification
   - `compliance.go` — Policy compliance checking (signatures, dates, etc.)
   - `holder.go` — Holder verification
   - `gaiax.go` — Gaia-X compliance checks
-  - `elsi_proof_checker.go` — JAdES signature validation for did:elsi
+  - `jwt_proof_checker.go` — JWT signature verification via DID-resolved keys; also handles did:elsi via JAdES and HTTPS-based issuers via `HttpsIssuerResolver`
+  - `ld_proof_checker.go` — JSON-LD Linked Data Proof verification (`JsonWebSignature2020`): resolves `verificationMethod` (DID URL or https:// URL), binds the signing key to the credential issuer / presentation holder, enforces the proof purpose
+  - `key_resolver.go` — Shared DID→key resolution, including verification-relationship enforcement (`authentication` / `assertionMethod`)
+  - `https_issuer_resolver.go` — Key discovery for HTTPS-based issuer identifiers via `/.well-known/jwt-vc-issuer` (SD-JWT VC) with an OpenID4VCI + RFC 8414 fallback, plus a per-issuer JWKS cache
   - `credentialsConfig.go` — Credential configuration management
-  - `caching_client.go` — HTTP caching layer
 
 - **`openapi/`** — HTTP handlers generated from OpenAPI spec (`api/api.yaml`). Routes defined in `routers.go`. Handlers in `api_api.go` (token, authorization, authentication) and `api_frontend.go` (frontend endpoints, WebSocket polling).
 
@@ -104,11 +106,45 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
 - **JWT signing**: RS256 or ES256 via `tokenSigner.Sign()` with `v.signingKey` (jwk.Key). Claims include issuer, audience, expiration (`jwtExpiration` duration), issuedAt, optional subject/nonce, and credential data.
 - **Three grant types**: `authorization_code` (exchanges code for cached JWT), `vp_token` (direct VP token validation + JWT generation), `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693 token exchange via VP token).
 
+## JSON-LD Proof Verification
+
+JSON-LD (`ldp_vc`) presentations and credentials are cryptographically verified — see `docs/json-ld-proof-verification.md` for the full design. In short:
+
+- `common/ldproof.go` implements `JsonWebSignature2020` signing and verification (URDNA2015 canonicalization, detached JWS with `b64=false`).
+- Proof options are canonicalized under the document context **plus** `https://w3id.org/security/suites/jws-2020/v1`, so `created`, `verificationMethod`, `proofPurpose`, `challenge` and `domain` are covered by the signature. `assertProofOptionsCovered` fails closed if any of them does not survive canonicalization; it compares parsed N-Quads predicates (`common/nquads.go`), not raw text, so an IRI inside a literal cannot fake coverage.
+- `verifier/ld_proof_checker.go` binds the proof key to the credential's `issuer` / the presentation's `holder`, requires the matching proof purpose, and requires the key to be authorized for the corresponding verification relationship.
+- `VerifyLDVPProofBinding` requires one and the same proof to carry every expected binding (challenge + domain); a split across two proofs is rejected.
+- `VerifyLDVPProofFreshness` bounds `proof.created` by `verifier.ldProofMaxAge` (default 300s) on the `vp_token` and token-exchange grants, which have no server-issued nonce. Missing, unparseable and future-dated timestamps are rejected.
+- `verifyJSONLDHolderBinding` requires an identified `credentialSubject` to be the presentation's `holder` — the JSON-LD counterpart of the JWT `cnf` binding.
+- Status lists (W3C and IETF) are bound to the issuer of the referencing credential; a credential with no issuer is rejected (`ErrorStatusListIssuerUnknown`).
+- The security-relevant contexts are vendored in `common/contexts/` and served by `common.NewEmbeddedContextLoader`, so verification never depends on the network.
+- `m2m.verificationMethod` has no default and must be an absolute DID URL — `InitM2MTokenProvider` fails at startup otherwise, since a relative reference can never produce a valid proof. `tir.signerForKeyType` keeps the signer and the advertised JWS algorithm in sync (`RSARS256` → PKCS#1 v1.5, `RSAPS256` → PSS).
+
+## HTTPS-based Issuer Identifiers
+
+Credential issuers may be identified by an HTTPS URL instead of a DID — see `docs/https-issuer-identifiers.md` for the full design. In short:
+
+- An issuer identifier is treated as a generic URI. `isHttpsIssuer()` decides whether the key is discovered via `did.Registry` or via `verifier/https_issuer_resolver.go` (well-known metadata → JWKS).
+- Three paths dispatch on it: the JWT `iss` claim (`jwt_proof_checker.go`), the JSON-LD proof `verificationMethod` (`ld_proof_checker.go`) and the status list `iss` claim (`credential_status_client.go`). Each fails closed with `ErrorHttpsIssuerNotSupported` when no resolver is configured.
+- The resolver is created once in `InitPresentationParser` and shared via `GetHttpsIssuerResolver()`, so a single JWKS cache serves all three paths.
+- The `issuer` field of fetched metadata must equal the issuer URL the lookup started from (RFC 8414 §3.3), otherwise `ErrorIssuerMismatch`.
+- In the JSON-LD path the JWKS `kid` is the **fragment** of the `verificationMethod` (`httpsJwksKeyId`), not the whole URI.
+- Trust validation adds no new list type: HTTPS issuers are matched by URL against the existing trusted-issuer / trusted-participant entries (`*` is a wildcard), never looked up in EBSI or Gaia-X.
+
+## Known Gaps
+
+- **HTTPS issuers cannot have verification relationships enforced.** A JWKS has no `authentication` / `assertionMethod` distinction, so the LD-proof path logs a warning and accepts the key; `proofPurpose` and issuer/holder binding remain enforced.
+- **No end-to-end integration test covers the HTTPS issuer paths.** `integration_test/helpers/https_issuer_mock.go` provides the mock servers but nothing consumes them yet.
+- **`validationMode: combined` and `jsonLd`** do not perform real JSON-LD validation — they only check that issuer and type fields are present. They are deprecated but still accepted.
+- **Verification relationships are only enforced when the DID document declares them.** A `did:web` document that lists `verificationMethod` but neither `authentication` nor `assertionMethod` falls back to the flat method list with a warning.
+- **Data Integrity suites other than `JsonWebSignature2020`** (`proofValue`-based cryptosuites) are parsed but not verified.
+
 ## Key Dependencies
 
-- **trustbloc/vc-go, did-go, kms-go** — VC verification, DID resolution, key management
 - **gin-gonic/gin** — HTTP framework
 - **lestrrat-go/jwx/v3** — JWT/JWS/JWK handling
-- **piprate/json-gold** — JSON-LD processing
+- **piprate/json-gold** — JSON-LD processing (URDNA2015 canonicalization, document loading)
 - **gookit/config** — Configuration management
 - **foolin/goview** — Template rendering for Gin
+- **patrickmn/go-cache** — In-memory cache with expiration (used for sessions, TIR results, document loader cache)
+- **fiware/VCVerifier/did** — Custom DID resolution: did:key, did:web, did:jwk via `did.Registry`

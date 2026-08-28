@@ -59,6 +59,7 @@ func Test_ReadConfig(t *testing.T) {
 					JwtExpiration:         30,
 					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
 					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
+					LdProofMaxAge:         DefaultLdProofMaxAgeSeconds,
 					RefreshToken:          RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes, CleanupInterval: 60},
 				},
 				Logging: logging.LoggingConfig{
@@ -107,7 +108,7 @@ func Test_ReadConfig(t *testing.T) {
 					},
 					UpdateInterval: 30,
 				},
-				M2M: M2M{AuthEnabled: false, VerificationMethod: "JsonWebKey2020", SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
+				M2M: M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				Database: Database{
 					Host:    "localhost",
 					Port:    5432,
@@ -147,6 +148,7 @@ func Test_ReadConfig(t *testing.T) {
 					JwtExpiration:         30,
 					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
 					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
+					LdProofMaxAge:         DefaultLdProofMaxAgeSeconds,
 					RefreshToken:          RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes, CleanupInterval: 60},
 				},
 				Logging: logging.LoggingConfig{
@@ -156,7 +158,7 @@ func Test_ReadConfig(t *testing.T) {
 					PathsToSkip:   nil,
 					DisableCaller: false,
 				},
-				M2M:        M2M{AuthEnabled: false, VerificationMethod: "JsonWebKey2020", SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
+				M2M:        M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				ConfigRepo: ConfigRepo{UpdateInterval: 30},
 				Database: Database{
 					Host:    "localhost",
@@ -199,6 +201,7 @@ func Test_ReadConfig(t *testing.T) {
 					JwtExpiration:         30,
 					StatusListCacheExpiry: DefaultStatusCacheExpirySeconds,
 					StatusListHttpTimeout: DefaultStatusHttpTimeoutSeconds,
+					LdProofMaxAge:         DefaultLdProofMaxAgeSeconds,
 					RefreshToken:          RefreshToken{Expiration: DefaultRefreshTokenExpirationMinutes, CleanupInterval: 60},
 				},
 				Logging: logging.LoggingConfig{
@@ -206,7 +209,7 @@ func Test_ReadConfig(t *testing.T) {
 					JsonLogging: true,
 					LogRequests: true,
 				},
-				M2M: M2M{AuthEnabled: false, VerificationMethod: "JsonWebKey2020", SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
+				M2M: M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				ConfigRepo: ConfigRepo{
 					UpdateInterval: 30,
 				},

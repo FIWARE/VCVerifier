@@ -152,7 +152,13 @@ func (s *CredentialStatusValidationService) ValidateVC(verifiableCredential *com
 		}
 
 		logging.Log().Debugf("Fetching status-list credential from %s (purpose=%s, index=%d)", entry.StatusListCredential, entry.StatusPurpose, entry.StatusListIndex)
-		statusCred, fetchErr := s.client.Fetch(entry.StatusListCredential)
+		// The status list must belong to the issuer of the credential it is
+		// asked about — see StatusListCredentialClient.Fetch.
+		referencingIssuer := ""
+		if issuer := verifiableCredential.Contents().Issuer; issuer != nil {
+			referencingIssuer = issuer.ID
+		}
+		statusCred, fetchErr := s.client.Fetch(entry.StatusListCredential, referencingIssuer)
 		if fetchErr != nil {
 			logging.Log().Debugf("Failed to fetch status-list credential from %s: %v", entry.StatusListCredential, fetchErr)
 			return false, fetchErr
@@ -227,8 +233,15 @@ func (s *CredentialStatusValidationService) validateIETFStatus(cred *common.Cred
 
 // checkIETFStatusList performs a single fetch-decode-check cycle for
 // an IETF Token Status List entry.
+//
+// The status list is bound to the issuer of the credential that referenced
+// it, exactly as for the W3C lists — see StatusListCredentialClient.Fetch.
 func (s *CredentialStatusValidationService) checkIETFStatusList(cred *common.Credential, entry *common.IETFStatusEntry) (bool, error) {
-	statusList, err := s.ietfClient.FetchIETF(entry.URI)
+	referencingIssuer := ""
+	if issuer := cred.Contents().Issuer; issuer != nil {
+		referencingIssuer = issuer.ID
+	}
+	statusList, err := s.ietfClient.FetchIETF(entry.URI, referencingIssuer)
 	if err != nil {
 		logging.Log().Debugf("Failed to fetch IETF status list from %s: %v", entry.URI, err)
 		return false, err

@@ -54,7 +54,7 @@ const (
 	// StatusListCacheCleanupMultiplier scales the configured cache expiry to
 	// obtain the go-cache janitor cleanup interval. A value of 2 matches the
 	// 2×expiry pattern used by the existing caches in common/cache.go and
-	// verifier/caching_client.go.
+	// common/caching_document_loader.go.
 	StatusListCacheCleanupMultiplier = 2
 
 	// statusListHTTPOKMin and statusListHTTPOKMaxExclusive define the
@@ -77,11 +77,35 @@ var (
 	// is not a recognisable Verifiable Credential (neither a JSON-LD object
 	// nor a decodable JWT).
 	ErrorStatusListUnparseable = errors.New("status_list_unparseable")
+	// ErrorStatusListJSONLDProofUnsupported is returned when a status list
+	// credential is in JSON-LD format and no LDProofChecker is available to
+	// verify the Linked Data Proof. This prevents MITM attacks on
+	// status-list resolution.
+	ErrorStatusListJSONLDProofUnsupported = errors.New("json_ld_status_list_proof_verification_not_supported")
+	// ErrorStatusListJSONLDProofMissing is returned when a JSON-LD status
+	// list credential does not contain a proof member, even though an
+	// LDProofChecker is available.
+	ErrorStatusListJSONLDProofMissing = errors.New("json_ld_status_list_credential_missing_proof")
+	// ErrorStatusListJSONLDProofInvalid is returned when the Linked Data
+	// Proof on a JSON-LD status list credential fails cryptographic
+	// verification.
+	ErrorStatusListJSONLDProofInvalid = errors.New("json_ld_status_list_credential_proof_invalid")
 	// ErrorStatusListSubjectMismatch is returned when the `sub` claim of a
 	// fetched IETF Token Status List JWT does not match the `uri` from the
 	// credential's status reference, per draft-ietf-oauth-status-list §8.3
 	// step 4a.
 	ErrorStatusListSubjectMismatch = errors.New("status_list_subject_mismatch")
+
+	// ErrorStatusListIssuerUnknown is returned when the credential that
+	// references a status list carries no issuer at all. The status list can
+	// then not be bound to anybody, and the proof on the list itself proves
+	// nothing — an attacker who answers the status-list URL picks both its
+	// issuer and its signing key. The check fails closed instead.
+	ErrorStatusListIssuerUnknown = errors.New("status_list_referencing_issuer_unknown")
+	// ErrorStatusListIssuerMismatch is returned when the status-list
+	// credential was issued by a different entity than the credential whose
+	// credentialStatus referenced it.
+	ErrorStatusListIssuerMismatch = errors.New("status_list_issuer_mismatch")
 	// ErrorStatusListExpired is returned when the `exp` claim of a fetched
 	// IETF Token Status List JWT is in the past, per
 	// draft-ietf-oauth-status-list §8.3 step 4c.
@@ -94,6 +118,8 @@ var (
 const (
 	// jwtClaimSub is the standard JWT `sub` (subject) claim key.
 	jwtClaimSub = "sub"
+	// jwtClaimIss is the standard JWT `iss` (issuer) claim key.
+	jwtClaimIss = "iss"
 	// jwtClaimExp is the standard JWT `exp` (expiration time) claim key.
 	jwtClaimExp = "exp"
 	// jwtClaimTTL is the IETF Token Status List `ttl` claim key, specifying
@@ -115,33 +141,50 @@ const (
 type StatusListCredentialClient interface {
 	// Fetch returns the status-list credential found at the given URL. It is
 	// free to serve previously fetched responses from an internal cache.
-	Fetch(url string) (*common.Credential, error)
+	//
+	// expectedIssuer is the issuer of the credential whose credentialStatus
+	// pointed at this URL. Implementations must reject a status list that was
+	// issued by anybody else, so that control over the network path to the
+	// status list is not enough to clear revocation bits. Passing an empty
+	// expectedIssuer skips the check.
+	Fetch(url string, expectedIssuer string) (*common.Credential, error)
 }
 
 // CachingStatusListClient is the default StatusListCredentialClient
-// implementation. It uses patrickmn/go-cache to avoid repeated network calls
-// for the same URL and a configurable http.Client timeout to protect the
-// verifier from slow status-list issuers.
+// implementation. It fetches W3C Bitstring Status List credentials in either
+// JWT or JSON-LD encoding, uses patrickmn/go-cache to avoid repeated network
+// calls for the same URL, and applies a configurable http.Client timeout to
+// protect the verifier from slow status-list issuers.
+//
+// JSON-LD credentials are accepted only when an LDProofChecker is configured
+// and the credential carries a valid Linked Data Proof created by its own
+// issuer.
 type CachingStatusListClient struct {
-	httpClient  *http.Client
-	cache       common.Cache
-	expiry      time.Duration
-	jwtVerifier StatusListJWTVerifier
+	httpClient     *http.Client
+	cache          common.Cache
+	expiry         time.Duration
+	jwtVerifier    StatusListJWTVerifier
+	ldProofChecker *LDProofChecker
 }
 
 // NewCachingStatusListClient constructs a CachingStatusListClient using the
-// supplied HTTP timeout and cache TTL. Both values are typically taken from
-// config.Verifier.StatusListHttpTimeout / config.Verifier.StatusListCacheExpiry.
+// supplied HTTP timeout, cache TTL, optional JWT verifier, and optional
+// LD-proof checker.
+//
+// Passing nil for jwtVerifier skips JWT signature verification (a warning is
+// logged). Passing nil for ldProofChecker causes all JSON-LD status list
+// credentials to be rejected (fail-closed).
 //
 // The cache janitor's cleanup interval is derived from cacheExpiry via
 // StatusListCacheCleanupMultiplier so evicted entries are reaped on a cadence
 // that matches the rest of the codebase.
-func NewCachingStatusListClient(timeout time.Duration, cacheExpiry time.Duration, jwtVerifier StatusListJWTVerifier) *CachingStatusListClient {
+func NewCachingStatusListClient(timeout time.Duration, cacheExpiry time.Duration, jwtVerifier StatusListJWTVerifier, ldProofChecker *LDProofChecker) *CachingStatusListClient {
 	return &CachingStatusListClient{
-		httpClient:  &http.Client{Timeout: timeout},
-		cache:       cache.New(cacheExpiry, StatusListCacheCleanupMultiplier*cacheExpiry),
-		expiry:      cacheExpiry,
-		jwtVerifier: jwtVerifier,
+		httpClient:     &http.Client{Timeout: timeout},
+		cache:          cache.New(cacheExpiry, StatusListCacheCleanupMultiplier*cacheExpiry),
+		expiry:         cacheExpiry,
+		jwtVerifier:    jwtVerifier,
+		ldProofChecker: ldProofChecker,
 	}
 }
 
@@ -149,13 +192,24 @@ func NewCachingStatusListClient(timeout time.Duration, cacheExpiry time.Duration
 // returned when available; otherwise the credential is fetched, parsed with
 // the existing VC parser, stored in the cache and returned.
 //
+// The issuer of the returned credential is checked against expectedIssuer —
+// the issuer of the credential that referenced this status list. The issuer
+// check is applied to cached entries as well, so a status list fetched for
+// one issuer can never be reused to answer for another.
+//
 // The returned error is wrapped with ErrorStatusListHttpFailure for transport
-// or non-2xx responses, and with ErrorStatusListUnparseable when the body
-// does not parse as a Verifiable Credential.
-func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) {
+// or non-2xx responses, with ErrorStatusListUnparseable when the body does
+// not parse as a Verifiable Credential, and with
+// ErrorStatusListIssuerMismatch when the status list belongs to a different
+// issuer.
+func (c *CachingStatusListClient) Fetch(url string, expectedIssuer string) (*common.Credential, error) {
 	if cached, hit := c.cache.Get(url); hit {
 		logging.Log().Debugf("Status-list cache hit for %s", url)
-		return cached.(*common.Credential), nil
+		cachedCredential := cached.(*common.Credential)
+		if err := assertStatusListIssuer(cachedCredential, expectedIssuer, url); err != nil {
+			return nil, err
+		}
+		return cachedCredential, nil
 	}
 
 	logging.Log().Debugf("Fetching W3C status-list credential from %s", url)
@@ -185,9 +239,13 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 	}
 
 	logging.Log().Debugf("Received %d bytes from %s, parsing credential", len(body), url)
-	cred, err := parseStatusListCredentialBody(body, c.jwtVerifier)
+	cred, err := parseStatusListCredentialBody(body, c.jwtVerifier, c.ldProofChecker)
 	if err != nil {
 		logging.Log().Debugf("Failed to parse status-list credential from %s: %v", url, err)
+		return nil, err
+	}
+
+	if err := assertStatusListIssuer(cred, expectedIssuer, url); err != nil {
 		return nil, err
 	}
 
@@ -196,21 +254,55 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 	return cred, nil
 }
 
+// assertStatusListIssuer requires the status-list credential to have been
+// issued by the issuer of the credential that referenced it. Verifying the
+// signature on a status list only shows that the signer controls the key it
+// names; without this binding an attacker who can answer the status-list URL
+// can present a self-signed list with every revocation bit cleared.
+//
+// An empty expectedIssuer — a referencing credential with no issuer at all —
+// is rejected rather than exempted. Skipping the only check that anchors the
+// list to a known party would fail open on exactly the credentials that are
+// least trustworthy.
+func assertStatusListIssuer(cred *common.Credential, expectedIssuer string, url string) error {
+	if expectedIssuer == "" {
+		logging.Log().Warnf("Referencing credential has no issuer, cannot bind status list %s to an issuer", url)
+		return fmt.Errorf("%w: status list %s", ErrorStatusListIssuerUnknown, url)
+	}
+
+	actualIssuer := ""
+	if issuer := cred.Contents().Issuer; issuer != nil {
+		actualIssuer = issuer.ID
+	}
+	if actualIssuer != expectedIssuer {
+		logging.Log().Warnf("Status list %s is issued by %q but the referencing credential is issued by %q",
+			url, actualIssuer, expectedIssuer)
+		return fmt.Errorf("%w: status list issuer %q, credential issuer %q",
+			ErrorStatusListIssuerMismatch, actualIssuer, expectedIssuer)
+	}
+	return nil
+}
+
 // parseStatusListCredentialBody decodes a status-list credential response
 // body into a *common.Credential.
 //
-// Two transport encodings are accepted:
-//   - JSON-LD: a response body starting with `{` is unmarshalled and handed
-//     to parseJSONLDCredential (the existing VC parser helper).
-//   - JWT: any other non-empty body is treated as a JWS and parsed via
-//     parseUnsignedJWTCredential — status-list credentials are public by
-//     nature so signature verification is intentionally deferred to higher
-//     layers that enforce trust registry lookups.
+// Two transport encodings are handled:
+//   - JSON-LD: a response body starting with `{` is accepted when an
+//     LDProofChecker is provided and the credential carries a Linked Data
+//     Proof created by its own issuer. Without a checker or without a proof
+//     the credential is rejected (fail-closed). Note that the proof alone
+//     only establishes who signed the list — binding it to the credential
+//     that referenced it is done separately, in Fetch.
+//   - JWT: any other non-empty body is treated as a JWS. When a
+//     StatusListJWTVerifier is provided the signature is verified;
+//     otherwise a warning is logged but parsing proceeds.
 //
-// A non-nil error is always wrapped with ErrorStatusListUnparseable so
-// callers can distinguish parse failures from transport failures with
-// errors.Is.
-func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifier) (*common.Credential, error) {
+// Parse failures are wrapped with ErrorStatusListUnparseable; JSON-LD
+// rejections use ErrorStatusListJSONLDProofUnsupported (no checker),
+// ErrorStatusListJSONLDProofMissing (no proof member), or
+// ErrorStatusListJSONLDProofInvalid (proof verification failed).
+// Callers can distinguish failure types with errors.Is.
+func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifier, ldProofChecker *LDProofChecker) (*common.Credential, error) {
 	trimmed := strings.TrimSpace(string(body))
 	if len(trimmed) == 0 {
 		logging.Log().Debug("Status-list credential response body is empty")
@@ -218,18 +310,7 @@ func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifie
 	}
 
 	if trimmed[0] == '{' {
-		logging.Log().Debug("Parsing status-list credential as JSON-LD")
-		var vcMap map[string]interface{}
-		if err := json.Unmarshal([]byte(trimmed), &vcMap); err != nil {
-			logging.Log().Debugf("JSON-LD unmarshal failed: %v", err)
-			return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
-		}
-		cred, err := parseJSONLDCredential(vcMap)
-		if err != nil {
-			logging.Log().Debugf("JSON-LD credential parse failed: %v", err)
-			return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
-		}
-		return cred, nil
+		return parseJSONLDStatusListCredential([]byte(trimmed), ldProofChecker)
 	}
 
 	logging.Log().Debug("Parsing status-list credential as JWT")
@@ -248,6 +329,88 @@ func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifie
 		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
 	return cred, nil
+}
+
+// parseJSONLDStatusListCredential parses and verifies a JSON-LD encoded
+// status list credential. If ldProofChecker is nil, the credential is rejected
+// (fail-closed). If the credential does not carry a proof member, it is also
+// rejected. Otherwise the Linked Data Proof is cryptographically verified
+// against the credential's own issuer.
+func parseJSONLDStatusListCredential(body []byte, ldProofChecker *LDProofChecker) (*common.Credential, error) {
+	if ldProofChecker == nil {
+		logging.Log().Warn("No LDProofChecker configured — rejecting JSON-LD status list credential")
+		return nil, fmt.Errorf("%w: JSON-LD status list credentials cannot be verified without LD-proof support",
+			ErrorStatusListJSONLDProofUnsupported)
+	}
+
+	// Parse the body as a JSON map to extract the proof and credential fields.
+	var docMap map[string]interface{}
+	if err := json.Unmarshal(body, &docMap); err != nil {
+		logging.Log().Debugf("JSON-LD status list credential is not valid JSON: %v", err)
+		return nil, fmt.Errorf("%w: invalid JSON: %v", ErrorStatusListUnparseable, err)
+	}
+
+	// Extract and parse the proof member.
+	proofRaw, hasProof := docMap[common.VPKeyProof]
+	if !hasProof || proofRaw == nil {
+		logging.Log().Warn("JSON-LD status list credential has no proof — rejecting")
+		return nil, fmt.Errorf("%w: credential does not contain a proof member",
+			ErrorStatusListJSONLDProofMissing)
+	}
+
+	proofs, err := common.ParseLDProofs(proofRaw)
+	if err != nil {
+		logging.Log().Debugf("Failed to parse proof on JSON-LD status list credential: %v", err)
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListJSONLDProofInvalid, err)
+	}
+	if len(proofs) == 0 {
+		logging.Log().Warn("JSON-LD status list credential proof array is empty — rejecting")
+		return nil, fmt.Errorf("%w: credential proof array is empty",
+			ErrorStatusListJSONLDProofMissing)
+	}
+
+	// Strip the proof from the document for canonicalization.
+	delete(docMap, common.VPKeyProof)
+	docBytes, err := json.Marshal(docMap)
+	if err != nil {
+		logging.Log().Debugf("Failed to marshal proof-stripped JSON-LD status list credential: %v", err)
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+
+	// Verify each proof against the issuer the status list itself claims.
+	statusListIssuer := extractStatusListIssuer(docMap)
+	for i, proof := range proofs {
+		if verifyErr := ldProofChecker.VerifyCredential(docBytes, proof, statusListIssuer); verifyErr != nil {
+			logging.Log().Debugf("JSON-LD status list credential proof %d verification failed: %v", i, verifyErr)
+			return nil, fmt.Errorf("%w: proof %d: %v", ErrorStatusListJSONLDProofInvalid, i, verifyErr)
+		}
+	}
+	logging.Log().Debug("JSON-LD status list credential proof(s) verified successfully")
+
+	// Parse the credential structure. Re-add the proof to the map so
+	// parseJSONLDCredential can attach it to the resulting Credential.
+	docMap[common.VPKeyProof] = proofRaw
+	cred, err := parseJSONLDCredential(docMap)
+	if err != nil {
+		logging.Log().Debugf("Failed to parse JSON-LD status list credential fields: %v", err)
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+	return cred, nil
+}
+
+// extractStatusListIssuer reads the `issuer` member of a raw status-list
+// credential, accepting both the string and the object (`{"id": ...}`) form
+// defined by the VC data model.
+func extractStatusListIssuer(docMap map[string]interface{}) string {
+	switch issuer := docMap[common.VCKeyIssuer].(type) {
+	case string:
+		return issuer
+	case map[string]interface{}:
+		if id, ok := issuer[common.JSONLDKeyID].(string); ok {
+			return id
+		}
+	}
+	return ""
 }
 
 // Compile-time assertion that CachingStatusListClient satisfies the public
@@ -269,7 +432,11 @@ var _ StatusListCredentialClient = (*CachingStatusListClient)(nil)
 type IETFStatusListClient interface {
 	// FetchIETF fetches and returns the parsed IETF status list from the
 	// given URI. Implementations may cache results internally.
-	FetchIETF(uri string) (*common.IETFStatusList, error)
+	//
+	// expectedIssuer is the issuer of the credential that referenced the
+	// list; the `iss` claim of the status-list JWT must match it. Passing an
+	// empty expectedIssuer is rejected — see assertIETFStatusListIssuer.
+	FetchIETF(uri string, expectedIssuer string) (*common.IETFStatusList, error)
 
 	// InvalidateIETF removes a cached status list entry so the next
 	// FetchIETF call retrieves a fresh copy from the origin.
@@ -288,15 +455,17 @@ type StatusListJWTVerifier interface {
 // StatusListJWTVerifierImpl verifies IETF Token Status List JWTs using two
 // strategies, tried in order:
 //
-//  1. If the JWT payload contains an `iss` claim that is a DID, the public
-//     key is resolved from the DID document via the configured DID registry.
+//  1. If the JWT payload contains an `iss` claim, the public key is resolved
+//     from that identifier: a DID via the configured DID registry, an
+//     https:// URL via the configured HttpsIssuerResolver.
 //  2. Otherwise, if the JWT header carries an `x5c` certificate chain, the
 //     public key is extracted from the leaf certificate.
 //
 // This two-step approach covers both spec-compliant issuers (iss-based) and
 // legacy/transitional deployments that only embed an x5c header.
 type StatusListJWTVerifierImpl struct {
-	registry *did.Registry
+	registry      *did.Registry
+	httpsResolver HttpsIssuerResolver
 }
 
 // NewStatusListJWTVerifier constructs a StatusListJWTVerifierImpl backed by
@@ -304,6 +473,16 @@ type StatusListJWTVerifierImpl struct {
 // status list issuers (typically did:web and did:key).
 func NewStatusListJWTVerifier(registry *did.Registry) *StatusListJWTVerifierImpl {
 	return &StatusListJWTVerifierImpl{registry: registry}
+}
+
+// WithHttpsResolver sets the HttpsIssuerResolver used to resolve status-list
+// signing keys for HTTPS-based issuer identifiers. When set, a status list
+// JWT whose `iss` claim starts with "https://" is verified against the
+// resolver's discovered JWKS instead of being sent through DID resolution.
+// Returns the verifier to allow method chaining.
+func (v *StatusListJWTVerifierImpl) WithHttpsResolver(resolver HttpsIssuerResolver) *StatusListJWTVerifierImpl {
+	v.httpsResolver = resolver
+	return v
 }
 
 // VerifyStatusListJWT parses the JWS and verifies the signature. It first
@@ -328,7 +507,7 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 
 	issuerDID := extractIssFromPayload(msg.Payload())
 	if issuerDID != "" {
-		logging.Log().Debugf("Status list JWT has iss claim %s, verifying via DID resolution", issuerDID)
+		logging.Log().Debugf("Status list JWT has iss claim %s, verifying via issuer key resolution", issuerDID)
 		return v.verifyWithISS(jwtBytes, msg, alg, issuerDID)
 	}
 
@@ -336,12 +515,12 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 	return v.verifyWithX5C(jwtBytes, headers, alg)
 }
 
-// verifyWithISS resolves the public key from the iss DID and verifies the
-// JWT signature.
+// verifyWithISS resolves the public key from the iss identifier and verifies
+// the JWT signature. The identifier may be a DID or an https:// URL.
 func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Message, alg jwa.SignatureAlgorithm, issuerDID string) ([]byte, error) {
 	kid, _ := msg.Signatures()[0].ProtectedHeaders().KeyID()
 
-	key, err := v.resolveKeyFromDID(issuerDID, kid)
+	key, err := v.resolveKeyFromIssuer(issuerDID, kid)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to resolve key for %s: %v", ErrorStatusListUnparseable, issuerDID, err)
 	}
@@ -351,7 +530,7 @@ func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Mess
 		return nil, fmt.Errorf("%w: status list JWT signature verification failed for %s: %v", ErrorStatusListUnparseable, issuerDID, err)
 	}
 
-	logging.Log().Debugf("Status list JWT signature verified via iss DID %s", issuerDID)
+	logging.Log().Debugf("Status list JWT signature verified via iss %s", issuerDID)
 	return payload, nil
 }
 
@@ -390,6 +569,28 @@ func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.H
 
 	logging.Log().Debug("Status list JWT signature verified via x5c certificate chain")
 	return payload, nil
+}
+
+// resolveKeyFromIssuer resolves the status-list signing key for an issuer
+// identifier, treating it as a generic URI: an https:// URL is resolved via
+// well-known issuer metadata and JWKS, anything else via DID resolution.
+func (v *StatusListJWTVerifierImpl) resolveKeyFromIssuer(issuer, kid string) (interface{}, error) {
+	if !isHttpsIssuer(issuer) {
+		return v.resolveKeyFromDID(issuer, kid)
+	}
+
+	if v.httpsResolver == nil {
+		logging.Log().Warnf("Status list issuer %s is an HTTPS URL but no HttpsIssuerResolver is configured", issuer)
+		return nil, ErrorHttpsIssuerNotSupported
+	}
+
+	key, err := v.httpsResolver.ResolveIssuerKey(issuer, kid)
+	if err != nil {
+		logging.Log().Warnf("Failed to resolve key for HTTPS status list issuer %s: %v", issuer, err)
+		return nil, err
+	}
+	logging.Log().Debugf("Resolved status list verification key for HTTPS issuer %s (kid=%s)", issuer, kid)
+	return key, nil
 }
 
 // resolveKeyFromDID resolves the DID document and finds the verification
@@ -452,10 +653,21 @@ func NewCachingIETFStatusListClient(timeout time.Duration, cacheExpiry time.Dura
 // FetchIETF retrieves the IETF Token Status List JWT from the given URI.
 // The JWT signature is verified using the configured StatusListJWTVerifier,
 // then the `status_list` payload is extracted and cached.
-func (c *CachingIETFStatusListClient) FetchIETF(uri string) (*common.IETFStatusList, error) {
+//
+// The `iss` claim of the status-list JWT is checked against expectedIssuer,
+// the issuer of the credential that referenced the list. Verifying the JWT
+// signature alone only shows that the signer controls the key the token
+// names — the attacker picks both when they control the status-list URL. The
+// binding is applied to cached entries as well, so a list fetched for one
+// issuer can never answer for another.
+func (c *CachingIETFStatusListClient) FetchIETF(uri string, expectedIssuer string) (*common.IETFStatusList, error) {
 	if cached, hit := c.cache.Get(uri); hit {
 		logging.Log().Debugf("IETF status-list cache hit for %s", uri)
-		return cached.(*common.IETFStatusList), nil
+		cachedEntry := cached.(*cachedIETFStatusList)
+		if err := assertIETFStatusListIssuer(cachedEntry.issuer, expectedIssuer, uri); err != nil {
+			return nil, err
+		}
+		return cachedEntry.statusList, nil
 	}
 
 	logging.Log().Debugf("Fetching IETF status list JWT from %s", uri)
@@ -509,15 +721,47 @@ func (c *CachingIETFStatusListClient) FetchIETF(uri string) (*common.IETFStatusL
 		return nil, err
 	}
 
+	if err := assertIETFStatusListIssuer(result.issuer, expectedIssuer, uri); err != nil {
+		return nil, err
+	}
+
 	cacheExpiry := c.expiry
 	if result.ttl != nil && *result.ttl < cacheExpiry {
 		cacheExpiry = *result.ttl
 		logging.Log().Debugf("Using issuer ttl %v (shorter than configured %v) for %s", cacheExpiry, c.expiry, uri)
 	}
 
-	c.cache.Set(uri, result.statusList, cacheExpiry)
+	c.cache.Set(uri, &cachedIETFStatusList{statusList: result.statusList, issuer: result.issuer}, cacheExpiry)
 	logging.Log().Debugf("Cached IETF status-list for %s (expiry=%v)", uri, cacheExpiry)
 	return result.statusList, nil
+}
+
+// cachedIETFStatusList is the cache entry for an IETF status list. The issuer
+// is retained alongside the list so the issuer binding can be re-checked on a
+// cache hit instead of being established only on the fetch path.
+type cachedIETFStatusList struct {
+	statusList *common.IETFStatusList
+	issuer     string
+}
+
+// assertIETFStatusListIssuer requires the `iss` claim of a status-list JWT to
+// match the issuer of the credential that referenced it.
+//
+// As with the W3C status lists, an empty expectedIssuer is rejected rather
+// than exempted: a referencing credential with no issuer cannot be bound to
+// any list, and skipping the check would fail open.
+func assertIETFStatusListIssuer(actualIssuer string, expectedIssuer string, uri string) error {
+	if expectedIssuer == "" {
+		logging.Log().Warnf("Referencing credential has no issuer, cannot bind IETF status list %s to an issuer", uri)
+		return fmt.Errorf("%w: status list %s", ErrorStatusListIssuerUnknown, uri)
+	}
+	if actualIssuer != expectedIssuer {
+		logging.Log().Warnf("IETF status list %s is issued by %q but the referencing credential is issued by %q",
+			uri, actualIssuer, expectedIssuer)
+		return fmt.Errorf("%w: status list issuer %q, credential issuer %q",
+			ErrorStatusListIssuerMismatch, actualIssuer, expectedIssuer)
+	}
+	return nil
 }
 
 // InvalidateIETF removes the cached status list for the given URI so the
@@ -603,6 +847,9 @@ func decodeJWTPayloadUnverified(jwtBytes []byte) ([]byte, error) {
 // caching metadata extracted from the JWT payload.
 type ietfStatusListResult struct {
 	statusList *common.IETFStatusList
+	// issuer is the `iss` claim of the status-list JWT. It is retained so
+	// the list can be bound to the credential that referenced it.
+	issuer string
 	// ttl is the issuer-requested cache duration from the `ttl` JWT claim
 	// (draft-ietf-oauth-status-list §5.1 / §8.3 step 4d). Nil when the
 	// claim is absent.
@@ -614,6 +861,9 @@ type ietfStatusListResult struct {
 //   - step 4a: the JWT's `sub` claim must equal expectedURI
 //   - step 4c: if `exp` is present it must not be in the past
 //   - step 4d: if `ttl` is present it is returned for cache control
+//
+// The `iss` claim is returned as-is; binding it to the referencing credential
+// is the caller's job (see assertIETFStatusListIssuer).
 func parseIETFStatusListPayload(payload []byte, expectedURI string, clock common.Clock) (*ietfStatusListResult, error) {
 	logging.Log().Debugf("Parsing IETF status list payload for %s", expectedURI)
 	var claims map[string]interface{}
@@ -658,8 +908,10 @@ func parseIETFStatusListPayload(payload []byte, expectedURI string, clock common
 	}
 	logging.Log().Debugf("Parsed IETF status list: bits=%d, lst length=%d", bits, len(lst))
 
+	issuer, _ := claims[jwtClaimIss].(string)
 	result := &ietfStatusListResult{
 		statusList: &common.IETFStatusList{Bits: bits, Lst: lst},
+		issuer:     issuer,
 	}
 
 	if ttlRaw, hasTTL := claims[jwtClaimTTL]; hasTTL {

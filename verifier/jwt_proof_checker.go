@@ -154,25 +154,9 @@ func (jpc *JWTProofChecker) verifyHttpsIssuerJWT(token []byte, issuerURL string,
 	return payload, key, nil
 }
 
+// resolveKey delegates to the shared ResolveKeyFromDID function.
 func (jpc *JWTProofChecker) resolveKey(didStr, kid string) (jwk.Key, error) {
-	docRes, err := jpc.registry.Resolve(didStr)
-	if err != nil {
-		logging.Log().Warnf("Failed to resolve DID %s: %v", didStr, err)
-		return nil, err
-	}
-
-	for _, vm := range docRes.DIDDocument.VerificationMethod {
-		if compareVerificationMethod(kid, vm.ID) {
-			key := vm.JSONWebKey()
-			if key == nil {
-				return nil, ErrorNoVerificationKey
-			}
-			return key, nil
-		}
-	}
-
-	logging.Log().Warnf("No matching verification method for kid=%s in DID=%s", kid, didStr)
-	return nil, ErrorNoVerificationKey
+	return ResolveKeyFromDID(jpc.registry, didStr, kid)
 }
 
 // extractDIDFromKid extracts the DID from a kid header value.

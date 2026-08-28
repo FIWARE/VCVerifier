@@ -77,9 +77,13 @@ func (j *JWKVDR) Read(didStr string) (*DocResolution, error) {
 		jsonWebKey: key,
 	}
 
+	// did:jwk documents expose their single key for every verification
+	// relationship, per the did:jwk method specification.
 	doc := &Doc{
 		ID:                 didStr,
 		VerificationMethod: []VerificationMethod{*vm},
+		Authentication:     []string{vmID},
+		AssertionMethod:    []string{vmID},
 	}
 
 	logging.Log().Debugf("Successfully resolved did:jwk %s", didStr)

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,6 +16,9 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	ljwk "github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
+	"github.com/piprate/json-gold/ld"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateConfig(t *testing.T) {
@@ -518,38 +522,193 @@ func TestParseJSONLDCredential_MapsV2ValidFromValidUntil(t *testing.T) {
 	}
 }
 
-// --- Tests for JSON-LD VP parsing ---
+// --- Tests for JSON-LD VP parsing (fail-closed) ---
 
-func TestParseJSONLDPresentation(t *testing.T) {
+// TestParseJSONLDPresentation_FailClosed verifies that JSON-LD VPs are
+// rejected because LD-proof verification is not yet implemented. This is the
+// primary security fix: an unsigned VP must not be silently accepted, and a
+// VP with an LD proof must be rejected until verification is available.
+func TestParseJSONLDPresentation_FailClosed(t *testing.T) {
+	type test struct {
+		testName string
+		vpJSON   string
+		wantErr  error
+	}
+
+	tests := []test{
+		{
+			testName: "unsigned_vp_rejected",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"holder": "did:web:holder.example.com",
+				"verifiableCredential": [{
+					"@context": ["https://www.w3.org/2018/credentials/v1"],
+					"type": ["VerifiableCredential"],
+					"issuer": "did:web:issuer.example.com",
+					"credentialSubject": {
+						"id": "did:web:subject.example.com",
+						"name": "Alice"
+					}
+				}]
+			}`,
+			wantErr: ErrorUnsignedPresentation,
+		},
+		{
+			testName: "vp_with_ld_proof_rejected",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"holder": "did:web:holder.example.com",
+				"proof": {
+					"type": "JsonWebSignature2020",
+					"created": "2023-01-01T00:00:00Z",
+					"verificationMethod": "did:web:holder.example.com#key-1",
+					"jws": "eyJhbGciOiJFZERTQSJ9..test"
+				},
+				"verifiableCredential": [{
+					"@context": ["https://www.w3.org/2018/credentials/v1"],
+					"type": ["VerifiableCredential"],
+					"issuer": "did:web:issuer.example.com",
+					"credentialSubject": {
+						"id": "did:web:subject.example.com",
+						"name": "Alice"
+					}
+				}]
+			}`,
+			wantErr: ErrorInvalidProof,
+		},
+		{
+			testName: "vp_with_array_proof_rejected",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"holder": "did:web:holder.example.com",
+				"proof": [{
+					"type": "JsonWebSignature2020",
+					"created": "2023-01-01T00:00:00Z",
+					"verificationMethod": "did:web:holder.example.com#key-1",
+					"jws": "eyJhbGciOiJFZERTQSJ9..test"
+				}],
+				"verifiableCredential": []
+			}`,
+			wantErr: ErrorInvalidProof,
+		},
+		{
+			testName: "empty_vp_no_proof_rejected",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"]
+			}`,
+			wantErr: ErrorUnsignedPresentation,
+		},
+		{
+			testName: "invalid_json_rejected",
+			vpJSON:   `{not valid json`,
+			wantErr:  nil, // any JSON parse error
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
+			_, err := parser.ParsePresentation([]byte(tc.vpJSON))
+			if err == nil {
+				t.Fatal("Expected error, got nil")
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Errorf("Expected error %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestParseJSONLDPresentation_NilProofChecker verifies that JSON-LD VPs are
+// also rejected when no ProofChecker is configured. The fail-closed behavior
+// is independent of the proof checker.
+func TestParseJSONLDPresentation_NilProofChecker(t *testing.T) {
 	vpJSON := `{
 		"@context": ["https://www.w3.org/2018/credentials/v1"],
 		"type": ["VerifiablePresentation"],
-		"holder": "did:web:holder.example.com",
-		"verifiableCredential": [{
-			"@context": ["https://www.w3.org/2018/credentials/v1"],
-			"type": ["VerifiableCredential"],
-			"issuer": "did:web:issuer.example.com",
-			"credentialSubject": {
-				"id": "did:web:subject.example.com",
-				"name": "Alice"
-			}
-		}]
+		"holder": "did:web:holder.example.com"
 	}`
 
-	parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
-	pres, err := parser.ParsePresentation([]byte(vpJSON))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.ParsePresentation([]byte(vpJSON))
+	if !errors.Is(err, ErrorUnsignedPresentation) {
+		t.Errorf("Expected ErrorUnsignedPresentation, got %v", err)
+	}
+}
+
+// TestParseJWTCredential_VerifiesEmbeddedVCSignature demonstrates that
+// parseJWTCredential (the method used for JWT VCs embedded in VPs) uses
+// the ProofChecker to verify signatures. Once LD-proof verification is
+// implemented and JSON-LD VPs are accepted, this method will be used to
+// verify JWT VCs embedded in JSON-LD VPs.
+func TestParseJWTCredential_VerifiesEmbeddedVCSignature(t *testing.T) {
+	type test struct {
+		testName string
+		token    []byte
+		wantErr  bool
+	}
+
+	vcPayload := map[string]interface{}{
+		"iss": "did:web:unreachable.issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context":          []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":              []interface{}{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com"},
+		},
+	}
+
+	tests := []test{
+		{
+			testName: "signed_vc_with_unresolvable_did_rejected",
+			token:    buildSignedJWT(t, "did:web:unreachable.issuer.example.com#key-1", vcPayload),
+			wantErr:  true,
+		},
+		{
+			testName: "fake_signature_vc_rejected",
+			token:    []byte(buildFakeJWT(vcPayload)),
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
+			_, err := parser.parseJWTCredential(tc.token)
+			if tc.wantErr && err == nil {
+				t.Error("Expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("Expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestParseJWTCredential_FallsBackWithoutProofChecker verifies that when
+// no ProofChecker is configured, parseJWTCredential falls back to unsigned
+// payload extraction. This is the current behavior for status list JWT
+// credentials.
+func TestParseJWTCredential_FallsBackWithoutProofChecker(t *testing.T) {
+	vcPayload := map[string]interface{}{
+		"iss": "did:web:issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context":          []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":              []interface{}{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com"},
+		},
+	}
+
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	cred, err := parser.parseJWTCredential([]byte(buildFakeJWT(vcPayload)))
 	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
+		t.Fatalf("Expected no error with nil ProofChecker, got %v", err)
 	}
-	if pres.Holder != "did:web:holder.example.com" {
-		t.Errorf("Expected holder did:web:holder.example.com, got %s", pres.Holder)
-	}
-	creds := pres.Credentials()
-	if len(creds) != 1 {
-		t.Fatalf("Expected 1 credential, got %d", len(creds))
-	}
-	if creds[0].Contents().Issuer.ID != "did:web:issuer.example.com" {
-		t.Errorf("Expected issuer did:web:issuer.example.com, got %s", creds[0].Contents().Issuer.ID)
+	if cred.Contents().Issuer.ID != "did:web:issuer.example.com" {
+		t.Errorf("Expected issuer did:web:issuer.example.com, got %s", cred.Contents().Issuer.ID)
 	}
 }
 
@@ -702,4 +861,969 @@ func TestVerifyCnfBinding_NoCnf(t *testing.T) {
 	if err != nil {
 		t.Errorf("Expected no error when cnf is absent, got %v", err)
 	}
+}
+
+// --- Tests for JSON-LD credential proof population ---
+
+func TestParseJSONLDCredential_PopulatesProofs(t *testing.T) {
+	type test struct {
+		testName   string
+		vcMap      map[string]interface{}
+		wantProofs int
+		wantType   string
+		wantErr    bool
+	}
+
+	tests := []test{
+		{
+			testName: "VC with single JWS proof",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:web:issuer.example.com",
+				"credentialSubject": map[string]interface{}{
+					"id":   "did:web:subject.example.com",
+					"name": "Alice",
+				},
+				"proof": map[string]interface{}{
+					"type":               "JsonWebSignature2020",
+					"created":            "2024-01-01T00:00:00Z",
+					"verificationMethod": "did:web:issuer.example.com#key-1",
+					"jws":                "eyJhbGciOiJQUzI1NiJ9..sig",
+					"proofPurpose":       "assertionMethod",
+				},
+			},
+			wantProofs: 1,
+			wantType:   "JsonWebSignature2020",
+			wantErr:    false,
+		},
+		{
+			testName: "VC with DataIntegrityProof",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:key:z6Mktest",
+				"credentialSubject": map[string]interface{}{
+					"id": "did:web:subject.example.com",
+				},
+				"proof": map[string]interface{}{
+					"type":               "DataIntegrityProof",
+					"created":            "2024-06-15T12:00:00Z",
+					"verificationMethod": "did:key:z6Mktest#z6Mktest",
+					"proofValue":         "z3FXQjecWufY46...",
+					"cryptosuite":        "eddsa-rdfc-2022",
+					"proofPurpose":       "assertionMethod",
+				},
+			},
+			wantProofs: 1,
+			wantType:   "DataIntegrityProof",
+			wantErr:    false,
+		},
+		{
+			testName: "VC with multiple proofs",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:web:issuer.example.com",
+				"credentialSubject": map[string]interface{}{
+					"id": "did:web:subject.example.com",
+				},
+				"proof": []interface{}{
+					map[string]interface{}{
+						"type":               "JsonWebSignature2020",
+						"created":            "2024-01-01T00:00:00Z",
+						"verificationMethod": "did:web:issuer.example.com#key-1",
+						"jws":                "eyJ..sig1",
+					},
+					map[string]interface{}{
+						"type":               "DataIntegrityProof",
+						"verificationMethod": "did:web:issuer.example.com#key-2",
+						"proofValue":         "zProofValue2",
+						"cryptosuite":        "ecdsa-rdfc-2019",
+					},
+				},
+			},
+			wantProofs: 2,
+			wantType:   "JsonWebSignature2020",
+			wantErr:    false,
+		},
+		{
+			testName: "VC without proof — no proofs populated",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:web:issuer.example.com",
+				"credentialSubject": map[string]interface{}{
+					"id": "did:web:subject.example.com",
+				},
+			},
+			wantProofs: 0,
+			wantErr:    false,
+		},
+		{
+			testName: "VC with invalid proof — missing type",
+			vcMap: map[string]interface{}{
+				"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+				"type":     []interface{}{"VerifiableCredential"},
+				"issuer":   "did:web:issuer.example.com",
+				"credentialSubject": map[string]interface{}{
+					"id": "did:web:subject.example.com",
+				},
+				"proof": map[string]interface{}{
+					"jws": "eyJ..sig",
+				},
+			},
+			wantProofs: 0,
+			wantErr:    true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			cred, err := parseJSONLDCredential(tc.vcMap)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("Expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Expected no error, got %v", err)
+			}
+
+			proofs := cred.Proofs()
+			if len(proofs) != tc.wantProofs {
+				t.Errorf("Expected %d proofs, got %d", tc.wantProofs, len(proofs))
+			}
+			if tc.wantProofs > 0 && proofs[0].Type != tc.wantType {
+				t.Errorf("Expected first proof type %s, got %s", tc.wantType, proofs[0].Type)
+			}
+		})
+	}
+}
+
+func TestParseJSONLDCredential_ProofFieldsPreserved(t *testing.T) {
+	vcMap := map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer":   "did:web:issuer.example.com",
+		"credentialSubject": map[string]interface{}{
+			"id": "did:web:subject.example.com",
+		},
+		"proof": map[string]interface{}{
+			"type":               "JsonWebSignature2020",
+			"created":            "2024-01-01T00:00:00Z",
+			"verificationMethod": "did:web:issuer.example.com#key-1",
+			"jws":                "eyJhbGciOiJQUzI1NiJ9..sig",
+			"proofPurpose":       "assertionMethod",
+		},
+	}
+
+	cred, err := parseJSONLDCredential(vcMap)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	proofs := cred.Proofs()
+	if len(proofs) != 1 {
+		t.Fatalf("Expected 1 proof, got %d", len(proofs))
+	}
+	p := proofs[0]
+	if p.Created != "2024-01-01T00:00:00Z" {
+		t.Errorf("Expected created 2024-01-01T00:00:00Z, got %s", p.Created)
+	}
+	if p.VerificationMethod != "did:web:issuer.example.com#key-1" {
+		t.Errorf("Expected verificationMethod, got %s", p.VerificationMethod)
+	}
+	if p.ProofPurpose != "assertionMethod" {
+		t.Errorf("Expected proofPurpose assertionMethod, got %s", p.ProofPurpose)
+	}
+	if p.JWS != "eyJhbGciOiJQUzI1NiJ9..sig" {
+		t.Errorf("Expected JWS, got %s", p.JWS)
+	}
+}
+
+func TestParseJSONLDCredential_RawJSONPreserved(t *testing.T) {
+	vcMap := map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer":   "did:web:issuer.example.com",
+		"credentialSubject": map[string]interface{}{
+			"id": "did:web:subject.example.com",
+		},
+		"proof": map[string]interface{}{
+			"type":               "JsonWebSignature2020",
+			"verificationMethod": "did:web:issuer.example.com#key-1",
+			"jws":                "eyJ..sig",
+		},
+	}
+
+	cred, err := parseJSONLDCredential(vcMap)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	raw := cred.ToRawJSON()
+	if raw == nil {
+		t.Fatal("Expected raw JSON to be preserved, got nil")
+	}
+	// The raw JSON should include the proof member for canonicalization purposes.
+	if _, ok := raw["proof"]; !ok {
+		t.Error("Expected proof key in raw JSON for canonicalization")
+	}
+}
+
+// TestParseJSONLDPresentation_ProofParsedBeforeRejection verifies that proof
+// parsing happens correctly before the fail-closed rejection. This ensures
+// invalid proof structure is caught early (not just rejected generically).
+func TestParseJSONLDPresentation_ProofParsedBeforeRejection(t *testing.T) {
+	type test struct {
+		testName string
+		vpJSON   string
+		wantErr  error
+	}
+
+	tests := []test{
+		{
+			testName: "valid proof format — rejected as unverifiable",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"proof": {
+					"type": "JsonWebSignature2020",
+					"created": "2024-01-01T00:00:00Z",
+					"verificationMethod": "did:web:holder.example.com#key-1",
+					"jws": "eyJhbGciOiJQUzI1NiJ9..sig"
+				}
+			}`,
+			wantErr: ErrorInvalidProof,
+		},
+		{
+			testName: "malformed proof — missing type returns parse error",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"proof": {
+					"jws": "eyJ..sig"
+				}
+			}`,
+			wantErr: common.ErrorLDProofMissingType,
+		},
+		{
+			testName: "malformed proof — no signature returns parse error",
+			vpJSON: `{
+				"@context": ["https://www.w3.org/2018/credentials/v1"],
+				"type": ["VerifiablePresentation"],
+				"proof": {
+					"type": "JsonWebSignature2020",
+					"created": "2024-01-01T00:00:00Z"
+				}
+			}`,
+			wantErr: common.ErrorLDProofNoSignature,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			parser := &ConfigurablePresentationParser{ProofChecker: newTestProofChecker()}
+			_, err := parser.ParsePresentation([]byte(tc.vpJSON))
+			if err == nil {
+				t.Fatal("Expected error, got nil")
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("Expected error %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// --- Tests for JSON-LD VP parsing with LDProofChecker ---
+
+// TestParseJSONLDPresentation_ValidVPWithLDProof verifies that a JSON-LD VP
+// with a valid LD proof is accepted when LDProofChecker is configured.
+// The holder key is set on the returned presentation for downstream binding.
+func TestParseJSONLDPresentation_ValidVPWithLDProof(t *testing.T) {
+	privKey, _, pubJWK := generateTestECKeys(t)
+	signer := &testES256Signer{key: privKey}
+	docLoader := newTestDocumentLoader()
+	verificationMethodID := "did:web:holder.example.com#key-1"
+	registry := createMockRegistry(t, "web", verificationMethodID, pubJWK)
+	checker := NewLDProofChecker(registry, docLoader)
+
+	// Create and sign a VP with a JSON-LD credential.
+	pres := createTestVP()
+	vpJSON, _ := signPresentation(t, pres, signer, verificationMethodID, docLoader)
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: checker,
+	}
+	result, err := parser.ParsePresentation(vpJSON)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if result == nil {
+		t.Fatal("Expected non-nil presentation")
+	}
+	if result.HolderKey() == nil {
+		t.Error("Expected holder key to be set on presentation")
+	}
+	// Verify the returned key matches the signer's public key.
+	holderKey, ok := result.HolderKey().(ljwk.Key)
+	if !ok {
+		t.Fatal("Expected holder key to be a jwk.Key")
+	}
+	if !ljwk.Equal(holderKey, pubJWK) {
+		t.Error("Holder key does not match expected public key")
+	}
+	if result.Holder != "did:web:holder.example.com" {
+		t.Errorf("Expected holder did:web:holder.example.com, got %s", result.Holder)
+	}
+}
+
+// TestParseJSONLDPresentation_ValidVPWithCredentials verifies that a JSON-LD
+// VP carrying a signed JSON-LD credential is accepted and that the embedded
+// credential's own Linked Data Proof is verified.
+func TestParseJSONLDPresentation_ValidVPWithCredentials(t *testing.T) {
+	docLoader := newTestDocumentLoader()
+
+	holderPrivKey, _, holderPubJWK := generateTestECKeys(t)
+	holderSigner := &testES256Signer{key: holderPrivKey}
+
+	issuerPrivKey, _, issuerPubJWK := generateTestECKeys(t)
+	issuerSigner := &testES256Signer{key: issuerPrivKey}
+
+	registry := createMultiKeyRegistry(t, map[string]ljwk.Key{
+		testHolderKeyID: holderPubJWK,
+		testIssuerKeyID: issuerPubJWK,
+	})
+	checker := NewLDProofChecker(registry, docLoader)
+
+	signedVC := signTestCredential(t, testIssuerDID, issuerSigner, testIssuerKeyID, docLoader)
+	vpJSON := signVPWithCredentials(t, holderSigner, testHolderKeyID, docLoader,
+		[]interface{}{signedVC}, ldProofTestOptions{proofPurpose: common.ProofPurposeAuthentication})
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: checker,
+	}
+
+	result, err := parser.ParsePresentation(vpJSON)
+	require.NoError(t, err, "a VP with a correctly signed credential must be accepted")
+	require.NotNil(t, result)
+	require.Len(t, result.Credentials(), 1, "the embedded credential must be part of the presentation")
+	assert.Equal(t, testIssuerDID, result.Credentials()[0].Contents().Issuer.ID)
+	assert.NotNil(t, result.HolderKey(), "holder key must be populated from the VP proof")
+}
+
+// TestParseJSONLDPresentation_CredentialProofsAreEnforced covers the negative
+// cases around embedded JSON-LD credentials: an unsigned credential, a
+// credential whose proof was made by somebody other than the claimed issuer,
+// and a credential whose content was changed after signing.
+func TestParseJSONLDPresentation_CredentialProofsAreEnforced(t *testing.T) {
+	docLoader := newTestDocumentLoader()
+
+	holderPrivKey, _, holderPubJWK := generateTestECKeys(t)
+	holderSigner := &testES256Signer{key: holderPrivKey}
+
+	issuerPrivKey, _, issuerPubJWK := generateTestECKeys(t)
+	issuerSigner := &testES256Signer{key: issuerPrivKey}
+
+	const attackerDID = "did:web:attacker.example.com"
+	const attackerKeyID = attackerDID + "#key-1"
+	attackerPrivKey, _, attackerPubJWK := generateTestECKeys(t)
+	attackerSigner := &testES256Signer{key: attackerPrivKey}
+
+	registry := createMultiKeyRegistry(t, map[string]ljwk.Key{
+		testHolderKeyID: holderPubJWK,
+		testIssuerKeyID: issuerPubJWK,
+		attackerKeyID:   attackerPubJWK,
+	})
+	checker := NewLDProofChecker(registry, docLoader)
+
+	// A credential signed by the attacker but claiming the trusted issuer.
+	forgedVC := createTestVC(testIssuerDID)
+	forgedVC[common.VPKeyProof] = signDocument(t, forgedVC, attackerSigner, attackerKeyID, docLoader,
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAssertionMethod})
+
+	// A properly signed credential whose subject was swapped afterwards.
+	tamperedVC := signTestCredential(t, testIssuerDID, issuerSigner, testIssuerKeyID, docLoader)
+	tamperedVC[common.VCKeyCredentialSubject] = map[string]interface{}{
+		common.JSONLDKeyID: "did:web:somebody-else.example.com",
+	}
+
+	// A correctly signed credential that was issued to somebody other than
+	// the holder of the presentation — a replay of another subject's
+	// credential inside a VP the attacker signed themselves.
+	foreignSubjectVC := createTestVCForSubject(testIssuerDID, testForeignSubjectDID)
+	foreignSubjectVC[common.VPKeyProof] = signDocument(t, foreignSubjectVC, issuerSigner, testIssuerKeyID, docLoader,
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAssertionMethod})
+
+	tests := []struct {
+		name       string
+		credential map[string]interface{}
+		wantErrIs  error
+	}{
+		{
+			name:       "unsigned_credential_rejected",
+			credential: createTestVC(testIssuerDID),
+			wantErrIs:  ErrorUnsignedCredential,
+		},
+		{
+			name:       "credential_signed_by_other_than_issuer_rejected",
+			credential: forgedVC,
+			wantErrIs:  ErrorProofIssuerMismatch,
+		},
+		{
+			name:       "tampered_credential_rejected",
+			credential: tamperedVC,
+			wantErrIs:  common.ErrorLDProofVerifySignature,
+		},
+		{
+			name:       "credential_issued_to_another_subject_rejected",
+			credential: foreignSubjectVC,
+			wantErrIs:  ErrorHolderSubjectMismatch,
+		},
+	}
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: checker,
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			vpJSON := signVPWithCredentials(t, holderSigner, testHolderKeyID, docLoader,
+				[]interface{}{tc.credential}, ldProofTestOptions{proofPurpose: common.ProofPurposeAuthentication})
+
+			_, err := parser.ParsePresentation(vpJSON)
+			require.Error(t, err, "the credential must not be accepted")
+			assert.True(t, errors.Is(err, tc.wantErrIs), "expected %v, got %v", tc.wantErrIs, err)
+		})
+	}
+}
+
+// TestParseJWTPresentation_EmbeddedJSONLDCredentialIsVerified closes the
+// bypass where JSON-LD credentials were only proof-checked inside JSON-LD
+// VPs: wrapping them in a JWT VP — which any holder can mint — must not skip
+// credential verification.
+func TestParseJWTPresentation_EmbeddedJSONLDCredentialIsVerified(t *testing.T) {
+	docLoader := newTestDocumentLoader()
+
+	issuerPrivKey, _, issuerPubJWK := generateTestECKeys(t)
+	issuerSigner := &testES256Signer{key: issuerPrivKey}
+
+	const attackerDID = "did:web:attacker.example.com"
+	const attackerKeyID = attackerDID + "#key-1"
+	attackerPrivKey, _, attackerPubJWK := generateTestECKeys(t)
+	attackerSigner := &testES256Signer{key: attackerPrivKey}
+
+	registry := createMultiKeyRegistry(t, map[string]ljwk.Key{
+		testIssuerKeyID: issuerPubJWK,
+		attackerKeyID:   attackerPubJWK,
+	})
+
+	forgedVC := createTestVC(testIssuerDID)
+	forgedVC[common.VPKeyProof] = signDocument(t, forgedVC, attackerSigner, attackerKeyID, docLoader,
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAssertionMethod})
+
+	tests := []struct {
+		name       string
+		credential map[string]interface{}
+		wantErrIs  error
+	}{
+		{
+			name:       "signed_credential_accepted",
+			credential: signTestCredential(t, testIssuerDID, issuerSigner, testIssuerKeyID, docLoader),
+		},
+		{
+			name:       "unsigned_credential_rejected",
+			credential: createTestVC(testIssuerDID),
+			wantErrIs:  ErrorUnsignedCredential,
+		},
+		{
+			name:       "credential_signed_by_other_than_issuer_rejected",
+			credential: forgedVC,
+			wantErrIs:  ErrorProofIssuerMismatch,
+		},
+	}
+
+	// No JWT proof checker: the JWT VP envelope is not the subject here, the
+	// embedded JSON-LD credential is.
+	parser := &ConfigurablePresentationParser{
+		LDProofChecker: NewLDProofChecker(registry, docLoader),
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			jwtVP := buildFakeJWT(map[string]interface{}{
+				common.JWTClaimIss: testHolderDID,
+				common.JWTClaimVP: map[string]interface{}{
+					common.JSONLDKeyContext:          []string{common.ContextCredentialsV1},
+					common.JSONLDKeyType:             []string{common.TypeVerifiablePresentation},
+					common.VPKeyVerifiableCredential: []interface{}{tc.credential},
+				},
+			})
+
+			result, err := parser.ParsePresentation([]byte(jwtVP))
+			if tc.wantErrIs != nil {
+				require.Error(t, err)
+				assert.True(t, errors.Is(err, tc.wantErrIs), "expected %v, got %v", tc.wantErrIs, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, result.Credentials(), 1)
+		})
+	}
+}
+
+// createMultiKeyRegistry builds a did.Registry that resolves several DIDs,
+// keyed by verification method ID. Each key is declared for both the
+// authentication and the assertionMethod relationship.
+func createMultiKeyRegistry(t *testing.T, keysByVerificationMethod map[string]ljwk.Key) *did.Registry {
+	t.Helper()
+
+	docsByDID := make(map[string]*did.DocResolution, len(keysByVerificationMethod))
+	for keyID, pubJWK := range keysByVerificationMethod {
+		didStr, _ := ExtractDIDAndFragment(keyID)
+		vm, err := did.NewVerificationMethodFromJWK(keyID, "JsonWebKey2020", didStr, pubJWK)
+		require.NoError(t, err)
+		docsByDID[didStr] = &did.DocResolution{
+			DIDDocument: &did.Doc{
+				ID:                 didStr,
+				VerificationMethod: []did.VerificationMethod{*vm},
+				Authentication:     []string{keyID},
+				AssertionMethod:    []string{keyID},
+			},
+		}
+	}
+
+	return did.NewRegistry(did.WithVDR(&mockVDR{
+		readFunc: func(didStr string) (*did.DocResolution, error) {
+			doc, ok := docsByDID[didStr]
+			if !ok {
+				return nil, errors.New("test: unknown did " + didStr)
+			}
+			return doc, nil
+		},
+	}))
+}
+
+// signVPWithCredentials builds a JSON-LD VP around the given credentials and
+// signs it, returning the full signed VP JSON. The credentials are part of
+// the signed document, so the VP proof covers them.
+func signVPWithCredentials(t *testing.T, signer common.LDSigner, verificationMethod string, docLoader ld.DocumentLoader, credentials []interface{}, opts ldProofTestOptions) []byte {
+	t.Helper()
+
+	vpMap := map[string]interface{}{
+		common.JSONLDKeyContext: []interface{}{
+			common.ContextCredentialsV1,
+			common.ContextSecuritySuiteJWS2020,
+		},
+		common.JSONLDKeyType:             []interface{}{common.TypeVerifiablePresentation},
+		common.VPKeyHolder:               testHolderDID,
+		common.VPKeyVerifiableCredential: credentials,
+	}
+	vpMap[common.VPKeyProof] = signDocument(t, vpMap, signer, verificationMethod, docLoader, opts)
+
+	return marshal(t, vpMap)
+}
+
+// TestParseJSONLDPresentation_InvalidProofRejectedWithLDChecker verifies that
+// a VP with an invalid LD proof is rejected even when LDProofChecker is configured.
+func TestParseJSONLDPresentation_InvalidProofRejectedWithLDChecker(t *testing.T) {
+	privKey, _, pubJWK := generateTestECKeys(t)
+	signer := &testES256Signer{key: privKey}
+	docLoader := newTestDocumentLoader()
+	verificationMethodID := "did:web:holder.example.com#key-1"
+	registry := createMockRegistry(t, "web", verificationMethodID, pubJWK)
+	checker := NewLDProofChecker(registry, docLoader)
+
+	// Sign a VP, then tamper with it.
+	pres := createTestVP()
+	vpJSON, _ := signPresentation(t, pres, signer, verificationMethodID, docLoader)
+
+	var vpMap map[string]interface{}
+	require.NoError(t, json.Unmarshal(vpJSON, &vpMap))
+	vpMap["holder"] = "did:web:attacker.example.com" // tamper
+	tamperedJSON, marshalErr := json.Marshal(vpMap)
+	require.NoError(t, marshalErr)
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: checker,
+	}
+	_, err := parser.ParsePresentation(tamperedJSON)
+	if err == nil {
+		t.Fatal("Expected error for tampered VP, got nil")
+	}
+}
+
+// TestParseJSONLDPresentation_NoLDCheckerFallsBackToFailClosed verifies that
+// when LDProofChecker is nil but a VP has proofs, the parser still rejects
+// with ErrorInvalidProof (the fail-closed behavior from Step 1).
+func TestParseJSONLDPresentation_NoLDCheckerFallsBackToFailClosed(t *testing.T) {
+	vpJSON := `{
+		"@context": ["https://www.w3.org/2018/credentials/v1"],
+		"type": ["VerifiablePresentation"],
+		"holder": "did:web:holder.example.com",
+		"proof": {
+			"type": "JsonWebSignature2020",
+			"created": "2024-01-01T00:00:00Z",
+			"verificationMethod": "did:web:holder.example.com#key-1",
+			"jws": "eyJhbGciOiJQUzI1NiJ9..sig"
+		}
+	}`
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: nil, // No LD checker
+	}
+	_, err := parser.ParsePresentation([]byte(vpJSON))
+	if !errors.Is(err, ErrorInvalidProof) {
+		t.Errorf("Expected ErrorInvalidProof, got %v", err)
+	}
+}
+
+// TestParseJSONLDPresentation_UnsignedVPAlwaysRejected verifies that a VP
+// without any proof is always rejected, regardless of LDProofChecker config.
+func TestParseJSONLDPresentation_UnsignedVPAlwaysRejected(t *testing.T) {
+	vpJSON := `{
+		"@context": ["https://www.w3.org/2018/credentials/v1"],
+		"type": ["VerifiablePresentation"],
+		"holder": "did:web:holder.example.com"
+	}`
+
+	type testCase struct {
+		name    string
+		checker *LDProofChecker
+	}
+
+	privKey, _, pubJWK := generateTestECKeys(t)
+	_ = privKey
+	docLoader := newTestDocumentLoader()
+	registry := createMockRegistry(t, "web", "did:web:holder.example.com#key-1", pubJWK)
+
+	tests := []testCase{
+		{name: "nil_checker", checker: nil},
+		{name: "with_checker", checker: NewLDProofChecker(registry, docLoader)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parser := &ConfigurablePresentationParser{
+				ProofChecker:   newTestProofChecker(),
+				LDProofChecker: tc.checker,
+			}
+			_, err := parser.ParsePresentation([]byte(vpJSON))
+			if !errors.Is(err, ErrorUnsignedPresentation) {
+				t.Errorf("Expected ErrorUnsignedPresentation, got %v", err)
+			}
+		})
+	}
+}
+
+// TestParseJSONLDPresentation_VCWithInvalidProofRejected verifies that
+// a JSON-LD VC embedded in a VP is rejected if its LD proof is invalid.
+// We construct a VP with a valid VP-level proof but embed a VC whose LD
+// proof signature is garbage, ensuring the VC proof verification path fires.
+func TestParseJSONLDPresentation_VCWithInvalidProofRejected(t *testing.T) {
+	privKey, _, pubJWK := generateTestECKeys(t)
+	signer := &testES256Signer{key: privKey}
+	docLoader := newTestDocumentLoader()
+	verificationMethodID := "did:web:holder.example.com#key-1"
+	registry := createMockRegistry(t, "web", verificationMethodID, pubJWK)
+	checker := NewLDProofChecker(registry, docLoader)
+
+	// Build a VP that includes a credential with a bogus LD proof.
+	// We need to sign the VP including the credential, so the VP proof covers
+	// the full document (including the VC), but the VC's own proof is invalid.
+	vcWithBadProof := map[string]interface{}{
+		"@context":          []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"type":              []interface{}{"VerifiableCredential"},
+		"issuer":            "did:web:issuer.example.com",
+		"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com", "name": "Alice"},
+		"proof": map[string]interface{}{
+			"type":               "JsonWebSignature2020",
+			"created":            "2024-01-01T00:00:00Z",
+			"verificationMethod": verificationMethodID,
+			"jws":                "eyJhbGciOiJFUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		},
+	}
+
+	// Create and sign a VP.
+	pres := createTestVP()
+	vpJSON, _ := signPresentation(t, pres, signer, verificationMethodID, docLoader)
+
+	// Inject the VC with a bad proof into the signed VP JSON.
+	// This means the VP-level proof no longer covers this content, so
+	// the VP proof check itself will fail (which is still the correct behavior —
+	// tampering with the VP content invalidates the VP proof).
+	var vpMap map[string]interface{}
+	require.NoError(t, json.Unmarshal(vpJSON, &vpMap))
+	vpMap["verifiableCredential"] = []interface{}{vcWithBadProof}
+	modifiedJSON, marshalErr := json.Marshal(vpMap)
+	require.NoError(t, marshalErr)
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: checker,
+	}
+	_, err := parser.ParsePresentation(modifiedJSON)
+	if err == nil {
+		t.Fatal("Expected error for VP with tampered content, got nil")
+	}
+}
+
+// TestParseJSONLDPresentation_EmptyProofArrayRejected verifies that a VP
+// with an empty proof array is treated as unsigned and rejected.
+func TestParseJSONLDPresentation_EmptyProofArrayRejected(t *testing.T) {
+	vpJSON := `{
+		"@context": ["https://www.w3.org/2018/credentials/v1"],
+		"type": ["VerifiablePresentation"],
+		"holder": "did:web:holder.example.com",
+		"proof": []
+	}`
+
+	privKey, _, pubJWK := generateTestECKeys(t)
+	_ = privKey
+	docLoader := newTestDocumentLoader()
+	registry := createMockRegistry(t, "web", "did:web:holder.example.com#key-1", pubJWK)
+	checker := NewLDProofChecker(registry, docLoader)
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: checker,
+	}
+	_, err := parser.ParsePresentation([]byte(vpJSON))
+	if !errors.Is(err, ErrorUnsignedPresentation) {
+		t.Errorf("Expected ErrorUnsignedPresentation for empty proof array, got %v", err)
+	}
+}
+
+// TestResolveKeyFromDID_NoMatchingKey verifies that ResolveKeyFromDID
+// returns ErrorNoVerificationKey when no matching verification method is found.
+func TestResolveKeyFromDID_NoMatchingKey(t *testing.T) {
+	_, _, pubJWK := generateTestECKeys(t)
+	// Registry key ID is "key-1" but we ask for "key-2".
+	registry := createMockRegistry(t, "web", "did:web:example.com#key-1", pubJWK)
+
+	_, err := ResolveKeyFromDID(registry, "did:web:example.com", "did:web:example.com#key-2")
+	if !errors.Is(err, ErrorNoVerificationKey) {
+		t.Errorf("Expected ErrorNoVerificationKey, got %v", err)
+	}
+}
+
+// --- VerifyLDVPProofBinding tests ---
+
+// TestVerifyLDVPProofBinding verifies challenge and domain binding for
+// JSON-LD VP proofs using table-driven tests.
+func TestVerifyLDVPProofBinding(t *testing.T) {
+	expectedChallenge := "session-nonce-abc123"
+	expectedDomain := "did:key:verifier"
+
+	type bindingTest struct {
+		name              string
+		proofs            []*common.LDProof
+		expectedChallenge string
+		expectedDomain    string
+		expectedErr       error
+	}
+
+	tests := []bindingTest{
+		{
+			name:              "correct challenge and domain",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: expectedChallenge, Domain: expectedDomain}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+		{
+			// Omitting the domain must not be a way to opt out of the
+			// audience binding.
+			name:              "correct challenge, no domain in proof",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: expectedChallenge}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       ErrorProofDomainMismatch,
+		},
+		{
+			name:              "wrong challenge",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: "wrong-nonce"}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    "",
+			expectedErr:       ErrorProofChallengeMismatch,
+		},
+		{
+			name:              "missing challenge when expected",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020"}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    "",
+			expectedErr:       ErrorProofChallengeMismatch,
+		},
+		{
+			name:              "wrong domain",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: expectedChallenge, Domain: "did:key:attacker"}},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       ErrorProofDomainMismatch,
+		},
+		{
+			name:              "no challenge expected, skip check",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Challenge: "any-value"}},
+			expectedChallenge: "",
+			expectedDomain:    "",
+			expectedErr:       nil,
+		},
+		{
+			name:              "no domain expected, skip domain check",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Domain: "any-domain"}},
+			expectedChallenge: "",
+			expectedDomain:    "",
+			expectedErr:       nil,
+		},
+		{
+			name:              "no proofs, no-op",
+			proofs:            nil,
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+		{
+			name:              "empty proofs slice, no-op",
+			proofs:            []*common.LDProof{},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+		{
+			name: "multiple proofs, first has correct challenge",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge},
+				{Type: "JsonWebSignature2020"},
+			},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    "",
+			expectedErr:       nil,
+		},
+		{
+			name: "multiple proofs, second has wrong challenge",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge},
+				{Type: "JsonWebSignature2020", Challenge: "wrong-nonce"},
+			},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    "",
+			expectedErr:       ErrorProofChallengeMismatch,
+		},
+		{
+			name: "multiple proofs, one has wrong domain",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge, Domain: expectedDomain},
+				{Type: "JsonWebSignature2020", Domain: "did:key:attacker"},
+			},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       ErrorProofDomainMismatch,
+		},
+		{
+			name:              "correct domain, no challenge expected",
+			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Domain: expectedDomain}},
+			expectedChallenge: "",
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+		{
+			// Neither proof binds the session to this verifier on its own,
+			// so the split must not be accepted just because both values
+			// appear somewhere in the list.
+			name: "challenge and domain split across two proofs",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge},
+				{Type: "JsonWebSignature2020", Domain: expectedDomain},
+			},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       ErrorProofChallengeMismatch,
+		},
+		{
+			name: "one proof carries both bindings alongside an unbound proof",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020"},
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge, Domain: expectedDomain},
+			},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pres, _ := common.NewPresentation()
+			pres.Proofs = tc.proofs
+
+			err := VerifyLDVPProofBinding(pres, tc.expectedChallenge, tc.expectedDomain)
+			if tc.expectedErr != nil {
+				assert.ErrorIs(t, err, tc.expectedErr, "expected error %v, got %v", tc.expectedErr, err)
+			} else {
+				assert.NoError(t, err, "expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestVerifyLDVPProofBinding_HolderKeyPropagation verifies that after parsing a
+// JSON-LD VP with a valid LD proof, the presentation's HolderKey is set to the
+// LD-proof signer key.
+func TestVerifyLDVPProofBinding_HolderKeyPropagation(t *testing.T) {
+	// Generate a key pair for signing and set up test infrastructure.
+	privKey, _, pubJWK := generateTestECKeys(t)
+	signer := &testES256Signer{key: privKey}
+	docLoader := newTestDocumentLoader()
+	verificationMethodID := "did:web:holder.example.com#key-1"
+	registry := createMockRegistry(t, "web", verificationMethodID, pubJWK)
+
+	// Create and sign a VP using the shared test helpers.
+	pres := createTestVP()
+	vpJSON, _ := signPresentation(t, pres, signer, verificationMethodID, docLoader)
+
+	// Set up a parser with the real LDProofChecker and mock JWTProofChecker.
+	ldChecker := NewLDProofChecker(registry, docLoader)
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: ldChecker,
+	}
+
+	result, err := parser.ParsePresentation(vpJSON)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Holder key should be set from the LD-proof verification.
+	holderKey := result.HolderKey()
+	assert.NotNil(t, holderKey, "HolderKey should be set after LD-proof verification")
+
+	// The proof should be populated.
+	require.Len(t, result.Proofs, 1)
+	assert.Equal(t, common.ProofTypeJsonWebSignature2020, result.Proofs[0].Type)
+
+	// Since AddLinkedDataProof doesn't add challenge/domain, the parsed proof
+	// won't have them. Simulate a VP from a wallet that included challenge/domain
+	// by setting them on the parsed proofs and then testing VerifyLDVPProofBinding.
+	challenge := "test-nonce-123"
+	domain := "did:web:verifier"
+	result.Proofs[0].Challenge = challenge
+	result.Proofs[0].Domain = domain
+
+	// VerifyLDVPProofBinding should accept with matching challenge/domain.
+	err = VerifyLDVPProofBinding(result, challenge, domain)
+	assert.NoError(t, err)
+
+	// VerifyLDVPProofBinding should reject with wrong challenge.
+	err = VerifyLDVPProofBinding(result, "wrong-nonce", domain)
+	assert.ErrorIs(t, err, ErrorProofChallengeMismatch)
+
+	// VerifyLDVPProofBinding should reject with wrong domain.
+	err = VerifyLDVPProofBinding(result, challenge, "wrong-domain")
+	assert.ErrorIs(t, err, ErrorProofDomainMismatch)
 }

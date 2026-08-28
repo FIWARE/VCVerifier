@@ -58,11 +58,13 @@ func main() {
 		RegisterDBHealth(db)
 	}
 
-	if err := verifier.InitVerifier(&configuration, repo); err != nil {
-		logger.Fatalf("Failed to initialize verifier: %v", err)
-	}
+	// The presentation parser is initialized first: it builds the shared
+	// LDProofChecker that InitVerifier hands to the status-list client.
 	if err := verifier.InitPresentationParser(&configuration, Health()); err != nil {
 		logger.Fatalf("Failed to initialize presentation parser: %v", err)
+	}
+	if err := verifier.InitVerifier(&configuration, repo); err != nil {
+		logger.Fatalf("Failed to initialize verifier: %v", err)
 	}
 
 	// bgCtx is cancelled before graceful shutdown to stop background tasks.
