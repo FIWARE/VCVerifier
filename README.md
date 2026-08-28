@@ -111,7 +111,7 @@ verifier:
     did:
     # identification of the verifier in communication with wallets
     clientIdentification:
-        # identification used by the verifier when requesting authorization, following the OIDC4VP client identifier prefixes(see https://openid.net/specs/openid-4-verifiable-presentations-1_0.html). Can be a did (e.g. "did:web:..."), an x509_san_dns entry ("x509_san_dns:<hostname>") or a redirect_uri entry ("redirect_uri:<the verifier's own callback url>"). Only redirect_uri works with the "urlEncoded" request mode, see "Request modes" below - it is the only scheme whose requests must NOT be signed.
+        # identification used by the verifier when requesting authorization, following the OIDC4VP client identifier prefixes(see https://openid.net/specs/openid-4-verifiable-presentations-1_0.html). Can be a did (e.g. "did:web:..."), an x509_san_dns entry ("x509_san_dns:<hostname>") or a redirect_uri entry ("redirect_uri:<the verifier's own callback url>"). redirect_uri only works with the "urlEncoded" request mode, see "Request modes" below - it is the only scheme whose requests must NOT be signed. If left empty, the "urlEncoded" mode defaults it per-request to "redirect_uri:" followed by the verifier's own callback URL, so it always matches.
         id:
         # path to the signing key(in pem format) for request object. Needs to correspond with the id. Not used (and not needed) for the "redirect_uri" id scheme, since that scheme is never signed.
         keyPath:
@@ -126,9 +126,9 @@ verifier:
     # request mode used for flows where the caller has no way to request one explicitly - the
     # OIDC-bridging authorization endpoint(/api/v1/authorization), and /api/v2/loginQR when no
     # request_mode query parameter is given. Must be one of supportedModes above. Defaults to
-    # "byReference" for backwards compatibility - if you only list "urlEncoded" in supportedModes
-    # (e.g. because you use the "redirect_uri" id scheme), you MUST set this explicitly to
-    # "urlEncoded", otherwise the verifier will fail to start(the default won't be in supportedModes).
+    # "byReference" for backwards compatibility, but only when "byReference" is itself listed in
+    # supportedModes - otherwise it defaults to the first entry of supportedModes instead, so
+    # e.g. a supportedModes: ["urlEncoded"]-only config keeps working without setting this.
     requestMode: byReference
     # address of the (ebsi-compliant) trusted-issuers-registry to be used for verifying the issuer of a received credential
     tirAddress:
@@ -590,10 +590,11 @@ The only mode where the request is **not** signed — every parameter (including
 This is the **only mode compatible with the `redirect_uri` [client identifier prefix](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html)** (as opposed to e.g. `did:...` or `x509_san_dns:...`). Per the OIDC4VP spec, requests using `redirect_uri` as client identifier scheme cannot be signed, since there is no key/certificate for the wallet to verify a signature against — the wallet's only trust check is that the response is sent back to the exact URI embedded in `client_id`.
 
 To use it:
-* set `clientIdentification.id` to `redirect_uri:` followed by the verifier's own callback URL, exactly as it will be sent as `response_uri` — for this verifier that's always `<host><pathPrefix>/api/v1/authentication_response`, e.g. `redirect_uri:https://verifier.org/api/v1/authentication_response`.
+* leave `clientIdentification.id` empty and the verifier defaults it, per request, to `redirect_uri:` followed by its own callback URL (`<host><pathPrefix>/api/v1/authentication_response`) — this is always consistent, since both values are derived from the same incoming request.
+* alternatively, set `clientIdentification.id` explicitly to `redirect_uri:` followed by the verifier's own callback URL, exactly as it will be sent as `response_uri`, e.g. `redirect_uri:https://verifier.org/api/v1/authentication_response`. If the host in `id` ever stops matching the host of the incoming request (e.g. after an ingress hostname or `pathPrefix` change), the verifier rejects the request instead of sending a `client_id`/`response_uri` pair the wallet is guaranteed to reject.
 * `keyPath`, `requestKeyAlgorithm` and `certificatePath` are **not needed** for this mode (no signing, no `x5c` header) — they only matter if `byValue`/`byReference` are also listed in `supportedModes` for other wallets.
 * make sure `"urlEncoded"` is included in `supportedModes`, and either pass `requestMode=urlEncoded` on the initial request, or set it as the default (see below).
-* if `"urlEncoded"` is the **only** entry in `supportedModes`, you also need to set `verifier.requestMode: urlEncoded` explicitly — the built-in default is `byReference` (for backwards compatibility), and the verifier will refuse to start if the default isn't itself one of the `supportedModes`.
+* if `"urlEncoded"` is the **only** entry in `supportedModes`, `verifier.requestMode` defaults to it automatically (the built-in `byReference` default only applies when it is itself listed in `supportedModes`) — you only need to set `verifier.requestMode` explicitly if you list several modes and want a non-`byReference` default.
 
 Trade-off: `redirect_uri` gives up the cryptographic proof of the verifier's identity that `did:...`/`x509_san_dns:...` provide — use it only when the wallet you need to support doesn't implement a signed scheme (some do not, see wallet compatibility notes below), or as a fallback for wallets you don't fully control.
 
