@@ -47,20 +47,22 @@ func TestVerifyConfig(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
-		testName      string
-		configToTest  configModel.Verifier
-		expectedError error
+		testName            string
+		configToTest        configModel.Verifier
+		expectedError       error
+		expectedRequestMode string
 	}
 
 	tests := []test{
-		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}, nil},
-		{"If no TIR is configured, the verification should fail.", configModel.Verifier{Did: "did:key:verifier", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoTIR},
-		{"If no DID is configured, the verification should fail.", configModel.Verifier{TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID},
-		{"If no DID and TIR is configured, the verification should fail.", configModel.Verifier{ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID},
-		{"If no validation mode is configured, verfication should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", KeyAlgorithm: "RS256"}, ErrorUnsupportedValidationMode},
-		{"If RequestMode is left empty and byReference is supported, it defaults to byReference and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"byReference"}}, nil},
-		{"If RequestMode is left empty and byReference is not supported, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}, ErrorRequestModeNotSupported},
-		{"If RequestMode is set to a value outside SupportedModes, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "byValue"}, ErrorRequestModeNotSupported},
+		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}, nil, "urlEncoded"},
+		{"If no TIR is configured, the verification should fail.", configModel.Verifier{Did: "did:key:verifier", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoTIR, ""},
+		{"If no DID is configured, the verification should fail.", configModel.Verifier{TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, ""},
+		{"If no DID and TIR is configured, the verification should fail.", configModel.Verifier{ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, ""},
+		{"If no validation mode is configured, verfication should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", KeyAlgorithm: "RS256"}, ErrorUnsupportedValidationMode, ""},
+		{"If RequestMode is left empty and byReference is supported, it defaults to byReference and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"byReference"}}, nil, "byReference"},
+		{"If RequestMode is left empty and byReference is not supported, it falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}, nil, "urlEncoded"},
+		{"If RequestMode is left empty and byReference is not supported but not the first entry either, it still falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded", "byValue"}}, nil, "urlEncoded"},
+		{"If RequestMode is set to a value outside SupportedModes, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "byValue"}, ErrorRequestModeNotSupported, "byValue"},
 	}
 
 	for _, tc := range tests {
@@ -70,6 +72,9 @@ func TestVerifyConfig(t *testing.T) {
 			verificationResult := verifyConfig(&tc.configToTest)
 			if verificationResult != tc.expectedError {
 				t.Errorf("%s - Expected %v but was %v.", tc.testName, tc.expectedError, verificationResult)
+			}
+			if tc.expectedRequestMode != "" && tc.configToTest.RequestMode != tc.expectedRequestMode {
+				t.Errorf("%s - Expected resolved RequestMode %v but was %v.", tc.testName, tc.expectedRequestMode, tc.configToTest.RequestMode)
 			}
 		})
 

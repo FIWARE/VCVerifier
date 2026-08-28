@@ -1739,9 +1739,15 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	// The "default:" struct tag only applies when the config is loaded from server.yaml
 	// (via gookit/config); callers building configModel.Verifier directly (tests, or any
 	// future caller) get the zero value. Fall back here so behaviour matches the documented
-	// default regardless of how the config was constructed.
+	// default regardless of how the config was constructed. Prefer "byReference" for backwards
+	// compatibility, but only when it is actually supported - otherwise fall back to whichever
+	// mode is supported, so a previously valid supportedModes-only config keeps booting.
 	if verifierConfig.RequestMode == "" {
-		verifierConfig.RequestMode = REQUEST_MODE_BY_REFERENCE
+		if slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_REFERENCE) {
+			verifierConfig.RequestMode = REQUEST_MODE_BY_REFERENCE
+		} else {
+			verifierConfig.RequestMode = verifierConfig.SupportedModes[0]
+		}
 	}
 	if !slices.Contains(verifierConfig.SupportedModes, verifierConfig.RequestMode) { //nolint:govet
 		return ErrorRequestModeNotSupported
