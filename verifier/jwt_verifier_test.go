@@ -1,10 +1,15 @@
 package verifier
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	common "github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/logging"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // fixedClock is a test double that always returns the configured instant.
@@ -375,4 +380,93 @@ func isErr(err, target error) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// DeprecatedValidationModes and WarnDeprecatedMode tests
+// ---------------------------------------------------------------------------
+
+func TestDeprecatedValidationModes(t *testing.T) {
+	// Verify that the deprecated set contains exactly the expected modes.
+	if !DeprecatedValidationModes[ValidationModeCombined] {
+		t.Error("expected 'combined' to be in DeprecatedValidationModes")
+	}
+	if !DeprecatedValidationModes[ValidationModeJsonLd] {
+		t.Error("expected 'jsonLd' to be in DeprecatedValidationModes")
+	}
+	if DeprecatedValidationModes[ValidationModeNone] {
+		t.Error("'none' should not be in DeprecatedValidationModes")
+	}
+	if DeprecatedValidationModes[ValidationModeBaseContext] {
+		t.Error("'baseContext' should not be in DeprecatedValidationModes")
+	}
+}
+
+func TestWarnDeprecatedMode(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         string
+		expectWarnAt bool
+	}{
+		{
+			name:         "combined is deprecated and logs a warning",
+			mode:         ValidationModeCombined,
+			expectWarnAt: true,
+		},
+		{
+			name:         "jsonLd is deprecated and logs a warning",
+			mode:         ValidationModeJsonLd,
+			expectWarnAt: true,
+		},
+		{
+			name:         "none is not deprecated — no warning",
+			mode:         ValidationModeNone,
+			expectWarnAt: false,
+		},
+		{
+			name:         "baseContext is not deprecated — no warning",
+			mode:         ValidationModeBaseContext,
+			expectWarnAt: false,
+		},
+		{
+			name:         "empty string — no warning",
+			mode:         "",
+			expectWarnAt: false,
+		},
+		{
+			name:         "unknown mode — no warning",
+			mode:         "unknownMode",
+			expectWarnAt: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Set up an observed logger so we can inspect log output.
+			core, recorded := observer.New(zapcore.WarnLevel)
+			testLogger := zap.New(core).Sugar()
+			prev := logging.SetTestLogger(testLogger)
+			defer logging.SetTestLogger(prev)
+
+			WarnDeprecatedMode(tc.mode)
+
+			warnCount := recorded.FilterLevelExact(zapcore.WarnLevel).Len()
+			if tc.expectWarnAt && warnCount == 0 {
+				t.Errorf("expected a Warn-level log entry for mode %q, but none was recorded", tc.mode)
+			}
+			if !tc.expectWarnAt && warnCount > 0 {
+				t.Errorf("expected no Warn-level log entry for mode %q, but got %d", tc.mode, warnCount)
+			}
+
+			if tc.expectWarnAt {
+				msg := recorded.FilterLevelExact(zapcore.WarnLevel).All()[0].Message
+				if !strings.Contains(msg, tc.mode) {
+					t.Errorf("expected warning message to mention mode %q, got: %s", tc.mode, msg)
+				}
+				if !strings.Contains(msg, "does not perform real JSON-LD validation") {
+					t.Errorf("expected warning message to mention missing JSON-LD validation, got: %s", msg)
+				}
+			}
+		})
+	}
 }
