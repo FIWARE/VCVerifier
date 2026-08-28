@@ -53,14 +53,14 @@ func TestVerifyConfig(t *testing.T) {
 	}
 
 	tests := []test{
-		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, DefaultRequestMode: "urlEncoded"}, nil},
+		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}, nil},
 		{"If no TIR is configured, the verification should fail.", configModel.Verifier{Did: "did:key:verifier", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoTIR},
 		{"If no DID is configured, the verification should fail.", configModel.Verifier{TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID},
 		{"If no DID and TIR is configured, the verification should fail.", configModel.Verifier{ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID},
 		{"If no validation mode is configured, verfication should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", KeyAlgorithm: "RS256"}, ErrorUnsupportedValidationMode},
-		{"If DefaultRequestMode is left empty and byReference is supported, it defaults to byReference and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"byReference"}}, nil},
-		{"If DefaultRequestMode is left empty and byReference is not supported, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}, ErrorDefaultRequestModeNotSupported},
-		{"If DefaultRequestMode is set to a value outside SupportedModes, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, DefaultRequestMode: "byValue"}, ErrorDefaultRequestModeNotSupported},
+		{"If RequestMode is left empty and byReference is supported, it defaults to byReference and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"byReference"}}, nil},
+		{"If RequestMode is left empty and byReference is not supported, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}, ErrorRequestModeNotSupported},
+		{"If RequestMode is set to a value outside SupportedModes, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "byValue"}, ErrorRequestModeNotSupported},
 	}
 
 	for _, tc := range tests {
@@ -966,14 +966,14 @@ func TestInitVerifier(t *testing.T) {
 	}
 
 	tests := []test{
-		{"A verifier should be properly intantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}, DefaultRequestMode: "urlEncoded"}}, nil},
+		{"A verifier should be properly intantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}}, nil},
 		{"Without a did, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, ErrorNoDID},
 		{"Without a tir, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", SessionExpiry: 30, ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, ErrorNoTIR},
 		{"Without a validationMode, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "blub", SessionExpiry: 30, KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, ErrorUnsupportedValidationMode},
-		{"Without a valid key algorithm, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "SomethingWeird", SupportedModes: []string{"urlEncoded"}, DefaultRequestMode: "urlEncoded"}}, ErrorInvalidKeyConfig},
+		{"Without a valid key algorithm, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "SomethingWeird", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}}, ErrorInvalidKeyConfig},
 		{"Without supported modes, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256"}}, ErrorSupportedModesNotSet},
-		{"KID should be added if the key does not contain it and a KID value is configured", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, DefaultRequestMode: "urlEncoded", KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Kid: "random-kid"}}}, nil},
-		{"ClientID should be added to the key when KID value and config are missing", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, DefaultRequestMode: "urlEncoded", KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Id: "client-id-value"}}}, nil},
+		{"KID should be added if the key does not contain it and a KID value is configured", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Kid: "random-kid"}}}, nil},
+		{"ClientID should be added to the key when KID value and config are missing", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Id: "client-id-value"}}}, nil},
 	}
 
 	for _, tc := range tests {
@@ -2131,14 +2131,14 @@ func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	baseVerifierConfig := configModel.Verifier{
-		Did:                "did:key:verifier",
-		TirAddress:         "https://tir.org",
-		ValidationMode:     "none",
-		SessionExpiry:      30,
-		KeyAlgorithm:       "RS256",
-		GenerateKey:        true,
-		SupportedModes:     []string{"urlEncoded"},
-		DefaultRequestMode: "urlEncoded",
+		Did:            "did:key:verifier",
+		TirAddress:     "https://tir.org",
+		ValidationMode: "none",
+		SessionExpiry:  30,
+		KeyAlgorithm:   "RS256",
+		GenerateKey:    true,
+		SupportedModes: []string{"urlEncoded"},
+		RequestMode:    "urlEncoded",
 	}
 
 	type test struct {

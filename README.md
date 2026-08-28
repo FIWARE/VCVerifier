@@ -129,7 +129,7 @@ verifier:
     # "byReference" for backwards compatibility - if you only list "urlEncoded" in supportedModes
     # (e.g. because you use the "redirect_uri" id scheme), you MUST set this explicitly to
     # "urlEncoded", otherwise the verifier will fail to start(the default won't be in supportedModes).
-    defaultRequestMode: byReference
+    requestMode: byReference
     # address of the (ebsi-compliant) trusted-issuers-registry to be used for verifying the issuer of a received credential
     tirAddress:
     # Expiry(in seconds) of an authentication session. After that, a new flow needs to be initiated.
@@ -593,7 +593,7 @@ To use it:
 * set `clientIdentification.id` to `redirect_uri:` followed by the verifier's own callback URL, exactly as it will be sent as `response_uri` — for this verifier that's always `<host><pathPrefix>/api/v1/authentication_response`, e.g. `redirect_uri:https://verifier.org/api/v1/authentication_response`.
 * `keyPath`, `requestKeyAlgorithm` and `certificatePath` are **not needed** for this mode (no signing, no `x5c` header) — they only matter if `byValue`/`byReference` are also listed in `supportedModes` for other wallets.
 * make sure `"urlEncoded"` is included in `supportedModes`, and either pass `requestMode=urlEncoded` on the initial request, or set it as the default (see below).
-* if `"urlEncoded"` is the **only** entry in `supportedModes`, you also need to set `verifier.defaultRequestMode: urlEncoded` explicitly — the built-in default is `byReference` (for backwards compatibility), and the verifier will refuse to start if the default isn't itself one of the `supportedModes`.
+* if `"urlEncoded"` is the **only** entry in `supportedModes`, you also need to set `verifier.requestMode: urlEncoded` explicitly — the built-in default is `byReference` (for backwards compatibility), and the verifier will refuse to start if the default isn't itself one of the `supportedModes`.
 
 Trade-off: `redirect_uri` gives up the cryptographic proof of the verifier's identity that `did:...`/`x509_san_dns:...` provide — use it only when the wallet you need to support doesn't implement a signed scheme (some do not, see wallet compatibility notes below), or as a fallback for wallets you don't fully control.
 

@@ -83,7 +83,7 @@ var ErrorTokenUnparsable = errors.New("unable_to_parse_token")
 var ErrorRequiredCredentialNotProvided = errors.New("required_credential_not_provided")
 var ErrorNoValidCredentialTypeProvided = errors.New("no_valid_credential_type_provided")
 var ErrorUnsupportedRequestMode = errors.New("unsupported_request_mode")
-var ErrorDefaultRequestModeNotSupported = errors.New("default_request_mode_not_in_supported_modes")
+var ErrorRequestModeNotSupported = errors.New("request_mode_not_in_supported_modes")
 var ErrorNoExpiration = errors.New("no_jwt_expiration_set")
 var ErrorNoKeyId = errors.New("no_key_id_available")
 var ErrorNoRequestObject = errors.New("no_request_object_available")
@@ -121,9 +121,9 @@ type Verifier interface {
 	GetRequestObject(state string) (jwt string, err error)
 	GetHost() string
 	GetPathPrefix() string
-	// GetDefaultRequestMode returns the request mode to use for flows where the caller has
+	// GetRequestMode returns the request mode to use for flows where the caller has
 	// no way to request one explicitly (e.g. the OIDC-bridging authorization endpoint).
-	GetDefaultRequestMode() string
+	GetRequestMode() string
 	GetAuthorizationType(clientId string) string
 	GetDefaultScope(serviceIdentifier string) (string, error)
 	// ExchangeRefreshToken atomically consumes a refresh token and returns a
@@ -175,7 +175,7 @@ type CredentialVerifier struct {
 	// request modes supported by this instance of the verifier
 	supportedRequestModes []string
 	// request mode used for flows where the caller has no way to request one explicitly
-	defaultRequestMode string
+	fallbackRequestMode string
 	// Key for signing the request objects
 	requestSigningKey *jwk.Key
 	// Client identification for signing the request objects
@@ -438,7 +438,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		},
 		signingAlgorithm:       verifierConfig.KeyAlgorithm,
 		supportedRequestModes:  verifierConfig.SupportedModes,
-		defaultRequestMode:     verifierConfig.DefaultRequestMode,
+		fallbackRequestMode:    verifierConfig.RequestMode,
 		requestSigningKey:      &didSigningKey,
 		clientIdentification:   verifierConfig.ClientIdentification,
 		verifierConfig:         *verifierConfig,
@@ -1740,11 +1740,11 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	// (via gookit/config); callers building configModel.Verifier directly (tests, or any
 	// future caller) get the zero value. Fall back here so behaviour matches the documented
 	// default regardless of how the config was constructed.
-	if verifierConfig.DefaultRequestMode == "" {
-		verifierConfig.DefaultRequestMode = REQUEST_MODE_BY_REFERENCE
+	if verifierConfig.RequestMode == "" {
+		verifierConfig.RequestMode = REQUEST_MODE_BY_REFERENCE
 	}
-	if !slices.Contains(verifierConfig.SupportedModes, verifierConfig.DefaultRequestMode) { //nolint:govet
-		return ErrorDefaultRequestModeNotSupported
+	if !slices.Contains(verifierConfig.SupportedModes, verifierConfig.RequestMode) { //nolint:govet
+		return ErrorRequestModeNotSupported
 	}
 
 	return nil
@@ -1791,10 +1791,10 @@ func (v *CredentialVerifier) GetPathPrefix() string {
 	return v.pathPrefix
 }
 
-// GetDefaultRequestMode returns the request mode to use for flows where the caller has
+// GetRequestMode returns the request mode to use for flows where the caller has
 // no way to request one explicitly (e.g. the OIDC-bridging authorization endpoint).
-func (v *CredentialVerifier) GetDefaultRequestMode() string {
-	return v.defaultRequestMode
+func (v *CredentialVerifier) GetRequestMode() string {
+	return v.fallbackRequestMode
 }
 
 // IsRefreshTokenEnabled reports whether the refresh token feature is active.
