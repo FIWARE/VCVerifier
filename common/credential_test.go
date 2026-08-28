@@ -295,6 +295,153 @@ func TestPresentation_MarshalJSON_CustomContext(t *testing.T) {
 	}
 }
 
+func TestCredential_Proofs(t *testing.T) {
+	cred, _ := CreateCredential(CredentialContents{ID: "vc-1"}, CustomFields{})
+
+	// No proofs initially.
+	if cred.Proofs() != nil {
+		t.Errorf("Expected nil proofs, got %v", cred.Proofs())
+	}
+
+	proofs := []*LDProof{
+		{Type: "JsonWebSignature2020", JWS: "eyJ..sig1"},
+		{Type: "DataIntegrityProof", ProofValue: "z3FXQ..."},
+	}
+	cred.SetProofs(proofs)
+
+	got := cred.Proofs()
+	if len(got) != 2 {
+		t.Fatalf("Expected 2 proofs, got %d", len(got))
+	}
+	if got[0].Type != "JsonWebSignature2020" {
+		t.Errorf("Expected first proof type JsonWebSignature2020, got %s", got[0].Type)
+	}
+	if got[1].ProofValue != "z3FXQ..." {
+		t.Errorf("Expected second proof proofValue z3FXQ..., got %s", got[1].ProofValue)
+	}
+}
+
+func TestCredential_SetProofs_Nil(t *testing.T) {
+	cred, _ := CreateCredential(CredentialContents{ID: "vc-1"}, CustomFields{})
+	cred.SetProofs([]*LDProof{{Type: "test", JWS: "sig"}})
+	cred.SetProofs(nil)
+
+	if cred.Proofs() != nil {
+		t.Errorf("Expected nil after SetProofs(nil), got %v", cred.Proofs())
+	}
+}
+
+func TestPresentation_MarshalJSON_SingleProof(t *testing.T) {
+	p, _ := NewPresentation()
+	p.Proofs = []*LDProof{
+		{
+			Type:               "JsonWebSignature2020",
+			Created:            "2024-01-01T00:00:00Z",
+			VerificationMethod: "did:web:example.com#key-1",
+			JWS:                "eyJ..sig",
+		},
+	}
+
+	data, err := p.MarshalJSON()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	// Single proof should be serialized as an object, not an array.
+	proofRaw, ok := parsed[VPKeyProof]
+	if !ok {
+		t.Fatal("Expected proof key in serialized presentation")
+	}
+	proofMap, ok := proofRaw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected proof to be a map, got %T", proofRaw)
+	}
+	if proofMap["type"] != "JsonWebSignature2020" {
+		t.Errorf("Expected proof type JsonWebSignature2020, got %v", proofMap["type"])
+	}
+	if proofMap["jws"] != "eyJ..sig" {
+		t.Errorf("Expected proof jws eyJ..sig, got %v", proofMap["jws"])
+	}
+}
+
+func TestPresentation_MarshalJSON_MultipleProofs(t *testing.T) {
+	p, _ := NewPresentation()
+	p.Proofs = []*LDProof{
+		{
+			Type:               "JsonWebSignature2020",
+			Created:            "2024-01-01T00:00:00Z",
+			VerificationMethod: "did:web:example.com#key-1",
+			JWS:                "eyJ..sig1",
+		},
+		{
+			Type:               "DataIntegrityProof",
+			Created:            "2024-01-02T00:00:00Z",
+			VerificationMethod: "did:key:z6Mk...",
+			ProofValue:         "z3FXQ...",
+			Cryptosuite:        "eddsa-rdfc-2022",
+		},
+	}
+
+	data, err := p.MarshalJSON()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	proofRaw, ok := parsed[VPKeyProof]
+	if !ok {
+		t.Fatal("Expected proof key in serialized presentation")
+	}
+	proofArr, ok := proofRaw.([]interface{})
+	if !ok {
+		t.Fatalf("Expected proof to be an array for multiple proofs, got %T", proofRaw)
+	}
+	if len(proofArr) != 2 {
+		t.Fatalf("Expected 2 proofs, got %d", len(proofArr))
+	}
+
+	first := proofArr[0].(map[string]interface{})
+	if first["type"] != "JsonWebSignature2020" {
+		t.Errorf("Expected first proof type JsonWebSignature2020, got %v", first["type"])
+	}
+
+	second := proofArr[1].(map[string]interface{})
+	if second["type"] != "DataIntegrityProof" {
+		t.Errorf("Expected second proof type DataIntegrityProof, got %v", second["type"])
+	}
+	if second["proofValue"] != "z3FXQ..." {
+		t.Errorf("Expected second proof proofValue z3FXQ..., got %v", second["proofValue"])
+	}
+}
+
+func TestPresentation_MarshalJSON_NoProofs(t *testing.T) {
+	p, _ := NewPresentation()
+	// Proofs is nil by default.
+
+	data, err := p.MarshalJSON()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	if _, ok := parsed[VPKeyProof]; ok {
+		t.Error("Expected no proof key for presentation without proofs")
+	}
+}
+
 func TestConstants(t *testing.T) {
 	if ContextCredentialsV1 != "https://www.w3.org/2018/credentials/v1" {
 		t.Error("ContextCredentialsV1 mismatch")

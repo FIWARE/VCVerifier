@@ -81,6 +81,15 @@ func Log() *zap.SugaredLogger {
 	return sugar
 }
 
+// SetTestLogger replaces the global logger with the provided one.
+// Intended for use in tests that need to capture or inspect log output.
+// Returns the previous logger so callers can restore it after the test.
+func SetTestLogger(logger *zap.SugaredLogger) (previous *zap.SugaredLogger) {
+	previous = sugar
+	sugar = logger
+	return previous
+}
+
 /**
 * Gin compatible function to enable logger injection into the gin-framework
 **/
