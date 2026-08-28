@@ -1725,7 +1725,7 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	// compatibility, but only when it is actually supported - otherwise fall back to whichever
 	// mode is supported, so a previously valid supportedModes-only config keeps booting.
 	if verifierConfig.RequestMode == "" {
-		if slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_REFERENCE) {
+		if slices.Contains(verifierConfig.SupportedModes, REQUEST_MODE_BY_REFERENCE) { //nolint:govet
 			verifierConfig.RequestMode = REQUEST_MODE_BY_REFERENCE
 		} else {
 			verifierConfig.RequestMode = verifierConfig.SupportedModes[0]
