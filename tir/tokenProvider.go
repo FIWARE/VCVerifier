@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
@@ -16,10 +17,28 @@ import (
 	"github.com/piprate/json-gold/ld"
 )
 
+// newDefaultCachingDocumentLoader creates the document loader used for M2M
+// token signing: the vendored security contexts are served from the binary,
+// everything else goes through a cache in front of the default HTTP-based
+// JSON-LD loader. Callers that need a custom underlying loader (e.g. for
+// testing) can construct one directly via common.NewCachingDocumentLoader.
+func newDefaultCachingDocumentLoader() ld.DocumentLoader {
+	return common.NewVerificationDocumentLoader(common.NewCachingDocumentLoader(
+		ld.NewDefaultDocumentLoader(http.DefaultClient),
+		common.DefaultDocumentCacheTTL,
+		common.DefaultDocumentCacheCleanup,
+	))
+}
+
 /**
  * Global file accessor
  */
 var localFileAccessor common.FileAccessor = common.DiskFileAccessor{}
+
+// verificationMethodSchemeSeparator separates the scheme from the rest of an
+// absolute URI. Its presence is what distinguishes a resolvable DID URL from
+// a relative verification method reference.
+const verificationMethodSchemeSeparator = ":"
 
 // Key type constants for M2M token signing.
 const (
@@ -42,6 +61,8 @@ type TokenProvider interface {
 	GetAuthCredential() (vc *common.Credential, err error)
 }
 
+// M2MTokenProvider creates machine-to-machine tokens by signing
+// Verifiable Presentations with an RSA private key.
 type M2MTokenProvider struct {
 	// encodes the token according to the configuration
 	tokenEncoder TokenEncoder
@@ -59,6 +80,10 @@ type M2MTokenProvider struct {
 	keyType string
 	// did of the token provider
 	did string
+	// documentLoader is used for JSON-LD context resolution when
+	// adding linked data proofs. A caching loader avoids redundant
+	// network fetches on the M2M signing hot path.
+	documentLoader ld.DocumentLoader
 }
 
 type TokenEncoder interface {
@@ -76,6 +101,18 @@ func InitM2MTokenProvider(config *configModel.Configuration, clock common.Clock)
 	}
 	if m2mConfig.VerificationMethod == "" {
 		logging.Log().Warn("No verification method configured, cannot provide m2m tokens.")
+		return tokenProvider, ErrorTokenProviderNoVerificationMethod
+	}
+	// The verification method has to be an absolute URI (typically a DID URL
+	// such as did:web:example.org#key-1). A relative value is dropped during
+	// JSON-LD expansion, which means it would not be covered by the proof
+	// signature — assertProofOptionsCovered rejects that, so every signing
+	// attempt would fail. Failing at startup instead keeps that from turning
+	// into a runtime error on the first token request.
+	if !strings.Contains(m2mConfig.VerificationMethod, verificationMethodSchemeSeparator) {
+		logging.Log().Warnf("Configured m2m verificationMethod %q is not an absolute URI. "+
+			"It must be a resolvable DID URL (e.g. did:web:example.org#key-1), otherwise no valid proof can be created.",
+			m2mConfig.VerificationMethod)
 		return tokenProvider, ErrorTokenProviderNoVerificationMethod
 	}
 
@@ -100,7 +137,17 @@ func InitM2MTokenProvider(config *configModel.Configuration, clock common.Clock)
 		return tokenProvider, err
 	}
 	logging.Log().Debug("Successfully initialized the M2MTokenProvider.")
-	return M2MTokenProvider{tokenEncoder: Base64TokenEncoder{}, authCredential: vc, signingKey: privateKey, did: config.Verifier.Did, clock: clock, verificationMethod: m2mConfig.VerificationMethod, keyType: config.M2M.KeyType, signatureType: config.M2M.SignatureType}, err
+	return M2MTokenProvider{
+		tokenEncoder:       Base64TokenEncoder{},
+		authCredential:     vc,
+		signingKey:         privateKey,
+		did:                config.Verifier.Did,
+		clock:              clock,
+		verificationMethod: m2mConfig.VerificationMethod,
+		keyType:            config.M2M.KeyType,
+		signatureType:      config.M2M.SignatureType,
+		documentLoader:     newDefaultCachingDocumentLoader(),
+	}, err
 }
 
 func (tokenProvider M2MTokenProvider) GetAuthCredential() (vc *common.Credential, err error) {
@@ -128,15 +175,20 @@ func (base64TokenEncoder Base64TokenEncoder) GetEncodedToken(vp *common.Presenta
 	return base64.RawURLEncoding.EncodeToString(marshalledPayload), err
 }
 
-// keyTypeToAlgorithm maps the configured key type to a JWS algorithm name.
-func keyTypeToAlgorithm(keyType string) string {
+// signerForKeyType returns the LD-proof signer for the configured key type
+// together with the JWS algorithm name that describes it.
+//
+// Signer and algorithm are chosen together on purpose: the algorithm ends up
+// in the proof's JWS header, and a header advertising PS256 over a PKCS#1
+// v1.5 signature (or the reverse) is rejected by every conforming verifier,
+// VerifyLinkedDataProof included. Returning them from one place makes that
+// mismatch impossible to reintroduce.
+func signerForKeyType(keyType string, privateKey *rsa.PrivateKey) (common.LDSigner, string) {
 	switch keyType {
-	case KeyTypeRSAPS256:
-		return AlgorithmPS256
 	case KeyTypeRSARS256:
-		return AlgorithmRS256
+		return NewRS256Signer(privateKey), AlgorithmRS256
 	default:
-		return AlgorithmPS256
+		return NewPS256Signer(privateKey), AlgorithmPS256
 	}
 }
 
@@ -149,14 +201,26 @@ func (tp M2MTokenProvider) signVerifiablePresentation(authCredential *common.Cre
 	vp.ID = "urn:uuid:" + uuid.NewString()
 	vp.Holder = tp.did
 
+	// A struct-literal constructed provider (as used in tests) has no
+	// document loader. Passing nil through would overwrite json-gold's own
+	// default and break context resolution, so fall back explicitly.
+	documentLoader := tp.documentLoader
+	if documentLoader == nil {
+		documentLoader = newDefaultCachingDocumentLoader()
+	}
+
 	created := tp.clock.Now()
+	signer, algorithm := signerForKeyType(tp.keyType, tp.signingKey)
 	err = vp.AddLinkedDataProof(&common.LinkedDataProofContext{
 		Created:            &created,
 		SignatureType:      tp.signatureType,
-		Algorithm:          keyTypeToAlgorithm(tp.keyType),
+		Algorithm:          algorithm,
 		VerificationMethod: tp.verificationMethod,
-		Signer:             NewRS256Signer(tp.signingKey),
-		DocumentLoader:     ld.NewDefaultDocumentLoader(http.DefaultClient),
+		Signer:             signer,
+		DocumentLoader:     documentLoader,
+		// The M2M token proves that this verifier is presenting its own
+		// participant credential, which is an authentication.
+		ProofPurpose: common.ProofPurposeAuthentication,
 	})
 
 	if err != nil {
@@ -210,21 +274,54 @@ func NewRS256Signer(privKey *rsa.PrivateKey) *RS256Signer {
 	}
 }
 
-// Sign data.
+// Sign hashes data with SHA-256 and signs it with RSASSA-PKCS1-v1_5, as
+// required for the JOSE algorithm RS256.
 func (s RS256Signer) Sign(data []byte) ([]byte, error) {
-	hash := crypto.SHA256.New()
-
-	_, err := hash.Write(data)
+	hashed, err := sha256Digest(data)
 	if err != nil {
 		return nil, err
 	}
 
-	hashed := hash.Sum(nil)
-
 	return rsa.SignPKCS1v15(rand.Reader, s.privKey, crypto.SHA256, hashed)
 }
 
-// RS256Signer is a Jose complient signer.
+// RS256Signer is a JOSE compliant RS256 (RSASSA-PKCS1-v1_5) signer.
 type RS256Signer struct {
 	privKey *rsa.PrivateKey
+}
+
+// NewPS256Signer creates a PS256Signer.
+func NewPS256Signer(privKey *rsa.PrivateKey) *PS256Signer {
+	return &PS256Signer{
+		privKey: privKey,
+	}
+}
+
+// Sign hashes data with SHA-256 and signs it with RSASSA-PSS, as required for
+// the JOSE algorithm PS256. RFC 7518 §3.5 mandates a salt length equal to the
+// hash length.
+func (s PS256Signer) Sign(data []byte) ([]byte, error) {
+	hashed, err := sha256Digest(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return rsa.SignPSS(rand.Reader, s.privKey, crypto.SHA256, hashed, &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthEqualsHash,
+		Hash:       crypto.SHA256,
+	})
+}
+
+// PS256Signer is a JOSE compliant PS256 (RSASSA-PSS) signer.
+type PS256Signer struct {
+	privKey *rsa.PrivateKey
+}
+
+// sha256Digest returns the SHA-256 digest of data.
+func sha256Digest(data []byte) ([]byte, error) {
+	hash := crypto.SHA256.New()
+	if _, err := hash.Write(data); err != nil {
+		return nil, err
+	}
+	return hash.Sum(nil), nil
 }

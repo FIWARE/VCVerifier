@@ -37,6 +37,24 @@ var (
 
 var SupportedModes = []string{ValidationModeNone, ValidationModeCombined, ValidationModeJsonLd, ValidationModeBaseContext}
 
+// DeprecatedValidationModes lists validation modes that are deprecated because
+// they do not perform real JSON-LD validation — they only check field presence
+// (issuer and type). Users should migrate to "none" or "baseContext".
+var DeprecatedValidationModes = map[string]bool{
+	ValidationModeCombined: true,
+	ValidationModeJsonLd:   true,
+}
+
+// WarnDeprecatedMode logs a prominent warning if the given validation mode is
+// in the deprecated set. Call this at startup so operators are aware that
+// "combined" and "jsonLd" modes do NOT perform real JSON-LD validation.
+func WarnDeprecatedMode(mode string) {
+	if DeprecatedValidationModes[mode] {
+		logging.Log().Warnf("validationMode '%s' is configured but does not perform real JSON-LD validation "+
+			"— it only checks field presence. Consider using 'none' or 'baseContext' instead.", mode)
+	}
+}
+
 // CredentialValidator validates credential content (not signatures — those are checked by JWTProofChecker).
 type CredentialValidator struct {
 	validationMode string
@@ -91,6 +109,15 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 
 // ValidateVC validates credential content. Signature verification is handled separately by JWTProofChecker.
 // Temporal validity (validFrom/validUntil) is always enforced regardless of mode.
+//
+// Available modes:
+//   - "none": no content validation beyond temporal checks.
+//   - "combined": DEPRECATED — checks only that issuer and type fields are present.
+//     Does NOT perform real JSON-LD or JSON-Schema validation despite the name.
+//   - "jsonLd": DEPRECATED — identical to "combined"; checks only field presence,
+//     not actual JSON-LD processing. Will be removed in a future release.
+//   - "baseContext": validates that the credential uses only W3C base-context types
+//     (VerifiableCredential, VerifiablePresentation) and has an issuer.
 func (cv CredentialValidator) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error) {
 	if ok, err := validateCredentialDates(verifiableCredential.Contents(), cv.now()); !ok {
 		return false, err
@@ -100,8 +127,10 @@ func (cv CredentialValidator) ValidateVC(verifiableCredential *common.Credential
 	case ValidationModeNone:
 		return true, nil
 	case ValidationModeCombined:
+		// DEPRECATED: only checks issuer + type presence, not real LD/Schema validation.
 		return validateCredentialContent(verifiableCredential)
 	case ValidationModeJsonLd:
+		// DEPRECATED: only checks issuer + type presence, not real JSON-LD validation.
 		return validateCredentialContent(verifiableCredential)
 	case ValidationModeBaseContext:
 		return validateBaseContext(verifiableCredential)
