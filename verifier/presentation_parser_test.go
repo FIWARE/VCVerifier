@@ -1252,6 +1252,13 @@ func TestParseJSONLDPresentation_CredentialProofsAreEnforced(t *testing.T) {
 		common.JSONLDKeyID: "did:web:somebody-else.example.com",
 	}
 
+	// A correctly signed credential that was issued to somebody other than
+	// the holder of the presentation — a replay of another subject's
+	// credential inside a VP the attacker signed themselves.
+	foreignSubjectVC := createTestVCForSubject(testIssuerDID, testForeignSubjectDID)
+	foreignSubjectVC[common.VPKeyProof] = signDocument(t, foreignSubjectVC, issuerSigner, testIssuerKeyID, docLoader,
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAssertionMethod})
+
 	tests := []struct {
 		name       string
 		credential map[string]interface{}
@@ -1271,6 +1278,11 @@ func TestParseJSONLDPresentation_CredentialProofsAreEnforced(t *testing.T) {
 			name:       "tampered_credential_rejected",
 			credential: tamperedVC,
 			wantErrIs:  common.ErrorLDProofVerifySignature,
+		},
+		{
+			name:       "credential_issued_to_another_subject_rejected",
+			credential: foreignSubjectVC,
+			wantErrIs:  ErrorHolderSubjectMismatch,
 		},
 	}
 
@@ -1718,6 +1730,29 @@ func TestVerifyLDVPProofBinding(t *testing.T) {
 			name:              "correct domain, no challenge expected",
 			proofs:            []*common.LDProof{{Type: "JsonWebSignature2020", Domain: expectedDomain}},
 			expectedChallenge: "",
+			expectedDomain:    expectedDomain,
+			expectedErr:       nil,
+		},
+		{
+			// Neither proof binds the session to this verifier on its own,
+			// so the split must not be accepted just because both values
+			// appear somewhere in the list.
+			name: "challenge and domain split across two proofs",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge},
+				{Type: "JsonWebSignature2020", Domain: expectedDomain},
+			},
+			expectedChallenge: expectedChallenge,
+			expectedDomain:    expectedDomain,
+			expectedErr:       ErrorProofChallengeMismatch,
+		},
+		{
+			name: "one proof carries both bindings alongside an unbound proof",
+			proofs: []*common.LDProof{
+				{Type: "JsonWebSignature2020"},
+				{Type: "JsonWebSignature2020", Challenge: expectedChallenge, Domain: expectedDomain},
+			},
+			expectedChallenge: expectedChallenge,
 			expectedDomain:    expectedDomain,
 			expectedErr:       nil,
 		},

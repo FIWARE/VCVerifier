@@ -54,12 +54,14 @@ const ContextSecuritySuiteJWS2020 = "https://w3id.org/security/suites/jws-2020/v
 
 // Expanded IRIs of the proof-option terms. They are used to assert that the
 // canonicalized proof options really do cover the security-relevant fields.
+// The values are bare IRIs — the N-Quads angle brackets are not part of them,
+// because the coverage check compares parsed predicates rather than raw text.
 const (
-	IRIProofCreated            = "<http://purl.org/dc/terms/created>"
-	IRIProofVerificationMethod = "<https://w3id.org/security#verificationMethod>"
-	IRIProofPurpose            = "<https://w3id.org/security#proofPurpose>"
-	IRIProofChallenge          = "<https://w3id.org/security#challenge>"
-	IRIProofDomain             = "<https://w3id.org/security#domain>"
+	IRIProofCreated            = "http://purl.org/dc/terms/created"
+	IRIProofVerificationMethod = "https://w3id.org/security#verificationMethod"
+	IRIProofPurpose            = "https://w3id.org/security#proofPurpose"
+	IRIProofChallenge          = "https://w3id.org/security#challenge"
+	IRIProofDomain             = "https://w3id.org/security#domain"
 )
 
 // Proof purposes defined by the Verifiable Credential Data Integrity spec.
@@ -351,23 +353,38 @@ func buildProofOptions(documentContext interface{}, proof *LDProof) JSONObject {
 // context regression ever made the proof terms expand to nothing again, the
 // signature would silently stop covering challenge, domain and created —
 // this guard turns that into a hard failure instead.
+//
+// The canonicalized N-Quads are parsed rather than searched as text: a
+// substring match cannot tell a predicate IRI apart from the same characters
+// appearing inside a literal, so a proof could satisfy the challenge check by
+// putting "<https://w3id.org/security#challenge>" into its domain field
+// while carrying no challenge triple at all. Where the expected object is
+// known verbatim it is compared too, so a term cannot be covered by some
+// other value than the one the proof claims.
 func assertProofOptionsCovered(canonicalProofOptions string, proof *LDProof) error {
+	quads := ParseNQuads(canonicalProofOptions)
 	required := []struct {
-		iri     string
-		field   string
-		present bool
+		iri   string
+		field string
+		value string
+		// expectedObject is the object the triple must carry, or "" when the
+		// canonicalized object is not the field value verbatim.
+		expectedObject string
 	}{
-		{IRIProofCreated, LDProofKeyCreated, proof.Created != ""},
-		{IRIProofVerificationMethod, LDProofKeyVerificationMethod, proof.VerificationMethod != ""},
-		{IRIProofPurpose, LDProofKeyProofPurpose, proof.ProofPurpose != ""},
-		{IRIProofChallenge, LDProofKeyChallenge, proof.Challenge != ""},
-		{IRIProofDomain, LDProofKeyDomain, proof.Domain != ""},
+		{IRIProofCreated, LDProofKeyCreated, proof.Created, proof.Created},
+		{IRIProofVerificationMethod, LDProofKeyVerificationMethod, proof.VerificationMethod, proof.VerificationMethod},
+		// proofPurpose is declared as @type: @id, so "authentication" is
+		// expanded to a context-defined IRI. Only its presence can be
+		// asserted without duplicating that mapping here.
+		{IRIProofPurpose, LDProofKeyProofPurpose, proof.ProofPurpose, ""},
+		{IRIProofChallenge, LDProofKeyChallenge, proof.Challenge, proof.Challenge},
+		{IRIProofDomain, LDProofKeyDomain, proof.Domain, proof.Domain},
 	}
 	for _, r := range required {
-		if !r.present {
+		if r.value == "" {
 			continue
 		}
-		if !strings.Contains(canonicalProofOptions, r.iri) {
+		if !HasNQuad(quads, r.iri, r.expectedObject) {
 			logging.Log().Warnf("Canonicalized proof options do not cover %q — the JSON-LD context does not define the proof terms", r.field)
 			return fmt.Errorf("%w: %s is not covered by the signature", ErrorLDProofOptionsNotCovered, r.field)
 		}
@@ -397,8 +414,14 @@ func (p *Presentation) AddLinkedDataProof(ctx *LinkedDataProofContext) error {
 
 	// The signed document itself must carry the suite context, otherwise the
 	// proof it ends up holding cannot be expanded by any verifier.
-	p.Context = toStringContext(EnsureSuiteContext(p.Context))
+	//
+	// The marshalled map is the authority for what was signed: MarshalJSON
+	// defaults an empty @context to credentials/v1, so deriving p.Context
+	// from the original (possibly nil) value would emit a presentation whose
+	// context no longer matches the one the proof was computed over — and
+	// whose proof therefore no longer verifies.
 	vpMap[JSONLDKeyContext] = EnsureSuiteContext(vpMap[JSONLDKeyContext])
+	p.Context = toStringContext(vpMap[JSONLDKeyContext])
 
 	proof, err := CreateLinkedDataProof(vpMap, ctx)
 	if err != nil {

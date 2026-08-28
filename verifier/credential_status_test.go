@@ -19,6 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +32,8 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func boolPtr(v bool) *bool { return &v }
@@ -395,10 +400,14 @@ type mockIETFStatusListClient struct {
 	// simulating a fresh fetch with an updated list.
 	refreshedStatusList *common.IETFStatusList
 	invalidated         bool
+	// expectedIssuers records the issuer each fetch was bound to, so tests
+	// can assert that the referencing credential's issuer is passed through.
+	expectedIssuers []string
 }
 
-func (m *mockIETFStatusListClient) FetchIETF(uri string) (*common.IETFStatusList, error) {
+func (m *mockIETFStatusListClient) FetchIETF(uri string, expectedIssuer string) (*common.IETFStatusList, error) {
 	m.calls = append(m.calls, uri)
+	m.expectedIssuers = append(m.expectedIssuers, expectedIssuer)
 	if m.invalidated && m.refreshedStatusList != nil {
 		return m.refreshedStatusList, m.err
 	}
@@ -428,6 +437,13 @@ func encodeIETFTestBitstring(t *testing.T, bits []byte) string {
 // contains the IETF-format status reference.
 func newCredentialWithIETFStatus(t *testing.T, credentialType string, idx uint64, uri string) *common.Credential {
 	t.Helper()
+	return newCredentialWithIETFStatusFromIssuer(t, credentialType, idx, uri, nil)
+}
+
+// newCredentialWithIETFStatusFromIssuer is newCredentialWithIETFStatus with an
+// explicit issuer, for the cases that assert the status list is bound to it.
+func newCredentialWithIETFStatusFromIssuer(t *testing.T, credentialType string, idx uint64, uri string, issuer *common.Issuer) *common.Credential {
+	t.Helper()
 	subject := common.Subject{
 		CustomFields: common.CustomFields{
 			common.IETFStatusClaimKey: map[string]interface{}{
@@ -440,6 +456,7 @@ func newCredentialWithIETFStatus(t *testing.T, credentialType string, idx uint64
 	}
 	cred, err := common.CreateCredential(common.CredentialContents{
 		Types:   []string{credentialType},
+		Issuer:  issuer,
 		Subject: []common.Subject{subject},
 	}, common.CustomFields{})
 	if err != nil {
@@ -880,6 +897,130 @@ func TestStatusListJWTVerifier_NoISSNoX5C(t *testing.T) {
 	if !errors.Is(err, ErrorStatusListUnparseable) {
 		t.Errorf("expected ErrorStatusListUnparseable, got %v", err)
 	}
+}
+
+// TestCachingIETFStatusListClientIssuerBinding verifies that an IETF Token
+// Status List is bound to the issuer of the credential that referenced it.
+// Verifying the JWT signature alone only shows that the signer controls the
+// key the token names — an attacker who answers the status-list URL picks
+// both, so without this binding they could serve a self-signed list with
+// every revocation bit cleared.
+func TestCachingIETFStatusListClientIssuerBinding(t *testing.T) {
+	privateKey, issuerDID := generateTestKeyAndDID(t)
+
+	// The status-list JWT's `sub` claim has to be the URL it was fetched
+	// from, so the handler serves the server's own URL once it is known.
+	var statusListURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload := map[string]interface{}{
+			"sub": statusListURL,
+			"status_list": map[string]interface{}{
+				"bits": 1,
+				"lst":  "eNpjAAAAAQAB",
+			},
+		}
+		w.Header().Set("Content-Type", common.ContentTypeStatusListJWT)
+		_, _ = w.Write(buildStatusListJWTWithISS(t, payload, privateKey, issuerDID))
+	}))
+	defer srv.Close()
+	statusListURL = srv.URL
+
+	tests := []struct {
+		name           string
+		expectedIssuer string
+		wantErr        error
+	}{
+		{name: "matching_issuer_accepted", expectedIssuer: issuerDID},
+		{name: "foreign_issuer_rejected", expectedIssuer: "did:web:attacker.example.com", wantErr: ErrorStatusListIssuerMismatch},
+		{name: "unknown_issuer_rejected", expectedIssuer: "", wantErr: ErrorStatusListIssuerUnknown},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// A fresh client per case, so the issuer check is exercised on
+			// the fetch path rather than on a cache hit.
+			client := NewCachingIETFStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry,
+				newTestStatusListJWTVerifier(), common.RealClock{})
+
+			statusList, err := client.FetchIETF(srv.URL, tc.expectedIssuer)
+			if tc.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, statusList)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, statusList)
+		})
+	}
+}
+
+// TestCachingIETFStatusListClientIssuerBindingOnCacheHit verifies that the
+// issuer binding is re-checked when the list is served from the cache, so a
+// list fetched for one issuer can never answer for another.
+func TestCachingIETFStatusListClientIssuerBindingOnCacheHit(t *testing.T) {
+	privateKey, issuerDID := generateTestKeyAndDID(t)
+
+	var hits int32
+	var statusListURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		payload := map[string]interface{}{
+			"sub": statusListURL,
+			"status_list": map[string]interface{}{
+				"bits": 1,
+				"lst":  "eNpjAAAAAQAB",
+			},
+		}
+		w.Header().Set("Content-Type", common.ContentTypeStatusListJWT)
+		_, _ = w.Write(buildStatusListJWTWithISS(t, payload, privateKey, issuerDID))
+	}))
+	defer srv.Close()
+	statusListURL = srv.URL
+
+	client := NewCachingIETFStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry,
+		newTestStatusListJWTVerifier(), common.RealClock{})
+
+	first, err := client.FetchIETF(srv.URL, issuerDID)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	cached, err := client.FetchIETF(srv.URL, issuerDID)
+	require.NoError(t, err)
+	assert.Same(t, first, cached, "the second fetch must be served from the cache")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&hits))
+
+	foreign, err := client.FetchIETF(srv.URL, "did:web:attacker.example.com")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorStatusListIssuerMismatch)
+	assert.Nil(t, foreign)
+}
+
+// TestCheckIETFStatusListBindsReferencingIssuer verifies that the issuer of
+// the credential referencing an IETF status list is what the list gets bound
+// to — the counterpart of the W3C binding, which the reviewed code applied to
+// only half of the status-list surface.
+func TestCheckIETFStatusListBindsReferencingIssuer(t *testing.T) {
+	const referencingIssuer = "did:web:issuer.example.com"
+	const testURI = "https://example.org/statuslists/test-list"
+
+	credential := newCredentialWithIETFStatusFromIssuer(t, statusValidationTestType, 0, testURI,
+		&common.Issuer{ID: referencingIssuer})
+
+	ietfMock := &mockIETFStatusListClient{
+		statusList: &common.IETFStatusList{Bits: 1, Lst: encodeIETFTestBitstring(t, []byte{0b00000000})},
+	}
+	service := NewCredentialStatusValidationService(&mockStatusListClient{}, ietfMock, nil)
+
+	result, err := service.ValidateVC(credential, CredentialStatusValidationContext{
+		PerType: map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result)
+	require.Len(t, ietfMock.expectedIssuers, 1, "the status list must have been fetched exactly once")
+	assert.Equal(t, referencingIssuer, ietfMock.expectedIssuers[0],
+		"the status list must be bound to the issuer of the referencing credential")
 }
 
 // ---------------------------------------------------------------------------

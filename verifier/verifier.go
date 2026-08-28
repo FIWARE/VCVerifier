@@ -172,6 +172,9 @@ type CredentialVerifier struct {
 	jwtExpiration time.Duration
 	// Session duration in seconds
 	sessionDuration time.Duration
+	// ldProofMaxAge bounds the age of a Linked Data Proof on a presentation.
+	// Zero disables the check.
+	ldProofMaxAge time.Duration
 	// refreshTokenEnabled indicates whether the refresh token feature is active.
 	refreshTokenEnabled bool
 	// refreshTokenExpiration is the lifetime of issued refresh tokens.
@@ -426,6 +429,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		verifierConfig:         *verifierConfig,
 		jwtExpiration:          time.Duration(verifierConfig.JwtExpiration) * time.Minute,
 		sessionDuration:        time.Duration(verifierConfig.SessionExpiry),
+		ldProofMaxAge:          time.Duration(verifierConfig.LdProofMaxAge) * time.Second,
 		refreshTokenEnabled:    verifierConfig.RefreshToken.Enabled,
 		refreshTokenExpiration: time.Duration(verifierConfig.RefreshToken.Expiration) * time.Minute,
 		refreshTokenRepo:       nil, // set below when enabled
@@ -668,6 +672,14 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 	if bindErr := VerifyLDVPProofBinding(verifiablePresentation, "", v.clientIdentification.Id); bindErr != nil {
 		logging.Log().Warnf("JSON-LD VP proof binding verification failed for client %s: %v", clientId, bindErr)
 		return 0, "", bindErr
+	}
+
+	// With no challenge to bind against, the proof's age is what keeps a
+	// captured presentation from being replayed here until its credentials
+	// expire.
+	if freshErr := VerifyLDVPProofFreshness(verifiablePresentation, v.clock.Now(), v.ldProofMaxAge); freshErr != nil {
+		logging.Log().Warnf("JSON-LD VP proof freshness verification failed for client %s: %v", clientId, freshErr)
+		return 0, "", freshErr
 	}
 
 	// Go through all requested scopes and create a verification context

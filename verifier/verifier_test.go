@@ -1528,6 +1528,182 @@ func TestGenerateToken_LDProofDomainBinding(t *testing.T) {
 	}
 }
 
+// TestGenerateToken_LDProofFreshness covers the only replay protection the
+// vp_token and token-exchange grants have: there is no server-issued nonce to
+// bind against, so a captured ldp_vc presentation must be rejected once its
+// proof is older than the configured window.
+func TestGenerateToken_LDProofFreshness(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const verifierId = "did:key:verifier"
+	const maxAge = 5 * time.Minute
+	now := mockClock{}.Now()
+
+	tests := []struct {
+		name        string
+		created     string
+		maxAge      time.Duration
+		expectedErr error
+	}{
+		{name: "fresh_proof_passes", created: now.Format(time.RFC3339), maxAge: maxAge},
+		{name: "proof_within_window_passes", created: now.Add(-maxAge / 2).Format(time.RFC3339), maxAge: maxAge},
+		{name: "stale_proof_rejected", created: now.Add(-2 * maxAge).Format(time.RFC3339), maxAge: maxAge, expectedErr: ErrorProofNotFresh},
+		{name: "future_proof_rejected", created: now.Add(maxAge).Format(time.RFC3339), maxAge: maxAge, expectedErr: ErrorProofCreatedInFuture},
+		{name: "missing_created_rejected", created: "", maxAge: maxAge, expectedErr: ErrorProofCreatedMissing},
+		{name: "unparseable_created_rejected", created: "yesterday", maxAge: maxAge, expectedErr: ErrorProofCreatedUnparseable},
+		{name: "zero_max_age_disables_the_check", created: now.Add(-100 * maxAge).Format(time.RFC3339), maxAge: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			presentation, _ := common.NewPresentation()
+			presentation.Holder = "did:web:holder.example.com"
+			presentation.Proofs = []*common.LDProof{{
+				Type:               common.ProofTypeJsonWebSignature2020,
+				Created:            tc.created,
+				VerificationMethod: "did:web:holder.example.com#key-1",
+				ProofPurpose:       common.ProofPurposeAuthentication,
+				Domain:             verifierId,
+			}}
+
+			mockConfig := mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{}}
+			verifier := CredentialVerifier{
+				credentialsConfig:    &mockConfig,
+				validationServices:   []ValidationService{},
+				signingKey:           getECDSAKey(),
+				clock:                mockClock{},
+				tokenSigner:          mockTokenSigner{},
+				signingAlgorithm:     "ES256",
+				host:                 "https://verifier.example.com",
+				jwtExpiration:        time.Hour,
+				clientIdentification: configModel.ClientIdentification{Id: verifierId},
+				ldProofMaxAge:        tc.maxAge,
+			}
+
+			_, _, err := verifier.GenerateToken("test-client", "subject-id", "audience-id", []string{"test-scope"}, presentation)
+
+			if tc.expectedErr != nil {
+				assert.ErrorIs(t, err, tc.expectedErr)
+				return
+			}
+			// The freshness check passed; the call still fails later because
+			// the presentation carries no credentials.
+			assert.ErrorIs(t, err, ErrorNoValidCredentialTypeProvided)
+		})
+	}
+}
+
+// TestAuthenticationResponse_LDProofBinding covers the challenge and domain
+// binding of the main OID4VP flow. Without it the whole binding block in
+// AuthenticationResponse could be deleted without a single test failing — the
+// other fixtures are JWT VPs and carry no LD proofs.
+func TestAuthenticationResponse_LDProofBinding(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const verifierId = "did:key:verifier"
+	const sessionNonce = "session-nonce"
+	const testState = "login-state"
+
+	tests := []struct {
+		name          string
+		proofs        []*common.LDProof
+		expectedError error
+	}{
+		{
+			name: "matching_challenge_and_domain_pass",
+			proofs: []*common.LDProof{{
+				Type:      common.ProofTypeJsonWebSignature2020,
+				Challenge: sessionNonce,
+				Domain:    verifierId,
+			}},
+		},
+		{
+			name: "wrong_challenge_rejected",
+			proofs: []*common.LDProof{{
+				Type:      common.ProofTypeJsonWebSignature2020,
+				Challenge: "replayed-nonce",
+				Domain:    verifierId,
+			}},
+			expectedError: ErrorProofChallengeMismatch,
+		},
+		{
+			name: "omitted_challenge_rejected",
+			proofs: []*common.LDProof{{
+				Type:   common.ProofTypeJsonWebSignature2020,
+				Domain: verifierId,
+			}},
+			expectedError: ErrorProofChallengeMismatch,
+		},
+		{
+			name: "wrong_domain_rejected",
+			proofs: []*common.LDProof{{
+				Type:      common.ProofTypeJsonWebSignature2020,
+				Challenge: sessionNonce,
+				Domain:    "did:key:other-verifier",
+			}},
+			expectedError: ErrorProofDomainMismatch,
+		},
+		{
+			name: "challenge_and_domain_split_across_proofs_rejected",
+			proofs: []*common.LDProof{
+				{Type: common.ProofTypeJsonWebSignature2020, Challenge: sessionNonce},
+				{Type: common.ProofTypeJsonWebSignature2020, Domain: verifierId},
+			},
+			expectedError: ErrorProofChallengeMismatch,
+		},
+	}
+
+	trueOption := true
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			presentation := getVP([]string{"vc"})
+			presentation.Proofs = tc.proofs
+
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{testState: {
+				version:       SAME_DEVICE,
+				callback:      "https://myhost.org/callback",
+				sessionId:     "my-session",
+				nonce:         sessionNonce,
+				clientId:      "clientId",
+				requestObject: "requestObjectJwt",
+			}}}
+			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+			nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
+			credentialsConfig := mockCredentialConfig{
+				mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {
+					"": {
+						Credentials: []configModel.Credential{{
+							Type:         "VerifiableCredential",
+							JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption},
+						}},
+					},
+				}},
+			}
+			verifier := CredentialVerifier{
+				did:                  verifierId,
+				signingKey:           getECDSAKey(),
+				tokenCache:           &tokenCache,
+				sessionCache:         &sessionCache,
+				nonceGenerator:       &nonceGenerator,
+				validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true}, nil}},
+				clock:                mockClock{},
+				credentialsConfig:    credentialsConfig,
+				clientIdentification: configModel.ClientIdentification{Id: verifierId},
+			}
+
+			_, err := verifier.AuthenticationResponse(testState, &presentation)
+
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError)
+				assert.Empty(t, tokenCache.tokens, "no token must be cached for a rejected presentation")
+				return
+			}
+			assert.NoError(t, err, "a correctly bound presentation must be accepted")
+			assert.NotEmpty(t, tokenCache.tokens, "a token must be cached for an accepted presentation")
+		})
+	}
+}
+
 func TestGenerateToken(t *testing.T) {
 
 	logging.Configure(LOGGING_CONFIG)

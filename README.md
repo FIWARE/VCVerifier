@@ -158,6 +158,11 @@ verifier:
     # client when fetching a status-list credential. Does NOT enable the
     # revocation-list check.
     statusListHttpTimeout: 10
+    # Maximum accepted age (in seconds) of the `created` timestamp on a Linked
+    # Data Proof of a presentation. It bounds how long a captured `ldp_vc`
+    # presentation stays replayable on the grants that have no server-issued
+    # nonce (`vp_token` and token-exchange). Set to 0 to accept any age.
+    ldProofMaxAge: 300
 
 # configuration of the service to retrieve configuration for
 configRepo:
@@ -552,6 +557,13 @@ verifier:
     # Default: 10.
     statusListHttpTimeout: 10
 ```
+
+A status list — W3C `BitstringStatusListCredential` as well as IETF Token
+Status List — is only accepted when it was issued by the issuer of the
+credential that referenced it. Verifying the signature on a status list alone
+proves nothing: an attacker who can answer the status-list URL picks both the
+list's issuer and its signing key. A credential that carries no issuer at all
+is therefore rejected rather than exempted from the check.
 
 ### Request modes
 

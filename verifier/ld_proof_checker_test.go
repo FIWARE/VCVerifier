@@ -157,8 +157,14 @@ const testIssuerDID = "did:web:issuer.example.com"
 // testIssuerKeyID is the verification method of testIssuerDID.
 const testIssuerKeyID = testIssuerDID + "#key-1"
 
-// testSubjectDID is the subject of the shared test credential.
-const testSubjectDID = "did:web:subject.example.com"
+// testSubjectDID is the subject of the shared test credential. It is the
+// holder DID: a credential is presented by the entity it was issued to, and
+// verifyJSONLDHolderBinding requires exactly that.
+const testSubjectDID = testHolderDID
+
+// testForeignSubjectDID is a subject that is not the presentation holder. A
+// credential issued to it must not be accepted inside a holder's VP.
+const testForeignSubjectDID = "did:web:subject.example.com"
 
 // testProofAlgorithm is the JWS algorithm all test proofs are created with.
 const testProofAlgorithm = "ES256"
@@ -218,6 +224,12 @@ func createTestVP() *common.Presentation {
 // proof. The suite context is included because a credential that carries a
 // JsonWebSignature2020 proof has to define the proof terms.
 func createTestVC(issuerDID string) map[string]interface{} {
+	return createTestVCForSubject(issuerDID, testSubjectDID)
+}
+
+// createTestVCForSubject is createTestVC with an explicit credential subject,
+// for the cases that need a subject other than the presentation holder.
+func createTestVCForSubject(issuerDID string, subjectDID string) map[string]interface{} {
 	return map[string]interface{}{
 		common.JSONLDKeyContext: []interface{}{
 			common.ContextCredentialsV1,
@@ -228,7 +240,7 @@ func createTestVC(issuerDID string) map[string]interface{} {
 		common.JSONLDKeyID:   "urn:uuid:11111111-2222-3333-4444-555555555555",
 		"issuanceDate":       "2024-01-01T00:00:00Z",
 		common.VCKeyCredentialSubject: map[string]interface{}{
-			common.JSONLDKeyID: testSubjectDID,
+			common.JSONLDKeyID: subjectDID,
 		},
 	}
 }

@@ -110,9 +110,14 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
 JSON-LD (`ldp_vc`) presentations and credentials are cryptographically verified — see `docs/json-ld-proof-verification.md` for the full design. In short:
 
 - `common/ldproof.go` implements `JsonWebSignature2020` signing and verification (URDNA2015 canonicalization, detached JWS with `b64=false`).
-- Proof options are canonicalized under the document context **plus** `https://w3id.org/security/suites/jws-2020/v1`, so `created`, `verificationMethod`, `proofPurpose`, `challenge` and `domain` are covered by the signature. A guard fails closed if any of them does not survive canonicalization.
+- Proof options are canonicalized under the document context **plus** `https://w3id.org/security/suites/jws-2020/v1`, so `created`, `verificationMethod`, `proofPurpose`, `challenge` and `domain` are covered by the signature. `assertProofOptionsCovered` fails closed if any of them does not survive canonicalization; it compares parsed N-Quads predicates (`common/nquads.go`), not raw text, so an IRI inside a literal cannot fake coverage.
 - `verifier/ld_proof_checker.go` binds the proof key to the credential's `issuer` / the presentation's `holder`, requires the matching proof purpose, and requires the key to be authorized for the corresponding verification relationship.
+- `VerifyLDVPProofBinding` requires one and the same proof to carry every expected binding (challenge + domain); a split across two proofs is rejected.
+- `VerifyLDVPProofFreshness` bounds `proof.created` by `verifier.ldProofMaxAge` (default 300s) on the `vp_token` and token-exchange grants, which have no server-issued nonce. Missing, unparseable and future-dated timestamps are rejected.
+- `verifyJSONLDHolderBinding` requires an identified `credentialSubject` to be the presentation's `holder` — the JSON-LD counterpart of the JWT `cnf` binding.
+- Status lists (W3C and IETF) are bound to the issuer of the referencing credential; a credential with no issuer is rejected (`ErrorStatusListIssuerUnknown`).
 - The security-relevant contexts are vendored in `common/contexts/` and served by `common.NewEmbeddedContextLoader`, so verification never depends on the network.
+- `m2m.verificationMethod` has no default and must be an absolute DID URL — `InitM2MTokenProvider` fails at startup otherwise, since a relative reference can never produce a valid proof. `tir.signerForKeyType` keeps the signer and the advertised JWS algorithm in sync (`RSARS256` → PKCS#1 v1.5, `RSAPS256` → PSS).
 
 ## Known Gaps
 

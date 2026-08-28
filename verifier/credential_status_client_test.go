@@ -29,6 +29,11 @@ const testStatusListCredentialJSONLD = `{
   }
 }`
 
+// testStatusListIssuer is the issuer of both status-list fixtures above. A
+// status list is only accepted when it was issued by the issuer of the
+// credential that referenced it, so the tests have to name it explicitly.
+const testStatusListIssuer = "did:example:issuer"
+
 // testStatusListCacheExpiry is long enough to keep entries cached for the
 // entire test run but still short enough to make an accidental stale cache
 // visible if the test is re-run in a persistent process.
@@ -69,7 +74,7 @@ func TestCachingStatusListClientFetch(t *testing.T) {
 			defer srv.Close()
 
 			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
-			cred, err := client.Fetch(srv.URL, "")
+			cred, err := client.Fetch(srv.URL, testStatusListIssuer)
 
 			if tc.wantErr != nil {
 				require.Error(t, err)
@@ -99,11 +104,11 @@ func TestCachingStatusListClientCache(t *testing.T) {
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
 
-	first, err := client.Fetch(srv.URL, "")
+	first, err := client.Fetch(srv.URL, testStatusListIssuer)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 
-	second, err := client.Fetch(srv.URL, "")
+	second, err := client.Fetch(srv.URL, testStatusListIssuer)
 	require.NoError(t, err)
 	require.NotNil(t, second)
 
@@ -122,7 +127,7 @@ func TestCachingStatusListClientTransportError(t *testing.T) {
 	srv.Close()
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
-	cred, err := client.Fetch(url, "")
+	cred, err := client.Fetch(url, testStatusListIssuer)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrorStatusListHttpFailure)
@@ -144,11 +149,30 @@ func TestCachingStatusListClientAcceptHeader(t *testing.T) {
 	defer srv.Close()
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
-	_, err := client.Fetch(srv.URL, "")
+	_, err := client.Fetch(srv.URL, testStatusListIssuer)
 	require.NoError(t, err)
 	assert.Equal(t, AcceptHeaderStatusListCredential, received)
 	assert.Contains(t, received, ContentTypeCredentialJson)
 	assert.Contains(t, received, ContentTypeCredentialJWT)
+}
+
+// TestCachingStatusListClientFetchUnknownIssuer verifies that a status list
+// is rejected when the credential that referenced it carries no issuer. The
+// binding is the only check that anchors the list to a known party, so
+// skipping it would fail open on exactly the credentials that name nobody.
+func TestCachingStatusListClientFetchUnknownIssuer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", ContentTypeCredentialJWT)
+		_, _ = w.Write([]byte(testStatusListVCJWT))
+	}))
+	defer srv.Close()
+
+	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, nil)
+	cred, err := client.Fetch(srv.URL, "")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorStatusListIssuerUnknown)
+	assert.Nil(t, cred)
 }
 
 // ensureInterfaceSatisfied asserts at test compile time that the concrete
@@ -293,7 +317,7 @@ func TestCachingStatusListClientFetchJWTVerification(t *testing.T) {
 			defer srv.Close()
 
 			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, tc.verifier, nil)
-			cred, err := client.Fetch(srv.URL, "")
+			cred, err := client.Fetch(srv.URL, testStatusListIssuer)
 
 			if tc.wantErr != nil {
 				require.Error(t, err)

@@ -58,6 +58,28 @@ var ErrorProofDomainMismatch = errors.New("vp_proof_domain_mismatch")
 // but the JSON-LD VP has no holder key from LD-proof verification.
 var ErrorHolderBindingMissingKey = errors.New("holder_binding_required_but_no_key_available")
 
+// ErrorProofCreatedMissing is returned when a JSON-LD VP proof carries no
+// `created` timestamp, so its age cannot be bounded.
+var ErrorProofCreatedMissing = errors.New("vp_proof_created_missing")
+
+// ErrorProofCreatedUnparseable is returned when a JSON-LD VP proof's
+// `created` timestamp is not a valid RFC3339 date-time.
+var ErrorProofCreatedUnparseable = errors.New("vp_proof_created_unparseable")
+
+// ErrorProofCreatedInFuture is returned when a JSON-LD VP proof claims to
+// have been created further in the future than the tolerated clock skew.
+var ErrorProofCreatedInFuture = errors.New("vp_proof_created_in_future")
+
+// ErrorProofNotFresh is returned when a JSON-LD VP proof is older than the
+// configured freshness window, indicating a replayed presentation.
+var ErrorProofNotFresh = errors.New("vp_proof_not_fresh")
+
+// ErrorHolderSubjectMismatch is returned when a JSON-LD credential inside a
+// presentation names a subject that is not the presentation's holder. Without
+// this check a credential issued to somebody else could be replayed inside an
+// attacker-signed presentation.
+var ErrorHolderSubjectMismatch = errors.New("credential_subject_does_not_match_holder")
+
 // allow singleton access to the parser
 var presentationParser PresentationParser
 
@@ -274,7 +296,7 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 			// A JSON-LD credential inside a JWT VP still needs its own LD
 			// proof verified — the VP signature says nothing about who
 			// issued the credentials it carries.
-			cred, err := cpp.parseAndVerifyJSONLDCredential(v)
+			cred, err := cpp.parseAndVerifyJSONLDCredential(v, pres.Holder)
 			if err != nil {
 				return nil, err
 			}
@@ -514,7 +536,7 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 			}
 			pres.AddCredentials(cred)
 		case map[string]interface{}:
-			cred, credErr := cpp.parseAndVerifyJSONLDCredential(v)
+			cred, credErr := cpp.parseAndVerifyJSONLDCredential(v, pres.Holder)
 			if credErr != nil {
 				return nil, credErr
 			}
@@ -533,7 +555,12 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 // rejected (ErrorUnsignedCredential), a credential with a proof but no
 // configured LDProofChecker is rejected (ErrorInvalidProof), and a proof that
 // was not created by the claimed issuer is rejected by the checker.
-func (cpp *ConfigurablePresentationParser) parseAndVerifyJSONLDCredential(vcMap map[string]interface{}) (*common.Credential, error) {
+//
+// presentationHolder is the holder declared by the enclosing presentation, or
+// "" when it declares none. It is used to bind the credential to the entity
+// that presented it — the JSON-LD counterpart of the cnf binding enforced for
+// JWT VCs.
+func (cpp *ConfigurablePresentationParser) parseAndVerifyJSONLDCredential(vcMap map[string]interface{}, presentationHolder string) (*common.Credential, error) {
 	cred, err := parseJSONLDCredential(vcMap)
 	if err != nil {
 		return nil, err
@@ -573,17 +600,113 @@ func (cpp *ConfigurablePresentationParser) parseAndVerifyJSONLDCredential(vcMap 
 		}
 	}
 
+	// The holder binding is a semantic check on an authentic credential, so
+	// it runs only once the proofs have been verified.
+	if err := verifyJSONLDHolderBinding(cred, presentationHolder); err != nil {
+		return nil, err
+	}
+
 	return cred, nil
+}
+
+// ldProofClockSkew is the tolerance applied on both ends of the proof
+// freshness window. Holder and verifier clocks are independent, so a proof
+// created a few seconds "in the future" is normal rather than suspicious.
+const ldProofClockSkew = 30 * time.Second
+
+// VerifyLDVPProofFreshness bounds the age of every Linked Data Proof on a
+// presentation, using the proof's `created` timestamp.
+//
+// It is the only replay protection available on the grants that have no
+// server-issued nonce (`vp_token` and token-exchange): without it a captured
+// `ldp_vc` presentation stays valid for as long as the credentials it carries
+// do. The check is fail-closed — a missing, unparseable or future-dated
+// `created` is rejected rather than treated as "nothing to check".
+//
+// A maxAge of zero or less disables the check, as does a presentation without
+// LD proofs (JWT and SD-JWT presentations are bound through their own
+// mechanisms).
+func VerifyLDVPProofFreshness(pres *common.Presentation, now time.Time, maxAge time.Duration) error {
+	if len(pres.Proofs) == 0 || maxAge <= 0 {
+		return nil
+	}
+
+	for _, proof := range pres.Proofs {
+		if proof.Created == "" {
+			logging.Log().Warn("VP proof has no created timestamp, its age cannot be bounded")
+			return ErrorProofCreatedMissing
+		}
+		created, err := time.Parse(time.RFC3339, proof.Created)
+		if err != nil {
+			logging.Log().Warnf("VP proof created timestamp %q is not a valid RFC3339 date-time: %v", proof.Created, err)
+			return ErrorProofCreatedUnparseable
+		}
+		if created.After(now.Add(ldProofClockSkew)) {
+			logging.Log().Warnf("VP proof was created at %s, which is in the future", proof.Created)
+			return ErrorProofCreatedInFuture
+		}
+		if age := now.Sub(created); age > maxAge+ldProofClockSkew {
+			logging.Log().Warnf("VP proof was created at %s, %v ago, which exceeds the accepted maximum age of %v",
+				proof.Created, age, maxAge)
+			return ErrorProofNotFresh
+		}
+	}
+
+	return nil
+}
+
+// verifyJSONLDHolderBinding requires an identified credential subject to be
+// the holder of the presentation that carries the credential. It is the
+// JSON-LD equivalent of verifyCnfBinding: the presentation proof establishes
+// who is presenting, this check establishes that the credential was issued to
+// them.
+//
+// The check is skipped when the presentation declares no holder — there is
+// then nothing to bind against — and when no credential subject carries an
+// id. A credential without an identified subject makes claims about nobody in
+// particular, so replaying it does not transfer anybody's identity; rejecting
+// it would break the many credentials that legitimately omit the id.
+func verifyJSONLDHolderBinding(cred *common.Credential, presentationHolder string) error {
+	if presentationHolder == "" {
+		return nil
+	}
+
+	identifiedSubjects := 0
+	for _, subject := range cred.Contents().Subject {
+		if subject.ID == "" {
+			continue
+		}
+		identifiedSubjects++
+		if subject.ID == presentationHolder {
+			return nil
+		}
+	}
+
+	if identifiedSubjects == 0 {
+		logging.Log().Debugf("JSON-LD credential %s has no identified subject, cannot bind it to holder %s",
+			cred.Contents().ID, presentationHolder)
+		return nil
+	}
+
+	logging.Log().Warnf("JSON-LD credential %s is not issued to the presentation holder %s",
+		cred.Contents().ID, presentationHolder)
+	return ErrorHolderSubjectMismatch
 }
 
 // VerifyLDVPProofBinding checks the semantic bindings of JSON-LD VP proofs:
 // challenge (replay prevention via session nonce) and domain (audience binding).
 //
-// Both checks treat an absent field as a mismatch rather than as "nothing to
-// check": if expectedChallenge is non-empty, at least one VP-level proof must
-// carry exactly that challenge, and if expectedDomain is non-empty, at least
-// one proof must carry exactly that domain. Otherwise an attacker could opt
-// out of either binding simply by omitting the field.
+// One and the same proof has to satisfy every expected binding. Tracking the
+// bindings independently across the whole proof list would let a presentation
+// with two proofs — one carrying the right challenge, the other the right
+// domain — pass without any single signature binding this session to this
+// verifier.
+//
+// An absent field counts as a mismatch rather than as "nothing to check": if
+// expectedChallenge is non-empty the proof must carry exactly that challenge,
+// and if expectedDomain is non-empty it must carry exactly that domain.
+// Otherwise an attacker could opt out of either binding simply by omitting
+// the field.
 //
 // Both fields are covered by the proof signature (see
 // common.VerifyLinkedDataProof), so a captured presentation cannot be
@@ -595,42 +718,54 @@ func VerifyLDVPProofBinding(pres *common.Presentation, expectedChallenge, expect
 	if len(pres.Proofs) == 0 {
 		return nil
 	}
-
-	challengeMatched := false
-	domainMatched := false
-	for _, proof := range pres.Proofs {
-		// Check challenge binding (replay prevention).
-		if expectedChallenge != "" && proof.Challenge != "" {
-			if proof.Challenge != expectedChallenge {
-				logging.Log().Warnf("VP proof challenge %q does not match expected nonce %q", proof.Challenge, expectedChallenge)
-				return ErrorProofChallengeMismatch
-			}
-			challengeMatched = true
-		}
-
-		// Check domain binding (audience verification).
-		if expectedDomain != "" && proof.Domain != "" {
-			if proof.Domain != expectedDomain {
-				logging.Log().Warnf("VP proof domain %q does not match expected domain %q", proof.Domain, expectedDomain)
-				return ErrorProofDomainMismatch
-			}
-			domainMatched = true
-		}
+	if expectedChallenge == "" && expectedDomain == "" {
+		return nil
 	}
 
-	// If a challenge was expected, at least one proof must have provided it.
-	if expectedChallenge != "" && !challengeMatched {
+	// A binding is "seen" once some proof carries the expected value, and
+	// "fully bound" once one single proof carries all of them.
+	challengeSeen := expectedChallenge == ""
+	domainSeen := expectedDomain == ""
+	fullyBound := false
+
+	for _, proof := range pres.Proofs {
+		// A proof that names a challenge or a domain has to name the right
+		// one. A mismatching value is an active contradiction rather than a
+		// missing binding, so it is rejected wherever in the list it appears.
+		if expectedChallenge != "" && proof.Challenge != "" && proof.Challenge != expectedChallenge {
+			logging.Log().Warnf("VP proof challenge %q does not match expected nonce %q", proof.Challenge, expectedChallenge)
+			return ErrorProofChallengeMismatch
+		}
+		if expectedDomain != "" && proof.Domain != "" && proof.Domain != expectedDomain {
+			logging.Log().Warnf("VP proof domain %q does not match expected domain %q", proof.Domain, expectedDomain)
+			return ErrorProofDomainMismatch
+		}
+
+		challengeBound := expectedChallenge == "" || proof.Challenge == expectedChallenge
+		domainBound := expectedDomain == "" || proof.Domain == expectedDomain
+		challengeSeen = challengeSeen || challengeBound
+		domainSeen = domainSeen || domainBound
+		fullyBound = fullyBound || (challengeBound && domainBound)
+	}
+
+	if fullyBound {
+		return nil
+	}
+
+	// Report the binding that no proof carried at all; when each was carried
+	// only by a different proof, no signature binds this session to this
+	// verifier and the challenge is the binding that is missing from the
+	// proof that names the domain.
+	if !challengeSeen {
 		logging.Log().Warn("VP proof challenge expected but not found in any proof")
 		return ErrorProofChallengeMismatch
 	}
-
-	// The same holds for the domain — an omitted domain is not a free pass.
-	if expectedDomain != "" && !domainMatched {
+	if !domainSeen {
 		logging.Log().Warnf("VP proof domain %q expected but not found in any proof", expectedDomain)
 		return ErrorProofDomainMismatch
 	}
-
-	return nil
+	logging.Log().Warnf("No single VP proof carries both the expected challenge and the expected domain %q", expectedDomain)
+	return ErrorProofChallengeMismatch
 }
 
 // extractJWTPayload decodes the payload from a JWT without signature verification.

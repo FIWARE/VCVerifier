@@ -96,6 +96,12 @@ var (
 	// step 4a.
 	ErrorStatusListSubjectMismatch = errors.New("status_list_subject_mismatch")
 
+	// ErrorStatusListIssuerUnknown is returned when the credential that
+	// references a status list carries no issuer at all. The status list can
+	// then not be bound to anybody, and the proof on the list itself proves
+	// nothing — an attacker who answers the status-list URL picks both its
+	// issuer and its signing key. The check fails closed instead.
+	ErrorStatusListIssuerUnknown = errors.New("status_list_referencing_issuer_unknown")
 	// ErrorStatusListIssuerMismatch is returned when the status-list
 	// credential was issued by a different entity than the credential whose
 	// credentialStatus referenced it.
@@ -112,6 +118,8 @@ var (
 const (
 	// jwtClaimSub is the standard JWT `sub` (subject) claim key.
 	jwtClaimSub = "sub"
+	// jwtClaimIss is the standard JWT `iss` (issuer) claim key.
+	jwtClaimIss = "iss"
 	// jwtClaimExp is the standard JWT `exp` (expiration time) claim key.
 	jwtClaimExp = "exp"
 	// jwtClaimTTL is the IETF Token Status List `ttl` claim key, specifying
@@ -252,12 +260,14 @@ func (c *CachingStatusListClient) Fetch(url string, expectedIssuer string) (*com
 // names; without this binding an attacker who can answer the status-list URL
 // can present a self-signed list with every revocation bit cleared.
 //
-// The check is skipped when expectedIssuer is empty, which happens for
-// credentials that carry no issuer at all.
+// An empty expectedIssuer — a referencing credential with no issuer at all —
+// is rejected rather than exempted. Skipping the only check that anchors the
+// list to a known party would fail open on exactly the credentials that are
+// least trustworthy.
 func assertStatusListIssuer(cred *common.Credential, expectedIssuer string, url string) error {
 	if expectedIssuer == "" {
-		logging.Log().Warnf("Referencing credential has no issuer — cannot bind status list %s to an issuer", url)
-		return nil
+		logging.Log().Warnf("Referencing credential has no issuer, cannot bind status list %s to an issuer", url)
+		return fmt.Errorf("%w: status list %s", ErrorStatusListIssuerUnknown, url)
 	}
 
 	actualIssuer := ""
@@ -422,7 +432,11 @@ var _ StatusListCredentialClient = (*CachingStatusListClient)(nil)
 type IETFStatusListClient interface {
 	// FetchIETF fetches and returns the parsed IETF status list from the
 	// given URI. Implementations may cache results internally.
-	FetchIETF(uri string) (*common.IETFStatusList, error)
+	//
+	// expectedIssuer is the issuer of the credential that referenced the
+	// list; the `iss` claim of the status-list JWT must match it. Passing an
+	// empty expectedIssuer is rejected — see assertIETFStatusListIssuer.
+	FetchIETF(uri string, expectedIssuer string) (*common.IETFStatusList, error)
 
 	// InvalidateIETF removes a cached status list entry so the next
 	// FetchIETF call retrieves a fresh copy from the origin.
@@ -605,10 +619,21 @@ func NewCachingIETFStatusListClient(timeout time.Duration, cacheExpiry time.Dura
 // FetchIETF retrieves the IETF Token Status List JWT from the given URI.
 // The JWT signature is verified using the configured StatusListJWTVerifier,
 // then the `status_list` payload is extracted and cached.
-func (c *CachingIETFStatusListClient) FetchIETF(uri string) (*common.IETFStatusList, error) {
+//
+// The `iss` claim of the status-list JWT is checked against expectedIssuer,
+// the issuer of the credential that referenced the list. Verifying the JWT
+// signature alone only shows that the signer controls the key the token
+// names — the attacker picks both when they control the status-list URL. The
+// binding is applied to cached entries as well, so a list fetched for one
+// issuer can never answer for another.
+func (c *CachingIETFStatusListClient) FetchIETF(uri string, expectedIssuer string) (*common.IETFStatusList, error) {
 	if cached, hit := c.cache.Get(uri); hit {
 		logging.Log().Debugf("IETF status-list cache hit for %s", uri)
-		return cached.(*common.IETFStatusList), nil
+		cachedEntry := cached.(*cachedIETFStatusList)
+		if err := assertIETFStatusListIssuer(cachedEntry.issuer, expectedIssuer, uri); err != nil {
+			return nil, err
+		}
+		return cachedEntry.statusList, nil
 	}
 
 	logging.Log().Debugf("Fetching IETF status list JWT from %s", uri)
@@ -662,15 +687,47 @@ func (c *CachingIETFStatusListClient) FetchIETF(uri string) (*common.IETFStatusL
 		return nil, err
 	}
 
+	if err := assertIETFStatusListIssuer(result.issuer, expectedIssuer, uri); err != nil {
+		return nil, err
+	}
+
 	cacheExpiry := c.expiry
 	if result.ttl != nil && *result.ttl < cacheExpiry {
 		cacheExpiry = *result.ttl
 		logging.Log().Debugf("Using issuer ttl %v (shorter than configured %v) for %s", cacheExpiry, c.expiry, uri)
 	}
 
-	c.cache.Set(uri, result.statusList, cacheExpiry)
+	c.cache.Set(uri, &cachedIETFStatusList{statusList: result.statusList, issuer: result.issuer}, cacheExpiry)
 	logging.Log().Debugf("Cached IETF status-list for %s (expiry=%v)", uri, cacheExpiry)
 	return result.statusList, nil
+}
+
+// cachedIETFStatusList is the cache entry for an IETF status list. The issuer
+// is retained alongside the list so the issuer binding can be re-checked on a
+// cache hit instead of being established only on the fetch path.
+type cachedIETFStatusList struct {
+	statusList *common.IETFStatusList
+	issuer     string
+}
+
+// assertIETFStatusListIssuer requires the `iss` claim of a status-list JWT to
+// match the issuer of the credential that referenced it.
+//
+// As with the W3C status lists, an empty expectedIssuer is rejected rather
+// than exempted: a referencing credential with no issuer cannot be bound to
+// any list, and skipping the check would fail open.
+func assertIETFStatusListIssuer(actualIssuer string, expectedIssuer string, uri string) error {
+	if expectedIssuer == "" {
+		logging.Log().Warnf("Referencing credential has no issuer, cannot bind IETF status list %s to an issuer", uri)
+		return fmt.Errorf("%w: status list %s", ErrorStatusListIssuerUnknown, uri)
+	}
+	if actualIssuer != expectedIssuer {
+		logging.Log().Warnf("IETF status list %s is issued by %q but the referencing credential is issued by %q",
+			uri, actualIssuer, expectedIssuer)
+		return fmt.Errorf("%w: status list issuer %q, credential issuer %q",
+			ErrorStatusListIssuerMismatch, actualIssuer, expectedIssuer)
+	}
+	return nil
 }
 
 // InvalidateIETF removes the cached status list for the given URI so the
@@ -756,6 +813,9 @@ func decodeJWTPayloadUnverified(jwtBytes []byte) ([]byte, error) {
 // caching metadata extracted from the JWT payload.
 type ietfStatusListResult struct {
 	statusList *common.IETFStatusList
+	// issuer is the `iss` claim of the status-list JWT. It is retained so
+	// the list can be bound to the credential that referenced it.
+	issuer string
 	// ttl is the issuer-requested cache duration from the `ttl` JWT claim
 	// (draft-ietf-oauth-status-list §5.1 / §8.3 step 4d). Nil when the
 	// claim is absent.
@@ -767,6 +827,9 @@ type ietfStatusListResult struct {
 //   - step 4a: the JWT's `sub` claim must equal expectedURI
 //   - step 4c: if `exp` is present it must not be in the past
 //   - step 4d: if `ttl` is present it is returned for cache control
+//
+// The `iss` claim is returned as-is; binding it to the referencing credential
+// is the caller's job (see assertIETFStatusListIssuer).
 func parseIETFStatusListPayload(payload []byte, expectedURI string, clock common.Clock) (*ietfStatusListResult, error) {
 	logging.Log().Debugf("Parsing IETF status list payload for %s", expectedURI)
 	var claims map[string]interface{}
@@ -811,8 +874,10 @@ func parseIETFStatusListPayload(payload []byte, expectedURI string, clock common
 	}
 	logging.Log().Debugf("Parsed IETF status list: bits=%d, lst length=%d", bits, len(lst))
 
+	issuer, _ := claims[jwtClaimIss].(string)
 	result := &ietfStatusListResult{
 		statusList: &common.IETFStatusList{Bits: bits, Lst: lst},
+		issuer:     issuer,
 	}
 
 	if ttlRaw, hasTTL := claims[jwtClaimTTL]; hasTTL {

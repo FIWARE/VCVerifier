@@ -233,8 +233,15 @@ func (s *CredentialStatusValidationService) validateIETFStatus(cred *common.Cred
 
 // checkIETFStatusList performs a single fetch-decode-check cycle for
 // an IETF Token Status List entry.
+//
+// The status list is bound to the issuer of the credential that referenced
+// it, exactly as for the W3C lists — see StatusListCredentialClient.Fetch.
 func (s *CredentialStatusValidationService) checkIETFStatusList(cred *common.Credential, entry *common.IETFStatusEntry) (bool, error) {
-	statusList, err := s.ietfClient.FetchIETF(entry.URI)
+	referencingIssuer := ""
+	if issuer := cred.Contents().Issuer; issuer != nil {
+		referencingIssuer = issuer.ID
+	}
+	statusList, err := s.ietfClient.FetchIETF(entry.URI, referencingIssuer)
 	if err != nil {
 		logging.Log().Debugf("Failed to fetch IETF status list from %s: %v", entry.URI, err)
 		return false, err

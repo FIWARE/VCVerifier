@@ -18,10 +18,19 @@ import (
 //go:embed contexts/*.jsonld
 var embeddedContexts embed.FS
 
+// Paths of the vendored context files inside the embedded file system.
+const (
+	contextFileW3CVCV1 = "contexts/credentials-v1.jsonld"
+	contextFileJWS2020 = "contexts/jws-2020-v1.jsonld"
+)
+
 // embeddedContextFiles maps context URLs to the vendored file that serves them.
+// The paths are named constants rather than inline literals: a literal keyed by
+// ContextCredentialsV1 reads to gosec as a hardcoded credential (G101), which
+// it is not — these are public JSON-LD context URLs and file names.
 var embeddedContextFiles = map[string]string{
-	ContextCredentialsV1:        "contexts/credentials-v1.jsonld",
-	ContextSecuritySuiteJWS2020: "contexts/jws-2020-v1.jsonld",
+	ContextCredentialsV1:        contextFileW3CVCV1,
+	ContextSecuritySuiteJWS2020: contextFileJWS2020,
 }
 
 // EmbeddedContextLoader is an ld.DocumentLoader that serves a fixed set of

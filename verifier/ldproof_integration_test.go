@@ -87,7 +87,7 @@ func signTestVP(t *testing.T, bundle integrationKeyBundle, holderDID string) ([]
 
 // makeMinimalVC returns a JSON-LD VC map with no proof (unsigned). It is used
 // by the negative test that asserts unsigned credentials are rejected.
-func makeMinimalVC(issuerDID string) map[string]interface{} {
+func makeMinimalVC(issuerDID string, subjectDID string) map[string]interface{} {
 	return map[string]interface{}{
 		"@context": []interface{}{
 			common.ContextCredentialsV1,
@@ -95,7 +95,7 @@ func makeMinimalVC(issuerDID string) map[string]interface{} {
 		},
 		"type":              []interface{}{"VerifiableCredential"},
 		"issuer":            issuerDID,
-		"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com", "name": "Alice"},
+		"credentialSubject": map[string]interface{}{"id": subjectDID, "name": "Alice"},
 	}
 }
 
@@ -244,7 +244,7 @@ func TestIntegration_JSONLDVP_UnsignedCredentialRejected(t *testing.T) {
 		},
 		common.JSONLDKeyType:             []interface{}{common.TypeVerifiablePresentation},
 		common.VPKeyHolder:               holderDID,
-		common.VPKeyVerifiableCredential: []interface{}{makeMinimalVC("did:web:very-trusted-issuer.example.com")},
+		common.VPKeyVerifiableCredential: []interface{}{makeMinimalVC("did:web:very-trusted-issuer.example.com", holderDID)},
 	}
 	vpMap[common.VPKeyProof] = signDocument(t, vpMap, bundle.signer, bundle.verifMeth, bundle.docLoader,
 		ldProofTestOptions{proofPurpose: common.ProofPurposeAuthentication})
@@ -445,7 +445,7 @@ func TestIntegration_StatusListFetch_JSONLDWithProof(t *testing.T) {
 	defer srv.Close()
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, bundle.checker)
-	cred, err := client.Fetch(srv.URL, "")
+	cred, err := client.Fetch(srv.URL, issuerDID)
 	require.NoError(t, err, "Fetch with valid JSON-LD proof should succeed")
 	require.NotNil(t, cred)
 }
@@ -467,7 +467,7 @@ func TestIntegration_StatusListFetch_JSONLDNoProofRejected(t *testing.T) {
 	defer srv.Close()
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, bundle.checker)
-	cred, err := client.Fetch(srv.URL, "")
+	cred, err := client.Fetch(srv.URL, issuerDID)
 	require.Error(t, err, "Fetch with no-proof JSON-LD must be rejected")
 	assert.ErrorIs(t, err, ErrorStatusListJSONLDProofMissing)
 	assert.Nil(t, cred)
@@ -615,7 +615,7 @@ func TestIntegration_StatusListJWT_RegressionStillWorks(t *testing.T) {
 	bundle := newIntegrationKeyBundle(t, holderDID)
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, bundle.checker)
-	cred, err := client.Fetch(srv.URL, "")
+	cred, err := client.Fetch(srv.URL, testStatusListIssuer)
 	require.NoError(t, err, "JWT status list should continue to work")
 	require.NotNil(t, cred)
 }

@@ -41,9 +41,20 @@ Two things guard against that:
 - `common.EnsureSuiteContext` adds the suite context on both the signing and
   the verification side, and `Presentation.AddLinkedDataProof` also adds it to
   the signed document itself so the emitted proof is expandable by others.
-- `assertProofOptionsCovered` inspects the canonical N-Quads and fails with
+- `assertProofOptionsCovered` parses the canonical N-Quads and fails with
   `ErrorLDProofOptionsNotCovered` when a populated proof field produced no
   triple. A context regression cannot silently degrade to "nothing is signed".
+
+The coverage check compares *parsed predicates*, not raw text (see
+`common/nquads.go`). A substring search over the N-Quads blob cannot tell a
+predicate IRI apart from the same characters appearing inside a literal, so a
+proof could satisfy the challenge requirement by writing
+`"domain": "<https://w3id.org/security#challenge>"` while carrying no
+challenge triple at all. Where the expected object is known verbatim
+(`created`, `verificationMethod`, `challenge`, `domain`) it is compared too, so
+a term cannot be covered by a value other than the one the proof claims.
+`proofPurpose` is checked on its predicate only, since it expands to a
+context-defined IRI.
 
 Note the practical consequence: a `verificationMethod` that is not an absolute
 URI is dropped during expansion, so signing and verification both reject it.
@@ -95,17 +106,55 @@ and `domain` fields:
 Both treat an **absent** field as a mismatch when the corresponding
 expectation is set, so omitting a field is not a way to opt out.
 
+Every expected binding has to be carried by **one and the same** proof.
+Tracking the bindings independently across the proof list would let a
+presentation with two proofs — one with the right challenge, the other with the
+right domain — pass without any single signature binding this session to this
+verifier. A proof that names a challenge or domain other than the expected one
+is rejected wherever in the list it appears.
+
 Where each applies:
 
-| Grant                                     | Challenge                | Domain |
-| ----------------------------------------- | ------------------------ | ------ |
-| `authorization_code` (`AuthenticationResponse`) | session nonce      | yes    |
-| `vp_token` (`GenerateToken`)              | not available — no server-issued nonce | yes |
-| `urn:ietf:params:oauth:grant-type:token-exchange` | not available    | yes    |
+| Grant                                     | Challenge                | Domain | Proof age |
+| ----------------------------------------- | ------------------------ | ------ | --------- |
+| `authorization_code` (`AuthenticationResponse`) | session nonce      | yes    | bounded by the session |
+| `vp_token` (`GenerateToken`)              | not available — no server-issued nonce | yes | `verifier.ldProofMaxAge` |
+| `urn:ietf:params:oauth:grant-type:token-exchange` | not available    | yes    | `verifier.ldProofMaxAge` |
 
 The domain check only runs when `verifier.clientIdentification.id` is
 configured. Deployments accepting `ldp_vc` should set it; without it there is
 no audience binding on any grant.
+
+### Proof freshness
+
+The grants without a server-issued nonce have no challenge to bind against, so
+the proof's own `created` timestamp is what keeps a captured presentation from
+being replayed until its credentials expire. `VerifyLDVPProofFreshness`
+rejects a proof older than `verifier.ldProofMaxAge` (default 300s,
+`ErrorProofNotFresh`), and is fail-closed on the timestamp itself: a missing
+(`ErrorProofCreatedMissing`), unparseable (`ErrorProofCreatedUnparseable`) or
+future-dated (`ErrorProofCreatedInFuture`) `created` is rejected rather than
+treated as "nothing to check". A 30s skew allowance covers independent holder
+and verifier clocks; setting `ldProofMaxAge: 0` disables the check.
+
+`created` is covered by the signature (see rule 1), so it cannot be rewritten
+in a captured presentation.
+
+### Holder binding of JSON-LD credentials
+
+A JWT VC is bound to the presenter through its `cnf` claim
+(`verifyCnfBinding`). The JSON-LD equivalent is `verifyJSONLDHolderBinding`:
+when the presentation declares a `holder`, an identified `credentialSubject`
+must be that holder, otherwise the credential is rejected with
+`ErrorHolderSubjectMismatch`. Without it a credential issued to somebody else
+could be replayed inside an attacker-signed VP — and `HolderValidationService`
+runs only from `GenerateToken`, never from `AuthenticationResponse`.
+
+The check runs after the credential's proofs have been verified — the subject
+of an inauthentic credential is not worth reasoning about — and is skipped when
+no subject carries an `id`. Such a credential makes claims about nobody in
+particular, so replaying it transfers no identity, and rejecting it would break
+the many credentials that legitimately omit the id.
 
 ## Fail-closed rules
 
@@ -126,11 +175,22 @@ carries.
 ## Status lists
 
 Verifying the proof on a status-list credential shows who signed the list, not
-that the list is the right one. `StatusListCredentialClient.Fetch` therefore
-also takes the issuer of the credential that referenced the list and rejects a
-mismatch with `ErrorStatusListIssuerMismatch`. The check is applied to cached
-entries too, so a legitimate lookup cannot warm the cache for a foreign
-issuer.
+that the list is the right one — an attacker who can answer the status-list URL
+picks both the issuer it names and the key it is signed with.
+
+Both status-list surfaces therefore bind the list to the issuer of the
+credential that referenced it:
+
+| Client                                   | Bound value                    | Error on mismatch |
+| ---------------------------------------- | ------------------------------ | ----------------- |
+| `StatusListCredentialClient.Fetch` (W3C) | the list credential's `issuer` | `ErrorStatusListIssuerMismatch` |
+| `IETFStatusListClient.FetchIETF`         | the status-list JWT's `iss`    | `ErrorStatusListIssuerMismatch` |
+
+The check is applied to cached entries too, so a legitimate lookup cannot warm
+the cache for a foreign issuer. A referencing credential with **no** issuer is
+rejected with `ErrorStatusListIssuerUnknown` rather than exempted: skipping the
+only check that anchors the list to a known party would fail open on exactly
+the credentials that name nobody.
 
 ## Contexts
 
@@ -167,7 +227,23 @@ proofs through the same code path that verification consumes.
 what the tests use to sign credentials.
 
 The M2M token provider (`tir/tokenProvider.go`) signs its participant
-presentation with `proofPurpose: authentication`. Its configured
-`m2m.verificationMethod` must be an absolute DID URL — the built-in default
-(`JsonWebKey2020`) is not one, and a warning is logged at startup when the
-configured value has no scheme.
+presentation with `proofPurpose: authentication`. Two things have to line up
+for the emitted presentation to verify against its own proof:
+
+- `m2m.verificationMethod` must be an absolute DID URL. A relative reference
+  is dropped during expansion, so `assertProofOptionsCovered` would reject
+  every signing attempt. `InitM2MTokenProvider` fails with
+  `ErrorTokenProviderNoVerificationMethod` at startup rather than letting that
+  surface as a runtime error on the first token request, and there is no
+  built-in default for the field.
+- The signer and the algorithm advertised in the JWS header have to describe
+  the same operation. `signerForKeyType` returns both from one place:
+  `RSARS256` → `RS256Signer` (RSASSA-PKCS1-v1_5) and `RSAPS256` → `PS256Signer`
+  (RSASSA-PSS), so a PS256 header over a PKCS#1 v1.5 signature cannot be
+  reintroduced.
+
+`Presentation.AddLinkedDataProof` derives the presentation's emitted
+`@context` from the marshalled document it actually signed. `MarshalJSON`
+defaults an empty `@context` to `credentials/v1`; deriving it from the original
+value instead would emit a presentation whose context no longer matches the one
+the proof was computed over.
