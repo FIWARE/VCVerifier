@@ -638,6 +638,25 @@ func TestCreateAuthenticationRequestUrlEncoded_IncludesPresentationDefinitionAnd
 	assert.Equal(t, *dcql, gotDcql)
 }
 
+func TestCreateAuthenticationRequestUrlEncoded_DefaultsClientIdWhenIdNotConfigured(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	verifier := CredentialVerifier{credentialsConfig: credentialsConfig}
+
+	authReq, err := verifier.createAuthenticationRequestUrlEncoded("openid4vp://", "https://verifier.org/api/v1/authentication_response", "state", "client", "scope", "nonce")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	_, query, _ := strings.Cut(authReq, "?")
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Was not able to parse the query string %s: %v", query, err)
+	}
+	assert.Equal(t, "redirect_uri:https://verifier.org/api/v1/authentication_response", values.Get("client_id"))
+}
+
 func TestCreateAuthenticationRequestUrlEncoded_PropagatesConfigError(t *testing.T) {
 	configError := errors.New("config_error")
 	credentialsConfig := mockCredentialConfig{mockError: configError}
