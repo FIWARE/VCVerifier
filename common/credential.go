@@ -140,6 +140,9 @@ type Credential struct {
 	customFields CustomFields
 	// rawJSON, if set, is returned by ToRawJSON() instead of building from contents.
 	rawJSON JSONObject
+	// proofs holds the Linked Data Proofs attached to this credential, if any.
+	// Populated during JSON-LD credential parsing.
+	proofs []*LDProof
 }
 
 // Contents returns the structured content of the credential.
@@ -150,6 +153,17 @@ func (c *Credential) Contents() CredentialContents {
 // CustomFields returns the custom fields of the credential.
 func (c *Credential) CustomFields() CustomFields {
 	return c.customFields
+}
+
+// Proofs returns the Linked Data Proofs attached to this credential.
+// Returns nil when the credential has no LD proofs (e.g. JWT-encoded VCs).
+func (c *Credential) Proofs() []*LDProof {
+	return c.proofs
+}
+
+// SetProofs stores Linked Data Proofs on this credential.
+func (c *Credential) SetProofs(proofs []*LDProof) {
+	c.proofs = proofs
 }
 
 // ToRawJSON converts the credential to a JSON map representation.
@@ -250,7 +264,9 @@ type Presentation struct {
 	Type        []string
 	Holder      string
 	credentials []*Credential
-	Proof       *LDProof
+	// Proofs holds the Linked Data Proofs attached to this presentation.
+	// A presentation may carry zero (JWT-signed) or multiple (LD-signed) proofs.
+	Proofs []*LDProof
 	// holderKey stores the resolved public key that signed the VP JWT.
 	// Stored as interface{} to avoid jwx dependency in the common package.
 	// The verifier package type-asserts to jwk.Key.
@@ -325,8 +341,10 @@ func (p *Presentation) MarshalJSON() ([]byte, error) {
 		result[VPKeyVerifiableCredential] = vcs
 	}
 
-	if p.Proof != nil {
-		result[VPKeyProof] = p.Proof
+	if len(p.Proofs) == 1 {
+		result[VPKeyProof] = p.Proofs[0]
+	} else if len(p.Proofs) > 1 {
+		result[VPKeyProof] = p.Proofs
 	}
 
 	return json.Marshal(result)

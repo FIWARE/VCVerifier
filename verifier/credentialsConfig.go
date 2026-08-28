@@ -21,6 +21,10 @@ import (
 // ErrorNoDefaultScope is returned when no default OIDC scope is configured for a service.
 var ErrorNoDefaultScope = errors.New("no_default_scope_configured")
 
+// FormatLDPVC is the credential format identifier for JSON-LD Verifiable
+// Credentials with Linked Data Proofs, as defined in the W3C VC Data Model.
+const FormatLDPVC = "ldp_vc"
+
 // CacheExpiry is the default cache expiry time in seconds for service configuration entries.
 const CacheExpiry = 60
 
@@ -380,4 +384,67 @@ func (cc cacheBasedCredentialsConfig) GetHolderVerification(serviceIdentifier st
 	}
 	logging.Log().Debugf("No holder verification for %s - %s", serviceIdentifier, credentialType)
 	return false, "", nil
+}
+
+// WarnLDPVCFormat iterates the configured services and logs an informational
+// message when any service references the ldp_vc credential format. This
+// alerts operators that LD-proof verification is enforced for JSON-LD
+// credentials — submissions without a valid proof will be rejected.
+//
+// When ldp_vc is in use it also warns if clientId is empty: the audience
+// binding of a JSON-LD VP proof is checked against the verifier's client
+// identification, so without it no domain binding takes place at all.
+//
+// The function checks three locations where a format may appear:
+//   - PresentationDefinition.Format map keys
+//   - InputDescriptor.Format map keys (per input descriptor)
+//   - DCQL CredentialQuery.Format string
+func WarnLDPVCFormat(services []config.ConfiguredService, clientId string) {
+	usesLDPVC := false
+	for _, svc := range services {
+		for scopeName, scope := range svc.ServiceScopes {
+			if hasLDPVCInScope(scope) {
+				usesLDPVC = true
+				logging.Log().Infof(
+					"Service %q scope %q references ldp_vc format — Linked Data Proof verification "+
+						"is enforced; JSON-LD presentations without a valid proof will be rejected.",
+					svc.Id, scopeName,
+				)
+			}
+		}
+	}
+
+	if usesLDPVC && clientId == "" {
+		logging.Log().Warn(
+			"ldp_vc is configured but verifier.clientIdentification.id is not set — " +
+				"the domain (audience) binding of JSON-LD VP proofs cannot be checked.",
+		)
+	}
+}
+
+// hasLDPVCInScope returns true when the given scope entry references the
+// ldp_vc credential format in any of the supported configuration locations.
+func hasLDPVCInScope(scope config.ScopeEntry) bool {
+	// Check PresentationDefinition.Format map.
+	if scope.PresentationDefinition != nil {
+		if _, ok := scope.PresentationDefinition.Format[FormatLDPVC]; ok {
+			return true
+		}
+		for _, id := range scope.PresentationDefinition.InputDescriptors {
+			if _, ok := id.Format[FormatLDPVC]; ok {
+				return true
+			}
+		}
+	}
+
+	// Check DCQL CredentialQuery.Format strings.
+	if scope.DCQL != nil {
+		for _, cq := range scope.DCQL.Credentials {
+			if cq.Format == FormatLDPVC {
+				return true
+			}
+		}
+	}
+
+	return false
 }

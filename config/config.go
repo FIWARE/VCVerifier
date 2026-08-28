@@ -11,6 +11,14 @@ const (
 	// DefaultRefreshTokenExpirationMinutes is the default lifetime for refresh
 	// tokens, expressed in minutes. 2880 minutes equals 48 hours.
 	DefaultRefreshTokenExpirationMinutes = 2880
+
+	// DefaultLdProofMaxAgeSeconds is the default freshness window for the
+	// `created` timestamp of a Linked Data Proof on a presentation. Five
+	// minutes is long enough for a wallet to build and submit a presentation
+	// and short enough to keep a captured one from being replayed for long.
+	// It has to be kept in sync with the `default` tag on Verifier.LdProofMaxAge,
+	// which the config parser reads instead of this constant.
+	DefaultLdProofMaxAgeSeconds = 300
 )
 
 // MaskedString is a string type for sensitive configuration values (passwords,
@@ -148,8 +156,12 @@ type M2M struct {
 	CredentialPath string `mapstructure:"credentialPath"`
 	// id of the verifier when retrieving tokens
 	ClientId string `mapstructure:"clientId"`
-	// verification method to be provided for the ld-proof
-	VerificationMethod string `mapstructure:"verificationMethod" default:"JsonWebKey2020"`
+	// verification method to be provided for the ld-proof. Has to be an
+	// absolute URI — typically a resolvable DID URL such as
+	// did:web:example.org#key-1. There is no usable default: a relative
+	// reference is dropped during JSON-LD expansion and would leave the
+	// verification method outside the proof signature.
+	VerificationMethod string `mapstructure:"verificationMethod"`
 	// signature type to be provided for the ld-proof
 	SignatureType string `mapstructure:"signatureType" default:"JsonWebSignature2020"`
 	// type of the provided key
@@ -206,6 +218,13 @@ type Verifier struct {
 	// revocation check — it only parametrises the HTTP client used when at
 	// least one credential opts in.
 	StatusListHttpTimeout int `mapstructure:"statusListHttpTimeout" default:"10"`
+	// Maximum age, in seconds, accepted for the `created` timestamp of a
+	// Linked Data Proof on a Verifiable Presentation. It bounds how long a
+	// captured `ldp_vc` presentation stays replayable on the grants that
+	// have no server-issued nonce (`vp_token` and token-exchange). Set to 0
+	// to accept a proof of any age. Defaults to
+	// DefaultLdProofMaxAgeSeconds.
+	LdProofMaxAge int `mapstructure:"ldProofMaxAge" default:"300"`
 	// RefreshToken groups all refresh token configuration.
 	RefreshToken RefreshToken `mapstructure:"refreshToken"`
 }

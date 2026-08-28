@@ -191,6 +191,9 @@ type CredentialVerifier struct {
 	jwtExpiration time.Duration
 	// Session duration in seconds
 	sessionDuration time.Duration
+	// ldProofMaxAge bounds the age of a Linked Data Proof on a presentation.
+	// Zero disables the check.
+	ldProofMaxAge time.Duration
 	// refreshTokenEnabled indicates whether the refresh token feature is active.
 	refreshTokenEnabled bool
 	// refreshTokenExpiration is the lifetime of issued refresh tokens.
@@ -347,6 +350,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	clock := common.RealClock{}
 
 	credentialsVerifier := CredentialValidator{validationMode: config.Verifier.ValidationMode, clock: clock}
+	WarnDeprecatedMode(config.Verifier.ValidationMode)
 
 	externalGaiaXValidator := InitGaiaXRegistryValidationService(verifierConfig)
 
@@ -354,6 +358,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	if err != nil {
 		logging.Log().Errorf("Was not able to initiate the credentials config. Err: %v", err)
 	}
+	WarnLDPVCFormat(config.ConfigRepo.Services, verifierConfig.ClientIdentification.Id)
 
 	var tokenProvider tir.TokenProvider
 	if (&config.M2M).AuthEnabled {
@@ -385,7 +390,9 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	statusListCacheExpiry := time.Duration(verifierConfig.StatusListCacheExpiry) * time.Second
 	statusListDIDRegistry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
 	statusListJWTVerifier := NewStatusListJWTVerifier(statusListDIDRegistry)
-	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier)
+	// GetLDProofChecker() is populated by InitPresentationParser, which
+	// main.go runs before InitVerifier.
+	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, GetLDProofChecker())
 	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, clock)
 	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, ietfStatusListClient, clock)
 
@@ -442,6 +449,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		verifierConfig:         *verifierConfig,
 		jwtExpiration:          time.Duration(verifierConfig.JwtExpiration) * time.Minute,
 		sessionDuration:        time.Duration(verifierConfig.SessionExpiry),
+		ldProofMaxAge:          time.Duration(verifierConfig.LdProofMaxAge) * time.Second,
 		refreshTokenEnabled:    verifierConfig.RefreshToken.Enabled,
 		refreshTokenExpiration: time.Duration(verifierConfig.RefreshToken.Expiration) * time.Minute,
 		refreshTokenRepo:       nil, // set below when enabled
@@ -685,6 +693,23 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 
 	if err := v.verifyVPSignatureIfRequired(clientId, scopes, credentialTypes, verifiablePresentation); err != nil {
 		return 0, "", err
+	}
+
+	// Audience binding for JSON-LD VPs. Unlike the authorization-code flow
+	// there is no server-issued nonce for the vp_token and token-exchange
+	// grants, so no challenge can be required here — the domain still has to
+	// name this verifier.
+	if bindErr := VerifyLDVPProofBinding(verifiablePresentation, "", v.clientIdentification.Id); bindErr != nil {
+		logging.Log().Warnf("JSON-LD VP proof binding verification failed for client %s: %v", clientId, bindErr)
+		return 0, "", bindErr
+	}
+
+	// With no challenge to bind against, the proof's age is what keeps a
+	// captured presentation from being replayed here until its credentials
+	// expire.
+	if freshErr := VerifyLDVPProofFreshness(verifiablePresentation, v.clock.Now(), v.ldProofMaxAge); freshErr != nil {
+		logging.Log().Warnf("JSON-LD VP proof freshness verification failed for client %s: %v", clientId, freshErr)
+		return 0, "", freshErr
 	}
 
 	// Go through all requested scopes and create a verification context
@@ -964,6 +989,16 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	}
 	loginSession := loginSessionInterface.(loginSession)
 
+	// Verify challenge/domain binding for JSON-LD VPs. The session nonce
+	// must appear as proof.challenge (replay prevention), and the verifier's
+	// client ID is checked against proof.domain (audience binding).
+	if len(verifiablePresentation.Proofs) > 0 {
+		if bindErr := VerifyLDVPProofBinding(verifiablePresentation, loginSession.nonce, v.clientIdentification.Id); bindErr != nil {
+			logging.Log().Warnf("JSON-LD VP proof binding verification failed for session %s: %v", state, bindErr)
+			return sameDevice, bindErr
+		}
+	}
+
 	credentialsByType, _ := extractCredentialTypes(verifiablePresentation)
 	trustedChain, _ := verifyChain(verifiablePresentation.Credentials())
 	var credentialsToBeIncluded []map[string]interface{}
@@ -1116,12 +1151,21 @@ func (v *CredentialVerifier) GetRequestObject(state string) (jwt string, err err
 	return loginSession.requestObject, err
 }
 
-// verifyVPSignatureIfRequired verifies the VP JWT signature only when the service config
+// verifyVPSignatureIfRequired verifies the VP signature when the service config
 // requires holder binding for at least one credential type in the presentation.
-// It is a no-op when the presentation carries no raw token (non-SD-JWT VP path).
+//
+// For SD-JWT VPs (rawToken != nil), the JWT signature is verified via the global
+// JWTProofChecker. For JSON-LD VPs (LD proofs present), the proof was already
+// verified during parsing — this method checks that a holder key is available.
+// For JWT VPs (neither rawToken nor LD proofs), the proof was already verified
+// during parsing, so this is a no-op.
 func (v *CredentialVerifier) verifyVPSignatureIfRequired(clientId string, scopes []string, credentialTypes []string, presentation *common.Presentation) error {
 	rawToken := presentation.RawToken()
-	if rawToken == nil {
+	hasLDProofs := len(presentation.Proofs) > 0
+
+	// If there's no raw token and no LD proofs, the VP signature was already
+	// verified during parsing (JWT VP path). Nothing more to do.
+	if rawToken == nil && !hasLDProofs {
 		return nil
 	}
 
@@ -1145,6 +1189,23 @@ outer:
 		return nil
 	}
 
+	// JSON-LD VP path: parsing already required the VP proof to be created by
+	// the DID named in `holder` (see LDProofChecker.VerifyPresentation), so a
+	// holder key here means the presenter proved control of the holder DID.
+	// Both the key and the holder itself must be present.
+	if hasLDProofs {
+		if presentation.HolderKey() == nil {
+			logging.Log().Warn("Holder binding required but JSON-LD VP has no holder key from LD-proof verification")
+			return ErrorHolderBindingMissingKey
+		}
+		if presentation.Holder == "" {
+			logging.Log().Warn("Holder binding required but JSON-LD VP declares no holder")
+			return ErrorHolderBindingMissingKey
+		}
+		return nil
+	}
+
+	// SD-JWT VP path: verify the VP JWT signature.
 	_, _, err := GetProofChecker().VerifyJWTAndReturnKey(rawToken)
 	if err != nil {
 		logging.Log().Warnf("VP JWT holder binding verification failed: %v", err)
