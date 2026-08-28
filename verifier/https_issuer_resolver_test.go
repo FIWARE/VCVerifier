@@ -998,8 +998,8 @@ func TestResolveIssuerKeys_OversizedResponseIsRejected(t *testing.T) {
 		switch r.URL.Path {
 		case WellKnownJwtVcIssuer:
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer": "%s", "jwks_uri": "%s/jwks", "padding": "%s"}`,
-				serverURL, serverURL, padding)))
+			_, _ = fmt.Fprintf(w, `{"issuer": "%s", "jwks_uri": "%s/jwks", "padding": "%s"}`,
+				serverURL, serverURL, padding)
 		case "/jwks":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(jwksBytes)
@@ -1143,11 +1143,11 @@ func TestResolveIssuerKeys_FallbackPathIssuerMismatch(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
 				case WellKnownOIDCCredentialIssuer:
-					_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer": "%s", "authorization_servers": ["%s"]}`,
-						tc.oidcIssuer(issuerURL), issuerURL)))
+					_, _ = fmt.Fprintf(w, `{"issuer": "%s", "authorization_servers": ["%s"]}`,
+						tc.oidcIssuer(issuerURL), issuerURL)
 				case WellKnownOAuthAuthzServer:
-					_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer": "%s", "jwks_uri": "%s/jwks"}`,
-						tc.authIssuer(issuerURL), issuerURL)))
+					_, _ = fmt.Fprintf(w, `{"issuer": "%s", "jwks_uri": "%s/jwks"}`,
+						tc.authIssuer(issuerURL), issuerURL)
 				case "/jwks":
 					_, _ = w.Write(jwksBytes)
 				default:
@@ -1359,7 +1359,7 @@ func TestResolveIssuerKeys_CapsAuthorizationServers(t *testing.T) {
 			list, err := json.Marshal(authServers)
 			require.NoError(t, err)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer": %q, "authorization_servers": %s}`, issuerURL, list)))
+			_, _ = fmt.Fprintf(w, `{"issuer": %q, "authorization_servers": %s}`, issuerURL, list)
 		case strings.HasPrefix(r.URL.Path, WellKnownOAuthAuthzServer):
 			// Every authorization server is reachable but useless.
 			authServerRequests.Add(1)

@@ -88,7 +88,7 @@ type HttpsIssuerServer struct {
 func (s *HttpsIssuerServer) Close() {
 	s.Server.Close()
 	if s.CACertPath != "" {
-		os.Remove(s.CACertPath)
+		_ = os.Remove(s.CACertPath)
 	}
 }
 
@@ -114,12 +114,12 @@ func NewHttpsIssuerServer(identity *HttpsIssuerIdentity) *HttpsIssuerServer {
 			"jwks_uri": issuerURL + JwksPath,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(metadata)
+		_ = json.NewEncoder(w).Encode(metadata)
 	})
 
 	mux.HandleFunc(JwksPath, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(jwksBytes)
+		_, _ = w.Write(jwksBytes)
 	})
 
 	server := httptest.NewServer(mux)
@@ -128,7 +128,7 @@ func NewHttpsIssuerServer(identity *HttpsIssuerIdentity) *HttpsIssuerServer {
 
 	// Build JWKS containing the issuer's public key.
 	keySet := jwk.NewSet()
-	keySet.AddKey(identity.PublicKeyJWK)
+	_ = keySet.AddKey(identity.PublicKeyJWK)
 	jwksBytes, _ = json.Marshal(keySet)
 
 	return &HttpsIssuerServer{
@@ -144,7 +144,7 @@ func NewHttpsIssuerServerWithInlineJWKS(identity *HttpsIssuerIdentity) *HttpsIss
 	var issuerURL string
 
 	keySet := jwk.NewSet()
-	keySet.AddKey(identity.PublicKeyJWK)
+	_ = keySet.AddKey(identity.PublicKeyJWK)
 	jwksBytes, _ := json.Marshal(keySet)
 
 	mux := http.NewServeMux()
@@ -155,7 +155,7 @@ func NewHttpsIssuerServerWithInlineJWKS(identity *HttpsIssuerIdentity) *HttpsIss
 			"jwks":   json.RawMessage(jwksBytes),
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(metadata)
+		_ = json.NewEncoder(w).Encode(metadata)
 	})
 
 	server := httptest.NewServer(mux)
@@ -213,12 +213,12 @@ func NewOidcIssuerServer(identity *HttpsIssuerIdentity) *OidcIssuerServer {
 			"jwks_uri": authServerURL + JwksPath,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(metadata)
+		_ = json.NewEncoder(w).Encode(metadata)
 	})
 
 	authMux.HandleFunc(JwksPath, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(jwksBytes)
+		_, _ = w.Write(jwksBytes)
 	})
 
 	authServer := httptest.NewServer(authMux)
@@ -226,7 +226,7 @@ func NewOidcIssuerServer(identity *HttpsIssuerIdentity) *OidcIssuerServer {
 
 	// Build JWKS
 	keySet := jwk.NewSet()
-	keySet.AddKey(identity.PublicKeyJWK)
+	_ = keySet.AddKey(identity.PublicKeyJWK)
 	jwksBytes, _ = json.Marshal(keySet)
 
 	// Credential issuer server: serves OpenID credential issuer metadata
@@ -239,7 +239,7 @@ func NewOidcIssuerServer(identity *HttpsIssuerIdentity) *OidcIssuerServer {
 			"authorization_servers": []string{authServerURL},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(metadata)
+		_ = json.NewEncoder(w).Encode(metadata)
 	})
 
 	issuerServer := httptest.NewServer(issuerMux)
@@ -317,7 +317,7 @@ func exportServerCertificate(server *httptest.Server) string {
 	if _, err := certFile.Write(certPEM); err != nil {
 		panic(fmt.Sprintf("writing cert PEM: %v", err))
 	}
-	certFile.Close()
+	_ = certFile.Close()
 
 	return certFile.Name()
 }

@@ -2505,21 +2505,6 @@ func TestGetHolderValidationContext(t *testing.T) {
 	}
 }
 
-// createMockCredentialsWithHttpsIssuer creates credential config entries whose
-// trust lists point at a registry endpoint. An HTTPS-based issuer is resolved
-// through that registry just like a DID-based one.
-func createMockCredentialsWithHttpsIssuer(serviceId, scope, credentialType, registryURL string) map[string]map[string]configModel.ScopeEntry {
-	credential := configModel.Credential{
-		Type:                     credentialType,
-		TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: registryURL}},
-		TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: registryURL}},
-	}
-
-	entry := configModel.ScopeEntry{Credentials: []configModel.Credential{credential}}
-
-	return map[string]map[string]configModel.ScopeEntry{serviceId: {scope: entry}}
-}
-
 // getVCWithHttpsIssuer creates a test credential where the Issuer.ID is an HTTPS URL
 // instead of a DID. This simulates a credential issued by an HTTPS-based issuer.
 func getVCWithHttpsIssuer(issuerURL string) *common.Credential {

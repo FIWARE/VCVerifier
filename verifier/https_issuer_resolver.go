@@ -521,7 +521,7 @@ func (r *CachingHttpsIssuerResolver) fetchJSON(ctx context.Context, url string) 
 	if err != nil {
 		return nil, 0, fmt.Errorf("http request to %s failed: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, 0, fmt.Errorf("http request to %s returned status %d", url, resp.StatusCode)
