@@ -5,9 +5,11 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v3/jwa"
@@ -76,11 +78,18 @@ type HttpsIssuerServer struct {
 	Server *httptest.Server
 	// Identity holds the issuer's key material with IssuerURL populated.
 	Identity *HttpsIssuerIdentity
+	// CACertPath is the path to a PEM file containing the server's certificate
+	// for the TLS variants, suitable for use as SSL_CERT_FILE. Empty for the
+	// plain-HTTP variants.
+	CACertPath string
 }
 
-// Close shuts down the test server.
+// Close shuts down the test server and removes its exported certificate, if any.
 func (s *HttpsIssuerServer) Close() {
 	s.Server.Close()
+	if s.CACertPath != "" {
+		os.Remove(s.CACertPath)
+	}
 }
 
 // URL returns the base URL of the test server (the issuer URL).
@@ -291,4 +300,92 @@ func CreateJWTVCWithHttpsIssuer(identity *HttpsIssuerIdentity, credType string, 
 	}
 
 	return SignJWTWithHttpsIssuer(token, identity)
+}
+
+// exportServerCertificate writes the TLS certificate of a test server to a
+// temporary PEM file, so a verifier process can trust it via SSL_CERT_FILE.
+func exportServerCertificate(server *httptest.Server) string {
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: server.Certificate().Raw,
+	})
+
+	certFile, err := os.CreateTemp("", "https-issuer-ca-*.pem")
+	if err != nil {
+		panic(fmt.Sprintf("creating temp cert file: %v", err))
+	}
+	if _, err := certFile.Write(certPEM); err != nil {
+		panic(fmt.Sprintf("writing cert PEM: %v", err))
+	}
+	certFile.Close()
+
+	return certFile.Name()
+}
+
+// newHttpsIssuerMux builds the metadata and JWKS handlers of an HTTPS issuer.
+// The metadata is produced per request, so the issuer URL — only known once the
+// server is listening — can be filled in by the caller afterwards.
+func newHttpsIssuerMux(issuerURL *string, jwksBytes *[]byte, inlineJwks bool) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc(WellKnownJwtVcIssuerPath, func(w http.ResponseWriter, r *http.Request) {
+		metadata := map[string]interface{}{"issuer": *issuerURL}
+		if inlineJwks {
+			metadata["jwks"] = json.RawMessage(*jwksBytes)
+		} else {
+			metadata["jwks_uri"] = *issuerURL + JwksPath
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(metadata)
+	})
+
+	mux.HandleFunc(JwksPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(*jwksBytes)
+	})
+
+	return mux
+}
+
+// NewHttpsIssuerTLSServer creates an HTTPS httptest.Server serving SD-JWT VC
+// issuer metadata with a jwks_uri, plus the JWKS itself. The verifier only
+// treats an issuer identifier as HTTPS-based when it starts with "https://",
+// so integration tests need this TLS variant rather than the plain-HTTP one.
+//
+// Pass "SSL_CERT_FILE=<CACertPath>" as an extra env var to StartVerifier so the
+// verifier trusts this server.
+func NewHttpsIssuerTLSServer(identity *HttpsIssuerIdentity) *HttpsIssuerServer {
+	return newHttpsIssuerTLSServer(identity, false)
+}
+
+// NewHttpsIssuerTLSServerWithInlineJWKS is NewHttpsIssuerTLSServer with the key
+// set embedded in the metadata document instead of served from a jwks_uri.
+func NewHttpsIssuerTLSServerWithInlineJWKS(identity *HttpsIssuerIdentity) *HttpsIssuerServer {
+	return newHttpsIssuerTLSServer(identity, true)
+}
+
+// newHttpsIssuerTLSServer implements both TLS variants.
+func newHttpsIssuerTLSServer(identity *HttpsIssuerIdentity, inlineJwks bool) *HttpsIssuerServer {
+	var issuerURL string
+	var jwksBytes []byte
+
+	server := httptest.NewTLSServer(newHttpsIssuerMux(&issuerURL, &jwksBytes, inlineJwks))
+	issuerURL = server.URL
+	identity.IssuerURL = issuerURL
+
+	keySet := jwk.NewSet()
+	if err := keySet.AddKey(identity.PublicKeyJWK); err != nil {
+		panic(fmt.Sprintf("adding key to set: %v", err))
+	}
+	var err error
+	jwksBytes, err = json.Marshal(keySet)
+	if err != nil {
+		panic(fmt.Sprintf("marshaling JWKS: %v", err))
+	}
+
+	return &HttpsIssuerServer{
+		Server:     server,
+		Identity:   identity,
+		CACertPath: exportServerCertificate(server),
+	}
 }

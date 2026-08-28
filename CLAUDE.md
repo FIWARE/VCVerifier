@@ -127,14 +127,18 @@ Credential issuers may be identified by an HTTPS URL instead of a DID — see `d
 - An issuer identifier is treated as a generic URI. `isHttpsIssuer()` decides whether the key is discovered via `did.Registry` or via `verifier/https_issuer_resolver.go` (well-known metadata → JWKS).
 - Three paths dispatch on it: the JWT `iss` claim (`jwt_proof_checker.go`), the JSON-LD proof `verificationMethod` (`ld_proof_checker.go`) and the status list `iss` claim (`credential_status_client.go`). Each fails closed with `ErrorHttpsIssuerNotSupported` when no resolver is configured.
 - The resolver is created once in `InitPresentationParser` and shared via `GetHttpsIssuerResolver()`, so a single JWKS cache serves all three paths.
-- The `issuer` field of fetched metadata must equal the issuer URL the lookup started from (RFC 8414 §3.3), otherwise `ErrorIssuerMismatch`.
+- Well-known paths follow their spec: SD-JWT VC and RFC 8414 **insert** the segment between host and path (`wellKnownURLInserted`), OpenID4VCI **appends** it (`wellKnownURLAppended`).
+- The `issuer` of fetched metadata must equal the issuer URL the lookup started from (RFC 8414 §3.3) on every hop, compared after the same canonicalization on both sides. A mismatch surfaces as `ErrorIssuerMismatch` and is never retried through the other discovery path.
+- Everything after the first request is named by attacker-influenced metadata, so `allowedMetadataURL` pins `jwks_uri` / `authorization_servers` to the issuer's scheme and host (plus `verifier.httpsIssuerAllowedHosts`), redirects may not leave the origin, bodies are `io.LimitReader`-bounded, and failures are negatively cached.
+- `ResolveIssuerKeys` returns **candidate** keys: the kid-matching key, or every signature-capable key when no kid is available. Callers try each; `verifyJWSWithCandidateKeys` (`verifier/jws_verification.go`) pins the `alg` to an allowlist and to the key's own `alg`.
+- A cached key set missing the requested kid triggers one refetch per `MinJwksRefetchInterval`, so key rotation is picked up without waiting out the TTL.
 - In the JSON-LD path the JWKS `kid` is the **fragment** of the `verificationMethod` (`httpsJwksKeyId`), not the whole URI.
-- Trust validation adds no new list type: HTTPS issuers are matched by URL against the existing trusted-issuer / trusted-participant entries (`*` is a wildcard), never looked up in EBSI or Gaia-X.
+- Trust validation does **not** branch on the identifier shape. A trust-list entry is always a registry endpoint (`ebsi`, `ebsi-v5`, `gaia-x`), never an issuer identity, so an HTTPS issuer is trusted by being registered in one of the configured trusted-issuers-list APIs — or by the `*` wildcard. `tir.issuerPathSegment` percent-encodes only `/`, `?` and `#` so an HTTPS identifier stays one path segment while an already-encoded `did:web` is not encoded twice.
 
 ## Known Gaps
 
 - **HTTPS issuers cannot have verification relationships enforced.** A JWKS has no `authentication` / `assertionMethod` distinction, so the LD-proof path logs a warning and accepts the key; `proofPurpose` and issuer/holder binding remain enforced.
-- **No end-to-end integration test covers the HTTPS issuer paths.** `integration_test/helpers/https_issuer_mock.go` provides the mock servers but nothing consumes them yet.
+- **An HTTPS issuer whose JWKS or authorization server lives on another host** is unresolvable until that host is added to `verifier.httpsIssuerAllowedHosts`.
 - **`validationMode: combined` and `jsonLd`** do not perform real JSON-LD validation — they only check that issuer and type fields are present. They are deprecated but still accepted.
 - **Verification relationships are only enforced when the DID document declares them.** A `did:web` document that lists `verificationMethod` but neither `authentication` nor `assertionMethod` falls back to the flat method list with a warning.
 - **Data Integrity suites other than `JsonWebSignature2020`** (`proofValue`-based cryptosuites) are parsed but not verified.

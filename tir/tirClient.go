@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/procyon-projects/chrono"
@@ -267,22 +268,44 @@ func (tc TirHttpClient) requestIssuerWithVersion(tirEndpoint string, didPath str
 	return resp, err
 }
 
+// structuralPathCharacters are the characters that would end the path segment
+// an issuer identifier is placed in, mapped to their percent-encoding.
+var structuralPathCharacters = strings.NewReplacer(
+	"/", "%2F",
+	"?", "%3F",
+	"#", "%23",
+)
+
+// issuerPathSegment prepares an issuer identifier for use as a single path
+// segment of a registry lookup URL.
+//
+// Only the characters that would break out of the segment are encoded, so an
+// issuer identified by an HTTPS URL addresses one issuer instead of a nested
+// path below the issuers endpoint. Everything else is left untouched on
+// purpose: a DID is passed to the registry exactly as it is written, including
+// the percent-encoding a `did:web` with a port already carries — running it
+// through a general-purpose escaper would turn `%3A` into `%253A` and address
+// a different issuer.
+func issuerPathSegment(issuer string) string {
+	return structuralPathCharacters.Replace(issuer)
+}
+
 func getIssuerV4Url(did string) string {
-	return ISSUERS_V4_PATH + "/" + did
+	return ISSUERS_V4_PATH + "/" + issuerPathSegment(did)
 }
 
 func getIssuerV3Url(did string) string {
-	return ISSUERS_V3_PATH + "/" + did
+	return ISSUERS_V3_PATH + "/" + issuerPathSegment(did)
 }
 
 // getIssuerV5Url returns the v5 API path for fetching issuer information by DID.
 func getIssuerV5Url(did string) string {
-	return ISSUERS_V5_PATH + "/" + did
+	return ISSUERS_V5_PATH + "/" + issuerPathSegment(did)
 }
 
 // getAttributesV5Url returns the v5 API path for listing an issuer's attributes.
 func getAttributesV5Url(did string) string {
-	return ISSUERS_V5_PATH + "/" + did + "/attributes"
+	return ISSUERS_V5_PATH + "/" + issuerPathSegment(did) + "/attributes"
 }
 
 // IsTrustedParticipantV5 checks whether the given DID is registered as a

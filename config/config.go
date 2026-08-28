@@ -220,6 +220,14 @@ type Verifier struct {
 	// to accept a proof of any age. Defaults to
 	// DefaultLdProofMaxAgeSeconds.
 	LdProofMaxAge int `mapstructure:"ldProofMaxAge" default:"300"`
+	// Hosts — in `host` or `host:port` form — that the metadata of an
+	// HTTPS-based credential issuer may point to in addition to the issuer's
+	// own host. Everything the resolver fetches after the first well-known
+	// request (jwks_uri, authorization_servers) is named by a document the
+	// issuer serves, so by default it is confined to the issuer's own origin.
+	// List a host here when the authorization server or the JWKS of a trusted
+	// issuer genuinely lives elsewhere.
+	HttpsIssuerAllowedHosts []string `mapstructure:"httpsIssuerAllowedHosts"`
 	// RefreshToken groups all refresh token configuration.
 	RefreshToken RefreshToken `mapstructure:"refreshToken"`
 }

@@ -52,25 +52,10 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 
 	issuerID := verifiableCredential.Contents().Issuer.ID
 
-	// HTTPS-URL-based issuers are validated by URL matching against the
-	// configured trusted participant URLs. Cryptographic trust was already
-	// established during JWT signature verification (via HTTPS metadata
-	// discovery and JWKS). This check applies regardless of the trust list
-	// Type — an HTTPS issuer is never looked up in an external registry.
-	if isHttpsIssuer(issuerID) {
-		for _, listEntries := range trustContext.GetTrustedParticipantLists() {
-			for _, participantList := range listEntries {
-				if matchesHttpsIssuerURL(issuerID, participantList.Url) {
-					logging.Log().Debugf("HTTPS issuer %s matched trusted participant URL %s.", issuerID, participantList.Url)
-					return true, err
-				}
-			}
-		}
-		logging.Log().Warnf("HTTPS issuer %s did not match any configured trusted participant URL.", issuerID)
-		return false, ErrorInvalidCredential
-	}
-
-	// DID-based issuers continue through the existing type-based dispatch.
+	// The issuer identifier is passed to the registries as-is, whether it is a
+	// DID or an HTTPS URL. A trusted-participants-list entry is always the
+	// address of a registry to query — never an issuer identity in its own
+	// right — so there is no identifier-dependent dispatch here.
 	for _, listEntries := range trustContext.GetTrustedParticipantLists() {
 		for _, participantList := range listEntries {
 			if participantList.Type == typeEbsi {
@@ -92,14 +77,4 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 	}
 
 	return false, ErrorInvalidCredential
-}
-
-// matchesHttpsIssuerURL checks whether an HTTPS issuer URL matches a
-// configured trusted URL. The wildcard value "*" matches any issuer.
-// Otherwise an exact string match is performed.
-func matchesHttpsIssuerURL(issuerURL, trustedURL string) bool {
-	if trustedURL == WILDCARD_TIL {
-		return true
-	}
-	return issuerURL == trustedURL
 }

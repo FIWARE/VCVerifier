@@ -342,10 +342,9 @@ func TestRefreshTokenConfigDefaults(t *testing.T) {
 	}
 }
 
-// TestReadConfigHttpsIssuer verifies parsing of a YAML config that includes
-// HTTPS issuer URLs in both trustedIssuersLists and trustedParticipantsLists
-// alongside DID-based registry entries, ensuring that mixed URL formats are
-// correctly parsed into structured types.
+// TestReadConfigHttpsIssuer verifies parsing of a YAML config for a service
+// whose credentials are verified against several typed registry endpoints,
+// ensuring the per-entry type survives parsing.
 func TestReadConfigHttpsIssuer(t *testing.T) {
 	config.Reset()
 	gotConfig, err := ReadConfig("data/config_test_https_issuer.yaml")
@@ -360,21 +359,17 @@ func TestReadConfigHttpsIssuer(t *testing.T) {
 	cred := credentials[0]
 	assert.Equal(t, "EmployeeCredential", cred.Type)
 
-	// Verify TrustedParticipantsLists: should contain both the DID-based registry
-	// URL and the HTTPS issuer URL.
-	assert.Len(t, cred.TrustedParticipantsLists, 2,
-		"Expected two trusted participant entries (DID registry + HTTPS issuer)")
+	// Verify TrustedParticipantsLists: both registry entries with their types.
+	assert.Len(t, cred.TrustedParticipantsLists, 2, "Expected two trusted participant registry entries")
 	assert.Equal(t, "ebsi", cred.TrustedParticipantsLists[0].Type)
 	assert.Equal(t, "https://tir-pdc.ebsi.fiware.dev", cred.TrustedParticipantsLists[0].Url)
-	assert.Equal(t, "ebsi", cred.TrustedParticipantsLists[1].Type)
-	assert.Equal(t, "https://issuer.example.com", cred.TrustedParticipantsLists[1].Url)
+	assert.Equal(t, "ebsi-v5", cred.TrustedParticipantsLists[1].Type)
+	assert.Equal(t, "https://tir-v5.ebsi.fiware.dev", cred.TrustedParticipantsLists[1].Url)
 
-	// Verify TrustedIssuersLists: should contain both the DID-based registry
-	// URL and the HTTPS issuer URL.
-	assert.Len(t, cred.TrustedIssuersLists, 2,
-		"Expected two trusted issuer entries (DID registry + HTTPS issuer)")
+	// Verify TrustedIssuersLists: both registry entries with their types.
+	assert.Len(t, cred.TrustedIssuersLists, 2, "Expected two trusted issuer registry entries")
 	assert.Equal(t, "ebsi", cred.TrustedIssuersLists[0].Type)
 	assert.Equal(t, "https://til-pdc.ebsi.fiware.dev", cred.TrustedIssuersLists[0].Url)
-	assert.Equal(t, "ebsi", cred.TrustedIssuersLists[1].Type)
-	assert.Equal(t, "https://issuer.example.com", cred.TrustedIssuersLists[1].Url)
+	assert.Equal(t, "ebsi-v5", cred.TrustedIssuersLists[1].Type)
+	assert.Equal(t, "https://til-v5.ebsi.fiware.dev", cred.TrustedIssuersLists[1].Url)
 }

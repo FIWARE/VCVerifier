@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -161,16 +162,26 @@ func TestIsDidElsiMethod(t *testing.T) {
 // a preconfigured key or error.
 type mockHttpsIssuerResolver struct {
 	key       jwk.Key
+	keys      []jwk.Key
 	err       error
 	calledURL string
 	calledKid string
 }
 
-// ResolveIssuerKey returns the preconfigured key or error, recording the call arguments.
-func (m *mockHttpsIssuerResolver) ResolveIssuerKey(issuerURL string, kid string) (jwk.Key, error) {
+// ResolveIssuerKeys returns the preconfigured key or error, recording the call arguments.
+func (m *mockHttpsIssuerResolver) ResolveIssuerKeys(_ context.Context, issuerURL string, kid string) ([]jwk.Key, error) {
 	m.calledURL = issuerURL
 	m.calledKid = kid
-	return m.key, m.err
+	if m.err != nil {
+		return nil, m.err
+	}
+	if len(m.keys) > 0 {
+		return m.keys, nil
+	}
+	if m.key == nil {
+		return nil, ErrorIssuerKeyNotFound
+	}
+	return []jwk.Key{m.key}, nil
 }
 
 // generateTestECKeyPair creates an ECDSA P-256 key pair and returns the private jwk.Key,

@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
@@ -117,13 +118,12 @@ func (jpc *JWTProofChecker) VerifyJWTAndReturnKey(token []byte) ([]byte, jwk.Key
 		return nil, nil, err
 	}
 
-	alg, _ := headers.Algorithm()
-	payload, err := jws.Verify(token, jws.WithKey(alg, key))
+	payload, verifiedKey, err := verifyJWSWithCandidateKeys(token, headers, []jwk.Key{key})
 	if err != nil {
 		logging.Log().Warnf("JWT signature verification failed for %s: %v", issuerDID, err)
 		return nil, nil, err
 	}
-	return payload, key, nil
+	return payload, verifiedKey, nil
 }
 
 // isHttpsIssuer returns true if the issuer identifier is an HTTPS URL.
@@ -139,14 +139,15 @@ func (jpc *JWTProofChecker) verifyHttpsIssuerJWT(token []byte, issuerURL string,
 		return nil, nil, ErrorHttpsIssuerNotSupported
 	}
 
-	key, err := jpc.httpsResolver.ResolveIssuerKey(issuerURL, kid)
+	// The verification chain carries no context down to here yet, so the
+	// resolver's own request timeout is the only bound on the lookup.
+	keys, err := jpc.httpsResolver.ResolveIssuerKeys(context.Background(), issuerURL, kid)
 	if err != nil {
 		logging.Log().Warnf("Failed to resolve key for HTTPS issuer %s: %v", issuerURL, err)
 		return nil, nil, err
 	}
 
-	alg, _ := headers.Algorithm()
-	payload, err := jws.Verify(token, jws.WithKey(alg, key))
+	payload, key, err := verifyJWSWithCandidateKeys(token, headers, keys)
 	if err != nil {
 		logging.Log().Warnf("JWT signature verification failed for HTTPS issuer %s: %v", issuerURL, err)
 		return nil, nil, err

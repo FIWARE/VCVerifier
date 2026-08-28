@@ -20,24 +20,74 @@ issuer that follows those specs.
 issuer URL it resolves a JWKS through two paths, in order:
 
 1. **SD-JWT VC Issuer Metadata** (primary, draft-ietf-oauth-sd-jwt-vc §5.2):
-   `<issuer-url>/.well-known/jwt-vc-issuer`. The metadata provides either an
-   inline `jwks` or a `jwks_uri`.
-2. **OpenID4VCI Credential Issuer Metadata** (fallback):
-   `<issuer-url>/.well-known/openid-credential-issuer`. Its
+   the well-known segment is *inserted between host and path*, so issuer
+   `https://example.com/tenant1` is looked up at
+   `https://example.com/.well-known/jwt-vc-issuer/tenant1`. The metadata
+   provides either an inline `jwks` or a `jwks_uri`.
+2. **OpenID4VCI Credential Issuer Metadata** (fallback): OpenID4VCI §12.2.4
+   *appends* its segment instead, so the same issuer is looked up at
+   `https://example.com/tenant1/.well-known/openid-credential-issuer`. Its
    `authorization_servers` are resolved via
-   `/.well-known/oauth-authorization-server` (RFC 8414), whose metadata
-   provides the `jwks_uri`.
+   `/.well-known/oauth-authorization-server` (RFC 8414 §3.1, inserted like the
+   primary path), whose metadata provides the `jwks_uri`.
+
+The two placement conventions genuinely differ; `wellKnownURLInserted` and
+`wellKnownURLAppended` implement them separately.
 
 The `issuer` field in the fetched metadata must equal the issuer URL the
-lookup started from (RFC 8414 §3.3). A mismatch is rejected with
-`ErrorIssuerMismatch`, so an issuer cannot delegate its identity to a
-different party by serving somebody else's metadata.
+lookup started from (RFC 8414 §3.3) — on **every** hop: the SD-JWT VC
+metadata, the OpenID4VCI metadata (`issuer` or `credential_issuer`) and the
+authorization server metadata. Both sides are canonicalized the same way (a
+trailing slash is ignored), so an issuer whose identifier ends in `/` is
+neither rejected against its own metadata nor able to pass as another one. A
+mismatch fails with `ErrorIssuerMismatch` and is **not** retried through the
+other path: an endpoint that answers while claiming a different identity is a
+security signal, not a reason to follow one more hop.
 
-Resolved key sets are cached per issuer URL (`DefaultJwksCacheTTL`, 15
-minutes). `CachingHttpsIssuerResolver` is created once in
-`InitPresentationParser` and shared — via `GetHttpsIssuerResolver()` — by
-every component that resolves issuer keys, so one cache serves the JWT path,
-the JSON-LD proof path and status-list verification.
+Resolved key sets are cached per issuer URL for `DefaultJwksCacheTTL`
+(15 minutes), or for the shorter lifetime the origin declares via
+`Cache-Control: max-age` — an origin may shorten its keys' cache lifetime but
+not extend it beyond the configured TTL. Resolution *failures* are cached too
+(`DefaultJwksFailureCacheTTL`, 30s), so a flood of tokens naming an
+unresolvable issuer cannot be turned into a flood of outbound requests.
+`CachingHttpsIssuerResolver` is created once in `InitPresentationParser` and
+shared — via `GetHttpsIssuerResolver()` — by every component that resolves
+issuer keys, so one cache serves the JWT path, the JSON-LD proof path and
+status-list verification.
+
+### Key rotation
+
+A cached key set that does not contain the requested `kid` triggers **one**
+refetch per `MinJwksRefetchInterval` (1 minute). A rotated key is therefore
+picked up without waiting out the cache TTL, while unknown key ids cannot
+drive the outbound request rate.
+
+### Outbound request restrictions
+
+Everything the resolver fetches is chosen by whoever presented the token: the
+issuer URL comes from the token, and the next hops (`jwks_uri`,
+`authorization_servers`) come from a document that URL serves. Proof
+verification runs before any trust-registry check, so this is reachable from
+unauthenticated input and is confined accordingly:
+
+- A URL taken from a metadata document must use the **same scheme** as the
+  issuer (no https→http downgrade) and live on the **issuer's own host**,
+  unless the operator listed the host in `verifier.httpsIssuerAllowedHosts`.
+  Anything else fails with `ErrorMetadataURLNotAllowed`.
+- Redirects may not leave the origin of the original request, and at most
+  `maxMetadataRedirects` (5) are followed.
+- Response bodies are read through an `io.LimitReader` bounded to
+  `maxMetadataResponseBytes` (1 MiB).
+- Every request carries a context with the resolver's timeout
+  (`httpClientTimeout`, 10s).
+
+```yaml
+verifier:
+  # only needed when an issuer's JWKS or authorization server lives on a
+  # different host than the issuer identifier itself
+  httpsIssuerAllowedHosts:
+    - "keys.example.com"
+```
 
 ## Where HTTPS issuers are resolved
 
@@ -59,27 +109,57 @@ The JWT paths pass the JWS `kid` header straight through to the resolver.
 The JSON-LD path cannot: a `verificationMethod` is a URI, and it is the
 **fragment** that names the key inside the issuer's JWKS.
 `httpsJwksKeyId()` extracts it, so `https://issuer.example.com#key-1` selects
-the JWKS entry with `kid` `key-1`. A `verificationMethod` with no fragment
-yields an empty `kid`, which makes the resolver fall back to the only (first)
-key in the set.
+the JWKS entry with `kid` `key-1`.
+
+When no `kid` is available — a fragment-less `verificationMethod`, or a JWS
+without a `kid` header — the resolver returns **every** signature-capable key
+of the set and the caller accepts the first one that verifies the signature.
+Picking `keySet.Key(0)` would make verification depend on JWKS ordering.
+Keys marked `use: enc`, or whose `key_ops` exclude `verify`, are never
+candidates.
+
+The algorithm is taken from the JWS header but pinned before use: it must be
+in the allowlist (`verifier/jws_verification.go` — the RSA, PSS, ECDSA and
+EdDSA families; never `none` or the symmetric `HS*` family), and it must match
+the `alg` the JWKS entry declares, when it declares one.
 
 ## Trust validation
 
-Trust lists are not extended with a new type. `Issuer.ID` is treated as a URI
-and HTTPS issuers are matched by URL against the configured trust list
-entries:
+Trust lists are **not** extended for HTTPS issuers, and their entries are never
+read as issuer identities. A `trustedIssuersLists` / `trustedParticipantsLists`
+entry is always the address of a trusted-issuers-list API to query — EBSI
+(v3/v4, v5) or Gaia-X — and the issuer identifier of the credential is looked
+up there, whether it is a DID or an HTTPS URL:
 
-- `verifier/trustedissuer.go` — `validateHttpsIssuer` matches the issuer URL
-  against the `TrustedIssuersLists` entries of every credential type.
-- `verifier/trustedparticipant.go` — the issuer URL is matched against the
-  `TrustedParticipantsLists` entries, regardless of the list `Type`.
+```yaml
+trustedIssuersLists:
+  -   type: ebsi
+      url: https://til-pdc.ebsi.fiware.dev
+```
 
-The wildcard entry `*` matches any HTTPS issuer; otherwise the match is exact
-string equality. An HTTPS issuer is never looked up in an external registry:
-EBSI and Gaia-X registries are keyed by DID, and the cryptographic trust for
-an HTTPS issuer was already established during signature verification via
-metadata discovery and JWKS. Configuring an HTTPS URL in a trust list is
-therefore the explicit statement that this issuer is accepted.
+So an HTTPS issuer becomes trusted by being registered in one of the
+configured registries, exactly like a DID-based one. Nothing in
+`verifier/trustedissuer.go` or `verifier/trustedparticipant.go` branches on the
+shape of the identifier.
+
+Two consequences worth stating explicitly:
+
+- **A registry address is not an issuer identity.** A credential whose `issuer`
+  happens to equal a configured registry URL gets no special treatment; it is
+  looked up like any other and rejected unless the registry knows it.
+- **The wildcard keeps its meaning.** `url: "*"` in a trusted-issuers list
+  waives the registry lookup for that credential type — for every issuer, DID-
+  or HTTPS-based alike.
+
+`tir.issuerPathSegment` places the identifier into the registry lookup URL. It
+percent-encodes only the characters that would otherwise end the path segment
+(`/`, `?`, `#`), so `https://issuer.example.com/tenant1` is addressed as one
+issuer, while a DID reaches the registry byte for byte as configured —
+including the `%3A` a `did:web` with a port already carries, which a
+general-purpose escaper would turn into `%253A`.
+
+Gaia-X entries resolve the issuer as a DID, so an HTTPS issuer simply fails to
+resolve there and is not trusted through that path.
 
 ## Security notes
 
@@ -87,7 +167,8 @@ therefore the explicit statement that this issuer is accepted.
   well-known endpoints, so an HTTPS issuer is exactly as trustworthy as its
   certificate and DNS. This is the model the SD-JWT VC and OpenID4VCI specs
   assume; it is weaker than a DID document anchored in a registry, which is
-  why an HTTPS issuer still has to appear in a trust list.
+  why an HTTPS issuer still has to be registered in a trusted-issuers registry
+  (or covered by a wildcard) before it is accepted.
 - **No verification relationships.** A JWKS has no `authentication` /
   `assertionMethod` distinction, so the relationship enforcement
   `ResolveKeyForRelationship` applies to DID documents cannot apply here. The
@@ -99,6 +180,9 @@ therefore the explicit statement that this issuer is accepted.
 - **Status lists stay bound to their issuer.** `assertStatusListIssuer`
   compares issuer strings, so an HTTPS-issued status list must be issued by
   the same HTTPS issuer as the credential that referenced it.
+- **Key discovery is not an SSRF primitive.** See *Outbound request
+  restrictions* above: same-scheme, same-host (or explicitly allowed),
+  origin-bound redirects, bounded bodies, cached failures.
 
 ## Known gaps
 
@@ -106,7 +190,6 @@ therefore the explicit statement that this issuer is accepted.
   a fragment. A `verificationMethod` that is a *different* URL under the same
   origin (e.g. `https://issuer.example.com/keys/1` for issuer
   `https://issuer.example.com`) is rejected by the signer-binding check.
-- `integration_test/helpers/https_issuer_mock.go` provides mock issuer servers
-  (well-known endpoints, inline and referenced JWKS, OIDC fallback) but no
-  end-to-end integration test consumes them yet; coverage for the HTTPS paths
-  is at unit level.
+- An issuer whose JWKS or authorization server lives on another host is only
+  resolvable after that host is added to `verifier.httpsIssuerAllowedHosts`.
+  The default confines discovery to the issuer's own origin.

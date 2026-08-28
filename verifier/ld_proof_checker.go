@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -100,12 +101,13 @@ func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDPro
 		return nil, err
 	}
 
-	key, err := lpc.resolveProofKey(proof, signerDID, did.RelationshipAuthentication)
+	keys, err := lpc.resolveProofKeys(proof, signerDID, did.RelationshipAuthentication)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve VP proof key: %w", err)
 	}
 
-	if err := common.VerifyLinkedDataProof(vpJSON, proof, key, lpc.docLoader); err != nil {
+	key, err := verifyLDProofWithCandidateKeys(vpJSON, proof, keys, lpc.docLoader)
+	if err != nil {
 		logging.Log().Warnf("VP LD proof verification failed: %v", err)
 		return nil, err
 	}
@@ -141,12 +143,12 @@ func (lpc *LDProofChecker) VerifyCredential(vcJSON []byte, proof *common.LDProof
 		return err
 	}
 
-	key, err := lpc.resolveProofKey(proof, signerDID, did.RelationshipAssertionMethod)
+	keys, err := lpc.resolveProofKeys(proof, signerDID, did.RelationshipAssertionMethod)
 	if err != nil {
 		return fmt.Errorf("failed to resolve VC proof key: %w", err)
 	}
 
-	if err := common.VerifyLinkedDataProof(vcJSON, proof, key, lpc.docLoader); err != nil {
+	if _, err := verifyLDProofWithCandidateKeys(vcJSON, proof, keys, lpc.docLoader); err != nil {
 		logging.Log().Warnf("VC LD proof verification failed: %v", err)
 		return err
 	}
@@ -186,18 +188,20 @@ func (lpc *LDProofChecker) assertProofSigner(proof *common.LDProof, expectedDID 
 	return signerDID, nil
 }
 
-// resolveProofKey rejects did:elsi and resolves the proof's verification
-// method to a public key, requiring the key to be authorized for the given
-// verification relationship.
+// resolveProofKeys rejects did:elsi and resolves the proof's verification
+// method to the candidate public keys, requiring the key to be authorized for
+// the given verification relationship.
 //
-// HTTPS-based signer identifiers are resolved through the HttpsIssuerResolver
-// instead of the DID registry.
-func (lpc *LDProofChecker) resolveProofKey(proof *common.LDProof, signerDID string, relationship string) (jwk.Key, error) {
+// DID resolution always yields exactly one key. An HTTPS signer whose
+// verificationMethod carries no fragment can yield several, because a JWKS
+// with more than one key offers nothing to select on — the caller then has to
+// find the one the proof verifies with.
+func (lpc *LDProofChecker) resolveProofKeys(proof *common.LDProof, signerDID string, relationship string) ([]jwk.Key, error) {
 	_, kid := ExtractDIDAndFragment(proof.VerificationMethod)
 
 	// Resolve HTTPS-based signer identifiers via well-known metadata + JWKS.
 	if isHttpsIssuer(signerDID) {
-		return lpc.resolveHttpsProofKey(proof.VerificationMethod, signerDID, relationship)
+		return lpc.resolveHttpsProofKeys(proof.VerificationMethod, signerDID, relationship)
 	}
 
 	// Reject did:elsi — JAdES is JWS-based and does not apply to LD proofs.
@@ -206,11 +210,34 @@ func (lpc *LDProofChecker) resolveProofKey(proof *common.LDProof, signerDID stri
 		return nil, ErrorDidElsiNotSupportedForLDProof
 	}
 
-	return ResolveKeyForRelationship(lpc.registry, signerDID, kid, relationship)
+	key, err := ResolveKeyForRelationship(lpc.registry, signerDID, kid, relationship)
+	if err != nil {
+		return nil, err
+	}
+	return []jwk.Key{key}, nil
 }
 
-// resolveHttpsProofKey resolves the key for an HTTPS-based signer identifier
-// through the configured HttpsIssuerResolver.
+// verifyLDProofWithCandidateKeys verifies a Linked Data Proof against the
+// candidate keys and returns the key that verified it. Only the key that
+// actually signed the document produces a valid signature, so trying each
+// candidate does not weaken the check — it is what makes a fragment-less
+// HTTPS verificationMethod usable against a multi-key JWKS.
+func verifyLDProofWithCandidateKeys(documentJSON []byte, proof *common.LDProof, keys []jwk.Key, docLoader ld.DocumentLoader) (jwk.Key, error) {
+	if len(keys) == 0 {
+		return nil, ErrorNoVerificationKey
+	}
+	var lastErr error
+	for _, key := range keys {
+		lastErr = common.VerifyLinkedDataProof(documentJSON, proof, key, docLoader)
+		if lastErr == nil {
+			return key, nil
+		}
+	}
+	return nil, lastErr
+}
+
+// resolveHttpsProofKeys resolves the candidate keys for an HTTPS-based signer
+// identifier through the configured HttpsIssuerResolver.
 //
 // A JWKS carries no verification relationships, so the authentication /
 // assertionMethod distinction a DID document expresses cannot be enforced
@@ -219,7 +246,7 @@ func (lpc *LDProofChecker) resolveProofKey(proof *common.LDProof, signerDID stri
 // accepted. The proofPurpose assertion in assertProofPurpose and the binding
 // of the signer to the document's issuer / holder in assertProofSigner still
 // apply, so the key is never accepted for an unrelated identity.
-func (lpc *LDProofChecker) resolveHttpsProofKey(verificationMethod string, signerURL string, relationship string) (jwk.Key, error) {
+func (lpc *LDProofChecker) resolveHttpsProofKeys(verificationMethod string, signerURL string, relationship string) ([]jwk.Key, error) {
 	if lpc.httpsResolver == nil {
 		logging.Log().Warnf("HTTPS signer %s encountered in LD proof but no HttpsIssuerResolver configured", signerURL)
 		return nil, ErrorHttpsIssuerNotSupported
@@ -230,7 +257,9 @@ func (lpc *LDProofChecker) resolveHttpsProofKey(verificationMethod string, signe
 			signerURL, relationship, verificationMethod)
 	}
 
-	return lpc.httpsResolver.ResolveIssuerKey(signerURL, httpsJwksKeyId(verificationMethod))
+	// The verification chain carries no context down to here yet, so the
+	// resolver's own request timeout is the only bound on the lookup.
+	return lpc.httpsResolver.ResolveIssuerKeys(context.Background(), signerURL, httpsJwksKeyId(verificationMethod))
 }
 
 // httpsJwksKeyId derives the JWKS `kid` from an HTTPS verificationMethod URI.

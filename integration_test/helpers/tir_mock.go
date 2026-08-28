@@ -72,8 +72,11 @@ func BuildIssuerAttribute(credentialType string, claims []TIRClaim) IssuerAttrib
 // NewMockTIR creates an httptest.Server that mocks the EBSI Trusted Issuers Registry API.
 // The issuers map keys are DIDs and values are the TrustedIssuer responses.
 // The mock handles:
-//   - GET /v4/issuers/<did> — returns the TrustedIssuer JSON or 404
-//   - GET /v3/issuers/<did> — same as v4 (fallback path)
+//   - GET /v4/issuers/<issuer> — returns the TrustedIssuer JSON or 404
+//   - GET /v3/issuers/<issuer> — same as v4 (fallback path)
+//
+// The issuer identifier may be a DID or an HTTPS URL; the latter arrives with
+// its slashes percent-encoded and is matched against the plain map key too.
 func NewMockTIR(issuers map[string]TrustedIssuer) *httptest.Server {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Use RawPath to preserve percent-encoding in DIDs (e.g., did:web:host%3Aport).
@@ -95,6 +98,13 @@ func NewMockTIR(issuers map[string]TrustedIssuer) *httptest.Server {
 		}
 
 		issuer, exists := issuers[did]
+		if !exists {
+			// An issuer identified by an HTTPS URL reaches the registry with
+			// its slashes percent-encoded, so that it stays inside one path
+			// segment. Look it up under its plain form as well, so tests can
+			// register issuers by their identifier as configured.
+			issuer, exists = issuers[strings.ReplaceAll(did, "%2F", "/")]
+		}
 		if !exists {
 			http.NotFound(w, r)
 			return

@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -82,6 +85,25 @@ func marshalJWKSet(t *testing.T, keySet jwk.Set) []byte {
 	return jwksBytes
 }
 
+// resolveFirstIssuerKey resolves the candidate keys for an issuer and returns
+// the first one, so tests that expect a single key stay readable.
+func resolveFirstIssuerKey(r HttpsIssuerResolver, issuerURL, kid string) (jwk.Key, error) {
+	keys, err := r.ResolveIssuerKeys(context.Background(), issuerURL, kid)
+	if err != nil {
+		return nil, err
+	}
+	return keys[0], nil
+}
+
+// hostOf returns the `host:port` part of a URL, for use with
+// WithAllowedMetadataHosts.
+func hostOf(t *testing.T, rawURL string) string {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	require.NoError(t, err)
+	return parsed.Host
+}
+
 func TestResolveIssuerKey_PrimaryPath_JwksUri(t *testing.T) {
 	logging.Configure(testLoggingConfig)
 
@@ -111,7 +133,7 @@ func TestResolveIssuerKey_PrimaryPath_JwksUri(t *testing.T) {
 	c := cache.New(5*time.Minute, 10*time.Minute)
 	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
 
-	key, err := resolver.ResolveIssuerKey(serverURL, "key-1")
+	key, err := resolveFirstIssuerKey(resolver, serverURL, "key-1")
 
 	assert.NoError(t, err)
 	assert.NotNil(t, key)
@@ -146,7 +168,7 @@ func TestResolveIssuerKey_PrimaryPath_InlineJwks(t *testing.T) {
 	c := cache.New(5*time.Minute, 10*time.Minute)
 	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
 
-	key, err := resolver.ResolveIssuerKey(serverURL, "inline-key")
+	key, err := resolveFirstIssuerKey(resolver, serverURL, "inline-key")
 
 	assert.NoError(t, err)
 	assert.NotNil(t, key)
@@ -201,9 +223,12 @@ func TestResolveIssuerKey_FallbackPath_OpenID4VCI(t *testing.T) {
 	issuerServerURL = issuerServer.URL
 
 	c := cache.New(5*time.Minute, 10*time.Minute)
-	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
+	// The authorization server lives on its own host, which the resolver only
+	// follows when the operator allowed it.
+	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL).
+		WithAllowedMetadataHosts([]string{hostOf(t, authServerURL)})
 
-	key, err := resolver.ResolveIssuerKey(issuerServerURL, "oidc-key")
+	key, err := resolveFirstIssuerKey(resolver, issuerServerURL, "oidc-key")
 
 	assert.NoError(t, err)
 	assert.NotNil(t, key)
@@ -255,7 +280,7 @@ func TestResolveIssuerKey_MultiKeyJWKS_SelectByKid(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
-			key, err := resolver.ResolveIssuerKey(serverURL, tc.kid)
+			key, err := resolveFirstIssuerKey(resolver, serverURL, tc.kid)
 			if tc.expectError != nil {
 				assert.ErrorIs(t, err, tc.expectError)
 				assert.Nil(t, key)
@@ -270,7 +295,7 @@ func TestResolveIssuerKey_MultiKeyJWKS_SelectByKid(t *testing.T) {
 	}
 }
 
-func TestResolveIssuerKey_DefaultToFirstKey_NoKid(t *testing.T) {
+func TestResolveIssuerKey_SingleKeyJWKS_NoKid(t *testing.T) {
 	logging.Configure(testLoggingConfig)
 
 	keySet, _ := generateTestJWKSet(t, "only-key")
@@ -299,8 +324,8 @@ func TestResolveIssuerKey_DefaultToFirstKey_NoKid(t *testing.T) {
 	c := cache.New(5*time.Minute, 10*time.Minute)
 	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
 
-	// Empty kid should return the first (only) key
-	key, err := resolver.ResolveIssuerKey(serverURL, "")
+	// Empty kid should return the only key of the set
+	key, err := resolveFirstIssuerKey(resolver, serverURL, "")
 
 	assert.NoError(t, err)
 	assert.NotNil(t, key)
@@ -341,14 +366,14 @@ func TestResolveIssuerKey_Caching(t *testing.T) {
 	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
 
 	// First call — should make HTTP requests
-	key1, err := resolver.ResolveIssuerKey(serverURL, "cached-key")
+	key1, err := resolveFirstIssuerKey(resolver, serverURL, "cached-key")
 	assert.NoError(t, err)
 	assert.NotNil(t, key1)
 	firstCallRequests := requestCount.Load()
 	assert.Greater(t, firstCallRequests, int32(0), "first call should make HTTP requests")
 
 	// Second call — should use cache, no additional HTTP requests
-	key2, err := resolver.ResolveIssuerKey(serverURL, "cached-key")
+	key2, err := resolveFirstIssuerKey(resolver, serverURL, "cached-key")
 	assert.NoError(t, err)
 	assert.NotNil(t, key2)
 	assert.Equal(t, firstCallRequests, requestCount.Load(), "second call should not make additional HTTP requests")
@@ -394,7 +419,7 @@ func TestResolveIssuerKey_ErrorCases(t *testing.T) {
 				})
 			},
 			kid:           "key-1",
-			expectedError: ErrorIssuerMetadataNotFound,
+			expectedError: ErrorIssuerMismatch,
 		},
 		{
 			testName: "no matching kid in JWKS",
@@ -494,7 +519,7 @@ func TestResolveIssuerKey_ErrorCases(t *testing.T) {
 			c := cache.New(5*time.Minute, 10*time.Minute)
 			resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
 
-			key, err := resolver.ResolveIssuerKey(serverURL, tc.kid)
+			key, err := resolveFirstIssuerKey(resolver, serverURL, tc.kid)
 			assert.ErrorIs(t, err, tc.expectedError)
 			assert.Nil(t, key)
 		})
@@ -531,7 +556,7 @@ func TestResolveIssuerKey_TrailingSlashNormalized(t *testing.T) {
 	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
 
 	// Call with trailing slash — should be normalized
-	key, err := resolver.ResolveIssuerKey(serverURL+"/", "slash-key")
+	key, err := resolveFirstIssuerKey(resolver, serverURL+"/", "slash-key")
 
 	assert.NoError(t, err)
 	assert.NotNil(t, key)
@@ -544,15 +569,15 @@ func TestResolveIssuerKey_DefaultCacheTTL(t *testing.T) {
 	assert.Equal(t, DefaultJwksCacheTTL, resolver.cacheTTL)
 }
 
-func TestFindKeyInSet(t *testing.T) {
+func TestSelectCandidateKeys(t *testing.T) {
 	logging.Configure(testLoggingConfig)
 
 	tests := []struct {
-		testName    string
-		keySet      func(t *testing.T) jwk.Set
-		kid         string
-		expectError error
-		expectedKid string
+		testName     string
+		keySet       func(t *testing.T) jwk.Set
+		kid          string
+		expectError  error
+		expectedKids []string
 	}{
 		{
 			testName: "empty keyset returns error",
@@ -567,16 +592,16 @@ func TestFindKeyInSet(t *testing.T) {
 			keySet: func(t *testing.T) jwk.Set {
 				return generateMultiKeyJWKSet(t, []string{"a", "b", "c"})
 			},
-			kid:         "b",
-			expectedKid: "b",
+			kid:          "b",
+			expectedKids: []string{"b"},
 		},
 		{
-			testName: "empty kid returns first key",
+			testName: "empty kid returns every key of the set",
 			keySet: func(t *testing.T) jwk.Set {
 				return generateMultiKeyJWKSet(t, []string{"first", "second"})
 			},
-			kid:         "",
-			expectedKid: "first",
+			kid:          "",
+			expectedKids: []string{"first", "second"},
 		},
 		{
 			testName: "non-existent kid returns error",
@@ -586,22 +611,45 @@ func TestFindKeyInSet(t *testing.T) {
 			kid:         "z",
 			expectError: ErrorIssuerKeyNotFound,
 		},
+		{
+			testName: "encryption keys are never candidates",
+			keySet: func(t *testing.T) jwk.Set {
+				keySet := generateMultiKeyJWKSet(t, []string{"enc-key", "sig-key"})
+				encKey, _ := keySet.Key(0)
+				require.NoError(t, encKey.Set(jwk.KeyUsageKey, "enc"))
+				return keySet
+			},
+			kid:          "",
+			expectedKids: []string{"sig-key"},
+		},
+		{
+			testName: "key_ops without verify excludes the key",
+			keySet: func(t *testing.T) jwk.Set {
+				keySet := generateMultiKeyJWKSet(t, []string{"wrap-only"})
+				key, _ := keySet.Key(0)
+				require.NoError(t, key.Set(jwk.KeyOpsKey, jwk.KeyOperationList{jwk.KeyOpWrapKey}))
+				return keySet
+			},
+			kid:         "wrap-only",
+			expectError: ErrorIssuerKeyNotFound,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
-			keySet := tc.keySet(t)
-			key, err := findKeyInSet(keySet, tc.kid)
+			keys, err := selectCandidateKeys(tc.keySet(t), tc.kid)
 
 			if tc.expectError != nil {
 				assert.ErrorIs(t, err, tc.expectError)
-				assert.Nil(t, key)
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, key)
-				keyID, ok := key.KeyID()
+				assert.Nil(t, keys)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, keys, len(tc.expectedKids))
+			for i, expectedKid := range tc.expectedKids {
+				keyID, ok := keys[i].KeyID()
 				assert.True(t, ok)
-				assert.Equal(t, tc.expectedKid, keyID)
+				assert.Equal(t, expectedKid, keyID)
 			}
 		})
 	}
@@ -659,10 +707,11 @@ func TestResolveIssuerKey_FallbackPath_MultipleAuthServers(t *testing.T) {
 	issuerServerURL = issuerServer.URL
 
 	c := cache.New(5*time.Minute, 10*time.Minute)
-	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
+	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL).
+		WithAllowedMetadataHosts([]string{hostOf(t, failingAuthServer.URL), hostOf(t, workingAuthServerURL)})
 
 	// Should succeed via the second authorization server
-	key, err := resolver.ResolveIssuerKey(issuerServerURL, "multi-auth-key")
+	key, err := resolveFirstIssuerKey(resolver, issuerServerURL, "multi-auth-key")
 
 	assert.NoError(t, err)
 	assert.NotNil(t, key)
@@ -694,7 +743,7 @@ func TestResolveIssuerKey_FallbackPath_NoAuthorizationServers(t *testing.T) {
 	c := cache.New(5*time.Minute, 10*time.Minute)
 	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
 
-	key, err := resolver.ResolveIssuerKey(issuerServerURL, "some-key")
+	key, err := resolveFirstIssuerKey(resolver, issuerServerURL, "some-key")
 	assert.ErrorIs(t, err, ErrorIssuerMetadataNotFound)
 	assert.Nil(t, key)
 }
@@ -726,7 +775,539 @@ func TestResolveIssuerKey_InvalidJWKSContent(t *testing.T) {
 	resolver := NewCachingHttpsIssuerResolver(c, DefaultJwksCacheTTL)
 
 	// Invalid JWKS content in primary path leads to fallback, which also fails → metadata not found
-	key, err := resolver.ResolveIssuerKey(serverURL, "key-1")
+	key, err := resolveFirstIssuerKey(resolver, serverURL, "key-1")
 	assert.Error(t, err)
 	assert.Nil(t, key)
+}
+
+// advanceableClock is a common.Clock whose time can be moved forward, for
+// testing the cache and refetch bookkeeping without sleeping.
+type advanceableClock struct {
+	now time.Time
+}
+
+// Now returns the clock's current time.
+func (c *advanceableClock) Now() time.Time {
+	return c.now
+}
+
+// advance moves the clock forward.
+func (c *advanceableClock) advance(d time.Duration) {
+	c.now = c.now.Add(d)
+}
+
+// TestResolveIssuerKeys_WellKnownPathPlacement verifies that the well-known
+// segment is inserted between host and path for SD-JWT VC / RFC 8414 and
+// appended for OpenID4VCI, as the respective specs prescribe.
+func TestResolveIssuerKeys_WellKnownPathPlacement(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	tests := []struct {
+		testName    string
+		issuerPath  string
+		expectedVC  string
+		expectedVCI string
+	}{
+		{
+			testName:    "issuer without a path",
+			issuerPath:  "",
+			expectedVC:  "/.well-known/jwt-vc-issuer",
+			expectedVCI: "/.well-known/openid-credential-issuer",
+		},
+		{
+			testName:    "issuer with a tenant path",
+			issuerPath:  "/tenant1",
+			expectedVC:  "/.well-known/jwt-vc-issuer/tenant1",
+			expectedVCI: "/tenant1/.well-known/openid-credential-issuer",
+		},
+		{
+			testName:    "issuer with a trailing slash",
+			issuerPath:  "/tenant1/",
+			expectedVC:  "/.well-known/jwt-vc-issuer/tenant1",
+			expectedVCI: "/tenant1/.well-known/openid-credential-issuer",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			base, err := url.Parse("https://example.com" + tc.issuerPath)
+			require.NoError(t, err)
+
+			assert.Equal(t, "https://example.com"+tc.expectedVC, wellKnownURLInserted(base, WellKnownJwtVcIssuer))
+			assert.Equal(t, "https://example.com"+tc.expectedVCI, wellKnownURLAppended(base, WellKnownOIDCCredentialIssuer))
+		})
+	}
+}
+
+// TestResolveIssuerKeys_MultiTenantIssuer verifies that an issuer with a path
+// component is resolved through the inserted well-known path.
+func TestResolveIssuerKeys_MultiTenantIssuer(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	keySet, _ := generateTestJWKSet(t, "tenant-key")
+	jwksBytes := marshalJWKSet(t, keySet)
+
+	var issuerURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case WellKnownJwtVcIssuer + "/tenant1":
+			metadata := fmt.Sprintf(`{"issuer": "%s", "jwks_uri": "%s/jwks"}`, issuerURL, issuerURL)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(metadata))
+		case "/tenant1/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(jwksBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	issuerURL = server.URL + "/tenant1"
+
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+	key, err := resolveFirstIssuerKey(resolver, issuerURL, "tenant-key")
+	require.NoError(t, err)
+	require.NotNil(t, key)
+}
+
+// TestResolveIssuerKeys_MetadataURLRestrictions verifies that URLs taken from a
+// metadata document may not leave the issuer's origin unless the host was
+// explicitly allowed.
+func TestResolveIssuerKeys_MetadataURLRestrictions(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	keySet, _ := generateTestJWKSet(t, "off-host-key")
+	jwksBytes := marshalJWKSet(t, keySet)
+
+	// A separate host serving the JWKS.
+	jwksServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwksBytes)
+	}))
+	defer jwksServer.Close()
+
+	tests := []struct {
+		testName     string
+		jwksURI      func(issuerURL string) string
+		allowedHosts []string
+		expectError  bool
+	}{
+		{
+			testName:    "jwks_uri on the issuer's own host is followed",
+			jwksURI:     func(issuerURL string) string { return issuerURL + "/jwks" },
+			expectError: false,
+		},
+		{
+			testName:    "jwks_uri on a foreign host is refused",
+			jwksURI:     func(string) string { return jwksServer.URL + "/jwks" },
+			expectError: true,
+		},
+		{
+			testName:     "jwks_uri on an explicitly allowed host is followed",
+			jwksURI:      func(string) string { return jwksServer.URL + "/jwks" },
+			allowedHosts: []string{hostOf(t, jwksServer.URL)},
+			expectError:  false,
+		},
+		{
+			testName:    "jwks_uri pointing at the link-local metadata service is refused",
+			jwksURI:     func(string) string { return "http://169.254.169.254/latest/meta-data/" },
+			expectError: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			var issuerURL string
+			issuerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case WellKnownJwtVcIssuer:
+					metadata := fmt.Sprintf(`{"issuer": "%s", "jwks_uri": "%s"}`, issuerURL, tc.jwksURI(issuerURL))
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(metadata))
+				case "/jwks":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write(jwksBytes)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer issuerServer.Close()
+			issuerURL = issuerServer.URL
+
+			resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL).
+				WithAllowedMetadataHosts(tc.allowedHosts)
+
+			key, err := resolveFirstIssuerKey(resolver, issuerURL, "off-host-key")
+			if tc.expectError {
+				assert.ErrorIs(t, err, ErrorIssuerMetadataNotFound)
+				assert.Nil(t, key)
+				return
+			}
+			assert.NoError(t, err)
+			assert.NotNil(t, key)
+		})
+	}
+}
+
+// TestResolveIssuerKeys_RedirectsMayNotLeaveTheOrigin verifies that a metadata
+// endpoint cannot bounce the resolver onto another host.
+func TestResolveIssuerKeys_RedirectsMayNotLeaveTheOrigin(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	internalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"secret": "internal"}`))
+	}))
+	defer internalServer.Close()
+
+	issuerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, internalServer.URL+"/internal", http.StatusFound)
+	}))
+	defer issuerServer.Close()
+
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+	key, err := resolveFirstIssuerKey(resolver, issuerServer.URL, "any-key")
+	assert.ErrorIs(t, err, ErrorIssuerMetadataNotFound)
+	assert.Nil(t, key)
+}
+
+// TestResolveIssuerKeys_OversizedResponseIsRejected verifies that a hostile
+// endpoint cannot stream an unbounded body into the verifier.
+func TestResolveIssuerKeys_OversizedResponseIsRejected(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	keySet, _ := generateTestJWKSet(t, "padded-key")
+	jwksBytes := marshalJWKSet(t, keySet)
+
+	// Otherwise valid metadata, padded past the size limit: without the limit
+	// the resolution would succeed, so the test really exercises the bound.
+	padding := strings.Repeat("a", maxMetadataResponseBytes)
+
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case WellKnownJwtVcIssuer:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer": "%s", "jwks_uri": "%s/jwks", "padding": "%s"}`,
+				serverURL, serverURL, padding)))
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(jwksBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+	key, err := resolveFirstIssuerKey(resolver, serverURL, "padded-key")
+	assert.ErrorIs(t, err, ErrorIssuerMetadataNotFound)
+	assert.Nil(t, key)
+}
+
+// TestResolveIssuerKeys_FailuresAreCached verifies that a failing issuer is not
+// contacted again for every token naming it.
+func TestResolveIssuerKeys_FailuresAreCached(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+	_, firstErr := resolver.ResolveIssuerKeys(context.Background(), server.URL, "key-1")
+	assert.ErrorIs(t, firstErr, ErrorIssuerMetadataNotFound)
+	requestsAfterFirst := requestCount.Load()
+	assert.Greater(t, requestsAfterFirst, int32(0))
+
+	_, secondErr := resolver.ResolveIssuerKeys(context.Background(), server.URL, "key-1")
+	assert.ErrorIs(t, secondErr, ErrorIssuerMetadataNotFound)
+	assert.Equal(t, requestsAfterFirst, requestCount.Load(),
+		"a cached failure must not trigger further outbound requests")
+}
+
+// TestResolveIssuerKeys_KeyRotation verifies that an unknown kid triggers a
+// refetch once the rate limit has passed, and does not before.
+func TestResolveIssuerKeys_KeyRotation(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	oldKeySet, _ := generateTestJWKSet(t, "old-key")
+	newKeySet, _ := generateTestJWKSet(t, "new-key")
+	servedJwks := marshalJWKSet(t, oldKeySet)
+
+	var jwksRequests atomic.Int32
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case WellKnownJwtVcIssuer:
+			metadata := fmt.Sprintf(`{"issuer": "%s", "jwks_uri": "%s/jwks"}`, serverURL, serverURL)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(metadata))
+		case "/jwks":
+			jwksRequests.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(servedJwks)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+
+	clock := &advanceableClock{now: time.Now()}
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL).
+		WithClock(clock)
+
+	key, err := resolveFirstIssuerKey(resolver, serverURL, "old-key")
+	require.NoError(t, err)
+	require.NotNil(t, key)
+	assert.Equal(t, int32(1), jwksRequests.Load())
+
+	// The issuer rotates its key.
+	servedJwks = marshalJWKSet(t, newKeySet)
+
+	// Immediately after the first fetch the unknown kid must not trigger a refetch.
+	_, err = resolver.ResolveIssuerKeys(context.Background(), serverURL, "new-key")
+	assert.ErrorIs(t, err, ErrorIssuerKeyNotFound)
+	assert.Equal(t, int32(1), jwksRequests.Load(), "refetch must be rate-limited")
+
+	// Once the minimum interval has passed, the rotated key is picked up
+	// without waiting for the cache TTL to expire.
+	clock.advance(MinJwksRefetchInterval)
+	rotatedKey, err := resolveFirstIssuerKey(resolver, serverURL, "new-key")
+	require.NoError(t, err)
+	keyID, ok := rotatedKey.KeyID()
+	assert.True(t, ok)
+	assert.Equal(t, "new-key", keyID)
+	assert.Equal(t, int32(2), jwksRequests.Load())
+}
+
+// TestResolveIssuerKeys_FallbackPathIssuerMismatch verifies that the RFC 8414
+// issuer check is enforced on the fallback path too — for the credential issuer
+// metadata as well as for the authorization server metadata.
+func TestResolveIssuerKeys_FallbackPathIssuerMismatch(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	keySet, _ := generateTestJWKSet(t, "fallback-key")
+	jwksBytes := marshalJWKSet(t, keySet)
+
+	tests := []struct {
+		testName        string
+		oidcIssuer      func(issuerURL string) string
+		authIssuer      func(issuerURL string) string
+		expectedError   error
+		expectResolvedK bool
+	}{
+		{
+			testName:        "matching issuers resolve",
+			oidcIssuer:      func(issuerURL string) string { return issuerURL },
+			authIssuer:      func(issuerURL string) string { return issuerURL },
+			expectResolvedK: true,
+		},
+		{
+			testName:      "credential issuer metadata claiming another identity is refused",
+			oidcIssuer:    func(string) string { return "https://somebody-else.example.com" },
+			authIssuer:    func(issuerURL string) string { return issuerURL },
+			expectedError: ErrorIssuerMismatch,
+		},
+		{
+			testName:      "authorization server metadata claiming another identity is refused",
+			oidcIssuer:    func(issuerURL string) string { return issuerURL },
+			authIssuer:    func(string) string { return "https://somebody-else.example.com" },
+			expectedError: ErrorIssuerMetadataNotFound,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			var issuerURL string
+			// The authorization server is hosted by the issuer itself, so no
+			// extra allowed host is needed.
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case WellKnownOIDCCredentialIssuer:
+					_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer": "%s", "authorization_servers": ["%s"]}`,
+						tc.oidcIssuer(issuerURL), issuerURL)))
+				case WellKnownOAuthAuthzServer:
+					_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer": "%s", "jwks_uri": "%s/jwks"}`,
+						tc.authIssuer(issuerURL), issuerURL)))
+				case "/jwks":
+					_, _ = w.Write(jwksBytes)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			issuerURL = server.URL
+
+			resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+			key, err := resolveFirstIssuerKey(resolver, issuerURL, "fallback-key")
+			if tc.expectResolvedK {
+				assert.NoError(t, err)
+				assert.NotNil(t, key)
+				return
+			}
+			assert.ErrorIs(t, err, tc.expectedError)
+			assert.Nil(t, key)
+		})
+	}
+}
+
+// TestResolveIssuerKeys_IssuerIdentifierWithTrailingSlash verifies that an
+// issuer whose canonical identifier ends in a slash is accepted: both sides of
+// the RFC 8414 comparison are canonicalized the same way.
+func TestResolveIssuerKeys_IssuerIdentifierWithTrailingSlash(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	keySet, _ := generateTestJWKSet(t, "slash-key")
+	jwksBytes := marshalJWKSet(t, keySet)
+
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case WellKnownJwtVcIssuer:
+			// The issuer publishes its identifier WITH a trailing slash.
+			metadata := fmt.Sprintf(`{"issuer": "%s/", "jwks_uri": "%s/jwks"}`, serverURL, serverURL)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(metadata))
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(jwksBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+	for _, requestedIssuer := range []string{serverURL, serverURL + "/"} {
+		key, err := resolveFirstIssuerKey(resolver, requestedIssuer, "slash-key")
+		assert.NoError(t, err, "issuer %s should resolve", requestedIssuer)
+		assert.NotNil(t, key)
+	}
+}
+
+// TestResolveIssuerKeys_InvalidIssuerURL verifies that identifiers that are not
+// usable http(s) URLs are rejected before any request is made.
+func TestResolveIssuerKeys_InvalidIssuerURL(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+	for _, issuer := range []string{"", "not-a-url", "ftp://example.com", "https://"} {
+		keys, err := resolver.ResolveIssuerKeys(context.Background(), issuer, "")
+		assert.ErrorIs(t, err, ErrorInvalidIssuerURL, "issuer %q should be rejected", issuer)
+		assert.Nil(t, keys)
+	}
+}
+
+// TestJwksTTL verifies that an origin may shorten, but not extend, the lifetime
+// of its cached key set.
+func TestJwksTTL(t *testing.T) {
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), 10*time.Minute)
+
+	tests := []struct {
+		testName    string
+		declared    time.Duration
+		expectedTTL time.Duration
+	}{
+		{"no max-age falls back to the configured TTL", 0, 10 * time.Minute},
+		{"a shorter max-age is honoured", 2 * time.Minute, 2 * time.Minute},
+		{"a longer max-age is capped at the configured TTL", time.Hour, 10 * time.Minute},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			assert.Equal(t, tc.expectedTTL, resolver.jwksTTL(tc.declared))
+		})
+	}
+}
+
+// TestMaxAgeOf verifies parsing of the Cache-Control max-age directive.
+func TestMaxAgeOf(t *testing.T) {
+	tests := []struct {
+		testName     string
+		cacheControl string
+		expected     time.Duration
+	}{
+		{"absent header", "", 0},
+		{"plain max-age", "max-age=120", 2 * time.Minute},
+		{"max-age among other directives", "public, max-age=60, must-revalidate", time.Minute},
+		{"unparseable max-age", "max-age=soon", 0},
+		{"zero max-age", "max-age=0", 0},
+		{"no max-age directive", "no-store", 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			header := http.Header{}
+			if tc.cacheControl != "" {
+				header.Set("Cache-Control", tc.cacheControl)
+			}
+			assert.Equal(t, tc.expected, maxAgeOf(header))
+		})
+	}
+}
+
+// TestResolveIssuerKeys_FailedRefetchKeepsCachedKeys verifies that a rotation
+// refetch that fails does not replace a working cached key set with a failure.
+func TestResolveIssuerKeys_FailedRefetchKeepsCachedKeys(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	keySet, _ := generateTestJWKSet(t, "known-key")
+	jwksBytes := marshalJWKSet(t, keySet)
+
+	metadataAvailable := true
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !metadataAvailable {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		switch r.URL.Path {
+		case WellKnownJwtVcIssuer:
+			metadata := fmt.Sprintf(`{"issuer": "%s", "jwks_uri": "%s/jwks"}`, serverURL, serverURL)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(metadata))
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(jwksBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+
+	clock := &advanceableClock{now: time.Now()}
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL).
+		WithClock(clock)
+
+	_, err := resolveFirstIssuerKey(resolver, serverURL, "known-key")
+	require.NoError(t, err)
+
+	// The issuer goes down, and a token names a key id that is not cached.
+	metadataAvailable = false
+	clock.advance(MinJwksRefetchInterval)
+
+	_, err = resolver.ResolveIssuerKeys(context.Background(), serverURL, "unknown-key")
+	assert.ErrorIs(t, err, ErrorIssuerKeyNotFound)
+
+	// The known key must still verify — the failed refetch may not have
+	// replaced the cached set with a negative entry.
+	key, err := resolveFirstIssuerKey(resolver, serverURL, "known-key")
+	assert.NoError(t, err)
+	assert.NotNil(t, key)
 }

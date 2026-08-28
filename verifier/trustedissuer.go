@@ -67,16 +67,10 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 	issuerID := verifiableCredential.Contents().Issuer.ID
 	til := trustContext.GetTrustedIssuersLists()
 
-	// HTTPS-URL-based issuers are validated by URL matching against the
-	// configured trusted issuer URLs. Cryptographic trust was already
-	// established during JWT signature verification (via HTTPS metadata
-	// discovery and JWKS). No EBSI attribute-based validation or external
-	// registry lookup is needed.
-	if isHttpsIssuer(issuerID) {
-		return tpvs.validateHttpsIssuer(issuerID, til)
-	}
-
-	// DID-based issuers continue through the existing type-based dispatch.
+	// The issuer identifier is passed to the registries as-is, whether it is a
+	// DID or an HTTPS URL. A trusted-issuers-list entry is always the address
+	// of a registry to query — never an issuer identity in its own right — so
+	// there is no identifier-dependent dispatch here.
 	for _, credentialType := range verifiableCredential.Contents().Types {
 		isWildcard, err := isWildcardTil(til[credentialType])
 		if isWildcard {
@@ -88,8 +82,11 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 			return false, err
 		}
 
-		tilEntries, credentialSupported := til[credentialType]
-		if !credentialSupported {
+		// An entry that is present but empty means the same as no entry at all:
+		// the validation context carries a key for every type of the
+		// presentation, whether or not the service configured a list for it.
+		tilEntries := til[credentialType]
+		if len(tilEntries) == 0 {
 			// A spec-compliant W3C credential carries the generic base type
 			// (e.g. "VerifiableCredential") alongside its specific type. The
 			// base type is not a trust-governed type, so when it has no TIL
@@ -145,23 +142,6 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 	}
 
 	return true, err
-}
-
-// validateHttpsIssuer checks whether an HTTPS-URL-based issuer matches any
-// of the configured trusted issuer URLs across all credential types. The
-// wildcard URL ("*") matches any HTTPS issuer. Returns (true, nil) when the
-// issuer is found, or (false, ErrorNoTilDefined) otherwise.
-func (tpvs *TrustedIssuerValidationService) validateHttpsIssuer(issuerID string, til map[string][]configModel.TrustedIssuersList) (bool, error) {
-	for credType, tilEntries := range til {
-		for _, entry := range tilEntries {
-			if matchesHttpsIssuerURL(issuerID, entry.Url) {
-				logging.Log().Debugf("HTTPS issuer %s matched trusted issuer URL %s for type %s.", issuerID, entry.Url, credType)
-				return true, nil
-			}
-		}
-	}
-	logging.Log().Warnf("HTTPS issuer %s did not match any configured trusted issuer URL.", issuerID)
-	return false, ErrorNoTilDefined
 }
 
 // isWildcardTil checks whether the given TIL list contains the wildcard

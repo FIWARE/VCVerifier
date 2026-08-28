@@ -191,7 +191,8 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 	// Create the HTTPS issuer resolver for metadata-based key discovery.
 	// Uses a dedicated cache with the same cleanup pattern as other verifier caches.
 	httpsResolverCache := cache.New(DefaultJwksCacheTTL, 2*DefaultJwksCacheTTL)
-	httpsResolver := NewCachingHttpsIssuerResolver(httpsResolverCache, DefaultJwksCacheTTL)
+	httpsResolver := NewCachingHttpsIssuerResolver(httpsResolverCache, DefaultJwksCacheTTL).
+		WithAllowedMetadataHosts(config.Verifier.HttpsIssuerAllowedHosts)
 	globalHttpsIssuerResolver = httpsResolver
 
 	checker := NewJWTProofChecker(registry, jAdESValidator).WithHttpsResolver(httpsResolver)

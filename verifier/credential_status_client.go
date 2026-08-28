@@ -14,6 +14,7 @@ package verifier
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -508,7 +509,7 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 	issuerDID := extractIssFromPayload(msg.Payload())
 	if issuerDID != "" {
 		logging.Log().Debugf("Status list JWT has iss claim %s, verifying via issuer key resolution", issuerDID)
-		return v.verifyWithISS(jwtBytes, msg, alg, issuerDID)
+		return v.verifyWithISS(jwtBytes, msg, issuerDID)
 	}
 
 	logging.Log().Debug("Status list JWT has no iss claim, falling back to x5c verification")
@@ -516,16 +517,19 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 }
 
 // verifyWithISS resolves the public key from the iss identifier and verifies
-// the JWT signature. The identifier may be a DID or an https:// URL.
-func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Message, alg jwa.SignatureAlgorithm, issuerDID string) ([]byte, error) {
-	kid, _ := msg.Signatures()[0].ProtectedHeaders().KeyID()
+// the JWT signature. The identifier may be a DID or an https:// URL. The
+// algorithm is taken from and validated against the protected headers by
+// verifyJWSWithCandidateKeys.
+func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Message, issuerDID string) ([]byte, error) {
+	headers := msg.Signatures()[0].ProtectedHeaders()
+	kid, _ := headers.KeyID()
 
-	key, err := v.resolveKeyFromIssuer(issuerDID, kid)
+	keys, err := v.resolveKeysFromIssuer(issuerDID, kid)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to resolve key for %s: %v", ErrorStatusListUnparseable, issuerDID, err)
 	}
 
-	payload, err := jws.Verify(jwtBytes, jws.WithKey(alg, key))
+	payload, _, err := verifyJWSWithCandidateKeys(jwtBytes, headers, keys)
 	if err != nil {
 		return nil, fmt.Errorf("%w: status list JWT signature verification failed for %s: %v", ErrorStatusListUnparseable, issuerDID, err)
 	}
@@ -571,12 +575,19 @@ func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.H
 	return payload, nil
 }
 
-// resolveKeyFromIssuer resolves the status-list signing key for an issuer
-// identifier, treating it as a generic URI: an https:// URL is resolved via
-// well-known issuer metadata and JWKS, anything else via DID resolution.
-func (v *StatusListJWTVerifierImpl) resolveKeyFromIssuer(issuer, kid string) (interface{}, error) {
+// resolveKeysFromIssuer resolves the candidate status-list signing keys for an
+// issuer identifier, treating it as a generic URI: an https:// URL is resolved
+// via well-known issuer metadata and JWKS, anything else via DID resolution.
+//
+// DID resolution yields a single key. An HTTPS issuer can yield several when
+// the JWT carries no kid, because a JWKS offers nothing to select on then.
+func (v *StatusListJWTVerifierImpl) resolveKeysFromIssuer(issuer, kid string) ([]jwk.Key, error) {
 	if !isHttpsIssuer(issuer) {
-		return v.resolveKeyFromDID(issuer, kid)
+		key, err := v.resolveKeyFromDID(issuer, kid)
+		if err != nil {
+			return nil, err
+		}
+		return []jwk.Key{key}, nil
 	}
 
 	if v.httpsResolver == nil {
@@ -584,19 +595,21 @@ func (v *StatusListJWTVerifierImpl) resolveKeyFromIssuer(issuer, kid string) (in
 		return nil, ErrorHttpsIssuerNotSupported
 	}
 
-	key, err := v.httpsResolver.ResolveIssuerKey(issuer, kid)
+	// The status list fetch has no context to inherit yet, so the resolver's
+	// own request timeout is the only bound on the lookup.
+	keys, err := v.httpsResolver.ResolveIssuerKeys(context.Background(), issuer, kid)
 	if err != nil {
 		logging.Log().Warnf("Failed to resolve key for HTTPS status list issuer %s: %v", issuer, err)
 		return nil, err
 	}
-	logging.Log().Debugf("Resolved status list verification key for HTTPS issuer %s (kid=%s)", issuer, kid)
-	return key, nil
+	logging.Log().Debugf("Resolved %d status list verification key(s) for HTTPS issuer %s (kid=%s)", len(keys), issuer, kid)
+	return keys, nil
 }
 
 // resolveKeyFromDID resolves the DID document and finds the verification
 // method matching the given kid. When kid is empty, the first verification
 // method with a JWK key is returned.
-func (v *StatusListJWTVerifierImpl) resolveKeyFromDID(issuerDID, kid string) (interface{}, error) {
+func (v *StatusListJWTVerifierImpl) resolveKeyFromDID(issuerDID, kid string) (jwk.Key, error) {
 	docRes, err := v.registry.Resolve(issuerDID)
 	if err != nil {
 		logging.Log().Warnf("Failed to resolve DID %s for status list verification: %v", issuerDID, err)

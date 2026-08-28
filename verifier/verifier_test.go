@@ -27,6 +27,7 @@ import (
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
 	logging "github.com/fiware/VCVerifier/logging"
+	tir "github.com/fiware/VCVerifier/tir"
 	"github.com/google/go-cmp/cmp"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
@@ -2504,14 +2505,14 @@ func TestGetHolderValidationContext(t *testing.T) {
 	}
 }
 
-// createMockCredentialsWithHttpsIssuer creates credential config entries where the
-// trusted participant and trusted issuer lists contain HTTPS issuer URLs for
-// direct URL matching (used in integration-level tests for HTTPS-based issuers).
-func createMockCredentialsWithHttpsIssuer(serviceId, scope, credentialType, httpsIssuerURL string) map[string]map[string]configModel.ScopeEntry {
+// createMockCredentialsWithHttpsIssuer creates credential config entries whose
+// trust lists point at a registry endpoint. An HTTPS-based issuer is resolved
+// through that registry just like a DID-based one.
+func createMockCredentialsWithHttpsIssuer(serviceId, scope, credentialType, registryURL string) map[string]map[string]configModel.ScopeEntry {
 	credential := configModel.Credential{
 		Type:                     credentialType,
-		TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: httpsIssuerURL}},
-		TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: httpsIssuerURL}},
+		TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: registryURL}},
+		TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: registryURL}},
 	}
 
 	entry := configModel.ScopeEntry{Credentials: []configModel.Credential{credential}}
@@ -2570,38 +2571,52 @@ func TestAuthenticationResponseHttpsIssuer(t *testing.T) {
 
 	const httpsIssuerURL = "https://issuer.example.com"
 
+	const registryURL = "https://til-pdc.ebsi.fiware.dev"
+
 	type httpsAuthTest struct {
-		testName         string
-		issuerURL        string
-		trustedURL       string
-		sameDevice       bool
-		expectedError    error
-		expectedResponse Response
+		testName  string
+		issuerURL string
+		// trustedIssuersURL is the trusted-issuers-list entry: a registry
+		// endpoint to query, or the wildcard that waives the lookup.
+		trustedIssuersURL string
+		// registeredIssuers are the identifiers the registry knows.
+		registeredIssuers []string
+		expectedError     error
+		expectedResponse  Response
 	}
+
+	successResponse := Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"}
 
 	tests := []httpsAuthTest{
 		{
-			testName:         "HTTPS issuer matching trusted URL should succeed (same device).",
-			issuerURL:        httpsIssuerURL,
-			trustedURL:       httpsIssuerURL,
-			sameDevice:       true,
-			expectedError:    nil,
-			expectedResponse: Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"},
+			testName:          "HTTPS issuer registered at the configured registry should succeed (same device).",
+			issuerURL:         httpsIssuerURL,
+			trustedIssuersURL: registryURL,
+			registeredIssuers: []string{httpsIssuerURL},
+			expectedError:     nil,
+			expectedResponse:  successResponse,
 		},
 		{
-			testName:         "HTTPS issuer matching wildcard trusted URL should succeed.",
-			issuerURL:        httpsIssuerURL,
-			trustedURL:       "*",
-			sameDevice:       true,
-			expectedError:    nil,
-			expectedResponse: Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"},
+			testName:          "HTTPS issuer with a wildcard til skips the issuer lookup but still has to be a known participant.",
+			issuerURL:         httpsIssuerURL,
+			trustedIssuersURL: WILDCARD_TIL,
+			registeredIssuers: []string{httpsIssuerURL},
+			expectedError:     nil,
+			expectedResponse:  successResponse,
 		},
 		{
-			testName:      "HTTPS issuer not matching any trusted URL should fail at participant validation.",
-			issuerURL:     httpsIssuerURL,
-			trustedURL:    "https://other-issuer.example.com",
-			sameDevice:    true,
-			expectedError: ErrorInvalidCredential,
+			testName:          "HTTPS issuer unknown to the registry should fail at participant validation.",
+			issuerURL:         httpsIssuerURL,
+			trustedIssuersURL: registryURL,
+			registeredIssuers: []string{},
+			expectedError:     ErrorInvalidCredential,
+		},
+		{
+			testName:          "HTTPS issuer equal to the configured registry URL must not be trusted.",
+			issuerURL:         registryURL,
+			trustedIssuersURL: registryURL,
+			registeredIssuers: []string{},
+			expectedError:     ErrorInvalidCredential,
 		},
 	}
 
@@ -2632,8 +2647,8 @@ func TestAuthenticationResponseHttpsIssuer(t *testing.T) {
 							Credentials: []configModel.Credential{
 								{
 									Type:                     "CustomerCredential",
-									TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: tc.trustedURL}},
-									TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: tc.trustedURL}},
+									TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: registryURL}},
+									TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: tc.trustedIssuersURL}},
 									JwtInclusion:             configModel.JwtInclusion{Enabled: &trueOption},
 								},
 							},
@@ -2642,10 +2657,15 @@ func TestAuthenticationResponseHttpsIssuer(t *testing.T) {
 				},
 			}
 
-			// Use real TrustedParticipantValidationService (no mock) — the HTTPS
-			// issuer path does not require external registry clients, only URL matching.
-			tpvs := &TrustedParticipantValidationService{}
-			tivs := &TrustedIssuerValidationService{}
+			// Use the real validation services with a mocked registry client:
+			// an HTTPS issuer is resolved through the very same registry
+			// lookups as a DID-based one.
+			tirClient := mockTirClient{
+				participantsList: tc.registeredIssuers,
+				expectedIssuer:   getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "CustomerCredential", map[string][]interface{}{})}),
+			}
+			tpvs := &TrustedParticipantValidationService{tirClient: tirClient, gaiaXClient: mockGaiaXClient{}}
+			tivs := &TrustedIssuerValidationService{tirClient: tirClient}
 			validationServices := []ValidationService{tpvs, tivs}
 
 			cv := CredentialVerifier{
@@ -2827,6 +2847,7 @@ func TestAuthenticationResponseHttpsIssuerCrossDevice(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	const httpsIssuerURL = "https://issuer.example.com"
+	const registryURL = "https://til-pdc.ebsi.fiware.dev"
 
 	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
 	sessionCache.sessions["login-state"] = loginSession{
@@ -2854,8 +2875,8 @@ func TestAuthenticationResponseHttpsIssuerCrossDevice(t *testing.T) {
 					Credentials: []configModel.Credential{
 						{
 							Type:                     "CustomerCredential",
-							TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: httpsIssuerURL}},
-							TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: httpsIssuerURL}},
+							TrustedParticipantsLists: []configModel.TrustedParticipantsList{{Type: "ebsi", Url: registryURL}},
+							TrustedIssuersLists:      configModel.TrustedIssuersLists{{Type: "ebsi", Url: registryURL}},
 							JwtInclusion:             configModel.JwtInclusion{Enabled: &trueOption},
 						},
 					},
@@ -2864,8 +2885,12 @@ func TestAuthenticationResponseHttpsIssuerCrossDevice(t *testing.T) {
 		},
 	}
 
-	tpvs := &TrustedParticipantValidationService{}
-	tivs := &TrustedIssuerValidationService{}
+	tirClient := mockTirClient{
+		participantsList: []string{httpsIssuerURL},
+		expectedIssuer:   getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "CustomerCredential", map[string][]interface{}{})}),
+	}
+	tpvs := &TrustedParticipantValidationService{tirClient: tirClient, gaiaXClient: mockGaiaXClient{}}
+	tivs := &TrustedIssuerValidationService{tirClient: tirClient}
 
 	cv := CredentialVerifier{
 		did:                  "did:key:verifier",
@@ -2898,6 +2923,7 @@ func TestAuthenticationResponseMultipleHttpsIssuers(t *testing.T) {
 
 	const httpsIssuerURL1 = "https://issuer-one.example.com"
 	const httpsIssuerURL2 = "https://issuer-two.example.com"
+	const registryURL = "https://til-pdc.ebsi.fiware.dev"
 
 	// Create a VP with two credentials from different HTTPS-based issuers.
 	httpsVC1 := getVCWithHttpsIssuer(httpsIssuerURL1)
@@ -2923,7 +2949,7 @@ func TestAuthenticationResponseMultipleHttpsIssuers(t *testing.T) {
 
 	nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
 
-	// Configure both HTTPS issuer URLs as trusted.
+	// A single registry endpoint; both HTTPS issuers are registered there.
 	credentialsConfig := mockCredentialConfig{
 		mockScopes: map[string]map[string]configModel.ScopeEntry{
 			"clientId": {
@@ -2932,12 +2958,10 @@ func TestAuthenticationResponseMultipleHttpsIssuers(t *testing.T) {
 						{
 							Type: "CustomerCredential",
 							TrustedParticipantsLists: []configModel.TrustedParticipantsList{
-								{Type: "ebsi", Url: httpsIssuerURL1},
-								{Type: "ebsi", Url: httpsIssuerURL2},
+								{Type: "ebsi", Url: registryURL},
 							},
 							TrustedIssuersLists: configModel.TrustedIssuersLists{
-								{Type: "ebsi", Url: httpsIssuerURL1},
-								{Type: "ebsi", Url: httpsIssuerURL2},
+								{Type: "ebsi", Url: registryURL},
 							},
 							JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption},
 						},
@@ -2947,8 +2971,12 @@ func TestAuthenticationResponseMultipleHttpsIssuers(t *testing.T) {
 		},
 	}
 
-	tpvs := &TrustedParticipantValidationService{}
-	tivs := &TrustedIssuerValidationService{}
+	tirClient := mockTirClient{
+		participantsList: []string{httpsIssuerURL1, httpsIssuerURL2},
+		expectedIssuer:   getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "CustomerCredential", map[string][]interface{}{})}),
+	}
+	tpvs := &TrustedParticipantValidationService{tirClient: tirClient, gaiaXClient: mockGaiaXClient{}}
+	tivs := &TrustedIssuerValidationService{tirClient: tirClient}
 
 	cv := CredentialVerifier{
 		did:                  "did:key:verifier",

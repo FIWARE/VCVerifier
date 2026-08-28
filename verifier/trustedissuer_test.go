@@ -184,51 +184,59 @@ func TestVerifyVC_Issuers(t *testing.T) {
 			participantsV5List:  []string{},
 			tirResponseV5:       tir.TrustedIssuer{},
 			expectedResult:      false},
-		// HTTPS URI issuer test cases
-		{testName: "HTTPS issuer matching a configured trusted issuer URL should be accepted.",
+		// HTTPS URI issuer test cases — an issuer identified by an HTTPS URL
+		// is looked up in the configured registries like any other issuer
+		// identifier; a til entry is an endpoint to query, never an identity.
+		{testName: "HTTPS issuer registered at the configured registry should be accepted.",
 			credentialToVerifiy: getHttpsIssuerCredential("https://issuer.example.com", "testClaim", "testValue"),
-			verificationContext: getHttpsIssuerVerificationContext("https://issuer.example.com"),
+			verificationContext: getHttpsIssuerVerificationContext(),
+			participantsList:    []string{"https://issuer.example.com"},
+			tirResponse:         getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "VerifiableCredential", map[string][]interface{}{})}),
 			expectedResult:      true},
-		{testName: "HTTPS issuer not matching any configured trusted issuer URL should be rejected.",
+		{testName: "HTTPS issuer unknown to the configured registry should be rejected.",
 			credentialToVerifiy: getHttpsIssuerCredential("https://untrusted.example.com", "testClaim", "testValue"),
-			verificationContext: getHttpsIssuerVerificationContext("https://issuer.example.com"),
+			verificationContext: getHttpsIssuerVerificationContext(),
+			participantsList:    []string{},
+			tirResponse:         tir.TrustedIssuer{},
 			expectedResult:      false},
-		{testName: "HTTPS issuer with wildcard TIL should be accepted.",
-			credentialToVerifiy: getHttpsIssuerCredential("https://any-issuer.example.com", "testClaim", "testValue"),
-			verificationContext: getHttpsIssuerVerificationContext("*"),
-			expectedResult:      true},
-		{testName: "HTTPS issuer should match regardless of trust list type field.",
+		{testName: "HTTPS issuer registered at a v5 registry should be accepted.",
 			credentialToVerifiy: getHttpsIssuerCredential("https://issuer.example.com", "testClaim", "testValue"),
 			verificationContext: TrustRegistriesValidationContext{
 				trustedIssuersLists: map[string][]config.TrustedIssuersList{
-					"VerifiableCredential": {{Type: "ebsi-v5", Url: "https://issuer.example.com"}},
+					"VerifiableCredential": {{Type: "ebsi-v5", Url: "https://til-pdc.ebsi.fiware.dev"}},
+				},
+			},
+			participantsV5List: []string{"https://issuer.example.com"},
+			tirResponseV5:      getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "VerifiableCredential", map[string][]interface{}{})}),
+			expectedResult:     true},
+		{testName: "HTTPS issuer with a wildcard til should be accepted without a registry lookup.",
+			credentialToVerifiy: getHttpsIssuerCredential("https://any-issuer.example.com", "testClaim", "testValue"),
+			verificationContext: TrustRegistriesValidationContext{
+				trustedIssuersLists: map[string][]config.TrustedIssuersList{
+					"VerifiableCredential": {{Type: "ebsi", Url: WILDCARD_TIL}},
 				},
 			},
 			expectedResult: true},
-		{testName: "HTTPS issuer matching one of multiple TIL entries should be accepted.",
-			credentialToVerifiy: getHttpsIssuerCredential("https://issuer-b.example.com", "testClaim", "testValue"),
+		{testName: "HTTPS issuer must not be trusted just because a til endpoint carries its URL.",
+			credentialToVerifiy: getHttpsIssuerCredential("https://til-pdc.ebsi.fiware.dev", "testClaim", "testValue"),
 			verificationContext: TrustRegistriesValidationContext{
 				trustedIssuersLists: map[string][]config.TrustedIssuersList{
-					"VerifiableCredential": {
-						{Type: "ebsi", Url: "https://issuer-a.example.com"},
-						{Type: "ebsi", Url: "https://issuer-b.example.com"},
-					},
+					"VerifiableCredential": {{Type: "ebsi", Url: "https://til-pdc.ebsi.fiware.dev"}},
 				},
 			},
-			expectedResult: true},
-		{testName: "DID issuer should still use EBSI dispatch when HTTPS TIL entries are also present.",
-			credentialToVerifiy: getVerifiableCredential("testClaim", "testValue"),
+			participantsList: []string{},
+			tirResponse:      tir.TrustedIssuer{},
+			expectedResult:   false},
+		{testName: "HTTPS issuer registered for another credential type must be rejected.",
+			credentialToVerifiy: getHttpsIssuerCredentialOfType("https://issuer.example.com", "AdminCredential"),
 			verificationContext: TrustRegistriesValidationContext{
 				trustedIssuersLists: map[string][]config.TrustedIssuersList{
-					"VerifiableCredential": {
-						{Type: "ebsi", Url: "http://my-til.org"},
-						{Type: "ebsi", Url: "https://issuer.example.com"},
-					},
+					"EmployeeCredential": {{Type: "ebsi", Url: "https://til-pdc.ebsi.fiware.dev"}},
 				},
 			},
-			participantsList: []string{"did:test:issuer"},
-			tirResponse:      getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "VerifiableCredential", map[string][]interface{}{})}),
-			expectedResult:   true},
+			participantsList: []string{"https://issuer.example.com"},
+			tirResponse:      getTrustedIssuer([]tir.IssuerAttribute{getAttribute(tir.TimeRange{}, "EmployeeCredential", map[string][]interface{}{})}),
+			expectedResult:   false},
 	}
 
 	for _, tc := range tests {
@@ -409,12 +417,30 @@ func getV5VerificationContext() ValidationContext {
 
 // getHttpsIssuerVerificationContext returns a validation context configured with
 // an HTTPS issuer URL (or wildcard) in the trusted issuers list.
-func getHttpsIssuerVerificationContext(issuerURL string) ValidationContext {
+// getHttpsIssuerVerificationContext returns a context with a single registry
+// endpoint configured for the base credential type. HTTPS-based issuers are
+// resolved through that registry, exactly like DID-based ones.
+func getHttpsIssuerVerificationContext() ValidationContext {
 	return TrustRegistriesValidationContext{
 		trustedIssuersLists: map[string][]config.TrustedIssuersList{
-			"VerifiableCredential": {{Type: "ebsi", Url: issuerURL}},
+			"VerifiableCredential": {{Type: "ebsi", Url: "https://til-pdc.ebsi.fiware.dev"}},
 		},
 	}
+}
+
+// getHttpsIssuerCredentialOfType creates a credential with an HTTPS-URL-based
+// issuer and a specific credential type next to the base type, for testing the
+// per-type scoping of the trust list.
+func getHttpsIssuerCredentialOfType(issuerURL, credentialType string) common.Credential {
+	vc, _ := common.CreateCredential(common.CredentialContents{
+		Issuer: &common.Issuer{ID: issuerURL},
+		Types:  []string{"VerifiableCredential", credentialType},
+		Subject: []common.Subject{
+			{
+				CustomFields: map[string]interface{}{"testClaim": "testValue"},
+			},
+		}}, common.CustomFields{})
+	return *vc
 }
 
 // getHttpsIssuerCredential creates a credential with an HTTPS-URL-based issuer.
