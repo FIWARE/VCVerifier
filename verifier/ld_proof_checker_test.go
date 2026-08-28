@@ -5,7 +5,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -779,19 +778,4 @@ func didKeyFromP256(t *testing.T, pub *ecdsa.PublicKey) string {
 	encoded, err := multibase.Encode(multibase.Base58BTC, append(prefix[:prefixLen], compressed...))
 	require.NoError(t, err)
 	return "did:key:" + encoded
-}
-
-// --- Detached JWS helper (local to this test file) ---
-
-// buildDetachedJWS constructs a detached JWS string from an algorithm and signature.
-func buildDetachedJWS(alg string, sig []byte) string {
-	header := map[string]interface{}{
-		"alg":  alg,
-		"b64":  false,
-		"crit": []string{"b64"},
-	}
-	headerJSON, _ := json.Marshal(header)
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
-	sigB64 := base64.RawURLEncoding.EncodeToString(sig)
-	return headerB64 + ".." + sigB64
 }

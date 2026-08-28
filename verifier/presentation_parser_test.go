@@ -1432,9 +1432,10 @@ func TestParseJSONLDPresentation_InvalidProofRejectedWithLDChecker(t *testing.T)
 	vpJSON, _ := signPresentation(t, pres, signer, verificationMethodID, docLoader)
 
 	var vpMap map[string]interface{}
-	json.Unmarshal(vpJSON, &vpMap)
+	require.NoError(t, json.Unmarshal(vpJSON, &vpMap))
 	vpMap["holder"] = "did:web:attacker.example.com" // tamper
-	tamperedJSON, _ := json.Marshal(vpMap)
+	tamperedJSON, marshalErr := json.Marshal(vpMap)
+	require.NoError(t, marshalErr)
 
 	parser := &ConfigurablePresentationParser{
 		ProofChecker:   newTestProofChecker(),
@@ -1547,9 +1548,10 @@ func TestParseJSONLDPresentation_VCWithInvalidProofRejected(t *testing.T) {
 	// the VP proof check itself will fail (which is still the correct behavior —
 	// tampering with the VP content invalidates the VP proof).
 	var vpMap map[string]interface{}
-	json.Unmarshal(vpJSON, &vpMap)
+	require.NoError(t, json.Unmarshal(vpJSON, &vpMap))
 	vpMap["verifiableCredential"] = []interface{}{vcWithBadProof}
-	modifiedJSON, _ := json.Marshal(vpMap)
+	modifiedJSON, marshalErr := json.Marshal(vpMap)
+	require.NoError(t, marshalErr)
 
 	parser := &ConfigurablePresentationParser{
 		ProofChecker:   newTestProofChecker(),

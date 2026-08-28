@@ -163,19 +163,6 @@ func signAndMarshal(t *testing.T, pres *Presentation, ctx *LinkedDataProofContex
 	return vpJSON, proof
 }
 
-// buildDetachedJWS constructs a detached JWS string from a header and signature.
-func buildDetachedJWS(alg string, sig []byte) string {
-	header := map[string]interface{}{
-		JWSHeaderAlg:  alg,
-		JWSHeaderB64:  false,
-		JWSHeaderCrit: []string{JWSHeaderB64},
-	}
-	headerJSON, _ := json.Marshal(header)
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
-	sigB64 := base64.RawURLEncoding.EncodeToString(sig)
-	return headerB64 + ".." + sigB64
-}
-
 // --- Existing ParseLDProof Tests ---
 
 func TestParseLDProof_JsonWebSignature2020(t *testing.T) {
@@ -1314,6 +1301,32 @@ func TestEnsureSuiteContext(t *testing.T) {
 // triple: with the suite context in place every proof field has to show up in
 // the canonical form, and tampering with any of them must break the
 // signature.
+// TestAddLinkedDataProof_SignerFailure verifies that a failure of the
+// underlying signer is surfaced as ErrorLDProofSign and that no half-built
+// proof is left on the presentation.
+func TestAddLinkedDataProof_SignerFailure(t *testing.T) {
+	loader := newTestDocumentLoader()
+
+	now := time.Now()
+	pres := &Presentation{
+		Context: []string{ContextCredentialsV1},
+		Type:    []string{TypeVerifiablePresentation},
+		Holder:  "did:web:holder.example.com",
+	}
+	err := pres.AddLinkedDataProof(&LinkedDataProofContext{
+		Created:            &now,
+		SignatureType:      ProofTypeJsonWebSignature2020,
+		Algorithm:          "ES256",
+		VerificationMethod: "did:web:holder.example.com#key-1",
+		Signer:             &failingSigner{},
+		DocumentLoader:     loader,
+		ProofPurpose:       ProofPurposeAuthentication,
+	})
+
+	assert.ErrorIs(t, err, ErrorLDProofSign)
+	assert.Empty(t, pres.Proofs, "a failed signature must not leave a proof behind")
+}
+
 func TestProofOptionsAreCoveredBySignature(t *testing.T) {
 	loader := newTestDocumentLoader()
 	privKey, pubJWK := generateTestES256Material(t)
