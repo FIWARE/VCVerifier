@@ -82,6 +82,7 @@ var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorWrongGrantType = errors.New("wrong_grant_type")
 var ErrorNoSuchCode = errors.New("no_such_code")
 var ErrorRedirectUriMismatch = errors.New("redirect_uri_does_not_match")
+var ErrorClientIdHostMismatch = errors.New("client_id_host_does_not_match_response_uri")
 var ErrorVerficationContextSetup = errors.New("no_valid_verification_context")
 var ErrorTokenUnparsable = errors.New("unable_to_parse_token")
 var ErrorRequiredCredentialNotProvided = errors.New("required_credential_not_provided")
@@ -1594,10 +1595,15 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 // larger QR/URI than "byValue"/"byReference", since nothing is fetched separately or embedded
 // as a compact JWT — see README.md for the resulting trade-off.
 func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, response_uri string, state string, clientId string, scope string, nonce string) (request string, err error) {
+	oidcClientId, err := resolveRedirectUriClientId(v.clientIdentification.Id, response_uri)
+	if err != nil {
+		return request, err
+	}
+
 	values := url.Values{}
 	values.Set("response_type", "vp_token")
 	values.Set("response_mode", "direct_post")
-	values.Set("client_id", resolveRedirectUriClientId(v.clientIdentification.Id, response_uri))
+	values.Set("client_id", oidcClientId)
 	values.Set("response_uri", response_uri)
 	values.Set("state", state)
 	if nonce != "" {
@@ -1635,14 +1641,35 @@ func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, 
 
 // resolveRedirectUriClientId determines the client_id to send for the unsigned "redirect_uri"
 // scheme. Per OIDC4VP, the wallet's only trust check for this scheme is that response_uri
-// equals the URI embedded in client_id. If no id is configured, default it to the actual
-// response_uri, which is always consistent since both are derived from the same request. Any
-// other id scheme (e.g. did:..., x509_san_dns:...) is left untouched.
-func resolveRedirectUriClientId(configuredId string, responseUri string) (clientId string) {
+// equals the URI embedded in client_id, so:
+//   - if no id is configured, it defaults to the actual response_uri, which is always consistent
+//     since both are derived from the same request.
+//   - if an id is configured, it must resolve to the same host as response_uri - a stale value
+//     (e.g. after an ingress hostname or pathPrefix change) would otherwise send a client_id the
+//     wallet is guaranteed to reject, instead of failing here with an actionable error.
+//   - any other id scheme (e.g. did:..., x509_san_dns:...) is left untouched.
+func resolveRedirectUriClientId(configuredId string, responseUri string) (clientId string, err error) {
 	if configuredId == "" {
-		return CLIENT_ID_REDIRECT_URI_PREFIX + responseUri
+		return CLIENT_ID_REDIRECT_URI_PREFIX + responseUri, nil
 	}
-	return configuredId
+	if !strings.HasPrefix(configuredId, CLIENT_ID_REDIRECT_URI_PREFIX) {
+		return configuredId, nil
+	}
+
+	configuredUri := strings.TrimPrefix(configuredId, CLIENT_ID_REDIRECT_URI_PREFIX)
+	parsedConfigured, err := url.Parse(configuredUri)
+	if err != nil {
+		return clientId, err
+	}
+	parsedResponse, err := url.Parse(responseUri)
+	if err != nil {
+		return clientId, err
+	}
+	if parsedConfigured.Host != parsedResponse.Host {
+		logging.Log().Warnf("Configured redirect_uri client_id host %s does not match the request's response_uri host %s.", parsedConfigured.Host, parsedResponse.Host)
+		return clientId, ErrorClientIdHostMismatch
+	}
+	return configuredId, nil
 }
 
 func (v *CredentialVerifier) createAuthenticationRequestByValue(base string, response_uri string, state string, clientId string, scope string, nonce string) (request string, err error) {
