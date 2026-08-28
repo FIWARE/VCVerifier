@@ -3,6 +3,7 @@ package verifier
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/did"
@@ -32,16 +33,21 @@ var ErrorMissingProofSubject = errors.New("ld_proof_binding_subject_missing")
 
 // LDProofChecker verifies Linked Data Proofs (JsonWebSignature2020) on
 // Verifiable Presentations and Verifiable Credentials by resolving the
-// proof's verificationMethod DID to a public key and delegating
-// cryptographic verification to common.VerifyLinkedDataProof.
+// proof's verificationMethod to a public key and delegating cryptographic
+// verification to common.VerifyLinkedDataProof.
+//
+// The verificationMethod is treated as a generic URI: a DID URL is resolved
+// through the did.Registry, an https:// URL through the HttpsIssuerResolver
+// (well-known metadata discovery plus JWKS).
 //
 // Verifying the signature is only half the job: the checker also binds the
 // signing key to the identity the document claims (issuer for credentials,
 // holder for presentations) and requires the proof to declare the matching
 // proof purpose. A valid signature by an unrelated key is rejected.
 type LDProofChecker struct {
-	registry  *did.Registry
-	docLoader ld.DocumentLoader
+	registry      *did.Registry
+	docLoader     ld.DocumentLoader
+	httpsResolver HttpsIssuerResolver
 }
 
 // NewLDProofChecker creates an LDProofChecker that resolves DIDs via the
@@ -52,6 +58,16 @@ func NewLDProofChecker(registry *did.Registry, docLoader ld.DocumentLoader) *LDP
 		registry:  registry,
 		docLoader: docLoader,
 	}
+}
+
+// WithHttpsResolver sets the HttpsIssuerResolver used to resolve proof keys
+// for HTTPS-based issuer and holder identifiers. When set, a proof whose
+// verificationMethod starts with "https://" is resolved through the
+// resolver's discovered JWKS instead of DID resolution.
+// Returns the checker to allow method chaining.
+func (lpc *LDProofChecker) WithHttpsResolver(resolver HttpsIssuerResolver) *LDProofChecker {
+	lpc.httpsResolver = resolver
+	return lpc
 }
 
 // VerifyPresentation verifies a Linked Data Proof on a JSON-LD Verifiable
@@ -173,8 +189,16 @@ func (lpc *LDProofChecker) assertProofSigner(proof *common.LDProof, expectedDID 
 // resolveProofKey rejects did:elsi and resolves the proof's verification
 // method to a public key, requiring the key to be authorized for the given
 // verification relationship.
+//
+// HTTPS-based signer identifiers are resolved through the HttpsIssuerResolver
+// instead of the DID registry.
 func (lpc *LDProofChecker) resolveProofKey(proof *common.LDProof, signerDID string, relationship string) (jwk.Key, error) {
 	_, kid := ExtractDIDAndFragment(proof.VerificationMethod)
+
+	// Resolve HTTPS-based signer identifiers via well-known metadata + JWKS.
+	if isHttpsIssuer(signerDID) {
+		return lpc.resolveHttpsProofKey(proof.VerificationMethod, signerDID, relationship)
+	}
 
 	// Reject did:elsi — JAdES is JWS-based and does not apply to LD proofs.
 	if IsDidElsi(signerDID) {
@@ -183,4 +207,41 @@ func (lpc *LDProofChecker) resolveProofKey(proof *common.LDProof, signerDID stri
 	}
 
 	return ResolveKeyForRelationship(lpc.registry, signerDID, kid, relationship)
+}
+
+// resolveHttpsProofKey resolves the key for an HTTPS-based signer identifier
+// through the configured HttpsIssuerResolver.
+//
+// A JWKS carries no verification relationships, so the authentication /
+// assertionMethod distinction a DID document expresses cannot be enforced
+// here. This mirrors how ResolveKeyForRelationship treats a DID document that
+// declares no relationships: the requirement is logged and the key is
+// accepted. The proofPurpose assertion in assertProofPurpose and the binding
+// of the signer to the document's issuer / holder in assertProofSigner still
+// apply, so the key is never accepted for an unrelated identity.
+func (lpc *LDProofChecker) resolveHttpsProofKey(verificationMethod string, signerURL string, relationship string) (jwk.Key, error) {
+	if lpc.httpsResolver == nil {
+		logging.Log().Warnf("HTTPS signer %s encountered in LD proof but no HttpsIssuerResolver configured", signerURL)
+		return nil, ErrorHttpsIssuerNotSupported
+	}
+
+	if relationship != "" {
+		logging.Log().Warnf("HTTPS signer %s exposes a JWKS with no verification relationships — cannot enforce %s for %s",
+			signerURL, relationship, verificationMethod)
+	}
+
+	return lpc.httpsResolver.ResolveIssuerKey(signerURL, httpsJwksKeyId(verificationMethod))
+}
+
+// httpsJwksKeyId derives the JWKS `kid` from an HTTPS verificationMethod URI.
+// The fragment identifies the key within the issuer's key set — e.g.
+// "https://issuer.example.com#key-1" selects the key with kid "key-1". When
+// the URI carries no fragment there is nothing to select on and an empty kid
+// is returned, which makes the resolver fall back to the only/first key in
+// the set.
+func httpsJwksKeyId(verificationMethod string) string {
+	if idx := strings.Index(verificationMethod, "#"); idx >= 0 {
+		return verificationMethod[idx+1:]
+	}
+	return ""
 }

@@ -455,15 +455,17 @@ type StatusListJWTVerifier interface {
 // StatusListJWTVerifierImpl verifies IETF Token Status List JWTs using two
 // strategies, tried in order:
 //
-//  1. If the JWT payload contains an `iss` claim that is a DID, the public
-//     key is resolved from the DID document via the configured DID registry.
+//  1. If the JWT payload contains an `iss` claim, the public key is resolved
+//     from that identifier: a DID via the configured DID registry, an
+//     https:// URL via the configured HttpsIssuerResolver.
 //  2. Otherwise, if the JWT header carries an `x5c` certificate chain, the
 //     public key is extracted from the leaf certificate.
 //
 // This two-step approach covers both spec-compliant issuers (iss-based) and
 // legacy/transitional deployments that only embed an x5c header.
 type StatusListJWTVerifierImpl struct {
-	registry *did.Registry
+	registry      *did.Registry
+	httpsResolver HttpsIssuerResolver
 }
 
 // NewStatusListJWTVerifier constructs a StatusListJWTVerifierImpl backed by
@@ -471,6 +473,16 @@ type StatusListJWTVerifierImpl struct {
 // status list issuers (typically did:web and did:key).
 func NewStatusListJWTVerifier(registry *did.Registry) *StatusListJWTVerifierImpl {
 	return &StatusListJWTVerifierImpl{registry: registry}
+}
+
+// WithHttpsResolver sets the HttpsIssuerResolver used to resolve status-list
+// signing keys for HTTPS-based issuer identifiers. When set, a status list
+// JWT whose `iss` claim starts with "https://" is verified against the
+// resolver's discovered JWKS instead of being sent through DID resolution.
+// Returns the verifier to allow method chaining.
+func (v *StatusListJWTVerifierImpl) WithHttpsResolver(resolver HttpsIssuerResolver) *StatusListJWTVerifierImpl {
+	v.httpsResolver = resolver
+	return v
 }
 
 // VerifyStatusListJWT parses the JWS and verifies the signature. It first
@@ -495,7 +507,7 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 
 	issuerDID := extractIssFromPayload(msg.Payload())
 	if issuerDID != "" {
-		logging.Log().Debugf("Status list JWT has iss claim %s, verifying via DID resolution", issuerDID)
+		logging.Log().Debugf("Status list JWT has iss claim %s, verifying via issuer key resolution", issuerDID)
 		return v.verifyWithISS(jwtBytes, msg, alg, issuerDID)
 	}
 
@@ -503,12 +515,12 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 	return v.verifyWithX5C(jwtBytes, headers, alg)
 }
 
-// verifyWithISS resolves the public key from the iss DID and verifies the
-// JWT signature.
+// verifyWithISS resolves the public key from the iss identifier and verifies
+// the JWT signature. The identifier may be a DID or an https:// URL.
 func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Message, alg jwa.SignatureAlgorithm, issuerDID string) ([]byte, error) {
 	kid, _ := msg.Signatures()[0].ProtectedHeaders().KeyID()
 
-	key, err := v.resolveKeyFromDID(issuerDID, kid)
+	key, err := v.resolveKeyFromIssuer(issuerDID, kid)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to resolve key for %s: %v", ErrorStatusListUnparseable, issuerDID, err)
 	}
@@ -518,7 +530,7 @@ func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Mess
 		return nil, fmt.Errorf("%w: status list JWT signature verification failed for %s: %v", ErrorStatusListUnparseable, issuerDID, err)
 	}
 
-	logging.Log().Debugf("Status list JWT signature verified via iss DID %s", issuerDID)
+	logging.Log().Debugf("Status list JWT signature verified via iss %s", issuerDID)
 	return payload, nil
 }
 
@@ -557,6 +569,28 @@ func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.H
 
 	logging.Log().Debug("Status list JWT signature verified via x5c certificate chain")
 	return payload, nil
+}
+
+// resolveKeyFromIssuer resolves the status-list signing key for an issuer
+// identifier, treating it as a generic URI: an https:// URL is resolved via
+// well-known issuer metadata and JWKS, anything else via DID resolution.
+func (v *StatusListJWTVerifierImpl) resolveKeyFromIssuer(issuer, kid string) (interface{}, error) {
+	if !isHttpsIssuer(issuer) {
+		return v.resolveKeyFromDID(issuer, kid)
+	}
+
+	if v.httpsResolver == nil {
+		logging.Log().Warnf("Status list issuer %s is an HTTPS URL but no HttpsIssuerResolver is configured", issuer)
+		return nil, ErrorHttpsIssuerNotSupported
+	}
+
+	key, err := v.httpsResolver.ResolveIssuerKey(issuer, kid)
+	if err != nil {
+		logging.Log().Warnf("Failed to resolve key for HTTPS status list issuer %s: %v", issuer, err)
+		return nil, err
+	}
+	logging.Log().Debugf("Resolved status list verification key for HTTPS issuer %s (kid=%s)", issuer, kid)
+	return key, nil
 }
 
 // resolveKeyFromDID resolves the DID document and finds the verification

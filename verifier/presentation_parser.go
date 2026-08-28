@@ -93,6 +93,12 @@ var globalProofChecker *JWTProofChecker
 // globalLDProofChecker is the shared LD proof checker for JSON-LD VP/VC verification.
 var globalLDProofChecker *LDProofChecker
 
+// globalHttpsIssuerResolver is the shared resolver for HTTPS-based issuer
+// identifiers. It is shared by every component that resolves issuer keys, so
+// a single JWKS cache serves the JWT path, the JSON-LD proof path and
+// status-list verification.
+var globalHttpsIssuerResolver HttpsIssuerResolver
+
 // parser interface
 type PresentationParser interface {
 	ParsePresentation(tokenBytes []byte) (*common.Presentation, error)
@@ -131,6 +137,13 @@ func GetProofChecker() *JWTProofChecker {
 // GetLDProofChecker returns the shared LD proof checker for JSON-LD VP/VC verification.
 func GetLDProofChecker() *LDProofChecker {
 	return globalLDProofChecker
+}
+
+// GetHttpsIssuerResolver returns the shared resolver for HTTPS-based issuer
+// identifiers, so components initialized after InitPresentationParser reuse
+// its JWKS cache instead of building their own.
+func GetHttpsIssuerResolver() HttpsIssuerResolver {
+	return globalHttpsIssuerResolver
 }
 
 /**
@@ -179,6 +192,7 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 	// Uses a dedicated cache with the same cleanup pattern as other verifier caches.
 	httpsResolverCache := cache.New(DefaultJwksCacheTTL, 2*DefaultJwksCacheTTL)
 	httpsResolver := NewCachingHttpsIssuerResolver(httpsResolverCache, DefaultJwksCacheTTL)
+	globalHttpsIssuerResolver = httpsResolver
 
 	checker := NewJWTProofChecker(registry, jAdESValidator).WithHttpsResolver(httpsResolver)
 	globalProofChecker = checker
@@ -195,7 +209,7 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 			ldDocLoaderCacheCleanup,
 		),
 	)
-	ldChecker := NewLDProofChecker(registry, docLoader)
+	ldChecker := NewLDProofChecker(registry, docLoader).WithHttpsResolver(httpsResolver)
 	globalLDProofChecker = ldChecker
 
 	presentationParser = &ConfigurablePresentationParser{

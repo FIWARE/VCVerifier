@@ -49,9 +49,10 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
   - `compliance.go` — Policy compliance checking (signatures, dates, etc.)
   - `holder.go` — Holder verification
   - `gaiax.go` — Gaia-X compliance checks
-  - `jwt_proof_checker.go` — JWT signature verification via DID-resolved keys; also handles did:elsi via JAdES
-  - `ld_proof_checker.go` — JSON-LD Linked Data Proof verification (`JsonWebSignature2020`): resolves `verificationMethod`, binds the signing key to the credential issuer / presentation holder, enforces the proof purpose
+  - `jwt_proof_checker.go` — JWT signature verification via DID-resolved keys; also handles did:elsi via JAdES and HTTPS-based issuers via `HttpsIssuerResolver`
+  - `ld_proof_checker.go` — JSON-LD Linked Data Proof verification (`JsonWebSignature2020`): resolves `verificationMethod` (DID URL or https:// URL), binds the signing key to the credential issuer / presentation holder, enforces the proof purpose
   - `key_resolver.go` — Shared DID→key resolution, including verification-relationship enforcement (`authentication` / `assertionMethod`)
+  - `https_issuer_resolver.go` — Key discovery for HTTPS-based issuer identifiers via `/.well-known/jwt-vc-issuer` (SD-JWT VC) with an OpenID4VCI + RFC 8414 fallback, plus a per-issuer JWKS cache
   - `credentialsConfig.go` — Credential configuration management
 
 - **`openapi/`** — HTTP handlers generated from OpenAPI spec (`api/api.yaml`). Routes defined in `routers.go`. Handlers in `api_api.go` (token, authorization, authentication) and `api_frontend.go` (frontend endpoints, WebSocket polling).
@@ -119,8 +120,21 @@ JSON-LD (`ldp_vc`) presentations and credentials are cryptographically verified 
 - The security-relevant contexts are vendored in `common/contexts/` and served by `common.NewEmbeddedContextLoader`, so verification never depends on the network.
 - `m2m.verificationMethod` has no default and must be an absolute DID URL — `InitM2MTokenProvider` fails at startup otherwise, since a relative reference can never produce a valid proof. `tir.signerForKeyType` keeps the signer and the advertised JWS algorithm in sync (`RSARS256` → PKCS#1 v1.5, `RSAPS256` → PSS).
 
+## HTTPS-based Issuer Identifiers
+
+Credential issuers may be identified by an HTTPS URL instead of a DID — see `docs/https-issuer-identifiers.md` for the full design. In short:
+
+- An issuer identifier is treated as a generic URI. `isHttpsIssuer()` decides whether the key is discovered via `did.Registry` or via `verifier/https_issuer_resolver.go` (well-known metadata → JWKS).
+- Three paths dispatch on it: the JWT `iss` claim (`jwt_proof_checker.go`), the JSON-LD proof `verificationMethod` (`ld_proof_checker.go`) and the status list `iss` claim (`credential_status_client.go`). Each fails closed with `ErrorHttpsIssuerNotSupported` when no resolver is configured.
+- The resolver is created once in `InitPresentationParser` and shared via `GetHttpsIssuerResolver()`, so a single JWKS cache serves all three paths.
+- The `issuer` field of fetched metadata must equal the issuer URL the lookup started from (RFC 8414 §3.3), otherwise `ErrorIssuerMismatch`.
+- In the JSON-LD path the JWKS `kid` is the **fragment** of the `verificationMethod` (`httpsJwksKeyId`), not the whole URI.
+- Trust validation adds no new list type: HTTPS issuers are matched by URL against the existing trusted-issuer / trusted-participant entries (`*` is a wildcard), never looked up in EBSI or Gaia-X.
+
 ## Known Gaps
 
+- **HTTPS issuers cannot have verification relationships enforced.** A JWKS has no `authentication` / `assertionMethod` distinction, so the LD-proof path logs a warning and accepts the key; `proofPurpose` and issuer/holder binding remain enforced.
+- **No end-to-end integration test covers the HTTPS issuer paths.** `integration_test/helpers/https_issuer_mock.go` provides the mock servers but nothing consumes them yet.
 - **`validationMode: combined` and `jsonLd`** do not perform real JSON-LD validation — they only check that issuer and type fields are present. They are deprecated but still accepted.
 - **Verification relationships are only enforced when the DID document declares them.** A `did:web` document that lists `verificationMethod` but neither `authentication` nor `assertionMethod` falls back to the flat method list with a warning.
 - **Data Integrity suites other than `JsonWebSignature2020`** (`proofValue`-based cryptosuites) are parsed but not verified.
