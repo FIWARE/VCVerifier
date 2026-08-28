@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -23,8 +24,8 @@ import (
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
-	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/did"
+	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/google/uuid"
 
@@ -42,9 +43,16 @@ import (
 	"github.com/valyala/fasttemplate"
 )
 
+const REQUEST_MODE_URL_ENCODED = "urlEncoded"
 const REQUEST_MODE_BY_VALUE = "byValue"
 const REQUEST_MODE_BY_REFERENCE = "byReference"
 const REQUEST_OBJECT_TYP = "oauth-authz-req+jwt"
+
+// qrCodePixelsPerModule is the fixed size (in pixels) of a single QR code "module".
+// Passed as a negative size to qrcode.Encode, it makes the rendered image grow with
+// the content instead of scaling a fixed canvas, keeping modules scannable regardless
+// of how large the encoded authentication request is.
+const qrCodePixelsPerModule = 6
 const (
 	CROSS_DEVICE_V1 = iota
 	CROSS_DEVICE_V2
@@ -75,6 +83,7 @@ var ErrorTokenUnparsable = errors.New("unable_to_parse_token")
 var ErrorRequiredCredentialNotProvided = errors.New("required_credential_not_provided")
 var ErrorNoValidCredentialTypeProvided = errors.New("no_valid_credential_type_provided")
 var ErrorUnsupportedRequestMode = errors.New("unsupported_request_mode")
+var ErrorDefaultRequestModeNotSupported = errors.New("default_request_mode_not_in_supported_modes")
 var ErrorNoExpiration = errors.New("no_jwt_expiration_set")
 var ErrorNoKeyId = errors.New("no_key_id_available")
 var ErrorNoRequestObject = errors.New("no_request_object_available")
@@ -112,6 +121,9 @@ type Verifier interface {
 	GetRequestObject(state string) (jwt string, err error)
 	GetHost() string
 	GetPathPrefix() string
+	// GetDefaultRequestMode returns the request mode to use for flows where the caller has
+	// no way to request one explicitly (e.g. the OIDC-bridging authorization endpoint).
+	GetDefaultRequestMode() string
 	GetAuthorizationType(clientId string) string
 	GetDefaultScope(serviceIdentifier string) (string, error)
 	// ExchangeRefreshToken atomically consumes a refresh token and returns a
@@ -162,6 +174,8 @@ type CredentialVerifier struct {
 	signingAlgorithm string
 	// request modes supported by this instance of the verifier
 	supportedRequestModes []string
+	// request mode used for flows where the caller has no way to request one explicitly
+	defaultRequestMode string
 	// Key for signing the request objects
 	requestSigningKey *jwk.Key
 	// Client identification for signing the request objects
@@ -417,6 +431,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		},
 		signingAlgorithm:       verifierConfig.KeyAlgorithm,
 		supportedRequestModes:  verifierConfig.SupportedModes,
+		defaultRequestMode:     verifierConfig.DefaultRequestMode,
 		requestSigningKey:      &didSigningKey,
 		clientIdentification:   verifierConfig.ClientIdentification,
 		verifierConfig:         *verifierConfig,
@@ -466,7 +481,12 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 		return qr, err
 	}
 
-	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, 256)
+	// A negative size tells go-qrcode to render at a fixed number of pixels per module
+	// instead of scaling a fixed canvas, so the image grows with the content instead of
+	// the modules shrinking below what a phone camera can resolve (relevant for
+	// REQUEST_MODE_URL_ENCODED, whose inlined presentation_definition/dcql_query can push
+	// the QR to a much higher version than byValue/byReference ever need).
+	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, -qrCodePixelsPerModule)
 	base64Img := base64.StdEncoding.EncodeToString(png)
 	base64Img = "data:image/png;base64," + base64Img
 
@@ -494,7 +514,12 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 		return qrInfo, err
 	}
 
-	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, 256)
+	// A negative size tells go-qrcode to render at a fixed number of pixels per module
+	// instead of scaling a fixed canvas, so the image grows with the content instead of
+	// the modules shrinking below what a phone camera can resolve (relevant for
+	// REQUEST_MODE_URL_ENCODED, whose inlined presentation_definition/dcql_query can push
+	// the QR to a much higher version than byValue/byReference ever need).
+	png, err := qrcode.Encode(authenticationRequest, qrcode.Medium, -qrCodePixelsPerModule)
 	base64Img := base64.StdEncoding.EncodeToString(png)
 	base64Img = "data:image/png;base64," + base64Img
 
@@ -1313,6 +1338,14 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 
 func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId string, scope string, redirectUri string, state string, nonce string, loginSession loginSession, requestMode string) (authenticationRequest string, err error) {
 	switch requestMode {
+	case REQUEST_MODE_URL_ENCODED:
+		authenticationRequest, err = v.createAuthenticationRequestUrlEncoded(base, redirectUri, state, clientId, scope, nonce)
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the url-encoded authentication request. Error: %v", err)
+		} else {
+			logging.Log().Debugf("Authentication request is %s.", authenticationRequest)
+		}
+		return authenticationRequest, err
 	case REQUEST_MODE_BY_VALUE:
 		authenticationRequest, err = v.createAuthenticationRequestByValue(base, redirectUri, state, clientId, scope, nonce)
 		if err != nil {
@@ -1488,6 +1521,53 @@ func (v *CredentialVerifier) createAuthenticationRequestObject(response_uri stri
 }
 
 // creates an authenticationRequest string from the given parameters
+// createAuthenticationRequestUrlEncoded builds an unsigned authentication request, with all
+// parameters(including presentation_definition/dcql_query) inlined as plain query parameters
+// on the request URI, instead of wrapped in a signed JWT. This is the only valid transport for
+// the "redirect_uri" client_id scheme, since that scheme cannot be used with signed requests
+// (there is no certificate/DID for the wallet to verify the signature against). It produces a
+// larger QR/URI than "byValue"/"byReference", since nothing is fetched separately or embedded
+// as a compact JWT — see README.md for the resulting trade-off.
+func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, response_uri string, state string, clientId string, scope string, nonce string) (request string, err error) {
+	values := url.Values{}
+	values.Set("response_type", "vp_token")
+	values.Set("response_mode", "direct_post")
+	values.Set("client_id", v.clientIdentification.Id)
+	values.Set("response_uri", response_uri)
+	values.Set("state", state)
+	if nonce != "" {
+		values.Set("nonce", nonce)
+	}
+
+	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
+	if err != nil {
+		return request, err
+	}
+	if presentationDefinition != nil {
+		pdJSON, err := json.Marshal(presentationDefinition)
+		if err != nil {
+			return request, err
+		}
+		values.Set("presentation_definition", string(pdJSON))
+	}
+
+	dcql, err := v.credentialsConfig.GetDcqlQuery(clientId, scope)
+	if err != nil {
+		return request, err
+	}
+	if dcql != nil {
+		dcqlJSON, err := json.Marshal(dcql)
+		if err != nil {
+			return request, err
+		}
+		values.Set("dcql_query", string(dcqlJSON))
+	} else {
+		logging.Log().Debugf("No dcql configured for %s - %s.", clientId, scope)
+	}
+
+	return base + "?" + values.Encode(), nil
+}
+
 func (v *CredentialVerifier) createAuthenticationRequestByValue(base string, response_uri string, state string, clientId string, scope string, nonce string) (request string, err error) {
 
 	// We use a template to generate the final string
@@ -1595,6 +1675,16 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	if len(verifierConfig.SupportedModes) == 0 {
 		return ErrorSupportedModesNotSet
 	}
+	// The "default:" struct tag only applies when the config is loaded from server.yaml
+	// (via gookit/config); callers building configModel.Verifier directly (tests, or any
+	// future caller) get the zero value. Fall back here so behaviour matches the documented
+	// default regardless of how the config was constructed.
+	if verifierConfig.DefaultRequestMode == "" {
+		verifierConfig.DefaultRequestMode = REQUEST_MODE_BY_REFERENCE
+	}
+	if !slices.Contains(verifierConfig.SupportedModes, verifierConfig.DefaultRequestMode) { //nolint:govet
+		return ErrorDefaultRequestModeNotSupported
+	}
 
 	return nil
 }
@@ -1638,6 +1728,12 @@ func (v *CredentialVerifier) GetHost() string {
 
 func (v *CredentialVerifier) GetPathPrefix() string {
 	return v.pathPrefix
+}
+
+// GetDefaultRequestMode returns the request mode to use for flows where the caller has
+// no way to request one explicitly (e.g. the OIDC-bridging authorization endpoint).
+func (v *CredentialVerifier) GetDefaultRequestMode() string {
+	return v.defaultRequestMode
 }
 
 // IsRefreshTokenEnabled reports whether the refresh token feature is active.
