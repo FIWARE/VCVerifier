@@ -54,7 +54,7 @@ type mockVerifier struct {
 	mockExchangeRefresh     string
 	mockExchangeError       error
 	mockPathPrefix          string
-	mockDefaultRequestMode  string
+	mockRequestMode         string
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
@@ -97,8 +97,8 @@ func (mV *mockVerifier) GetPathPrefix() string {
 	return mV.mockPathPrefix
 }
 
-func (mV *mockVerifier) GetDefaultRequestMode() string {
-	return mV.mockDefaultRequestMode
+func (mV *mockVerifier) GetRequestMode() string {
+	return mV.mockRequestMode
 }
 
 // TODO

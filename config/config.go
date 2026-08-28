@@ -168,7 +168,7 @@ type Verifier struct {
 	// (e.g. the OIDC-bridging /api/v1/authorization endpoint, or /api/v2/loginQR when no
 	// request_mode query parameter is given). Must be one of supportedModes when set. Defaults
 	// to "byReference" to preserve the pre-existing, hardcoded behaviour.
-	DefaultRequestMode string `mapstructure:"defaultRequestMode" default:"byReference"`
+	RequestMode string `mapstructure:"requestMode" default:"byReference"`
 	// address of the (ebsi-compatible) trusted-issuers-registry for verifying the issuer
 	TirAddress string `mapstructure:"tirAddress"`
 	// expiry of the tir-cache entries

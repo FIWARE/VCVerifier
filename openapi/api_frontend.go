@@ -67,9 +67,9 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 
 	requestMode, requestModeExists := c.GetQuery("request_mode")
 	if !requestModeExists {
-		defaultRequestMode := getFrontendVerifier().GetDefaultRequestMode()
-		logging.Log().Infof("Using default request mode %s.", defaultRequestMode)
-		requestMode = defaultRequestMode
+		fallbackRequestMode := getFrontendVerifier().GetRequestMode()
+		logging.Log().Infof("Using default request mode %s.", fallbackRequestMode)
+		requestMode = fallbackRequestMode
 	}
 
 	qr, err := getFrontendVerifier().ReturnLoginQR(c.Request.Host, "https", callback, state, clientId, nonce, requestMode)
@@ -136,9 +136,9 @@ func VerifierLoginQr(c *gin.Context) {
 
 	requestMode, requestModeExists := c.GetQuery("request_mode")
 	if !requestModeExists {
-		defaultRequestMode := getFrontendVerifier().GetDefaultRequestMode()
-		logging.Log().Infof("Using default request mode %s.", defaultRequestMode)
-		requestMode = defaultRequestMode
+		fallbackRequestMode := getFrontendVerifier().GetRequestMode()
+		logging.Log().Infof("Using default request mode %s.", fallbackRequestMode)
+		requestMode = fallbackRequestMode
 	}
 
 	qrInfo, err := getFrontendVerifier().ReturnLoginQRV2(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode)

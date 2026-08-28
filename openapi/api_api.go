@@ -230,19 +230,19 @@ func AuthorizationEndpoint(c *gin.Context) {
 	}
 
 	authorizationType := getApiVerifier().GetAuthorizationType(clientId)
-	defaultRequestMode := getApiVerifier().GetDefaultRequestMode()
+	fallbackRequestMode := getApiVerifier().GetRequestMode()
 	var redirect string
 	var err error
 	switch authorizationType {
 	case DEEPLINK:
-		redirect, err = getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, "", clientId, nonce, defaultRequestMode, scope, verifier.OPENID4VP_PROTOCOL)
+		redirect, err = getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, "", clientId, nonce, fallbackRequestMode, scope, verifier.OPENID4VP_PROTOCOL)
 		if err != nil {
 			logging.Log().Warnf("Was not able start a same device flow. Err: %v", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageFailedSameDevice)
 			return
 		}
 	case FRONTEND_V2:
-		redirect = buildFrontendV2Address(protocol, c.Request.Host, getApiVerifier().GetPathPrefix(), state, clientId, redirectUri, scope, nonce, defaultRequestMode)
+		redirect = buildFrontendV2Address(protocol, c.Request.Host, getApiVerifier().GetPathPrefix(), state, clientId, redirectUri, scope, nonce, fallbackRequestMode)
 	}
 	c.Redirect(http.StatusFound, redirect)
 }
@@ -533,9 +533,9 @@ func StartSIOPSameDevice(c *gin.Context) {
 
 	requestMode, requestModeExists := c.GetQuery("request_mode")
 	if !requestModeExists {
-		defaultRequestMode := getApiVerifier().GetDefaultRequestMode()
-		logging.Log().Infof("Using default request mode %s.", defaultRequestMode)
-		requestMode = defaultRequestMode
+		fallbackRequestMode := getApiVerifier().GetRequestMode()
+		logging.Log().Infof("Using default request mode %s.", fallbackRequestMode)
+		requestMode = fallbackRequestMode
 	}
 
 	scope, scopeExists := c.GetQuery("scope")
@@ -849,9 +849,9 @@ func VerifierAPIStartSIOP(c *gin.Context) {
 
 	requestMode, requestModeExists := c.GetQuery("request_mode")
 	if !requestModeExists {
-		defaultRequestMode := getApiVerifier().GetDefaultRequestMode()
-		logging.Log().Infof("Using default request mode %s.", defaultRequestMode)
-		requestMode = defaultRequestMode
+		fallbackRequestMode := getApiVerifier().GetRequestMode()
+		logging.Log().Infof("Using default request mode %s.", fallbackRequestMode)
+		requestMode = fallbackRequestMode
 	}
 
 	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, "", requestMode)
