@@ -62,6 +62,10 @@ const (
 const OPENID4VP_PROTOCOL = "openid4vp"
 const REDIRECT_PROTOCOL = "redirect"
 
+// CLIENT_ID_REDIRECT_URI_PREFIX is the OIDC4VP client_id prefix for the "redirect_uri"
+// client identifier scheme (https://openid.net/specs/openid-4-verifiable-presentations-1_0.html).
+const CLIENT_ID_REDIRECT_URI_PREFIX = "redirect_uri:"
+
 const DEFAULT_AUTHORIZATION_PATH = "/api/v1/authorization"
 const DEFAULT_SERIVCE_AUTHORIZATION_TYPE = "FRONTEND_V2"
 
@@ -1532,7 +1536,7 @@ func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, 
 	values := url.Values{}
 	values.Set("response_type", "vp_token")
 	values.Set("response_mode", "direct_post")
-	values.Set("client_id", v.clientIdentification.Id)
+	values.Set("client_id", resolveRedirectUriClientId(v.clientIdentification.Id, response_uri))
 	values.Set("response_uri", response_uri)
 	values.Set("state", state)
 	if nonce != "" {
@@ -1566,6 +1570,18 @@ func (v *CredentialVerifier) createAuthenticationRequestUrlEncoded(base string, 
 	}
 
 	return base + "?" + values.Encode(), nil
+}
+
+// resolveRedirectUriClientId determines the client_id to send for the unsigned "redirect_uri"
+// scheme. Per OIDC4VP, the wallet's only trust check for this scheme is that response_uri
+// equals the URI embedded in client_id. If no id is configured, default it to the actual
+// response_uri, which is always consistent since both are derived from the same request. Any
+// other id scheme (e.g. did:..., x509_san_dns:...) is left untouched.
+func resolveRedirectUriClientId(configuredId string, responseUri string) (clientId string) {
+	if configuredId == "" {
+		return CLIENT_ID_REDIRECT_URI_PREFIX + responseUri
+	}
+	return configuredId
 }
 
 func (v *CredentialVerifier) createAuthenticationRequestByValue(base string, response_uri string, state string, clientId string, scope string, nonce string) (request string, err error) {
