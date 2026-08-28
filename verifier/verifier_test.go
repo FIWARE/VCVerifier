@@ -657,6 +657,21 @@ func TestCreateAuthenticationRequestUrlEncoded_DefaultsClientIdWhenIdNotConfigur
 	assert.Equal(t, "redirect_uri:https://verifier.org/api/v1/authentication_response", values.Get("client_id"))
 }
 
+func TestCreateAuthenticationRequestUrlEncoded_RejectsClientIdHostMismatch(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	verifier := CredentialVerifier{
+		credentialsConfig:    credentialsConfig,
+		clientIdentification: configModel.ClientIdentification{Id: "redirect_uri:https://old-verifier.org/api/v1/authentication_response"},
+	}
+
+	_, err := verifier.createAuthenticationRequestUrlEncoded("openid4vp://", "https://verifier.org/api/v1/authentication_response", "state", "client", "scope", "nonce")
+	if err != ErrorClientIdHostMismatch {
+		t.Errorf("Expected %v, got %v", ErrorClientIdHostMismatch, err)
+	}
+}
+
 func TestCreateAuthenticationRequestUrlEncoded_PropagatesConfigError(t *testing.T) {
 	configError := errors.New("config_error")
 	credentialsConfig := mockCredentialConfig{mockError: configError}
