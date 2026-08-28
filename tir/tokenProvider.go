@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 
 	common "github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
@@ -16,16 +17,17 @@ import (
 	"github.com/piprate/json-gold/ld"
 )
 
-// newDefaultCachingDocumentLoader creates a caching document loader backed
-// by the default HTTP-based JSON-LD loader. Callers that need a custom
-// underlying loader (e.g. for testing) can construct one directly via
-// common.NewCachingDocumentLoader.
+// newDefaultCachingDocumentLoader creates the document loader used for M2M
+// token signing: the vendored security contexts are served from the binary,
+// everything else goes through a cache in front of the default HTTP-based
+// JSON-LD loader. Callers that need a custom underlying loader (e.g. for
+// testing) can construct one directly via common.NewCachingDocumentLoader.
 func newDefaultCachingDocumentLoader() ld.DocumentLoader {
-	return common.NewCachingDocumentLoader(
+	return common.NewVerificationDocumentLoader(common.NewCachingDocumentLoader(
 		ld.NewDefaultDocumentLoader(http.DefaultClient),
 		common.DefaultDocumentCacheTTL,
 		common.DefaultDocumentCacheCleanup,
-	)
+	))
 }
 
 /**
@@ -95,6 +97,16 @@ func InitM2MTokenProvider(config *configModel.Configuration, clock common.Clock)
 	if m2mConfig.VerificationMethod == "" {
 		logging.Log().Warn("No verification method configured, cannot provide m2m tokens.")
 		return tokenProvider, ErrorTokenProviderNoVerificationMethod
+	}
+	// The verification method has to be an absolute URI (typically a DID URL
+	// such as did:web:example.org#key-1). A relative value — the built-in
+	// default "JsonWebKey2020" among them — is dropped during JSON-LD
+	// expansion, which means it would not be covered by the proof signature.
+	// Signing rejects that, so warn about it as early as possible.
+	if !strings.Contains(m2mConfig.VerificationMethod, ":") {
+		logging.Log().Warnf("Configured m2m verificationMethod %q is not an absolute URI. "+
+			"It must be a resolvable DID URL (e.g. did:web:example.org#key-1), otherwise no valid proof can be created.",
+			m2mConfig.VerificationMethod)
 	}
 
 	privateKey, err := getSigningKey(m2mConfig.KeyPath)
@@ -177,6 +189,14 @@ func (tp M2MTokenProvider) signVerifiablePresentation(authCredential *common.Cre
 	vp.ID = "urn:uuid:" + uuid.NewString()
 	vp.Holder = tp.did
 
+	// A struct-literal constructed provider (as used in tests) has no
+	// document loader. Passing nil through would overwrite json-gold's own
+	// default and break context resolution, so fall back explicitly.
+	documentLoader := tp.documentLoader
+	if documentLoader == nil {
+		documentLoader = newDefaultCachingDocumentLoader()
+	}
+
 	created := tp.clock.Now()
 	err = vp.AddLinkedDataProof(&common.LinkedDataProofContext{
 		Created:            &created,
@@ -184,7 +204,10 @@ func (tp M2MTokenProvider) signVerifiablePresentation(authCredential *common.Cre
 		Algorithm:          keyTypeToAlgorithm(tp.keyType),
 		VerificationMethod: tp.verificationMethod,
 		Signer:             NewRS256Signer(tp.signingKey),
-		DocumentLoader:     tp.documentLoader,
+		DocumentLoader:     documentLoader,
+		// The M2M token proves that this verifier is presenting its own
+		// participant credential, which is an authentication.
+		ProofPurpose: common.ProofPurposeAuthentication,
 	})
 
 	if err != nil {

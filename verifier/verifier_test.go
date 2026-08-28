@@ -1468,6 +1468,66 @@ func TestExtractCredentialTypes(t *testing.T) {
 	}
 
 }
+
+// TestGenerateToken_LDProofDomainBinding verifies that the vp_token and
+// token-exchange grants — which both go through GenerateToken — enforce the
+// audience binding of a JSON-LD VP proof. Unlike the authorization-code flow
+// there is no session nonce here, so the domain is the only binding available
+// and omitting it must not be a way around the check.
+func TestGenerateToken_LDProofDomainBinding(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const verifierId = "did:key:verifier"
+
+	tests := []struct {
+		name        string
+		proofDomain string
+		expectedErr error
+	}{
+		{name: "matching_domain_passes_binding", proofDomain: verifierId},
+		{name: "foreign_domain_rejected", proofDomain: "did:key:other-verifier", expectedErr: ErrorProofDomainMismatch},
+		{name: "omitted_domain_rejected", proofDomain: "", expectedErr: ErrorProofDomainMismatch},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			presentation, _ := common.NewPresentation()
+			presentation.Holder = "did:web:holder.example.com"
+			presentation.Proofs = []*common.LDProof{{
+				Type:               common.ProofTypeJsonWebSignature2020,
+				VerificationMethod: "did:web:holder.example.com#key-1",
+				ProofPurpose:       common.ProofPurposeAuthentication,
+				Domain:             tc.proofDomain,
+			}}
+
+			mockConfig := mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{}}
+			verifier := CredentialVerifier{
+				credentialsConfig:    &mockConfig,
+				validationServices:   []ValidationService{},
+				signingKey:           getECDSAKey(),
+				clock:                mockClock{},
+				tokenSigner:          mockTokenSigner{},
+				signingAlgorithm:     "ES256",
+				host:                 "https://verifier.example.com",
+				jwtExpiration:        time.Hour,
+				clientIdentification: configModel.ClientIdentification{Id: verifierId},
+			}
+
+			_, _, err := verifier.GenerateToken("test-client", "subject-id", "audience-id", []string{"test-scope"}, presentation)
+
+			if tc.expectedErr != nil {
+				assert.ErrorIs(t, err, tc.expectedErr)
+				return
+			}
+			// The binding passed; the call still fails later because the
+			// presentation carries no credentials. That is the expected
+			// outcome for this fixture and confirms the binding check let it
+			// through.
+			assert.ErrorIs(t, err, ErrorNoValidCredentialTypeProvided)
+		})
+	}
+}
+
 func TestGenerateToken(t *testing.T) {
 
 	logging.Configure(LOGGING_CONFIG)
@@ -1844,15 +1904,15 @@ func TestGetTrustRegistriesValidationContext_V5TypePropagation(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
-		testName              string
-		credentialScopes      map[string]map[string]configModel.ScopeEntry
-		clientId              string
-		scope                 string
-		credentialTypes       []string
-		expectedIssuersMap    map[string][]configModel.TrustedIssuersList
-		expectedParticipants  map[string][]configModel.TrustedParticipantsList
-		configError           error
-		expectedError         error
+		testName             string
+		credentialScopes     map[string]map[string]configModel.ScopeEntry
+		clientId             string
+		scope                string
+		credentialTypes      []string
+		expectedIssuersMap   map[string][]configModel.TrustedIssuersList
+		expectedParticipants map[string][]configModel.TrustedParticipantsList
+		configError          error
+		expectedError        error
 	}
 
 	tests := []test{
@@ -1975,13 +2035,13 @@ func TestGetTrustRegistriesValidationContext_V5TypePropagation(t *testing.T) {
 			},
 		},
 		{
-			testName:      "config error is propagated",
-			configError:   errors.New("config_failure"),
-			clientId:      "client-err",
-			scope:         "scope-err",
+			testName:         "config error is propagated",
+			configError:      errors.New("config_failure"),
+			clientId:         "client-err",
+			scope:            "scope-err",
 			credentialScopes: map[string]map[string]configModel.ScopeEntry{},
 			credentialTypes:  []string{"VerifiableCredential"},
-			expectedError: errors.New("config_failure"),
+			expectedError:    errors.New("config_failure"),
 		},
 	}
 
@@ -2131,22 +2191,22 @@ func TestAuthenticationResponse_V5ValidationServices(t *testing.T) {
 		{
 			testName:   "Same-device flow with ebsi-v5 trust registries succeeds when credential is valid.",
 			sameDevice: true, testState: "login-state",
-			testVP:            getVP([]string{"vc"}),
-			testHolder:        "holder",
-			testSession:       loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
-			requestedState:    "login-state",
+			testVP:             getVP([]string{"vc"}),
+			testHolder:         "holder",
+			testSession:        loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
+			requestedState:     "login-state",
 			verificationResult: []bool{true},
 			expectedResponse:   Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"},
 		},
 		{
 			testName:   "Same-device flow with ebsi-v5 trust registries fails when credential is invalid.",
 			sameDevice: true, testState: "login-state",
-			testVP:            getVP([]string{"vc"}),
-			testHolder:        "holder",
-			testSession:       loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
-			requestedState:    "login-state",
+			testVP:             getVP([]string{"vc"}),
+			testHolder:         "holder",
+			testSession:        loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
+			requestedState:     "login-state",
 			verificationResult: []bool{false},
-			expectedError:     ErrorInvalidVC,
+			expectedError:      ErrorInvalidVC,
 			expectedResponse:   Response{},
 		},
 	}
@@ -2291,11 +2351,12 @@ func TestVerifyVPSignatureIfRequired_JSONLDVPs(t *testing.T) {
 	assert.NoError(t, err)
 
 	type testCase struct {
-		name              string
-		holderRequired    bool
-		hasProofs         bool
-		hasHolderKey      bool
-		expectedErr       error
+		name           string
+		holderRequired bool
+		hasProofs      bool
+		hasHolderKey   bool
+		holder         string
+		expectedErr    error
 	}
 
 	tests := []testCase{
@@ -2311,6 +2372,7 @@ func TestVerifyVPSignatureIfRequired_JSONLDVPs(t *testing.T) {
 			holderRequired: true,
 			hasProofs:      true,
 			hasHolderKey:   true,
+			holder:         "did:web:holder.example.com",
 			expectedErr:    nil,
 		},
 		{
@@ -2318,6 +2380,17 @@ func TestVerifyVPSignatureIfRequired_JSONLDVPs(t *testing.T) {
 			holderRequired: true,
 			hasProofs:      true,
 			hasHolderKey:   false,
+			holder:         "did:web:holder.example.com",
+			expectedErr:    ErrorHolderBindingMissingKey,
+		},
+		{
+			// A holder key without a holder proves control of some key, but
+			// not of the presenter identity.
+			name:           "holder_binding_required_without_holder",
+			holderRequired: true,
+			hasProofs:      true,
+			hasHolderKey:   true,
+			holder:         "",
 			expectedErr:    ErrorHolderBindingMissingKey,
 		},
 		{
@@ -2353,6 +2426,7 @@ func TestVerifyVPSignatureIfRequired_JSONLDVPs(t *testing.T) {
 			if tc.hasHolderKey {
 				pres.SetHolderKey(holderJWK)
 			}
+			pres.Holder = tc.holder
 
 			err := verifier.verifyVPSignatureIfRequired(
 				testServiceID,

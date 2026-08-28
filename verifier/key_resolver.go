@@ -73,6 +73,12 @@ const didElsiMethodPrefix = "did:elsi:"
 // not apply to Linked Data Proofs.
 var ErrorDidElsiNotSupportedForLDProof = errors.New("did_elsi_not_supported_for_ld_proofs")
 
+// ErrorVerificationRelationshipNotAllowed is returned when a verification
+// method exists in the DID document but is not authorized for the
+// verification relationship the proof requires (e.g. a key listed only under
+// assertionMethod being used to authenticate a presentation).
+var ErrorVerificationRelationshipNotAllowed = errors.New("verification_method_not_allowed_for_relationship")
+
 // ResolveKeyFromDID resolves a DID to a public JWK key by querying the
 // given did.Registry. The didStr is the full DID (e.g., "did:key:z6Mk..."),
 // and kid is the key identifier used to select the correct verification
@@ -81,24 +87,61 @@ var ErrorDidElsiNotSupportedForLDProof = errors.New("did_elsi_not_supported_for_
 // This function is shared between JWTProofChecker and LDProofChecker to
 // avoid duplicating DID-to-key resolution logic.
 func ResolveKeyFromDID(registry *did.Registry, didStr string, kid string) (jwk.Key, error) {
+	return ResolveKeyForRelationship(registry, didStr, kid, "")
+}
+
+// ResolveKeyForRelationship resolves a DID to a public JWK key and, when a
+// relationship is given (did.RelationshipAuthentication or
+// did.RelationshipAssertionMethod), additionally requires the verification
+// method to be authorized for that relationship in the DID document.
+//
+// A DID document that declares no verification relationships at all cannot be
+// checked — the flat verificationMethod list is then used and a warning is
+// logged. Documents that declare relationships are enforced strictly.
+func ResolveKeyForRelationship(registry *did.Registry, didStr string, kid string, relationship string) (jwk.Key, error) {
 	docRes, err := registry.Resolve(didStr)
 	if err != nil {
 		logging.Log().Warnf("Failed to resolve DID %s: %v", didStr, err)
 		return nil, err
 	}
+	doc := docRes.DIDDocument
 
-	for _, vm := range docRes.DIDDocument.VerificationMethod {
-		if compareVerificationMethod(kid, vm.ID) {
-			key := vm.JSONWebKey()
-			if key == nil {
-				return nil, ErrorNoVerificationKey
-			}
-			return key, nil
+	for _, vm := range doc.VerificationMethod {
+		if !compareVerificationMethod(kid, vm.ID) {
+			continue
 		}
+		if err := checkVerificationRelationship(doc, vm.ID, relationship); err != nil {
+			return nil, err
+		}
+		key := vm.JSONWebKey()
+		if key == nil {
+			return nil, ErrorNoVerificationKey
+		}
+		return key, nil
 	}
 
 	logging.Log().Warnf("No matching verification method for kid=%s in DID=%s", kid, didStr)
 	return nil, ErrorNoVerificationKey
+}
+
+// checkVerificationRelationship enforces that vmID is authorized for the
+// requested relationship. It is a no-op when no relationship is requested or
+// when the DID document does not model verification relationships.
+func checkVerificationRelationship(doc *did.Doc, vmID string, relationship string) error {
+	if relationship == "" {
+		return nil
+	}
+	if !doc.DeclaresRelationships() {
+		logging.Log().Warnf("DID document %s declares no verification relationships — cannot enforce %s for %s",
+			doc.ID, relationship, vmID)
+		return nil
+	}
+	if !doc.AllowsForRelationship(vmID, relationship) {
+		logging.Log().Warnf("Verification method %s is not authorized for relationship %s in DID document %s",
+			vmID, relationship, doc.ID)
+		return ErrorVerificationRelationshipNotAllowed
+	}
+	return nil
 }
 
 // ExtractDIDAndFragment splits a verification method URI into a DID and a

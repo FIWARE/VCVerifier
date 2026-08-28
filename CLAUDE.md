@@ -50,8 +50,9 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
   - `holder.go` — Holder verification
   - `gaiax.go` — Gaia-X compliance checks
   - `jwt_proof_checker.go` — JWT signature verification via DID-resolved keys; also handles did:elsi via JAdES
+  - `ld_proof_checker.go` — JSON-LD Linked Data Proof verification (`JsonWebSignature2020`): resolves `verificationMethod`, binds the signing key to the credential issuer / presentation holder, enforces the proof purpose
+  - `key_resolver.go` — Shared DID→key resolution, including verification-relationship enforcement (`authentication` / `assertionMethod`)
   - `credentialsConfig.go` — Credential configuration management
-  - `caching_client.go` — HTTP caching layer
 
 - **`openapi/`** — HTTP handlers generated from OpenAPI spec (`api/api.yaml`). Routes defined in `routers.go`. Handlers in `api_api.go` (token, authorization, authentication) and `api_frontend.go` (frontend endpoints, WebSocket polling).
 
@@ -104,11 +105,20 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
 - **JWT signing**: RS256 or ES256 via `tokenSigner.Sign()` with `v.signingKey` (jwk.Key). Claims include issuer, audience, expiration (`jwtExpiration` duration), issuedAt, optional subject/nonce, and credential data.
 - **Three grant types**: `authorization_code` (exchanges code for cached JWT), `vp_token` (direct VP token validation + JWT generation), `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693 token exchange via VP token).
 
+## JSON-LD Proof Verification
+
+JSON-LD (`ldp_vc`) presentations and credentials are cryptographically verified — see `docs/json-ld-proof-verification.md` for the full design. In short:
+
+- `common/ldproof.go` implements `JsonWebSignature2020` signing and verification (URDNA2015 canonicalization, detached JWS with `b64=false`).
+- Proof options are canonicalized under the document context **plus** `https://w3id.org/security/suites/jws-2020/v1`, so `created`, `verificationMethod`, `proofPurpose`, `challenge` and `domain` are covered by the signature. A guard fails closed if any of them does not survive canonicalization.
+- `verifier/ld_proof_checker.go` binds the proof key to the credential's `issuer` / the presentation's `holder`, requires the matching proof purpose, and requires the key to be authorized for the corresponding verification relationship.
+- The security-relevant contexts are vendored in `common/contexts/` and served by `common.NewEmbeddedContextLoader`, so verification never depends on the network.
+
 ## Known Gaps
 
-- **JSON-LD / `ldp_vc` proof verification is not implemented.** JSON-LD credentials and presentations are parsed structurally but no Linked Data Proof (Data Integrity / `JsonWebSignature2020`) is ever cryptographically checked. The `parseJSONLDPresentation` function explicitly documents "no proof verification". Only JWT-based signatures are verified (via `JWTProofChecker`). See ticket #54 for the remediation plan.
 - **`validationMode: combined` and `jsonLd`** do not perform real JSON-LD validation — they only check that issuer and type fields are present. They are deprecated but still accepted.
-- **`verifier/caching_client.go`** (`NewCachingDocumentLoader`) has no production callers since trustbloc removal.
+- **Verification relationships are only enforced when the DID document declares them.** A `did:web` document that lists `verificationMethod` but neither `authentication` nor `assertionMethod` falls back to the flat method list with a warning.
+- **Data Integrity suites other than `JsonWebSignature2020`** (`proofValue`-based cryptosuites) are parsed but not verified.
 
 ## Key Dependencies
 

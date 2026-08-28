@@ -391,14 +391,20 @@ func (cc cacheBasedCredentialsConfig) GetHolderVerification(serviceIdentifier st
 // alerts operators that LD-proof verification is enforced for JSON-LD
 // credentials — submissions without a valid proof will be rejected.
 //
+// When ldp_vc is in use it also warns if clientId is empty: the audience
+// binding of a JSON-LD VP proof is checked against the verifier's client
+// identification, so without it no domain binding takes place at all.
+//
 // The function checks three locations where a format may appear:
 //   - PresentationDefinition.Format map keys
 //   - InputDescriptor.Format map keys (per input descriptor)
 //   - DCQL CredentialQuery.Format string
-func WarnLDPVCFormat(services []config.ConfiguredService) {
+func WarnLDPVCFormat(services []config.ConfiguredService, clientId string) {
+	usesLDPVC := false
 	for _, svc := range services {
 		for scopeName, scope := range svc.ServiceScopes {
 			if hasLDPVCInScope(scope) {
+				usesLDPVC = true
 				logging.Log().Infof(
 					"Service %q scope %q references ldp_vc format — Linked Data Proof verification "+
 						"is enforced; JSON-LD presentations without a valid proof will be rejected.",
@@ -406,6 +412,13 @@ func WarnLDPVCFormat(services []config.ConfiguredService) {
 				)
 			}
 		}
+	}
+
+	if usesLDPVC && clientId == "" {
+		logging.Log().Warn(
+			"ldp_vc is configured but verifier.clientIdentification.id is not set — " +
+				"the domain (audience) binding of JSON-LD VP proofs cannot be checked.",
+		)
 	}
 }
 

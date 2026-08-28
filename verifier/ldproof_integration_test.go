@@ -9,14 +9,11 @@ package verifier
 
 import (
 	"crypto/ecdsa"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
@@ -88,10 +85,14 @@ func signTestVP(t *testing.T, bundle integrationKeyBundle, holderDID string) ([]
 	return signPresentation(t, pres, bundle.signer, bundle.verifMeth, bundle.docLoader)
 }
 
-// makeMinimalVC returns a JSON-LD VC map with no proof (unsigned).
+// makeMinimalVC returns a JSON-LD VC map with no proof (unsigned). It is used
+// by the negative test that asserts unsigned credentials are rejected.
 func makeMinimalVC(issuerDID string) map[string]interface{} {
 	return map[string]interface{}{
-		"@context":          []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"@context": []interface{}{
+			common.ContextCredentialsV1,
+			common.ContextSecuritySuiteJWS2020,
+		},
 		"type":              []interface{}{"VerifiableCredential"},
 		"issuer":            issuerDID,
 		"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com", "name": "Alice"},
@@ -102,7 +103,7 @@ func makeMinimalVC(issuerDID string) map[string]interface{} {
 // with an optional proof section. When proofMap is nil, no proof is included.
 func makeStatusListVCJSONLD(issuerDID string, proofMap map[string]interface{}) string {
 	doc := map[string]interface{}{
-		"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"@context": []interface{}{common.ContextCredentialsV1, common.ContextSecuritySuiteJWS2020},
 		"id":       "https://example.com/status/1",
 		"type":     []interface{}{"VerifiableCredential", "BitstringStatusListCredential"},
 		"issuer":   issuerDID,
@@ -124,71 +125,21 @@ func makeStatusListVCJSONLD(issuerDID string, proofMap map[string]interface{}) s
 // given JSON-LD document (typically a credential) and returns it as a proof
 // map. The document must NOT already contain a proof member.
 //
-// This mirrors the canonicalize-hash-sign flow of common.Presentation.AddLinkedDataProof
-// adapted for arbitrary JSON-LD documents.
+// It delegates to the production signing routine so the integration tests
+// exercise the same canonicalization and proof-options handling as the
+// verifier does.
 func signCredentialDocument(t *testing.T, docMap map[string]interface{}, bundle integrationKeyBundle) map[string]interface{} {
 	t.Helper()
 
-	// 1. Strip any existing proof (should not be present but be safe).
 	docCopy := make(map[string]interface{})
 	for k, v := range docMap {
-		if k != "proof" {
+		if k != common.VPKeyProof {
 			docCopy[k] = v
 		}
 	}
 
-	// 2. Build proof options with @context from the document.
-	created := time.Now().UTC().Format(time.RFC3339)
-	proofOptions := map[string]interface{}{
-		"@context":           docCopy["@context"],
-		"type":               common.ProofTypeJsonWebSignature2020,
-		"created":            created,
-		"verificationMethod": bundle.verifMeth,
-	}
-
-	// 3. Canonicalize both document and proof options using URDNA2015.
-	proc := ld.NewJsonLdProcessor()
-	ldOpts := ld.NewJsonLdOptions("")
-	ldOpts.Format = "application/n-quads"
-	ldOpts.Algorithm = "URDNA2015"
-	ldOpts.DocumentLoader = bundle.docLoader
-
-	canonDoc, err := proc.Normalize(docCopy, ldOpts)
-	require.NoError(t, err, "canonicalize document")
-	canonProof, err := proc.Normalize(proofOptions, ldOpts)
-	require.NoError(t, err, "canonicalize proof options")
-
-	// 4. Hash both canonical forms.
-	docHash := sha256.Sum256([]byte(canonDoc.(string)))
-	proofHash := sha256.Sum256([]byte(canonProof.(string)))
-
-	// 5. tbs = hash(proof_options) || hash(document)
-	tbs := append(proofHash[:], docHash[:]...)
-
-	// 6. Create JWS header with b64=false.
-	headerJSON, _ := json.Marshal(map[string]interface{}{
-		"alg":  "ES256",
-		"b64":  false,
-		"crit": []string{"b64"},
-	})
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
-
-	// 7. Sign: ASCII(header) || "." || tbs (raw bytes since b64=false).
-	signingInput := append([]byte(headerB64+"."), tbs...)
-	sig, err := bundle.signer.Sign(signingInput)
-	require.NoError(t, err, "sign tbs")
-
-	// 8. Construct detached JWS: header..signature (empty payload part).
-	sigB64 := base64.RawURLEncoding.EncodeToString(sig)
-	jwsValue := headerB64 + ".." + sigB64
-
-	return map[string]interface{}{
-		"type":               common.ProofTypeJsonWebSignature2020,
-		"created":            created,
-		"verificationMethod": bundle.verifMeth,
-		"proofPurpose":       "assertionMethod",
-		"jws":                jwsValue,
-	}
+	return signDocument(t, docCopy, bundle.signer, bundle.verifMeth, bundle.docLoader,
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAssertionMethod})
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +223,43 @@ func TestIntegration_JSONLDVP_UnsignedRejected(t *testing.T) {
 	require.Error(t, err, "unsigned VP must be rejected")
 	assert.True(t, errors.Is(err, ErrorUnsignedPresentation),
 		"expected ErrorUnsignedPresentation, got: %v", err)
+}
+
+// ---------------------------------------------------------------------------
+// Negative: signed VP carrying an unsigned credential rejected
+// ---------------------------------------------------------------------------
+
+// TestIntegration_JSONLDVP_UnsignedCredentialRejected submits a correctly
+// signed VP that carries a credential with no proof of its own. The VP
+// signature says nothing about who issued that credential, so it must be
+// rejected rather than silently accepted.
+func TestIntegration_JSONLDVP_UnsignedCredentialRejected(t *testing.T) {
+	holderDID := "did:web:holder.integration.example.com"
+	bundle := newIntegrationKeyBundle(t, holderDID)
+
+	vpMap := map[string]interface{}{
+		common.JSONLDKeyContext: []interface{}{
+			common.ContextCredentialsV1,
+			common.ContextSecuritySuiteJWS2020,
+		},
+		common.JSONLDKeyType:             []interface{}{common.TypeVerifiablePresentation},
+		common.VPKeyHolder:               holderDID,
+		common.VPKeyVerifiableCredential: []interface{}{makeMinimalVC("did:web:very-trusted-issuer.example.com")},
+	}
+	vpMap[common.VPKeyProof] = signDocument(t, vpMap, bundle.signer, bundle.verifMeth, bundle.docLoader,
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAuthentication})
+
+	vpJSON, err := json.Marshal(vpMap)
+	require.NoError(t, err)
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   newTestProofChecker(),
+		LDProofChecker: bundle.checker,
+	}
+
+	_, err = parser.ParsePresentation(vpJSON)
+	require.Error(t, err, "an unsigned credential must not be accepted")
+	assert.ErrorIs(t, err, ErrorUnsignedCredential)
 }
 
 // ---------------------------------------------------------------------------
@@ -410,7 +398,7 @@ func TestIntegration_StatusListJSONLD_EmptyProofArrayRejected(t *testing.T) {
 	bundle := newIntegrationKeyBundle(t, issuerDID)
 
 	doc := map[string]interface{}{
-		"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"@context": []interface{}{common.ContextCredentialsV1, common.ContextSecuritySuiteJWS2020},
 		"type":     []interface{}{"VerifiableCredential", "BitstringStatusListCredential"},
 		"issuer":   issuerDID,
 		"proof":    []interface{}{},
@@ -457,7 +445,7 @@ func TestIntegration_StatusListFetch_JSONLDWithProof(t *testing.T) {
 	defer srv.Close()
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, bundle.checker)
-	cred, err := client.Fetch(srv.URL)
+	cred, err := client.Fetch(srv.URL, "")
 	require.NoError(t, err, "Fetch with valid JSON-LD proof should succeed")
 	require.NotNil(t, cred)
 }
@@ -479,9 +467,93 @@ func TestIntegration_StatusListFetch_JSONLDNoProofRejected(t *testing.T) {
 	defer srv.Close()
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, bundle.checker)
-	cred, err := client.Fetch(srv.URL)
+	cred, err := client.Fetch(srv.URL, "")
 	require.Error(t, err, "Fetch with no-proof JSON-LD must be rejected")
 	assert.ErrorIs(t, err, ErrorStatusListJSONLDProofMissing)
+	assert.Nil(t, cred)
+}
+
+// ---------------------------------------------------------------------------
+// JSON-LD status list: issuer binding
+// ---------------------------------------------------------------------------
+
+// TestIntegration_StatusListFetch_IssuerBinding verifies that a status list
+// is only accepted for the issuer of the credential that referenced it. A
+// valid self-signed status list from a different issuer — what an attacker
+// controlling the status-list URL would serve — must be rejected.
+func TestIntegration_StatusListFetch_IssuerBinding(t *testing.T) {
+	issuerDID := "did:web:issuer.statuslist.example.com"
+	bundle := newIntegrationKeyBundle(t, issuerDID)
+
+	credBody := makeStatusListVCJSONLD(issuerDID, nil)
+	var docMap map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(credBody), &docMap))
+	docMap["proof"] = signCredentialDocument(t, docMap, bundle)
+	bodyWithProof, err := json.Marshal(docMap)
+	require.NoError(t, err)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bodyWithProof)
+	}))
+	defer srv.Close()
+
+	tests := []struct {
+		name           string
+		expectedIssuer string
+		wantErr        bool
+	}{
+		{name: "same_issuer_accepted", expectedIssuer: issuerDID},
+		{name: "foreign_issuer_rejected", expectedIssuer: "did:web:other-issuer.example.com", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// A fresh client per case so the cache cannot mask the check.
+			client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, bundle.checker)
+			cred, err := client.Fetch(srv.URL, tc.expectedIssuer)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrorStatusListIssuerMismatch)
+				assert.Nil(t, cred)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, cred)
+		})
+	}
+}
+
+// TestIntegration_StatusListFetch_IssuerBindingAppliesToCache verifies the
+// issuer check is not bypassable by warming the cache with a legitimate
+// lookup first.
+func TestIntegration_StatusListFetch_IssuerBindingAppliesToCache(t *testing.T) {
+	issuerDID := "did:web:issuer.statuslist.example.com"
+	bundle := newIntegrationKeyBundle(t, issuerDID)
+
+	credBody := makeStatusListVCJSONLD(issuerDID, nil)
+	var docMap map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(credBody), &docMap))
+	docMap["proof"] = signCredentialDocument(t, docMap, bundle)
+	bodyWithProof, err := json.Marshal(docMap)
+	require.NoError(t, err)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bodyWithProof)
+	}))
+	defer srv.Close()
+
+	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, bundle.checker)
+
+	_, err = client.Fetch(srv.URL, issuerDID)
+	require.NoError(t, err, "the first, legitimate lookup populates the cache")
+
+	cred, err := client.Fetch(srv.URL, "did:web:other-issuer.example.com")
+	require.Error(t, err, "the cached entry must still be checked against the expected issuer")
+	assert.ErrorIs(t, err, ErrorStatusListIssuerMismatch)
 	assert.Nil(t, cred)
 }
 
@@ -543,7 +615,7 @@ func TestIntegration_StatusListJWT_RegressionStillWorks(t *testing.T) {
 	bundle := newIntegrationKeyBundle(t, holderDID)
 
 	client := NewCachingStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry, nil, bundle.checker)
-	cred, err := client.Fetch(srv.URL)
+	cred, err := client.Fetch(srv.URL, "")
 	require.NoError(t, err, "JWT status list should continue to work")
 	require.NotNil(t, cred)
 }
@@ -645,7 +717,7 @@ func TestIntegration_WarnLDPVCFormat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// WarnLDPVCFormat must not panic for any configuration variant.
 			assert.NotPanics(t, func() {
-				WarnLDPVCFormat(tc.services)
+				WarnLDPVCFormat(tc.services, "did:key:verifier")
 			})
 		})
 	}

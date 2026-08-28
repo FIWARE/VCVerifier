@@ -95,6 +95,11 @@ var (
 	// credential's status reference, per draft-ietf-oauth-status-list §8.3
 	// step 4a.
 	ErrorStatusListSubjectMismatch = errors.New("status_list_subject_mismatch")
+
+	// ErrorStatusListIssuerMismatch is returned when the status-list
+	// credential was issued by a different entity than the credential whose
+	// credentialStatus referenced it.
+	ErrorStatusListIssuerMismatch = errors.New("status_list_issuer_mismatch")
 	// ErrorStatusListExpired is returned when the `exp` claim of a fetched
 	// IETF Token Status List JWT is in the past, per
 	// draft-ietf-oauth-status-list §8.3 step 4c.
@@ -128,17 +133,24 @@ const (
 type StatusListCredentialClient interface {
 	// Fetch returns the status-list credential found at the given URL. It is
 	// free to serve previously fetched responses from an internal cache.
-	Fetch(url string) (*common.Credential, error)
+	//
+	// expectedIssuer is the issuer of the credential whose credentialStatus
+	// pointed at this URL. Implementations must reject a status list that was
+	// issued by anybody else, so that control over the network path to the
+	// status list is not enough to clear revocation bits. Passing an empty
+	// expectedIssuer skips the check.
+	Fetch(url string, expectedIssuer string) (*common.Credential, error)
 }
 
 // CachingStatusListClient is the default StatusListCredentialClient
-// implementation. It uses patrickmn/go-cache to avoid repeated network calls
-// for the same URL and a configurable http.Client timeout to protect the
-// verifier from slow status-list issuers.
-// CachingStatusListClient fetches and caches W3C Bitstring Status List
-// credentials. It supports both JWT-encoded and JSON-LD-encoded status list
-// credentials. JSON-LD credentials are accepted only when an LDProofChecker
-// is configured and the credential carries a valid Linked Data Proof.
+// implementation. It fetches W3C Bitstring Status List credentials in either
+// JWT or JSON-LD encoding, uses patrickmn/go-cache to avoid repeated network
+// calls for the same URL, and applies a configurable http.Client timeout to
+// protect the verifier from slow status-list issuers.
+//
+// JSON-LD credentials are accepted only when an LDProofChecker is configured
+// and the credential carries a valid Linked Data Proof created by its own
+// issuer.
 type CachingStatusListClient struct {
 	httpClient     *http.Client
 	cache          common.Cache
@@ -172,13 +184,24 @@ func NewCachingStatusListClient(timeout time.Duration, cacheExpiry time.Duration
 // returned when available; otherwise the credential is fetched, parsed with
 // the existing VC parser, stored in the cache and returned.
 //
+// The issuer of the returned credential is checked against expectedIssuer —
+// the issuer of the credential that referenced this status list. The issuer
+// check is applied to cached entries as well, so a status list fetched for
+// one issuer can never be reused to answer for another.
+//
 // The returned error is wrapped with ErrorStatusListHttpFailure for transport
-// or non-2xx responses, and with ErrorStatusListUnparseable when the body
-// does not parse as a Verifiable Credential.
-func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) {
+// or non-2xx responses, with ErrorStatusListUnparseable when the body does
+// not parse as a Verifiable Credential, and with
+// ErrorStatusListIssuerMismatch when the status list belongs to a different
+// issuer.
+func (c *CachingStatusListClient) Fetch(url string, expectedIssuer string) (*common.Credential, error) {
 	if cached, hit := c.cache.Get(url); hit {
 		logging.Log().Debugf("Status-list cache hit for %s", url)
-		return cached.(*common.Credential), nil
+		cachedCredential := cached.(*common.Credential)
+		if err := assertStatusListIssuer(cachedCredential, expectedIssuer, url); err != nil {
+			return nil, err
+		}
+		return cachedCredential, nil
 	}
 
 	logging.Log().Debugf("Fetching W3C status-list credential from %s", url)
@@ -208,17 +231,13 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 	}
 
 	logging.Log().Debugf("Received %d bytes from %s, parsing credential", len(body), url)
-	// Resolve the LDProofChecker lazily: at construction time (InitVerifier)
-	// the presentation parser may not be initialized yet, so the field may
-	// be nil. Fall back to the globally-registered checker that becomes
-	// available after InitPresentationParser.
-	ldChecker := c.ldProofChecker
-	if ldChecker == nil {
-		ldChecker = GetLDProofChecker()
-	}
-	cred, err := parseStatusListCredentialBody(body, c.jwtVerifier, ldChecker)
+	cred, err := parseStatusListCredentialBody(body, c.jwtVerifier, c.ldProofChecker)
 	if err != nil {
 		logging.Log().Debugf("Failed to parse status-list credential from %s: %v", url, err)
+		return nil, err
+	}
+
+	if err := assertStatusListIssuer(cred, expectedIssuer, url); err != nil {
 		return nil, err
 	}
 
@@ -227,14 +246,43 @@ func (c *CachingStatusListClient) Fetch(url string) (*common.Credential, error) 
 	return cred, nil
 }
 
+// assertStatusListIssuer requires the status-list credential to have been
+// issued by the issuer of the credential that referenced it. Verifying the
+// signature on a status list only shows that the signer controls the key it
+// names; without this binding an attacker who can answer the status-list URL
+// can present a self-signed list with every revocation bit cleared.
+//
+// The check is skipped when expectedIssuer is empty, which happens for
+// credentials that carry no issuer at all.
+func assertStatusListIssuer(cred *common.Credential, expectedIssuer string, url string) error {
+	if expectedIssuer == "" {
+		logging.Log().Warnf("Referencing credential has no issuer — cannot bind status list %s to an issuer", url)
+		return nil
+	}
+
+	actualIssuer := ""
+	if issuer := cred.Contents().Issuer; issuer != nil {
+		actualIssuer = issuer.ID
+	}
+	if actualIssuer != expectedIssuer {
+		logging.Log().Warnf("Status list %s is issued by %q but the referencing credential is issued by %q",
+			url, actualIssuer, expectedIssuer)
+		return fmt.Errorf("%w: status list issuer %q, credential issuer %q",
+			ErrorStatusListIssuerMismatch, actualIssuer, expectedIssuer)
+	}
+	return nil
+}
+
 // parseStatusListCredentialBody decodes a status-list credential response
 // body into a *common.Credential.
 //
 // Two transport encodings are handled:
 //   - JSON-LD: a response body starting with `{` is accepted when an
-//     LDProofChecker is provided and the credential carries a valid Linked
-//     Data Proof. Without a checker or without a proof the credential is
-//     rejected (fail-closed) to prevent MITM attacks on revocation status.
+//     LDProofChecker is provided and the credential carries a Linked Data
+//     Proof created by its own issuer. Without a checker or without a proof
+//     the credential is rejected (fail-closed). Note that the proof alone
+//     only establishes who signed the list — binding it to the credential
+//     that referenced it is done separately, in Fetch.
 //   - JWT: any other non-empty body is treated as a JWS. When a
 //     StatusListJWTVerifier is provided the signature is verified;
 //     otherwise a warning is logged but parsing proceeds.
@@ -276,7 +324,8 @@ func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifie
 // parseJSONLDStatusListCredential parses and verifies a JSON-LD encoded
 // status list credential. If ldProofChecker is nil, the credential is rejected
 // (fail-closed). If the credential does not carry a proof member, it is also
-// rejected. Otherwise the Linked Data Proof is cryptographically verified.
+// rejected. Otherwise the Linked Data Proof is cryptographically verified
+// against the credential's own issuer.
 func parseJSONLDStatusListCredential(body []byte, ldProofChecker *LDProofChecker) (*common.Credential, error) {
 	if ldProofChecker == nil {
 		logging.Log().Warn("No LDProofChecker configured — rejecting JSON-LD status list credential")
@@ -292,7 +341,7 @@ func parseJSONLDStatusListCredential(body []byte, ldProofChecker *LDProofChecker
 	}
 
 	// Extract and parse the proof member.
-	proofRaw, hasProof := docMap["proof"]
+	proofRaw, hasProof := docMap[common.VPKeyProof]
 	if !hasProof || proofRaw == nil {
 		logging.Log().Warn("JSON-LD status list credential has no proof — rejecting")
 		return nil, fmt.Errorf("%w: credential does not contain a proof member",
@@ -311,16 +360,17 @@ func parseJSONLDStatusListCredential(body []byte, ldProofChecker *LDProofChecker
 	}
 
 	// Strip the proof from the document for canonicalization.
-	delete(docMap, "proof")
+	delete(docMap, common.VPKeyProof)
 	docBytes, err := json.Marshal(docMap)
 	if err != nil {
 		logging.Log().Debugf("Failed to marshal proof-stripped JSON-LD status list credential: %v", err)
 		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
 
-	// Verify each proof.
+	// Verify each proof against the issuer the status list itself claims.
+	statusListIssuer := extractStatusListIssuer(docMap)
 	for i, proof := range proofs {
-		if verifyErr := ldProofChecker.VerifyCredential(docBytes, proof); verifyErr != nil {
+		if verifyErr := ldProofChecker.VerifyCredential(docBytes, proof, statusListIssuer); verifyErr != nil {
 			logging.Log().Debugf("JSON-LD status list credential proof %d verification failed: %v", i, verifyErr)
 			return nil, fmt.Errorf("%w: proof %d: %v", ErrorStatusListJSONLDProofInvalid, i, verifyErr)
 		}
@@ -329,13 +379,28 @@ func parseJSONLDStatusListCredential(body []byte, ldProofChecker *LDProofChecker
 
 	// Parse the credential structure. Re-add the proof to the map so
 	// parseJSONLDCredential can attach it to the resulting Credential.
-	docMap["proof"] = proofRaw
+	docMap[common.VPKeyProof] = proofRaw
 	cred, err := parseJSONLDCredential(docMap)
 	if err != nil {
 		logging.Log().Debugf("Failed to parse JSON-LD status list credential fields: %v", err)
 		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
 	return cred, nil
+}
+
+// extractStatusListIssuer reads the `issuer` member of a raw status-list
+// credential, accepting both the string and the object (`{"id": ...}`) form
+// defined by the VC data model.
+func extractStatusListIssuer(docMap map[string]interface{}) string {
+	switch issuer := docMap[common.VCKeyIssuer].(type) {
+	case string:
+		return issuer
+	case map[string]interface{}:
+		if id, ok := issuer[common.JSONLDKeyID].(string); ok {
+			return id
+		}
+	}
+	return ""
 }
 
 // Compile-time assertion that CachingStatusListClient satisfies the public
