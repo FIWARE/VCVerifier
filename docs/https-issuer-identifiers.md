@@ -44,7 +44,16 @@ mismatch fails with `ErrorIssuerMismatch` and is **not** retried through the
 other path: an endpoint that answers while claiming a different identity is a
 security signal, not a reason to follow one more hop.
 
-Resolved key sets are cached per issuer URL for `DefaultJwksCacheTTL`
+Resolved key sets are cached under `issuerCacheKey`: the identifier with only
+its scheme and host lowercased (both are case-insensitive per RFC 3986) and a
+trailing slash dropped. Everything else — the case of the path, its
+percent-encoding, a query, a fragment — keeps two identifiers apart, since the
+cached path returns before any identity check runs. `%2F` inside a segment is
+in particular not a separator; the same escaped form is used when the
+well-known URL is built, so an issuer with an encoded slash discovers at its
+own endpoint rather than another's.
+
+Key sets are cached for `DefaultJwksCacheTTL`
 (15 minutes), or for the shorter lifetime the origin declares via
 `Cache-Control: max-age` — an origin may shorten its keys' cache lifetime but
 not extend it beyond the configured TTL. Resolution *failures* are cached too

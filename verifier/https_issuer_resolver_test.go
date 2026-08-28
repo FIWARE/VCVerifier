@@ -826,6 +826,14 @@ func TestResolveIssuerKeys_WellKnownPathPlacement(t *testing.T) {
 			expectedVC:  "/.well-known/jwt-vc-issuer/tenant1",
 			expectedVCI: "/tenant1/.well-known/openid-credential-issuer",
 		},
+		{
+			// An encoded slash stays inside its segment; decoding it would
+			// address a different issuer's well-known location.
+			testName:    "issuer with an encoded slash in its path",
+			issuerPath:  "/a%2Fb",
+			expectedVC:  "/.well-known/jwt-vc-issuer/a%2Fb",
+			expectedVCI: "/a%2Fb/.well-known/openid-credential-issuer",
+		},
 	}
 
 	for _, tc := range tests {
@@ -1394,4 +1402,88 @@ func TestResolveIssuerKeys_HonoursCallerContext(t *testing.T) {
 	assert.ErrorIs(t, err, ErrorIssuerMetadataNotFound)
 	assert.Nil(t, keys)
 	assert.Equal(t, int32(0), requestCount.Load(), "a cancelled context must not reach the issuer")
+}
+
+// TestIssuerCacheKey verifies which issuer identifiers share a cache entry.
+// Only differences that cannot denote a different issuer may collapse: the
+// case of scheme and host, and a trailing slash. Everything else — the case of
+// the path, its percent-encoding, a query or a fragment — has to keep the
+// identifiers apart, because a shared entry hands one issuer's keys to
+// another without the metadata identity check ever running.
+func TestIssuerCacheKey(t *testing.T) {
+	tests := []struct {
+		testName string
+		issuer   string
+		other    string
+		sameKey  bool
+	}{
+		{"a trailing slash is not a difference", "https://example.com", "https://example.com/", true},
+		{"the host is case-insensitive", "https://Example.COM", "https://example.com", true},
+		{"the scheme is case-insensitive", "HTTPS://example.com", "https://example.com", true},
+		{"a trailing slash on a path is not a difference", "https://example.com/tenant1/", "https://example.com/tenant1", true},
+		{"an encoded slash is not a path separator", "https://example.com/a%2Fb", "https://example.com/a/b", false},
+		{"the path is case-sensitive", "https://example.com/Tenant1", "https://example.com/tenant1", false},
+		{"different tenants stay apart", "https://example.com/tenant1", "https://example.com/tenant2", false},
+		{"a query is part of the identifier", "https://example.com?tenant=1", "https://example.com", false},
+		{"a fragment is part of the identifier", "https://example.com#one", "https://example.com", false},
+		{"the port is part of the host", "https://example.com:8443", "https://example.com", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			issuerBase, err := parseIssuerURL(tc.issuer)
+			require.NoError(t, err)
+			otherBase, err := parseIssuerURL(tc.other)
+			require.NoError(t, err)
+
+			if tc.sameKey {
+				assert.Equal(t, issuerCacheKey(otherBase), issuerCacheKey(issuerBase),
+					"%s and %s should share a cache entry", tc.issuer, tc.other)
+				return
+			}
+			assert.NotEqual(t, issuerCacheKey(otherBase), issuerCacheKey(issuerBase),
+				"%s and %s must not share a cache entry", tc.issuer, tc.other)
+		})
+	}
+}
+
+// TestResolveIssuerKeys_EncodedPathDoesNotShareCache verifies the same at the
+// resolver level: resolving an issuer must not serve its keys to an identifier
+// that only decodes to the same path.
+func TestResolveIssuerKeys_EncodedPathDoesNotShareCache(t *testing.T) {
+	logging.Configure(testLoggingConfig)
+
+	keySet, _ := generateTestJWKSet(t, "tenant-key")
+	jwksBytes := marshalJWKSet(t, keySet)
+
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Match on the escaped path: r.URL.Path decodes %2F back into a
+		// separator, which is exactly the conflation under test.
+		switch r.URL.EscapedPath() {
+		case WellKnownJwtVcIssuer + "/a/b":
+			metadata := fmt.Sprintf(`{"issuer": "%s/a/b", "jwks_uri": "%s/jwks"}`, serverURL, serverURL)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(metadata))
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(jwksBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+
+	resolver := NewCachingHttpsIssuerResolver(cache.New(5*time.Minute, 10*time.Minute), DefaultJwksCacheTTL)
+
+	key, err := resolveFirstIssuerKey(resolver, serverURL+"/a/b", "tenant-key")
+	require.NoError(t, err)
+	require.NotNil(t, key)
+
+	// The encoded form names a different issuer — one whose metadata this
+	// server does not serve — so it must be resolved on its own and fail.
+	keys, err := resolver.ResolveIssuerKeys(context.Background(), serverURL+"/a%2Fb", "tenant-key")
+	assert.ErrorIs(t, err, ErrorIssuerMetadataNotFound)
+	assert.Nil(t, keys)
 }

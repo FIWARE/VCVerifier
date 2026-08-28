@@ -678,12 +678,7 @@ func parseIssuerURL(issuerURL string) (*url.URL, error) {
 // segment `/.well-known/jwt-vc-issuer` the result is
 // `https://example.com/.well-known/jwt-vc-issuer/tenant1`.
 func wellKnownURLInserted(base *url.URL, wellKnownPath string) string {
-	metadataURL := *base
-	metadataURL.Path = wellKnownPath + strings.TrimSuffix(base.Path, "/")
-	metadataURL.RawPath = ""
-	metadataURL.RawQuery = ""
-	metadataURL.Fragment = ""
-	return metadataURL.String()
+	return issuerOrigin(base) + wellKnownPath + issuerPath(base)
 }
 
 // wellKnownURLAppended builds a well-known URL by appending the segment to the
@@ -691,12 +686,23 @@ func wellKnownURLInserted(base *url.URL, wellKnownPath string) string {
 // credential issuer metadata. For issuer `https://example.com/tenant1` the
 // result is `https://example.com/tenant1/.well-known/openid-credential-issuer`.
 func wellKnownURLAppended(base *url.URL, wellKnownPath string) string {
-	metadataURL := *base
-	metadataURL.Path = strings.TrimSuffix(base.Path, "/") + wellKnownPath
-	metadataURL.RawPath = ""
-	metadataURL.RawQuery = ""
-	metadataURL.Fragment = ""
-	return metadataURL.String()
+	return issuerOrigin(base) + issuerPath(base) + wellKnownPath
+}
+
+// issuerOrigin is the scheme and authority of an issuer identifier.
+func issuerOrigin(base *url.URL) string {
+	return base.Scheme + "://" + base.Host
+}
+
+// issuerPath is the path component an issuer identifier contributes to a
+// well-known URL, without its trailing slash.
+//
+// It is the *escaped* path: reconstructing it from the decoded url.Path would
+// turn a `%2F` inside a segment into a separator and send the discovery
+// request to a different issuer's well-known location. Query and fragment are
+// dropped — a well-known URL is built from scheme, authority and path only.
+func issuerPath(base *url.URL) string {
+	return strings.TrimSuffix(base.EscapedPath(), "/")
 }
 
 // assertIssuerMatches enforces the RFC 8414 Section 3.3 check that the issuer
@@ -720,21 +726,32 @@ func canonicalIssuerID(issuerID string) string {
 	return strings.TrimSuffix(issuerID, "/")
 }
 
-// issuerCacheKey is the key an issuer's resolved keys are cached under. Scheme
+// issuerCacheKey is the key an issuer's resolved keys are cached under.
+//
+// Two identifiers may share a key only when they are the same issuer. Scheme
 // and host are case-insensitive per RFC 3986, so they are lowercased to keep
 // `https://Example.com` and `https://example.com` from occupying two entries
-// and costing two resolutions. The path keeps its case — it is case-sensitive
-// — and only a trailing slash is dropped, matching canonicalIssuerID.
+// and costing two resolutions. Everything after the host is taken verbatim —
+// including its percent-encoding — and only a trailing slash is dropped,
+// matching canonicalIssuerID.
+//
+// The escaped path in particular must survive: `%2F` inside a segment is not a
+// separator, so decoding it would let `https://example.com/a%2Fb` read the
+// entry of `https://example.com/a/b` and be handed that issuer's keys — the
+// cached path returns before assertIssuerMatches ever runs.
 //
 // This is deliberately a different function from canonicalIssuerID: relaxing
 // the identity comparison the same way would go beyond what RFC 8414 allows.
 func issuerCacheKey(issuerBase *url.URL) string {
-	normalized := *issuerBase
-	normalized.Scheme = strings.ToLower(issuerBase.Scheme)
-	normalized.Host = strings.ToLower(issuerBase.Host)
-	normalized.Path = strings.TrimSuffix(issuerBase.Path, "/")
-	normalized.RawPath = ""
-	return normalized.String()
+	key := strings.ToLower(issuerBase.Scheme) + "://" + strings.ToLower(issuerBase.Host) +
+		strings.TrimSuffix(issuerBase.EscapedPath(), "/")
+	if issuerBase.RawQuery != "" {
+		key += "?" + issuerBase.RawQuery
+	}
+	if issuerBase.Fragment != "" {
+		key += "#" + issuerBase.EscapedFragment()
+	}
+	return key
 }
 
 // selectCandidateKeys returns the keys of a JWKS that may verify a signature.
