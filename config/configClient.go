@@ -526,7 +526,7 @@ type DCQL struct {
 	// A non-empty array of Credential Queries that specify the requested Credentials.
 	Credentials []CredentialQuery `json:"credentials" mapstructure:"credentials"`
 	// A non-empty array of Credential Set Queries that specifies additional constraints on which of the requested Credentials to return.
-	CredentialSets []CredentialSetQuery `json:"credential_sets" mapstructure:"credential_sets"`
+	CredentialSets []CredentialSetQuery `json:"credential_sets,omitempty" mapstructure:"credential_sets,omitempty"`
 }
 
 // CredentialQuery is an object representing a request for a presentation of one or more matching Credentials
@@ -546,7 +546,7 @@ type CredentialQuery struct {
 	// A non-empty array containing arrays of identifiers for elements in claims that specifies which combinations of claims for the Credential are requested.
 	ClaimSets [][]string `json:"claim_sets,omitempty" mapstructure:"claim_sets,omitempty"`
 	// A non-empty array of objects  that specifies expected authorities or trust frameworks that certify Issuers, that the Verifier will accept. Every Credential returned by the Wallet SHOULD match at least one of the conditions present in the corresponding trusted_authorities array if present.
-	TrustedAuthorities []TrustedAuthorityQuery `json:"trusted_authorities" mapstructure:"trusted_authorities"`
+	TrustedAuthorities []TrustedAuthorityQuery `json:"trusted_authorities,omitempty" mapstructure:"trusted_authorities,omitempty"`
 }
 
 // RequiresCryptographicHolderBinding returns true when the field is nil (absent) or explicitly true.

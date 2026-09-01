@@ -21,8 +21,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const DEFAULT_REQUEST_MODE = verifier.REQUEST_MODE_BY_REFERENCE
-
 var frontendVerifier verifier.Verifier
 var requestObjectClient *verifier.RequestObjectClient
 
@@ -69,8 +67,9 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 
 	requestMode, requestModeExists := c.GetQuery("request_mode")
 	if !requestModeExists {
-		logging.Log().Infof("Using default request mode %s.", DEFAULT_REQUEST_MODE)
-		requestMode = DEFAULT_REQUEST_MODE
+		fallbackRequestMode := getFrontendVerifier().GetRequestMode()
+		logging.Log().Infof("Using default request mode %s.", fallbackRequestMode)
+		requestMode = fallbackRequestMode
 	}
 
 	qr, err := getFrontendVerifier().ReturnLoginQR(c.Request.Host, "https", callback, state, clientId, nonce, requestMode)
@@ -137,8 +136,9 @@ func VerifierLoginQr(c *gin.Context) {
 
 	requestMode, requestModeExists := c.GetQuery("request_mode")
 	if !requestModeExists {
-		logging.Log().Infof("Using default request mode %s.", DEFAULT_REQUEST_MODE)
-		requestMode = DEFAULT_REQUEST_MODE
+		fallbackRequestMode := getFrontendVerifier().GetRequestMode()
+		logging.Log().Infof("Using default request mode %s.", fallbackRequestMode)
+		requestMode = fallbackRequestMode
 	}
 
 	qrInfo, err := getFrontendVerifier().ReturnLoginQRV2(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode)

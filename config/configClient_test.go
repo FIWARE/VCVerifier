@@ -485,3 +485,22 @@ func TestTrustedIssuersListsDecodeHook(t *testing.T) {
 		assert.Equal(t, input, result)
 	})
 }
+
+func Test_DCQL_MarshalJSON_OmitsUnsetOptionalArrays(t *testing.T) {
+	dcql := DCQL{Credentials: []CredentialQuery{{Id: "my-cred"}}}
+
+	out, err := json.Marshal(dcql)
+	assert.NoError(t, err)
+	assert.NotContains(t, string(out), "credential_sets")
+	assert.NotContains(t, string(out), "trusted_authorities")
+
+	var roundTripped map[string]interface{}
+	assert.NoError(t, json.Unmarshal(out, &roundTripped))
+	_, hasCredentialSets := roundTripped["credential_sets"]
+	assert.False(t, hasCredentialSets)
+
+	credentials := roundTripped["credentials"].([]interface{})
+	credential := credentials[0].(map[string]interface{})
+	_, hasTrustedAuthorities := credential["trusted_authorities"]
+	assert.False(t, hasTrustedAuthorities)
+}
