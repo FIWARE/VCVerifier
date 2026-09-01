@@ -176,6 +176,11 @@ type Verifier struct {
 	ClientIdentification ClientIdentification `mapstructure:"clientIdentification"`
 	// supported request modes - currently 'urlEncoded', 'byValue' and 'byReference' are available. In case of byValue, the keyPath has to be set.
 	SupportedModes []string `mapstructure:"supportedModes" default:"urlEncoded"`
+	// request mode to use for flows where the caller has no way to request one explicitly
+	// (e.g. the OIDC-bridging /api/v1/authorization endpoint, or /api/v2/loginQR when no
+	// request_mode query parameter is given). Must be one of supportedModes when set. Defaults
+	// to "byReference" to preserve the pre-existing, hardcoded behaviour.
+	RequestMode string `mapstructure:"requestMode" default:"byReference"`
 	// address of the (ebsi-compatible) trusted-issuers-registry for verifying the issuer
 	TirAddress string `mapstructure:"tirAddress"`
 	// expiry of the tir-cache entries
