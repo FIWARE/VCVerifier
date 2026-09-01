@@ -389,7 +389,10 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	statusListHttpTimeout := time.Duration(verifierConfig.StatusListHttpTimeout) * time.Second
 	statusListCacheExpiry := time.Duration(verifierConfig.StatusListCacheExpiry) * time.Second
 	statusListDIDRegistry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
-	statusListJWTVerifier := NewStatusListJWTVerifier(statusListDIDRegistry)
+	// GetHttpsIssuerResolver() is populated by InitPresentationParser, so the
+	// status-list path shares the JWKS cache with credential verification.
+	statusListJWTVerifier := NewStatusListJWTVerifier(statusListDIDRegistry).
+		WithHttpsResolver(GetHttpsIssuerResolver())
 	// GetLDProofChecker() is populated by InitPresentationParser, which
 	// main.go runs before InitVerifier.
 	statusListClient := NewCachingStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, GetLDProofChecker())

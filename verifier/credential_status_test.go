@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -827,6 +828,62 @@ func TestStatusListJWTVerifier_X5C_ValidSignature(t *testing.T) {
 	}
 	if claims["sub"] != "https://example.org/statuslists/1" {
 		t.Errorf("unexpected sub claim: %v", claims["sub"])
+	}
+}
+
+// TestStatusListJWTVerifier_X5C_RejectsUnsupportedAlgorithm verifies that the
+// x5c fallback pins the `alg` header the same way every other verification path
+// does. The header is attacker-controlled, so a symmetric algorithm — where the
+// certificate's public key would double as the shared secret — must never reach
+// the verification step.
+func TestStatusListJWTVerifier_X5C_RejectsUnsupportedAlgorithm(t *testing.T) {
+	privateKey := generateTestKey(t)
+	certDER := generateSelfSignedCert(t, privateKey)
+	payload := map[string]interface{}{
+		"status_list": map[string]interface{}{
+			"bits": 1,
+			"lst":  "eNpjAAAAAQAB",
+		},
+		"sub": "https://example.org/statuslists/1",
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	var chain cert.Chain
+	if err := chain.AddString(base64.StdEncoding.EncodeToString(certDER)); err != nil {
+		t.Fatalf("add cert to chain: %v", err)
+	}
+	hdrs := jws.NewHeaders()
+	_ = hdrs.Set("typ", "statuslist+jwt")
+	_ = hdrs.Set("x5c", &chain)
+
+	// The secret is irrelevant: the algorithm has to be refused before any key
+	// is consulted.
+	hmacKey, err := jwk.Import([]byte("an-attacker-chosen-secret-000000"))
+	if err != nil {
+		t.Fatalf("import hmac key: %v", err)
+	}
+	jwtBytes, err := jws.Sign(payloadBytes, jws.WithKey(jwa.HS256(), hmacKey, jws.WithProtectedHeaders(hdrs)))
+	if err != nil {
+		t.Fatalf("sign JWT: %v", err)
+	}
+
+	verifier := newTestStatusListJWTVerifier()
+	verified, err := verifier.VerifyStatusListJWT(jwtBytes)
+	if err == nil {
+		t.Fatal("expected an HS256-signed status list JWT to be rejected, got nil")
+	}
+	if !errors.Is(err, ErrorStatusListUnparseable) {
+		t.Errorf("expected ErrorStatusListUnparseable, got %v", err)
+	}
+	if !strings.Contains(err.Error(), ErrorUnsupportedSignatureAlgorithm.Error()) {
+		t.Errorf("expected the algorithm allowlist to reject the JWT, got %v", err)
+	}
+	if verified != nil {
+		t.Error("no payload should be returned for a rejected JWT")
 	}
 }
 

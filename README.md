@@ -170,6 +170,17 @@ verifier:
     # presentation stays replayable on the grants that have no server-issued
     # nonce (`vp_token` and token-exchange). Set to 0 to accept any age.
     ldProofMaxAge: 300
+    # Hosts that the metadata of an HTTPS-based credential issuer may point to
+    # (jwks_uri, authorization_servers) in addition to the issuer's own host.
+    # Empty by default, which confines key discovery to the issuer's own origin
+    # — see "Trusted issuers and participants" below.
+    httpsIssuerAllowedHosts: []
+    # Allows key discovery for HTTPS-based issuers to connect to addresses that
+    # are not globally routable (loopback, private, link-local). The issuer URL
+    # comes from the presented token, before any trust check, so this is false
+    # by default — enable it only when the issuers live in the verifier's own
+    # network.
+    httpsIssuerAllowPrivateNetworks: false
 
 # configuration of the service to retrieve configuration for
 configRepo:
@@ -244,6 +255,38 @@ configRepo:
                                 'sd+jwt-vc':
                                     alg: ES256
 ```
+#### Trusted issuers and participants
+
+Every entry of `trustedIssuersLists` and `trustedParticipantsLists` is the
+address of a registry to query — never the identity of an issuer. The `type`
+selects the API to talk to:
+
+| `type` | `url` |
+| --- | --- |
+| `ebsi` | an EBSI Trusted Issuers Registry (v3/v4) |
+| `ebsi-v5` | an EBSI Trusted Issuers Registry (v5) |
+| `gaia-x` | a Gaia-X registry (participants only) |
+
+A bare string entry (the legacy format, `- https://tir-pdc.ebsi.fiware.dev`) is
+read as `type: ebsi`.
+
+```yaml
+credentials:
+    -   type: CustomerCredential
+        trustedIssuersLists:
+            -   type: ebsi
+                url: https://til-pdc.ebsi.fiware.dev
+```
+
+The issuer of a credential is looked up in those registries by its identifier,
+whether that is a DID or an HTTPS URL — an issuer identified by an HTTPS URL is
+trusted by being registered there, like any other. `url: "*"` in a trusted
+issuers list waives the lookup for that credential type. See
+[docs/https-issuer-identifiers.md](docs/https-issuer-identifiers.md) for how
+the signing keys of an HTTPS-identified issuer are discovered and for
+`verifier.httpsIssuerAllowedHosts` and
+`verifier.httpsIssuerAllowPrivateNetworks`.
+
 #### Templating
 
 The login-page, provided at ```/api/v1/loginQR```, can be configured by providing a different template in the ```templateDir```. The templateDir needs to contain a file named ```verifier_present_qr.html``` which will be rendered on calls to the login-api. The template needs to include the QR-Code via ```<img src="data:{{.qrcode}}"```. Beside that, all options provided by the [goview-framework](https://github.com/foolin/goview) can be used. Static content(like icons, images) can be provided through the ```staticDir``` and will be available at the path ```/static```.
