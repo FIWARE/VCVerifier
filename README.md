@@ -168,6 +168,12 @@ verifier:
     # Empty by default, which confines key discovery to the issuer's own origin
     # — see "Trusted issuers and participants" below.
     httpsIssuerAllowedHosts: []
+    # Allows key discovery for HTTPS-based issuers to connect to addresses that
+    # are not globally routable (loopback, private, link-local). The issuer URL
+    # comes from the presented token, before any trust check, so this is false
+    # by default — enable it only when the issuers live in the verifier's own
+    # network.
+    httpsIssuerAllowPrivateNetworks: false
 
 # configuration of the service to retrieve configuration for
 configRepo:
@@ -271,7 +277,8 @@ trusted by being registered there, like any other. `url: "*"` in a trusted
 issuers list waives the lookup for that credential type. See
 [docs/https-issuer-identifiers.md](docs/https-issuer-identifiers.md) for how
 the signing keys of an HTTPS-identified issuer are discovered and for
-`verifier.httpsIssuerAllowedHosts`.
+`verifier.httpsIssuerAllowedHosts` and
+`verifier.httpsIssuerAllowPrivateNetworks`.
 
 #### Templating
 

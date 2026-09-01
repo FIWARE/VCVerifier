@@ -28,7 +28,6 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
-	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
 	"github.com/patrickmn/go-cache"
@@ -504,7 +503,6 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 	}
 
 	headers := sigs[0].ProtectedHeaders()
-	alg, _ := headers.Algorithm()
 
 	issuerDID := extractIssFromPayload(msg.Payload())
 	if issuerDID != "" {
@@ -513,7 +511,7 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 	}
 
 	logging.Log().Debug("Status list JWT has no iss claim, falling back to x5c verification")
-	return v.verifyWithX5C(jwtBytes, headers, alg)
+	return v.verifyWithX5C(jwtBytes, headers)
 }
 
 // verifyWithISS resolves the public key from the iss identifier and verifies
@@ -540,7 +538,13 @@ func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Mess
 
 // verifyWithX5C extracts the public key from the x5c certificate chain in
 // the JWT header and verifies the signature.
-func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.Headers, alg jwa.SignatureAlgorithm) ([]byte, error) {
+//
+// Verification goes through verifyJWSWithCandidateKeys like every other path,
+// so the `alg` of the header is pinned to the allowlist here too: the header is
+// as attacker-controlled as anywhere else, and handing it to jws.Verify
+// unchecked would leave this the one path where `none` or an HMAC algorithm
+// could still be named.
+func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.Headers) ([]byte, error) {
 	chain, hasX5C := headers.X509CertChain()
 	if !hasX5C || chain == nil || chain.Len() == 0 {
 		return nil, fmt.Errorf("%w: status list JWT has neither iss claim nor x5c header", ErrorStatusListUnparseable)
@@ -566,7 +570,7 @@ func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.H
 		return nil, fmt.Errorf("%w: x5c public key import failed: %v", ErrorStatusListUnparseable, err)
 	}
 
-	payload, err := jws.Verify(jwtBytes, jws.WithKey(alg, pubKey))
+	payload, _, err := verifyJWSWithCandidateKeys(jwtBytes, headers, []jwk.Key{pubKey})
 	if err != nil {
 		return nil, fmt.Errorf("%w: status list JWT x5c signature verification failed: %v", ErrorStatusListUnparseable, err)
 	}

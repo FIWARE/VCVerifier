@@ -192,7 +192,8 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 	// Uses a dedicated cache with the same cleanup pattern as other verifier caches.
 	httpsResolverCache := cache.New(DefaultJwksCacheTTL, 2*DefaultJwksCacheTTL)
 	httpsResolver := NewCachingHttpsIssuerResolver(httpsResolverCache, DefaultJwksCacheTTL).
-		WithAllowedMetadataHosts(config.Verifier.HttpsIssuerAllowedHosts)
+		WithAllowedMetadataHosts(config.Verifier.HttpsIssuerAllowedHosts).
+		WithAllowPrivateAddresses(config.Verifier.HttpsIssuerAllowPrivateNetworks)
 	globalHttpsIssuerResolver = httpsResolver
 
 	checker := NewJWTProofChecker(registry, jAdESValidator).WithHttpsResolver(httpsResolver)

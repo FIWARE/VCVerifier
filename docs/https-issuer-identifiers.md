@@ -44,19 +44,29 @@ mismatch fails with `ErrorIssuerMismatch` and is **not** retried through the
 other path: an endpoint that answers while claiming a different identity is a
 security signal, not a reason to follow one more hop.
 
+An issuer identifier carries no query and no fragment (RFC 8414 Section 2), and
+`parseIssuerURL` rejects one that does. Neither would reach the well-known URL
+built from it, so accepting them would let `https://issuer.example?1`, `?2`,
+... address one endpoint under unboundedly many identifiers — a counter in the
+query would walk past the failure cache.
+
 Resolved key sets are cached under `issuerCacheKey`: the identifier with only
 its scheme and host lowercased (both are case-insensitive per RFC 3986) and a
 trailing slash dropped. Everything else — the case of the path, its
-percent-encoding, a query, a fragment — keeps two identifiers apart, since the
-cached path returns before any identity check runs. `%2F` inside a segment is
-in particular not a separator; the same escaped form is used when the
-well-known URL is built, so an issuer with an encoded slash discovers at its
-own endpoint rather than another's.
+percent-encoding — keeps two identifiers apart, since the cached path returns
+before any identity check runs. `%2F` inside a segment is in particular not a
+separator; the same escaped form is used when the well-known URL is built, so
+an issuer with an encoded slash discovers at its own endpoint rather than
+another's.
 
 Key sets are cached for `DefaultJwksCacheTTL`
 (15 minutes), or for the shorter lifetime the origin declares via
 `Cache-Control: max-age` — an origin may shorten its keys' cache lifetime but
-not extend it beyond the configured TTL. Resolution *failures* are cached too
+not extend it beyond the configured TTL. An origin that declares a lifetime of
+*zero* — `max-age=0`, `no-store` or `no-cache` — is honoured by not storing the
+entry at all, and by dropping any entry an earlier fetch left behind; go-cache
+reads a zero TTL as "use the default expiration", so passing it on would cache
+for the full 15 minutes instead. Resolution *failures* are cached too
 (`DefaultJwksFailureCacheTTL`, 30s), so a flood of tokens naming an
 unresolvable issuer cannot be turned into a flood of outbound requests.
 `CachingHttpsIssuerResolver` is created once in `InitPresentationParser` and
@@ -86,6 +96,17 @@ issuer URL comes from the token, and the next hops (`jwks_uri`,
 verification runs before any trust-registry check, so this is reachable from
 unauthenticated input and is confined accordingly:
 
+- Every address a request would connect to is classified before the connection
+  is made: loopback, the RFC 1918 / RFC 4193 private ranges, link-local
+  (including `169.254.169.254`), multicast and a handful of reserved ranges are
+  refused with `ErrorAddressNotAllowed`. This is the only restriction that also
+  covers the **first** hop — the issuer identifier itself, which arrives in an
+  unverified token — so `iss: "https://10.0.0.5:8443/x"` cannot make the
+  verifier probe the internal network. The check happens in the dialer, on the
+  resolved address, and the connection is then made to the address that was
+  checked, so a name answering differently the second time (DNS rebinding)
+  gains nothing. Set `verifier.httpsIssuerAllowPrivateNetworks: true` for a
+  deployment whose issuers genuinely live in the verifier's own network.
 - A URL taken from a metadata document must use the **same scheme** as the
   issuer (no https→http downgrade) and live on the **issuer's own host**,
   unless the operator listed the host in `verifier.httpsIssuerAllowedHosts`.
@@ -100,8 +121,13 @@ unauthenticated input and is confined accordingly:
   unbounded walk would let one metadata document drive thousands of requests.
 - Each request is bounded by `httpClientTimeout` (10s) **and** the whole
   resolution by `resolutionTimeout` (30s), so the number of hops a document
-  asks for cannot extend the total. The caller's context is honoured, so once
-  it reaches down from the request handlers a disconnect will abort the work.
+  asks for cannot extend the total. The resolver honours a caller context once
+  one is threaded down to it; today all three call sites still pass
+  `context.Background()`, so the two timeouts are the only bound in practice.
+
+Where an egress proxy is configured (`HTTP_PROXY` / `HTTPS_PROXY`), the address
+guard applies to the connection to the proxy and the egress policy is the
+proxy's.
 
 ```yaml
 verifier:
@@ -109,6 +135,9 @@ verifier:
   # different host than the issuer identifier itself
   httpsIssuerAllowedHosts:
     - "keys.example.com"
+  # only needed when the issuers themselves live inside the verifier's own
+  # network; the default refuses loopback, private and link-local addresses
+  httpsIssuerAllowPrivateNetworks: false
 ```
 
 ## Where HTTPS issuers are resolved
@@ -140,6 +169,16 @@ Picking `keySet.Key(0)` would make verification depend on JWKS ordering.
 Keys marked `use: enc`, or whose `key_ops` exclude `verify`, are never
 candidates.
 
+A `kid` is a hint (RFC 7515 Section 4.1.4), so a JWKS key that declares **no**
+`kid` is a candidate for a JWS that names one, whenever no key carries the
+named id — an issuer publishing a single unlabelled key would otherwise never
+verify. Keys carrying a *different* `kid` are not returned: that a key set
+labels its keys and labels none of them the way the JWS does is the signal that
+the set is stale, and it is what makes the rotation refetch above work.
+
+Every JWS the verifier checks — including the status-list `x5c` fallback, which
+takes its key from a certificate rather than from a JWKS — goes through
+`verifyJWSWithCandidateKeys`.
 The algorithm is taken from the JWS header but pinned before use: it must be
 in the allowlist (`verifier/jws_verification.go` — the RSA, PSS, ECDSA and
 EdDSA families; never `none` or the symmetric `HS*` family), and it must match
@@ -202,9 +241,14 @@ resolve there and is not trusted through that path.
 - **Status lists stay bound to their issuer.** `assertStatusListIssuer`
   compares issuer strings, so an HTTPS-issued status list must be issued by
   the same HTTPS issuer as the credential that referenced it.
-- **Key discovery is not an SSRF primitive.** See *Outbound request
-  restrictions* above: same-scheme, same-host (or explicitly allowed),
-  origin-bound redirects, bounded bodies, cached failures.
+- **Key discovery is confined.** See *Outbound request restrictions* above.
+  The first hop is a host the token names, so it is bounded by the address
+  guard alone: it may be any public address, but never one inside the
+  deployment's own network. Every hop after it is additionally pinned to the
+  issuer's scheme and host (or an explicitly allowed one), with origin-bound
+  redirects, bounded bodies and cached failures. What remains is that a token
+  can make the verifier issue a GET to a public URL of the sender's choosing,
+  once per `DefaultJwksFailureCacheTTL`.
 
 ## Known gaps
 
@@ -215,3 +259,6 @@ resolve there and is not trusted through that path.
 - An issuer whose JWKS or authorization server lives on another host is only
   resolvable after that host is added to `verifier.httpsIssuerAllowedHosts`.
   The default confines discovery to the issuer's own origin.
+- An issuer inside the verifier's own network is only resolvable after
+  `verifier.httpsIssuerAllowPrivateNetworks` is enabled. The switch is global:
+  it cannot be granted to one issuer and withheld from another.

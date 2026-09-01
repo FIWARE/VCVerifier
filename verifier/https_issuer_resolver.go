@@ -27,7 +27,9 @@ const (
 	// WellKnownOIDCCredentialIssuer is the path for OpenID4VCI Credential Issuer Metadata
 	// (openid-4-verifiable-credential-issuance-1_0, Section 12.2.4). Unlike the two
 	// well-known paths above, OpenID4VCI *appends* the segment to the issuer's path.
-	WellKnownOIDCCredentialIssuer = "/.well-known/openid-credential-issuer"
+	// The literal is a public well-known path; gosec reads the "Credential" in
+	// the constant name as a hardcoded credential (G101), which it is not.
+	WellKnownOIDCCredentialIssuer = "/.well-known/openid-credential-issuer" // #nosec G101
 
 	// WellKnownOAuthAuthzServer is the path for OAuth 2.0 Authorization Server Metadata
 	// (RFC 8414). Section 3.1 requires the segment to be inserted between the host and
@@ -88,6 +90,20 @@ const (
 	// cacheControlMaxAge is the Cache-Control directive naming a response's
 	// freshness lifetime.
 	cacheControlMaxAge = "max-age="
+
+	// cacheControlNoStore / cacheControlNoCache are the Cache-Control
+	// directives with which an origin declares that its response must not be
+	// reused without revalidation.
+	cacheControlNoStore = "no-store"
+	cacheControlNoCache = "no-cache"
+
+	// Transport settings of the resolver's HTTP client. The resolver talks to a
+	// handful of metadata endpoints, so the connection pool is deliberately
+	// small.
+	maxIdleMetadataConnections    = 4
+	metadataIdleConnTimeout       = 90 * time.Second
+	metadataTLSHandshakeTimeout   = 10 * time.Second
+	metadataExpectContinueTimeout = 1 * time.Second
 )
 
 // Sentinel errors for HTTPS issuer key resolution.
@@ -203,6 +219,10 @@ type CachingHttpsIssuerResolver struct {
 	// allowedHosts holds additional hosts (in `host` or `host:port` form) that
 	// metadata documents may point to. The issuer's own host is always allowed.
 	allowedHosts map[string]bool
+	// allowPrivateAddresses lifts the address guard in dialContext. It exists
+	// for deployments whose issuers genuinely live inside the same network —
+	// and for the tests, which serve metadata from a loopback listener.
+	allowPrivateAddresses bool
 	// clock supplies the current time, injectable for tests.
 	clock common.Clock
 }
@@ -213,19 +233,35 @@ func NewCachingHttpsIssuerResolver(cache common.Cache, cacheTTL time.Duration) *
 	if cacheTTL == 0 {
 		cacheTTL = DefaultJwksCacheTTL
 	}
-	return &CachingHttpsIssuerResolver{
-		// The per-request timeout is applied through the request context in
-		// fetchJSON, so that it is bounded by the overall resolution deadline
-		// as well; a client-level Timeout would duplicate the shorter of the two.
-		httpClient: &http.Client{
-			CheckRedirect: restrictRedirects,
-		},
+	resolver := &CachingHttpsIssuerResolver{
 		cache:           cache,
 		cacheTTL:        cacheTTL,
 		failureCacheTTL: DefaultJwksFailureCacheTTL,
 		allowedHosts:    map[string]bool{},
 		clock:           common.RealClock{},
 	}
+	// The per-request timeout is applied through the request context in
+	// fetchJSON, so that it is bounded by the overall resolution deadline
+	// as well; a client-level Timeout would duplicate the shorter of the two.
+	resolver.httpClient = &http.Client{
+		CheckRedirect: restrictRedirects,
+		Transport: &http.Transport{
+			// An egress proxy stays in effect: where one is configured the
+			// guard applies to the connection to the proxy and the egress
+			// policy is the proxy's.
+			Proxy: http.ProxyFromEnvironment,
+			// Every address the resolver connects to is named by the token or
+			// by a document that token pointed at, so the connection itself is
+			// the last place the target can still be rejected.
+			DialContext:           resolver.dialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConnsPerHost:   maxIdleMetadataConnections,
+			IdleConnTimeout:       metadataIdleConnTimeout,
+			TLSHandshakeTimeout:   metadataTLSHandshakeTimeout,
+			ExpectContinueTimeout: metadataExpectContinueTimeout,
+		},
+	}
+	return resolver
 }
 
 // WithAllowedMetadataHosts allows metadata documents to point at the given hosts
@@ -242,6 +278,20 @@ func (r *CachingHttpsIssuerResolver) WithAllowedMetadataHosts(hosts []string) *C
 			r.allowedHosts[trimmed] = true
 		}
 	}
+	return r
+}
+
+// WithAllowPrivateAddresses controls whether the resolver may connect to
+// addresses that are not globally routable — loopback, the RFC 1918 / RFC 4193
+// private ranges, link-local. The default is to refuse them (see
+// ErrorAddressNotAllowed): the first request of a resolution goes to a host the
+// presented token names, before any trust check has run, so a permissive
+// default would turn credential verification into an internal port scanner.
+//
+// Enable it only for a deployment whose issuers genuinely live in the same
+// network as the verifier. Returns the resolver to allow method chaining.
+func (r *CachingHttpsIssuerResolver) WithAllowPrivateAddresses(allow bool) *CachingHttpsIssuerResolver {
+	r.allowPrivateAddresses = allow
 	return r
 }
 
@@ -304,7 +354,7 @@ func (r *CachingHttpsIssuerResolver) ResolveIssuerKeys(ctx context.Context, issu
 	resolutionCtx, cancel := context.WithTimeout(ctx, resolutionTimeout)
 	defer cancel()
 
-	keySet, declaredMaxAge, err := r.resolveKeySet(resolutionCtx, issuerURL, issuerBase)
+	keySet, caching, err := r.resolveKeySet(resolutionCtx, issuerURL, issuerBase)
 	if err != nil {
 		if cachedKeySet != nil {
 			// The issuer was reachable a moment ago; keep what it served then
@@ -319,9 +369,16 @@ func (r *CachingHttpsIssuerResolver) ResolveIssuerKeys(ctx context.Context, issu
 		return nil, err
 	}
 
-	ttl := r.jwksTTL(declaredMaxAge)
-	r.cache.Set(cacheKey, jwksCacheEntry{keySet: keySet, nextRefetchAt: r.nextRefetchAt()}, ttl)
-	logging.Log().Debugf("Cached JWKS for issuer %s for %s (keys: %d)", issuerURL, ttl, keySet.Len())
+	if ttl, storable := r.jwksTTL(caching); storable {
+		r.cache.Set(cacheKey, jwksCacheEntry{keySet: keySet, nextRefetchAt: r.nextRefetchAt()}, ttl)
+		logging.Log().Debugf("Cached JWKS for issuer %s for %s (keys: %d)", issuerURL, ttl, keySet.Len())
+	} else {
+		// The origin asked for the response not to be reused. Any entry left
+		// over from an earlier fetch has to go with it, otherwise the keys the
+		// issuer just declared uncacheable would keep being served from there.
+		r.cache.Delete(cacheKey)
+		logging.Log().Debugf("Not caching JWKS for issuer %s: the origin declared it uncacheable", issuerURL)
+	}
 
 	return selectCandidateKeys(keySet, kid)
 }
@@ -333,84 +390,84 @@ func (r *CachingHttpsIssuerResolver) ResolveIssuerKeys(ctx context.Context, issu
 // surfaced directly instead of being retried through the fallback path, which
 // would follow a further hop chosen by the same host and report the failure as
 // a plain "no metadata".
-func (r *CachingHttpsIssuerResolver) resolveKeySet(ctx context.Context, issuerURL string, issuerBase *url.URL) (jwk.Set, time.Duration, error) {
-	keySet, maxAge, err := r.resolveViaPrimaryPath(ctx, issuerURL, issuerBase)
+func (r *CachingHttpsIssuerResolver) resolveKeySet(ctx context.Context, issuerURL string, issuerBase *url.URL) (jwk.Set, responseCaching, error) {
+	keySet, caching, err := r.resolveViaPrimaryPath(ctx, issuerURL, issuerBase)
 	if err == nil {
-		return keySet, maxAge, nil
+		return keySet, caching, nil
 	}
 	if errors.Is(err, ErrorIssuerMismatch) {
 		logging.Log().Warnf("Aborting resolution for issuer %s: %v", issuerURL, err)
-		return nil, 0, err
+		return nil, responseCaching{}, err
 	}
 	logging.Log().Debugf("Primary path (jwt-vc-issuer) failed for %s: %v", issuerURL, err)
 
-	keySet, maxAge, fallbackErr := r.resolveViaFallbackPath(ctx, issuerURL, issuerBase)
+	keySet, caching, fallbackErr := r.resolveViaFallbackPath(ctx, issuerURL, issuerBase)
 	if fallbackErr != nil {
 		if errors.Is(fallbackErr, ErrorIssuerMismatch) {
 			logging.Log().Warnf("Aborting resolution for issuer %s: %v", issuerURL, fallbackErr)
-			return nil, 0, fallbackErr
+			return nil, responseCaching{}, fallbackErr
 		}
 		logging.Log().Warnf("Both metadata paths failed for issuer %s: %v", issuerURL, fallbackErr)
-		return nil, 0, ErrorIssuerMetadataNotFound
+		return nil, responseCaching{}, ErrorIssuerMetadataNotFound
 	}
-	return keySet, maxAge, nil
+	return keySet, caching, nil
 }
 
 // resolveViaPrimaryPath attempts to resolve the JWKS via the SD-JWT VC issuer metadata
 // endpoint (/.well-known/jwt-vc-issuer).
-func (r *CachingHttpsIssuerResolver) resolveViaPrimaryPath(ctx context.Context, issuerURL string, issuerBase *url.URL) (jwk.Set, time.Duration, error) {
+func (r *CachingHttpsIssuerResolver) resolveViaPrimaryPath(ctx context.Context, issuerURL string, issuerBase *url.URL) (jwk.Set, responseCaching, error) {
 	metadataURL := wellKnownURLInserted(issuerBase, WellKnownJwtVcIssuer)
 
-	body, maxAge, err := r.fetchJSON(ctx, metadataURL)
+	body, caching, err := r.fetchJSON(ctx, metadataURL)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to fetch jwt-vc-issuer metadata: %w", err)
+		return nil, responseCaching{}, fmt.Errorf("failed to fetch jwt-vc-issuer metadata: %w", err)
 	}
 
 	var metadata JwtVcIssuerMetadata
 	if err := json.Unmarshal(body, &metadata); err != nil {
-		return nil, 0, fmt.Errorf("failed to parse jwt-vc-issuer metadata: %w", err)
+		return nil, responseCaching{}, fmt.Errorf("failed to parse jwt-vc-issuer metadata: %w", err)
 	}
 
 	if err := assertIssuerMatches(issuerURL, metadata.Issuer, "jwt-vc-issuer"); err != nil {
-		return nil, 0, err
+		return nil, responseCaching{}, err
 	}
 
 	// Try inline JWKS first, then jwks_uri
 	if len(metadata.Jwks) > 0 {
 		keySet, err := jwk.Parse(metadata.Jwks)
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to parse inline JWKS: %w", err)
+			return nil, responseCaching{}, fmt.Errorf("failed to parse inline JWKS: %w", err)
 		}
-		return keySet, maxAge, nil
+		return keySet, caching, nil
 	}
 
 	if metadata.JwksUri != "" {
 		jwksURL, err := r.allowedMetadataURL(issuerBase, metadata.JwksUri)
 		if err != nil {
-			return nil, 0, err
+			return nil, responseCaching{}, err
 		}
 		return r.fetchJWKS(ctx, jwksURL)
 	}
 
-	return nil, 0, ErrorIssuerJwksNotFound
+	return nil, responseCaching{}, ErrorIssuerJwksNotFound
 }
 
 // resolveViaFallbackPath attempts to resolve the JWKS via the OpenID4VCI credential issuer
 // metadata endpoint (/.well-known/openid-credential-issuer), then resolves
 // authorization_servers' OAuth metadata for jwks_uri.
-func (r *CachingHttpsIssuerResolver) resolveViaFallbackPath(ctx context.Context, issuerURL string, issuerBase *url.URL) (jwk.Set, time.Duration, error) {
+func (r *CachingHttpsIssuerResolver) resolveViaFallbackPath(ctx context.Context, issuerURL string, issuerBase *url.URL) (jwk.Set, responseCaching, error) {
 	// OpenID4VCI appends its well-known segment to the issuer path instead of
 	// inserting it after the host, unlike SD-JWT VC and RFC 8414.
 	metadataURL := wellKnownURLAppended(issuerBase, WellKnownOIDCCredentialIssuer)
 
 	body, _, err := r.fetchJSON(ctx, metadataURL)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to fetch openid-credential-issuer metadata: %w", err)
+		return nil, responseCaching{}, fmt.Errorf("failed to fetch openid-credential-issuer metadata: %w", err)
 	}
 
 	var metadata OidcCredentialIssuerMetadata
 	if err := json.Unmarshal(body, &metadata); err != nil {
-		return nil, 0, fmt.Errorf("failed to parse openid-credential-issuer metadata: %w", err)
+		return nil, responseCaching{}, fmt.Errorf("failed to parse openid-credential-issuer metadata: %w", err)
 	}
 
 	// OpenID4VCI names the identifier `credential_issuer`; accept either field,
@@ -420,11 +477,11 @@ func (r *CachingHttpsIssuerResolver) resolveViaFallbackPath(ctx context.Context,
 		claimedIssuer = metadata.CredentialIssuer
 	}
 	if err := assertIssuerMatches(issuerURL, claimedIssuer, "openid-credential-issuer"); err != nil {
-		return nil, 0, err
+		return nil, responseCaching{}, err
 	}
 
 	if len(metadata.AuthorizationServers) == 0 {
-		return nil, 0, ErrorIssuerJwksNotFound
+		return nil, responseCaching{}, ErrorIssuerJwksNotFound
 	}
 
 	authorizationServers := metadata.AuthorizationServers
@@ -441,131 +498,167 @@ func (r *CachingHttpsIssuerResolver) resolveViaFallbackPath(ctx context.Context,
 			logging.Log().Warnf("Ignoring authorization server %s of issuer %s: %v", authServerURL, issuerURL, err)
 			continue
 		}
-		keySet, maxAge, err := r.resolveViaAuthorizationServer(ctx, allowedAuthServerURL)
+		keySet, caching, err := r.resolveViaAuthorizationServer(ctx, allowedAuthServerURL)
 		if err != nil {
 			logging.Log().Debugf("Authorization server %s failed: %v", allowedAuthServerURL, err)
 			continue
 		}
-		return keySet, maxAge, nil
+		return keySet, caching, nil
 	}
 
-	return nil, 0, ErrorIssuerJwksNotFound
+	return nil, responseCaching{}, ErrorIssuerJwksNotFound
 }
 
 // resolveViaAuthorizationServer fetches OAuth 2.0 Authorization Server metadata
 // from /.well-known/oauth-authorization-server and retrieves the JWKS. RFC 8414
 // Section 3.3 requires the `issuer` of the response to be the authorization
 // server identifier the request was built from, so it is checked here too.
-func (r *CachingHttpsIssuerResolver) resolveViaAuthorizationServer(ctx context.Context, authServerURL string) (jwk.Set, time.Duration, error) {
+func (r *CachingHttpsIssuerResolver) resolveViaAuthorizationServer(ctx context.Context, authServerURL string) (jwk.Set, responseCaching, error) {
 	authServerBase, err := parseIssuerURL(authServerURL)
 	if err != nil {
-		return nil, 0, err
+		return nil, responseCaching{}, err
 	}
 	oauthMetadataURL := wellKnownURLInserted(authServerBase, WellKnownOAuthAuthzServer)
 
 	body, _, err := r.fetchJSON(ctx, oauthMetadataURL)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to fetch oauth-authorization-server metadata: %w", err)
+		return nil, responseCaching{}, fmt.Errorf("failed to fetch oauth-authorization-server metadata: %w", err)
 	}
 
 	var oauthMeta OAuthServerMetadata
 	if err := json.Unmarshal(body, &oauthMeta); err != nil {
-		return nil, 0, fmt.Errorf("failed to parse oauth-authorization-server metadata: %w", err)
+		return nil, responseCaching{}, fmt.Errorf("failed to parse oauth-authorization-server metadata: %w", err)
 	}
 
 	if err := assertIssuerMatches(authServerURL, oauthMeta.Issuer, "oauth-authorization-server"); err != nil {
-		return nil, 0, err
+		return nil, responseCaching{}, err
 	}
 
 	if oauthMeta.JwksUri == "" {
-		return nil, 0, ErrorIssuerJwksNotFound
+		return nil, responseCaching{}, ErrorIssuerJwksNotFound
 	}
 
 	jwksURL, err := r.allowedMetadataURL(authServerBase, oauthMeta.JwksUri)
 	if err != nil {
-		return nil, 0, err
+		return nil, responseCaching{}, err
 	}
 
 	return r.fetchJWKS(ctx, jwksURL)
 }
 
 // fetchJWKS fetches and parses a JSON Web Key Set from the given URL.
-func (r *CachingHttpsIssuerResolver) fetchJWKS(ctx context.Context, jwksURL string) (jwk.Set, time.Duration, error) {
-	body, maxAge, err := r.fetchJSON(ctx, jwksURL)
+func (r *CachingHttpsIssuerResolver) fetchJWKS(ctx context.Context, jwksURL string) (jwk.Set, responseCaching, error) {
+	body, caching, err := r.fetchJSON(ctx, jwksURL)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to fetch JWKS from %s: %w", jwksURL, err)
+		return nil, responseCaching{}, fmt.Errorf("failed to fetch JWKS from %s: %w", jwksURL, err)
 	}
 
 	keySet, err := jwk.Parse(body)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to parse JWKS from %s: %w", jwksURL, err)
+		return nil, responseCaching{}, fmt.Errorf("failed to parse JWKS from %s: %w", jwksURL, err)
 	}
 
-	return keySet, maxAge, nil
+	return keySet, caching, nil
 }
 
 // fetchJSON performs an HTTP GET request and returns the response body, bounded
 // to maxMetadataResponseBytes, together with the freshness lifetime the response
 // declares. Returns an error for non-2xx status codes.
-func (r *CachingHttpsIssuerResolver) fetchJSON(ctx context.Context, url string) ([]byte, time.Duration, error) {
+func (r *CachingHttpsIssuerResolver) fetchJSON(ctx context.Context, url string) ([]byte, responseCaching, error) {
 	requestCtx, cancel := context.WithTimeout(ctx, httpClientTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create request for %s: %w", url, err)
+		return nil, responseCaching{}, fmt.Errorf("failed to create request for %s: %w", url, err)
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("http request to %s failed: %w", url, err)
+		return nil, responseCaching{}, fmt.Errorf("http request to %s failed: %w", url, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, 0, fmt.Errorf("http request to %s returned status %d", url, resp.StatusCode)
+		return nil, responseCaching{}, fmt.Errorf("http request to %s returned status %d", url, resp.StatusCode)
 	}
 
 	// Read one byte beyond the limit so an oversized body is detected rather
 	// than silently truncated into unparseable JSON.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataResponseBytes+1))
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to read response body from %s: %w", url, err)
+		return nil, responseCaching{}, fmt.Errorf("failed to read response body from %s: %w", url, err)
 	}
 	if len(body) > maxMetadataResponseBytes {
-		return nil, 0, fmt.Errorf("%w: %s returned more than %d bytes", ErrorResponseTooLarge, url, maxMetadataResponseBytes)
+		return nil, responseCaching{}, fmt.Errorf("%w: %s returned more than %d bytes", ErrorResponseTooLarge, url, maxMetadataResponseBytes)
 	}
 
-	return body, maxAgeOf(resp.Header), nil
+	return body, cachingOf(resp.Header), nil
 }
 
-// maxAgeOf extracts the `max-age` directive of a Cache-Control response header.
-// Returns 0 when the header is absent, unparseable or does not carry max-age.
-func maxAgeOf(header http.Header) time.Duration {
+// responseCaching is what a response's Cache-Control header says about reusing
+// it. The distinction between "the origin said nothing" and "the origin said
+// zero" matters: only the first one may fall back to the configured TTL.
+type responseCaching struct {
+	// maxAge is the freshness lifetime the origin declared. Only meaningful
+	// when declared is true.
+	maxAge time.Duration
+	// declared reports whether the origin expressed a freshness lifetime at
+	// all, whether through max-age, no-store or no-cache.
+	declared bool
+}
+
+// storable reports whether the response may be kept in the cache. An origin
+// that declared a zero lifetime — `max-age=0`, `no-store` or `no-cache` — asked
+// for exactly the opposite of being cached for the configured TTL.
+func (c responseCaching) storable() bool {
+	return !c.declared || c.maxAge > 0
+}
+
+// cachingOf reads the Cache-Control directives of a response header.
+// `no-store` and `no-cache` are reported as a declared lifetime of zero, as is
+// `max-age=0`; an absent, unparseable or max-age-less header is reported as no
+// declaration at all.
+func cachingOf(header http.Header) responseCaching {
 	for _, directive := range strings.Split(header.Get("Cache-Control"), ",") {
 		directive = strings.TrimSpace(directive)
-		if !strings.HasPrefix(directive, cacheControlMaxAge) {
+		lowered := strings.ToLower(directive)
+		if lowered == cacheControlNoStore || lowered == cacheControlNoCache {
+			return responseCaching{declared: true}
+		}
+		if !strings.HasPrefix(lowered, cacheControlMaxAge) {
 			continue
 		}
-		seconds, err := strconv.Atoi(strings.TrimPrefix(directive, cacheControlMaxAge))
-		if err != nil || seconds <= 0 {
-			return 0
+		seconds, err := strconv.Atoi(strings.TrimPrefix(lowered, cacheControlMaxAge))
+		if err != nil {
+			continue
 		}
-		return time.Duration(seconds) * time.Second
+		if seconds <= 0 {
+			return responseCaching{declared: true}
+		}
+		return responseCaching{maxAge: time.Duration(seconds) * time.Second, declared: true}
 	}
-	return 0
+	return responseCaching{}
 }
 
-// jwksTTL is the time-to-live for a fetched key set: the configured TTL, or the
-// shorter lifetime the origin declared. An origin may shorten its own keys'
-// lifetime — that is how a frequently rotating issuer stays verifiable — but it
-// may not extend caching beyond what the operator configured.
-func (r *CachingHttpsIssuerResolver) jwksTTL(declaredMaxAge time.Duration) time.Duration {
-	if declaredMaxAge > 0 && declaredMaxAge < r.cacheTTL {
-		return declaredMaxAge
+// jwksTTL is the time-to-live for a fetched key set, and whether it may be
+// cached at all: the configured TTL, or the shorter lifetime the origin
+// declared. An origin may shorten its own keys' lifetime — that is how a
+// frequently rotating issuer stays verifiable — but it may not extend caching
+// beyond what the operator configured.
+//
+// A declared lifetime of zero is not a TTL of zero: go-cache reads a zero
+// duration as "use the default expiration", so honouring it means not writing
+// the entry at all.
+func (r *CachingHttpsIssuerResolver) jwksTTL(caching responseCaching) (time.Duration, bool) {
+	if !caching.storable() {
+		return 0, false
 	}
-	return r.cacheTTL
+	if caching.declared && caching.maxAge < r.cacheTTL {
+		return caching.maxAge, true
+	}
+	return r.cacheTTL, true
 }
 
 // cachedEntry returns the cache entry for the given issuer, if one is present
@@ -669,6 +762,15 @@ func parseIssuerURL(issuerURL string) (*url.URL, error) {
 	if parsed.User != nil {
 		return nil, fmt.Errorf("%w: %s carries userinfo", ErrorInvalidIssuerURL, parsed.Redacted())
 	}
+	// RFC 8414 Section 2 forbids query and fragment in an issuer identifier,
+	// and neither reaches the well-known URL that is built from it. Accepting
+	// them would make `https://issuer.example?1`, `?2`, ... an unbounded set of
+	// identifiers addressing one and the same endpoint — distinct cache keys
+	// for identical work, which is exactly what the failure cache exists to
+	// prevent.
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return nil, fmt.Errorf("%w: %s carries a query or fragment", ErrorInvalidIssuerURL, issuerURL)
+	}
 	return parsed, nil
 }
 
@@ -699,8 +801,9 @@ func issuerOrigin(base *url.URL) string {
 //
 // It is the *escaped* path: reconstructing it from the decoded url.Path would
 // turn a `%2F` inside a segment into a separator and send the discovery
-// request to a different issuer's well-known location. Query and fragment are
-// dropped — a well-known URL is built from scheme, authority and path only.
+// request to a different issuer's well-known location. There is no query or
+// fragment to consider: parseIssuerURL rejects an identifier carrying either,
+// and a well-known URL is built from scheme, authority and path only.
 func issuerPath(base *url.URL) string {
 	return strings.TrimSuffix(base.EscapedPath(), "/")
 }
@@ -740,29 +843,39 @@ func canonicalIssuerID(issuerID string) string {
 // entry of `https://example.com/a/b` and be handed that issuer's keys — the
 // cached path returns before assertIssuerMatches ever runs.
 //
+// Query and fragment need no handling here: parseIssuerURL rejects an
+// identifier carrying either, so the key covers everything that can influence
+// the URLs the resolution fetches.
+//
 // This is deliberately a different function from canonicalIssuerID: relaxing
 // the identity comparison the same way would go beyond what RFC 8414 allows.
 func issuerCacheKey(issuerBase *url.URL) string {
-	key := strings.ToLower(issuerBase.Scheme) + "://" + strings.ToLower(issuerBase.Host) +
+	return strings.ToLower(issuerBase.Scheme) + "://" + strings.ToLower(issuerBase.Host) +
 		strings.TrimSuffix(issuerBase.EscapedPath(), "/")
-	if issuerBase.RawQuery != "" {
-		key += "?" + issuerBase.RawQuery
-	}
-	if issuerBase.Fragment != "" {
-		key += "#" + issuerBase.EscapedFragment()
-	}
-	return key
 }
 
 // selectCandidateKeys returns the keys of a JWKS that may verify a signature.
 //
 // Keys marked for encryption use, or whose key_ops exclude verification, are
-// never returned. When a kid is given only the keys carrying it qualify; when
-// none is given every remaining key is a candidate, because a JWS without a kid
-// carries no information about which key of a multi-key set signed it and
-// picking the first one would make verification depend on JWKS ordering.
+// never returned. Of the rest:
+//
+//   - Without a kid every key is a candidate. A JWS without a kid carries no
+//     information about which key of a multi-key set signed it, and picking the
+//     first one would make verification depend on JWKS ordering.
+//   - With a kid the keys carrying it are preferred, and keys that declare no
+//     kid at all are candidates too when none of them matches. `kid` is a hint
+//     (RFC 7515 Section 4.1.4), and an issuer publishing a single unlabelled
+//     key is common enough that dropping it would make such an issuer
+//     permanently unverifiable — the signature still has to validate either
+//     way.
+//
+// Keys carrying a *different* kid are not returned: that a key set labels its
+// keys and labels none of them the way the JWS does is the signal that the set
+// is stale, and it is what lets ResolveIssuerKeys pick up a key rotation
+// instead of waiting out the cache TTL.
 func selectCandidateKeys(keySet jwk.Set, kid string) ([]jwk.Key, error) {
 	candidates := []jwk.Key{}
+	unlabelled := []jwk.Key{}
 	for i := 0; i < keySet.Len(); i++ {
 		key, ok := keySet.Key(i)
 		if !ok {
@@ -771,15 +884,21 @@ func selectCandidateKeys(keySet jwk.Set, kid string) ([]jwk.Key, error) {
 		if !isSignatureKey(key) {
 			continue
 		}
-		if kid != "" {
-			keyID, hasKeyID := key.KeyID()
-			if !hasKeyID || keyID != kid {
-				continue
-			}
+		if kid == "" {
+			candidates = append(candidates, key)
+			continue
 		}
-		candidates = append(candidates, key)
+		switch keyID, hasKeyID := key.KeyID(); {
+		case hasKeyID && keyID == kid:
+			candidates = append(candidates, key)
+		case !hasKeyID || keyID == "":
+			unlabelled = append(unlabelled, key)
+		}
 	}
 
+	if len(candidates) == 0 {
+		candidates = unlabelled
+	}
 	if len(candidates) == 0 {
 		return nil, ErrorIssuerKeyNotFound
 	}
