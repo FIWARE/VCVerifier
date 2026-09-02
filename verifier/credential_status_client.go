@@ -14,6 +14,7 @@ package verifier
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -27,7 +28,6 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
-	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
 	"github.com/patrickmn/go-cache"
@@ -455,15 +455,17 @@ type StatusListJWTVerifier interface {
 // StatusListJWTVerifierImpl verifies IETF Token Status List JWTs using two
 // strategies, tried in order:
 //
-//  1. If the JWT payload contains an `iss` claim that is a DID, the public
-//     key is resolved from the DID document via the configured DID registry.
+//  1. If the JWT payload contains an `iss` claim, the public key is resolved
+//     from that identifier: a DID via the configured DID registry, an
+//     https:// URL via the configured HttpsIssuerResolver.
 //  2. Otherwise, if the JWT header carries an `x5c` certificate chain, the
 //     public key is extracted from the leaf certificate.
 //
 // This two-step approach covers both spec-compliant issuers (iss-based) and
 // legacy/transitional deployments that only embed an x5c header.
 type StatusListJWTVerifierImpl struct {
-	registry *did.Registry
+	registry      *did.Registry
+	httpsResolver HttpsIssuerResolver
 }
 
 // NewStatusListJWTVerifier constructs a StatusListJWTVerifierImpl backed by
@@ -471,6 +473,16 @@ type StatusListJWTVerifierImpl struct {
 // status list issuers (typically did:web and did:key).
 func NewStatusListJWTVerifier(registry *did.Registry) *StatusListJWTVerifierImpl {
 	return &StatusListJWTVerifierImpl{registry: registry}
+}
+
+// WithHttpsResolver sets the HttpsIssuerResolver used to resolve status-list
+// signing keys for HTTPS-based issuer identifiers. When set, a status list
+// JWT whose `iss` claim starts with "https://" is verified against the
+// resolver's discovered JWKS instead of being sent through DID resolution.
+// Returns the verifier to allow method chaining.
+func (v *StatusListJWTVerifierImpl) WithHttpsResolver(resolver HttpsIssuerResolver) *StatusListJWTVerifierImpl {
+	v.httpsResolver = resolver
+	return v
 }
 
 // VerifyStatusListJWT parses the JWS and verifies the signature. It first
@@ -491,40 +503,48 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 	}
 
 	headers := sigs[0].ProtectedHeaders()
-	alg, _ := headers.Algorithm()
 
 	issuerDID := extractIssFromPayload(msg.Payload())
 	if issuerDID != "" {
-		logging.Log().Debugf("Status list JWT has iss claim %s, verifying via DID resolution", issuerDID)
-		return v.verifyWithISS(jwtBytes, msg, alg, issuerDID)
+		logging.Log().Debugf("Status list JWT has iss claim %s, verifying via issuer key resolution", issuerDID)
+		return v.verifyWithISS(jwtBytes, msg, issuerDID)
 	}
 
 	logging.Log().Debug("Status list JWT has no iss claim, falling back to x5c verification")
-	return v.verifyWithX5C(jwtBytes, headers, alg)
+	return v.verifyWithX5C(jwtBytes, headers)
 }
 
-// verifyWithISS resolves the public key from the iss DID and verifies the
-// JWT signature.
-func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Message, alg jwa.SignatureAlgorithm, issuerDID string) ([]byte, error) {
-	kid, _ := msg.Signatures()[0].ProtectedHeaders().KeyID()
+// verifyWithISS resolves the public key from the iss identifier and verifies
+// the JWT signature. The identifier may be a DID or an https:// URL. The
+// algorithm is taken from and validated against the protected headers by
+// verifyJWSWithCandidateKeys.
+func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Message, issuerDID string) ([]byte, error) {
+	headers := msg.Signatures()[0].ProtectedHeaders()
+	kid, _ := headers.KeyID()
 
-	key, err := v.resolveKeyFromDID(issuerDID, kid)
+	keys, err := v.resolveKeysFromIssuer(issuerDID, kid)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to resolve key for %s: %v", ErrorStatusListUnparseable, issuerDID, err)
 	}
 
-	payload, err := jws.Verify(jwtBytes, jws.WithKey(alg, key))
+	payload, _, err := verifyJWSWithCandidateKeys(jwtBytes, headers, keys)
 	if err != nil {
 		return nil, fmt.Errorf("%w: status list JWT signature verification failed for %s: %v", ErrorStatusListUnparseable, issuerDID, err)
 	}
 
-	logging.Log().Debugf("Status list JWT signature verified via iss DID %s", issuerDID)
+	logging.Log().Debugf("Status list JWT signature verified via iss %s", issuerDID)
 	return payload, nil
 }
 
 // verifyWithX5C extracts the public key from the x5c certificate chain in
 // the JWT header and verifies the signature.
-func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.Headers, alg jwa.SignatureAlgorithm) ([]byte, error) {
+//
+// Verification goes through verifyJWSWithCandidateKeys like every other path,
+// so the `alg` of the header is pinned to the allowlist here too: the header is
+// as attacker-controlled as anywhere else, and handing it to jws.Verify
+// unchecked would leave this the one path where `none` or an HMAC algorithm
+// could still be named.
+func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.Headers) ([]byte, error) {
 	chain, hasX5C := headers.X509CertChain()
 	if !hasX5C || chain == nil || chain.Len() == 0 {
 		return nil, fmt.Errorf("%w: status list JWT has neither iss claim nor x5c header", ErrorStatusListUnparseable)
@@ -550,7 +570,7 @@ func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.H
 		return nil, fmt.Errorf("%w: x5c public key import failed: %v", ErrorStatusListUnparseable, err)
 	}
 
-	payload, err := jws.Verify(jwtBytes, jws.WithKey(alg, pubKey))
+	payload, _, err := verifyJWSWithCandidateKeys(jwtBytes, headers, []jwk.Key{pubKey})
 	if err != nil {
 		return nil, fmt.Errorf("%w: status list JWT x5c signature verification failed: %v", ErrorStatusListUnparseable, err)
 	}
@@ -559,10 +579,41 @@ func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.H
 	return payload, nil
 }
 
+// resolveKeysFromIssuer resolves the candidate status-list signing keys for an
+// issuer identifier, treating it as a generic URI: an https:// URL is resolved
+// via well-known issuer metadata and JWKS, anything else via DID resolution.
+//
+// DID resolution yields a single key. An HTTPS issuer can yield several when
+// the JWT carries no kid, because a JWKS offers nothing to select on then.
+func (v *StatusListJWTVerifierImpl) resolveKeysFromIssuer(issuer, kid string) ([]jwk.Key, error) {
+	if !isHttpsIssuer(issuer) {
+		key, err := v.resolveKeyFromDID(issuer, kid)
+		if err != nil {
+			return nil, err
+		}
+		return []jwk.Key{key}, nil
+	}
+
+	if v.httpsResolver == nil {
+		logging.Log().Warnf("Status list issuer %s is an HTTPS URL but no HttpsIssuerResolver is configured", issuer)
+		return nil, ErrorHttpsIssuerNotSupported
+	}
+
+	// The status list fetch has no context to inherit yet, so the resolver's
+	// own request timeout is the only bound on the lookup.
+	keys, err := v.httpsResolver.ResolveIssuerKeys(context.Background(), issuer, kid)
+	if err != nil {
+		logging.Log().Warnf("Failed to resolve key for HTTPS status list issuer %s: %v", issuer, err)
+		return nil, err
+	}
+	logging.Log().Debugf("Resolved %d status list verification key(s) for HTTPS issuer %s (kid=%s)", len(keys), issuer, kid)
+	return keys, nil
+}
+
 // resolveKeyFromDID resolves the DID document and finds the verification
 // method matching the given kid. When kid is empty, the first verification
 // method with a JWK key is returned.
-func (v *StatusListJWTVerifierImpl) resolveKeyFromDID(issuerDID, kid string) (interface{}, error) {
+func (v *StatusListJWTVerifierImpl) resolveKeyFromDID(issuerDID, kid string) (jwk.Key, error) {
 	docRes, err := v.registry.Resolve(issuerDID)
 	if err != nil {
 		logging.Log().Warnf("Failed to resolve DID %s for status list verification: %v", issuerDID, err)

@@ -50,19 +50,25 @@ func (tpvs *TrustedParticipantValidationService) ValidateVC(verifiableCredential
 		return true, err
 	}
 
+	issuerID := verifiableCredential.Contents().Issuer.ID
+
+	// The issuer identifier is passed to the registries as-is, whether it is a
+	// DID or an HTTPS URL. A trusted-participants-list entry is always the
+	// address of a registry to query — never an issuer identity in its own
+	// right — so there is no identifier-dependent dispatch here.
 	for _, listEntries := range trustContext.GetTrustedParticipantLists() {
 		for _, participantList := range listEntries {
 			if participantList.Type == typeEbsi {
 				logging.Log().Debug("Check at ebsi.")
-				result = tpvs.tirClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
+				result = tpvs.tirClient.IsTrustedParticipant(participantList.Url, issuerID)
 			}
 			if participantList.Type == typeEbsiV5 {
 				logging.Log().Debug("Check at ebsi-v5.")
-				result = tpvs.tirClient.IsTrustedParticipantV5(participantList.Url, verifiableCredential.Contents().Issuer.ID)
+				result = tpvs.tirClient.IsTrustedParticipantV5(participantList.Url, issuerID)
 			}
 			if participantList.Type == typeGaiaX {
 				logging.Log().Debug("Check at gaia-x.")
-				result = tpvs.gaiaXClient.IsTrustedParticipant(participantList.Url, verifiableCredential.Contents().Issuer.ID)
+				result = tpvs.gaiaXClient.IsTrustedParticipant(participantList.Url, issuerID)
 			}
 			if result {
 				return result, err

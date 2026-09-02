@@ -783,3 +783,30 @@ func jsonHandler(statusCode int, body string) http.HandlerFunc {
 		_, _ = w.Write([]byte(body))
 	}
 }
+
+// TestIssuerPathSegment verifies how an issuer identifier is placed into a
+// registry lookup path: an HTTPS identifier has to stay inside one segment,
+// while a DID — including the percent-encoding a `did:web` with a port already
+// carries — must reach the registry byte for byte as configured.
+func TestIssuerPathSegment(t *testing.T) {
+	tests := []struct {
+		testName string
+		issuer   string
+		expected string
+	}{
+		{"plain did:key is untouched", "did:key:z6MkrHKzgsahxBLyNAbLQyB1pcWNYC9GmywiWPgkrvntAZcj", "did:key:z6MkrHKzgsahxBLyNAbLQyB1pcWNYC9GmywiWPgkrvntAZcj"},
+		{"did:web is untouched", "did:web:example.com", "did:web:example.com"},
+		{"already encoded did:web is not encoded again", "did:web:127.0.0.1%3A8080", "did:web:127.0.0.1%3A8080"},
+		{"https issuer stays one segment", "https://issuer.example.com", "https:%2F%2Fissuer.example.com"},
+		{"https issuer with a path stays one segment", "https://issuer.example.com/tenant1", "https:%2F%2Fissuer.example.com%2Ftenant1"},
+		{"query and fragment characters are encoded", "https://issuer.example.com/a?b#c", "https:%2F%2Fissuer.example.com%2Fa%3Fb%23c"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			if got := issuerPathSegment(tc.issuer); got != tc.expected {
+				t.Errorf("%s - expected %s but was %s.", tc.testName, tc.expected, got)
+			}
+		})
+	}
+}

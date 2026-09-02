@@ -109,6 +109,34 @@ func TestVerifyVC_Participant(t *testing.T) {
 			verificationContext:    TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"someType": {{Type: "ebsi", Url: "http://my-trust-registry.org"}, {Type: "ebsi-v5", Url: "http://my-v5-registry.org"}}}},
 			ebsiParticipantsList:   []string{"did:web:trusted-issuer.org"},
 			ebsiV5ParticipantsList: []string{}, expectedResult: true},
+		// HTTPS URI issuer test cases — the issuer identifier is looked up in
+		// the configured registry, whether it is a DID or an HTTPS URL. A
+		// participants-list entry is an endpoint to query, never an identity.
+		{testName: "HTTPS issuer registered at the configured registry should be trusted.",
+			credentialToVerifiy:  getCredential("https://issuer.example.com"),
+			verificationContext:  TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"someType": {{Type: "ebsi", Url: "http://my-trust-registry.org"}}}},
+			ebsiParticipantsList: []string{"https://issuer.example.com"},
+			expectedResult:       true},
+		{testName: "HTTPS issuer unknown to the configured registry should be rejected.",
+			credentialToVerifiy:  getCredential("https://untrusted-issuer.example.com"),
+			verificationContext:  TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"someType": {{Type: "ebsi", Url: "http://my-trust-registry.org"}}}},
+			ebsiParticipantsList: []string{"https://issuer.example.com"},
+			expectedResult:       false},
+		{testName: "HTTPS issuer registered at a v5 registry should be trusted.",
+			credentialToVerifiy:    getCredential("https://issuer.example.com"),
+			verificationContext:    TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"someType": {{Type: "ebsi-v5", Url: "http://my-v5-registry.org"}}}},
+			ebsiV5ParticipantsList: []string{"https://issuer.example.com"},
+			expectedResult:         true},
+		{testName: "HTTPS issuer must not be trusted just because a registry entry carries its URL.",
+			credentialToVerifiy:  getCredential("https://tir-pdc.ebsi.fiware.dev"),
+			verificationContext:  TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"someType": {{Type: "ebsi", Url: "https://tir-pdc.ebsi.fiware.dev"}}}},
+			ebsiParticipantsList: []string{},
+			expectedResult:       false},
+		{testName: "DID issuer should be found via the ebsi entry when a gaia-x entry is also present.",
+			credentialToVerifiy:  getCredential("did:web:trusted-issuer.org"),
+			verificationContext:  TrustRegistriesValidationContext{trustedParticipantsRegistries: map[string][]config.TrustedParticipantsList{"someType": {{Type: "gaia-x", Url: "https://gaia-x.registry"}, {Type: "ebsi", Url: "http://my-trust-registry.org"}}}},
+			ebsiParticipantsList: []string{"did:web:trusted-issuer.org"},
+			expectedResult:       true},
 	}
 
 	for _, tc := range tests {

@@ -231,6 +231,9 @@ func (cb *ConfigBuilder) Build() string {
 	b.WriteString("  sessionExpiry: 30\n")
 	b.WriteString("  jwtExpiration: 30\n")
 	b.WriteString("  supportedModes: [\"byValue\", \"byReference\"]\n")
+	// The mock issuers of the integration tests are httptest listeners on
+	// loopback, which the resolver's address guard refuses by default.
+	b.WriteString("  httpsIssuerAllowPrivateNetworks: true\n")
 
 	if cb.signingKey != "" {
 		b.WriteString("  clientIdentification:\n")

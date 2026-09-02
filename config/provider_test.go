@@ -344,3 +344,35 @@ func TestRefreshTokenConfigDefaults(t *testing.T) {
 		})
 	}
 }
+
+// TestReadConfigHttpsIssuer verifies parsing of a YAML config for a service
+// whose credentials are verified against several typed registry endpoints,
+// ensuring the per-entry type survives parsing.
+func TestReadConfigHttpsIssuer(t *testing.T) {
+	config.Reset()
+	gotConfig, err := ReadConfig("data/config_test_https_issuer.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for HTTPS issuer config")
+
+	services := gotConfig.ConfigRepo.Services
+	assert.Len(t, services, 1)
+	assert.Equal(t, "testServiceHttps", services[0].Id)
+
+	credentials := services[0].ServiceScopes["httpsScope"].Credentials
+	assert.Len(t, credentials, 1)
+	cred := credentials[0]
+	assert.Equal(t, "EmployeeCredential", cred.Type)
+
+	// Verify TrustedParticipantsLists: both registry entries with their types.
+	assert.Len(t, cred.TrustedParticipantsLists, 2, "Expected two trusted participant registry entries")
+	assert.Equal(t, "ebsi", cred.TrustedParticipantsLists[0].Type)
+	assert.Equal(t, "https://tir-pdc.ebsi.fiware.dev", cred.TrustedParticipantsLists[0].Url)
+	assert.Equal(t, "ebsi-v5", cred.TrustedParticipantsLists[1].Type)
+	assert.Equal(t, "https://tir-v5.ebsi.fiware.dev", cred.TrustedParticipantsLists[1].Url)
+
+	// Verify TrustedIssuersLists: both registry entries with their types.
+	assert.Len(t, cred.TrustedIssuersLists, 2, "Expected two trusted issuer registry entries")
+	assert.Equal(t, "ebsi", cred.TrustedIssuersLists[0].Type)
+	assert.Equal(t, "https://til-pdc.ebsi.fiware.dev", cred.TrustedIssuersLists[0].Url)
+	assert.Equal(t, "ebsi-v5", cred.TrustedIssuersLists[1].Type)
+	assert.Equal(t, "https://til-v5.ebsi.fiware.dev", cred.TrustedIssuersLists[1].Url)
+}

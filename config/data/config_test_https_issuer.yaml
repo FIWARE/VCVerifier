@@ -1,0 +1,47 @@
+server:
+  port: 3000
+  staticDir: "views/static"
+  templateDir: "views/"
+
+logging:
+  level: "DEBUG"
+  jsonLogging: true
+  logRequests: true
+
+verifier:
+  did: "did:key:somekey"
+  tirAddress: "https://test.dev/trusted_issuer/v3/issuers/"
+
+m2m:
+  authEnabled: false
+
+configRepo:
+  services:
+    - id: testServiceHttps
+      defaultOidcScope: httpsScope
+      oidcScopes:
+        httpsScope:
+          credentials:
+            - type: EmployeeCredential
+              # Trust-list entries are always registry endpoints — an issuer,
+              # whether identified by a DID or by an HTTPS URL, is looked up
+              # there. Both a v3/v4 and a v5 registry are configured here.
+              trustedParticipantsLists:
+                - type: ebsi
+                  url: https://tir-pdc.ebsi.fiware.dev
+                - type: ebsi-v5
+                  url: https://tir-v5.ebsi.fiware.dev
+              trustedIssuersLists:
+                - type: ebsi
+                  url: https://til-pdc.ebsi.fiware.dev
+                - type: ebsi-v5
+                  url: https://til-v5.ebsi.fiware.dev
+          presentationDefinition:
+            id: https-pd
+            input_descriptors:
+              - id: https-descriptor
+                constraints:
+                  fields:
+                    - id: https-field
+                      path:
+                        - $.vc.my.claim

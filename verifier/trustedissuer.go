@@ -64,7 +64,13 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 		return false, ErrorEmptyTilList
 	}
 
+	issuerID := verifiableCredential.Contents().Issuer.ID
 	til := trustContext.GetTrustedIssuersLists()
+
+	// The issuer identifier is passed to the registries as-is, whether it is a
+	// DID or an HTTPS URL. A trusted-issuers-list entry is always the address
+	// of a registry to query — never an issuer identity in its own right — so
+	// there is no identifier-dependent dispatch here.
 	for _, credentialType := range verifiableCredential.Contents().Types {
 		isWildcard, err := isWildcardTil(til[credentialType])
 		if isWildcard {
@@ -76,8 +82,11 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 			return false, err
 		}
 
-		tilEntries, credentialSupported := til[credentialType]
-		if !credentialSupported {
+		// An entry that is present but empty means the same as no entry at all:
+		// the validation context carries a key for every type of the
+		// presentation, whether or not the service configured a list for it.
+		tilEntries := til[credentialType]
+		if len(tilEntries) == 0 {
 			// A spec-compliant W3C credential carries the generic base type
 			// (e.g. "VerifiableCredential") alongside its specific type. The
 			// base type is not a trust-governed type, so when it has no TIL
@@ -101,7 +110,7 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 
 		// Try ebsi (v3/v4) endpoints first.
 		if len(ebsiURLs) > 0 {
-			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuer(ebsiURLs, verifiableCredential.Contents().Issuer.ID)
+			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuer(ebsiURLs, issuerID)
 			if err != nil {
 				logging.Log().Warnf("Was not able to validate trusted issuer via ebsi. Err: %v", err)
 				return false, err
@@ -110,7 +119,7 @@ func (tpvs *TrustedIssuerValidationService) ValidateVC(verifiableCredential *com
 
 		// If not found via ebsi, try ebsi-v5 endpoints.
 		if !exist && len(ebsiV5URLs) > 0 {
-			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuerV5(ebsiV5URLs, verifiableCredential.Contents().Issuer.ID)
+			exist, trustedIssuer, err = tpvs.tirClient.GetTrustedIssuerV5(ebsiV5URLs, issuerID)
 			if err != nil {
 				logging.Log().Warnf("Was not able to validate trusted issuer via ebsi-v5. Err: %v", err)
 				return false, err
