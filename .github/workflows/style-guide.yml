@@ -9,10 +9,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The module cache is left at the action's default (enabled, keyed on
+      # go.sum), like every other workflow here. golangci-lint typechecks
+      # against the real dependencies, so with the cache off every run re-fetched
+      # every module and a single reset zip download from proxy.golang.org
+      # surfaced as `could not import <package> (typecheck)` on an unrelated file.
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: false
+
+      # Fetch the modules before linting, retrying transient proxy failures.
+      # golangci-lint cannot distinguish a failed download from broken code, so
+      # doing it here keeps a flaky proxy from being reported as a lint issue.
+      - name: Download modules
+        run: |
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            echo "go mod download failed (attempt ${attempt}), retrying in $((attempt * 10))s"
+            sleep $((attempt * 10))
+          done
+          echo "go mod download failed after 3 attempts"
+          exit 1
 
       - uses: golangci/golangci-lint-action@v9
         with:
