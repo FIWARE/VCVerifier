@@ -1053,6 +1053,101 @@ func TestCachingIETFStatusListClientIssuerBindingOnCacheHit(t *testing.T) {
 	assert.Nil(t, foreign)
 }
 
+// TestCachingIETFStatusListClientIssuerlessList verifies that a Status List
+// Token which asserts no issuer is accepted. draft-ietf-oauth-status-list
+// §5.1 does not require `iss` and §11.3 allows a separate Status Issuer, so
+// every list signed through the x5c path — which by definition carries no
+// `iss` — would otherwise be rejected as a mismatch against the empty string.
+// A referencing credential without an issuer must still be rejected: nothing
+// can be bound to it.
+func TestCachingIETFStatusListClientIssuerlessList(t *testing.T) {
+	privateKey := generateTestKey(t)
+	certDER := generateSelfSignedCert(t, privateKey)
+
+	// The status-list JWT's `sub` claim has to be the URL it was fetched
+	// from, so the handler serves the server's own URL once it is known.
+	var statusListURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload := map[string]interface{}{
+			"sub": statusListURL,
+			"status_list": map[string]interface{}{
+				"bits": 1,
+				"lst":  "eNpjAAAAAQAB",
+			},
+		}
+		w.Header().Set("Content-Type", common.ContentTypeStatusListJWT)
+		_, _ = w.Write(buildStatusListJWTWithX5C(t, payload, privateKey, certDER))
+	}))
+	defer srv.Close()
+	statusListURL = srv.URL
+
+	tests := []struct {
+		testName       string
+		expectedIssuer string
+		expectedError  error
+	}{
+		{testName: "issuerless_list_accepted", expectedIssuer: "did:web:issuer.example.com"},
+		{testName: "issuerless_list_accepted_for_any_referencing_issuer", expectedIssuer: "did:web:other.example.com"},
+		{testName: "referencing_credential_without_issuer_rejected", expectedIssuer: "", expectedError: ErrorStatusListIssuerUnknown},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			// A fresh client per case, so the issuer check is exercised on
+			// the fetch path rather than on a cache hit.
+			client := NewCachingIETFStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry,
+				newTestStatusListJWTVerifier(), common.RealClock{})
+
+			statusList, err := client.FetchIETF(srv.URL, tc.expectedIssuer)
+			if tc.expectedError != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tc.expectedError)
+				assert.Nil(t, statusList)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, statusList)
+		})
+	}
+}
+
+// TestCachingIETFStatusListClientIssuerlessListOnCacheHit verifies that an
+// issuerless list is accepted on the cache path too, so the relaxation does
+// not depend on which of the two code paths served the list.
+func TestCachingIETFStatusListClientIssuerlessListOnCacheHit(t *testing.T) {
+	privateKey := generateTestKey(t)
+	certDER := generateSelfSignedCert(t, privateKey)
+
+	var hits int32
+	var statusListURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		payload := map[string]interface{}{
+			"sub": statusListURL,
+			"status_list": map[string]interface{}{
+				"bits": 1,
+				"lst":  "eNpjAAAAAQAB",
+			},
+		}
+		w.Header().Set("Content-Type", common.ContentTypeStatusListJWT)
+		_, _ = w.Write(buildStatusListJWTWithX5C(t, payload, privateKey, certDER))
+	}))
+	defer srv.Close()
+	statusListURL = srv.URL
+
+	client := NewCachingIETFStatusListClient(testStatusListHTTPTimeout, testStatusListCacheExpiry,
+		newTestStatusListJWTVerifier(), common.RealClock{})
+
+	first, err := client.FetchIETF(srv.URL, "did:web:issuer.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	cached, err := client.FetchIETF(srv.URL, "did:web:issuer.example.com")
+	require.NoError(t, err)
+	assert.Same(t, first, cached, "the second fetch must be served from the cache")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&hits))
+}
+
 // TestCheckIETFStatusListBindsReferencingIssuer verifies that the issuer of
 // the credential referencing an IETF status list is what the list gets bound
 // to — the counterpart of the W3C binding, which the reviewed code applied to

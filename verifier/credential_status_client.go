@@ -671,12 +671,14 @@ func NewCachingIETFStatusListClient(timeout time.Duration, cacheExpiry time.Dura
 // The JWT signature is verified using the configured StatusListJWTVerifier,
 // then the `status_list` payload is extracted and cached.
 //
-// The `iss` claim of the status-list JWT is checked against expectedIssuer,
-// the issuer of the credential that referenced the list. Verifying the JWT
-// signature alone only shows that the signer controls the key the token
-// names — the attacker picks both when they control the status-list URL. The
-// binding is applied to cached entries as well, so a list fetched for one
-// issuer can never answer for another.
+// When the status-list JWT asserts an `iss` claim, it is checked against
+// expectedIssuer, the issuer of the credential that referenced the list:
+// verifying the JWT signature alone only shows that the signer controls the
+// key the token names — the attacker picks both when they control the
+// status-list URL. The binding is applied to cached entries as well, so a
+// list fetched for one issuer can never answer for another. A token that
+// asserts no issuer is bound by the referencing credential's signed `uri`
+// instead; see assertIETFStatusListIssuer.
 func (c *CachingIETFStatusListClient) FetchIETF(uri string, expectedIssuer string) (*common.IETFStatusList, error) {
 	if cached, hit := c.cache.Get(uri); hit {
 		logging.Log().Debugf("IETF status-list cache hit for %s", uri)
@@ -762,7 +764,18 @@ type cachedIETFStatusList struct {
 }
 
 // assertIETFStatusListIssuer requires the `iss` claim of a status-list JWT to
-// match the issuer of the credential that referenced it.
+// match the issuer of the credential that referenced it, when the token
+// asserts an issuer at all.
+//
+// A Status List Token need not carry `iss`: draft-ietf-oauth-status-list §5.1
+// requires only `sub`, `iat` and `status_list`, and §11.3 explicitly allows the
+// Status Issuer to be a different entity than the Token Issuer. A token that
+// asserts no issuer can therefore not be bound by name, and comparing its
+// absent `iss` against the referencing credential would reject spec-compliant
+// lists - notably every list signed through the x5c path, which by definition
+// has no `iss`. What binds such a list is the referencing credential's own
+// signature over the `uri` it points at, plus the `sub` == uri check of §8.3
+// that parseIETFStatusListPayload already enforces.
 //
 // As with the W3C status lists, an empty expectedIssuer is rejected rather
 // than exempted: a referencing credential with no issuer cannot be bound to
@@ -771,6 +784,10 @@ func assertIETFStatusListIssuer(actualIssuer string, expectedIssuer string, uri 
 	if expectedIssuer == "" {
 		logging.Log().Warnf("Referencing credential has no issuer, cannot bind IETF status list %s to an issuer", uri)
 		return fmt.Errorf("%w: status list %s", ErrorStatusListIssuerUnknown, uri)
+	}
+	if actualIssuer == "" {
+		logging.Log().Debugf("IETF status list %s asserts no issuer, binding rests on the signed uri of the referencing credential and the sub check", uri)
+		return nil
 	}
 	if actualIssuer != expectedIssuer {
 		logging.Log().Warnf("IETF status list %s is issued by %q but the referencing credential is issued by %q",
