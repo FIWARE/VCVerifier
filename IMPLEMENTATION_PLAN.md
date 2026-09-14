@@ -42,7 +42,9 @@ The ticket requests "configuration of the Credential Types to be checked for eID
 
 ### Step 2: ETSI Trust List Fetcher with LOTL Resolution and Caching
 
-**Goal:** Add a background trust list fetcher that downloads the EU LOTL, follows pointers to national TLs, parses them, and caches the resulting trust service data.
+**Goal:** Add a background trust list fetcher that downloads the EU LOTL, follows pointers to national TLs, parses them, and caches the resulting trust service data. Add the full `Eidas` config struct so the feature is configurable and can be disabled (the default).
+
+**Global feature gate (introduced here, enforced in later steps):** The `eidas.enabled` flag in `config.Configuration` defaults to `false`. When disabled: the trust list fetcher must **not** be started (no goroutines, no HTTP requests, no memory for the trust store). Steps 3 and 4 add enforcement so that any per-credential `eidasConfig.enabled: true` is **rejected with HTTP 400** when the global flag is disabled — see Step 3 "Global feature gate" section and Step 4 `InitVerifier` wiring.
 
 **What to do:**
 - Add `eidas/fetcher.go` with a `TrustListFetcher` struct that:
@@ -55,6 +57,8 @@ The ticket requests "configuration of the Credential Types to be checked for eID
   - Respects HTTP `Cache-Control` headers for TTL, with a configurable minimum/maximum refresh interval and a fallback default TTL (e.g. 24h).
   - Runs periodic background refresh using a `time.Ticker`.
   - Provides a `Stop()` method for graceful shutdown.
+  - Prunes stale country entries on refresh (countries removed from the LOTL or allowed-countries set).
+- Expand the `config.Eidas` struct with all fetcher configuration fields (`LotlURL`, `RefreshInterval`, `Countries`, `MaxWorkers`, `FetchTimeout`) so the entire feature is configurable via `server.yaml`. The `Enabled` field defaults to `false` — when the feature is off, no resources are consumed.
 - Add `eidas/trust_store.go` with a `TrustStore` struct:
   - Thread-safe read access to cached trust service entries via `sync.RWMutex`.
   - `GetTrustedServices(countryCode string, serviceTypes []string, onlyGranted bool) []TrustedService` — returns services matching type and status filters.
@@ -68,6 +72,7 @@ The ticket requests "configuration of the Credential Types to be checked for eID
 - `eidas/trust_store.go` (new)
 - `eidas/fetcher_test.go` (new)
 - `eidas/trust_store_test.go` (new)
+- `config/config.go` (modified — expand `Eidas` struct with fetcher configuration)
 - `go.mod` / `go.sum` (updated if any new dependencies)
 
 **Acceptance criteria:**
@@ -75,6 +80,8 @@ The ticket requests "configuration of the Credential Types to be checked for eID
 - Fetcher can resolve a LOTL → national TLs → TSPs hierarchy from test fixtures.
 - Cache is populated and queryable by country code and service type.
 - Background refresh runs on a timer and can be stopped cleanly.
+- Stale country entries are pruned during refresh.
+- `config.Eidas` struct includes all fetcher configuration fields; `Enabled` defaults to `false`.
 
 ---
 
