@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
+  <SchemeInformation>
+    <TSLVersionIdentifier>5</TSLVersionIdentifier>
+    <TSLSequenceNumber>1</TSLSequenceNumber>
+    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <SchemeOperatorName>
+      <Name xml:lang="en">Test Operator</Name>
+    </SchemeOperatorName>
+    <SchemeName>
+      <Name xml:lang="en">Whitespace Cert TL</Name>
+    </SchemeName>
+    <SchemeInformationURI>
+      <URI xml:lang="en">https://example.com/ws</URI>
+    </SchemeInformationURI>
+    <StatusDeterminationApproach>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/StatusDetn/EUappropriate</StatusDeterminationApproach>
+    <SchemeTerritory>DE</SchemeTerritory>
+    <HistoricalInformationPeriod>0</HistoricalInformationPeriod>
+    <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate>
+      <dateTime>2024-07-01T00:00:00Z</dateTime>
+    </NextUpdate>
+  </SchemeInformation>
+  <TrustServiceProviderList>
+    <TrustServiceProvider>
+      <TSPInformation>
+        <TSPName>
+          <Name xml:lang="en">Whitespace TSP</Name>
+        </TSPName>
+        <TSPTradeName/>
+        <TSPInformationURI>
+          <URI xml:lang="en">https://example.com</URI>
+        </TSPInformationURI>
+      </TSPInformation>
+      <TSPServices>
+        <TSPService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceName>
+              <Name xml:lang="en">Whitespace Cert Service</Name>
+            </ServiceName>
+            <ServiceDigitalIdentity>
+              <DigitalId>
+                <X509Certificate>
+                  MIIByTCCAW+gAwIBAgIBATAKBggqhkjOPQQDAjBMMQswCQYDVQQGEwJERTEWMBQG
+                  A1UEChMNVGVzdCBUU1AgR21iSDElMCMGA1UEAxMcVGVzdCBDQSBmb3IgZUlEQVMg
+                  VHJ1c3QgTGlzdDAeFw0yMDAxMDEwMDAwMDBaFw0zMDEyMzEyMzU5NTlaMEwxCzAJ
+                  BgNVBAYTAkRFMRYwFAYDVQQKEw1UZXN0IFRTUCBHbWJIMSUwIwYDVQQDExxUZXN0
+                  IENBIGZvciBlSURBUyBUcnVzdCBMaXN0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD
+                  QgAE6EhBf6YQOC25lzUmpz8JaB16XgZ6lXNdWrrLct1drRWp269F131KIX9BTOtm
+                  j6/5jgIxCHD6fO1bHGMSYZpCraNCMEAwDgYDVR0PAQH/BAQDAgEGMA8GA1UdEwEB
+                  /wQFMAMBAf8wHQYDVR0OBBYEFJX3JarS3z7UqAKWJMxWYjiCh3acMAoGCCqGSM49
+                  BAMCA0gAMEUCIFM1WTlO95Z+u8ZcjcMkFuzhSJcABP3emJJ2rf7dBIVeAiEA/6Sb
+                  P3WkyZb3urWHM6QP9jYj5uzvbW3X9BJaFnphg64=
+                </X509Certificate>
+              </DigitalId>
+            </ServiceDigitalIdentity>
+            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <StatusStartingTime>2021-01-01T00:00:00Z</StatusStartingTime>
+          </ServiceInformation>
+        </TSPService>
+      </TSPServices>
+    </TrustServiceProvider>
+  </TrustServiceProviderList>
+</TrustServiceStatusList>

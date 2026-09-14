@@ -1,0 +1,482 @@
+// Package eidas provides parsing and handling of ETSI TS 119 612 EU Trusted Lists.
+//
+// ETSI TS 119 612 defines the XML schema for EU Trusted Lists (TLs) used in the
+// eIDAS trust framework. A List of Trusted Lists (LOTL) references national TLs,
+// each of which contains Trust Service Providers (TSPs) and their trust services.
+//
+// This package parses trust list XML documents into Go structs and extracts X.509
+// certificates from service digital identities for trust validation.
+//
+// Known limitation: XMLDSig signature verification on trust lists is not yet
+// implemented. The caller must ensure transport-level integrity (e.g. HTTPS).
+package eidas
+
+import (
+	"crypto/x509"
+	"encoding/xml"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/logging"
+)
+
+// XML namespace for ETSI TS 119 612 trust lists (v2).
+const TrustListNamespace = "https://uri.etsi.org/02231/v2#"
+
+// TSLTag identifies the trust list format version.
+const TSLTag = "https://uri.etsi.org/19612/TSLTag"
+
+// --- Service Type Identifier URIs (ETSI TS 119 612 §5.5.1) ---
+
+const (
+	// ServiceTypeCAQC identifies a Certification Authority issuing qualified certificates.
+	ServiceTypeCAQC = "https://uri.etsi.org/TrstSvc/Svctype/CA/QC"
+
+	// ServiceTypeQTST identifies a Qualified Time Stamping Authority.
+	ServiceTypeQTST = "https://uri.etsi.org/TrstSvc/Svctype/TSA/QTST"
+
+	// ServiceTypeTSA identifies a (non-qualified) Time Stamping Authority.
+	ServiceTypeTSA = "https://uri.etsi.org/TrstSvc/Svctype/TSA"
+
+	// ServiceTypeCA identifies a (non-qualified) Certification Authority.
+	ServiceTypeCA = "https://uri.etsi.org/TrstSvc/Svctype/CA"
+
+	// ServiceTypeIdV identifies an Identity Verification service.
+	ServiceTypeIdV = "https://uri.etsi.org/TrstSvc/Svctype/IdV"
+
+	// ServiceTypeNationalRootCAQC identifies a national root CA for qualified certificates.
+	ServiceTypeNationalRootCAQC = "https://uri.etsi.org/TrstSvc/Svctype/NationalRootCA-QC"
+
+	// ServiceTypeEDS identifies an Electronic Delivery Service.
+	ServiceTypeEDS = "https://uri.etsi.org/TrstSvc/Svctype/EDS/Q"
+
+	// ServiceTypeREMD identifies a Qualified Electronic Registered Delivery Service.
+	ServiceTypeREMD = "https://uri.etsi.org/TrstSvc/Svctype/EDS/REM/Q"
+)
+
+// --- Service Status URIs (ETSI TS 119 612 §5.5.4) ---
+
+const (
+	// ServiceStatusGranted indicates the service has been granted (active and trusted).
+	ServiceStatusGranted = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+
+	// ServiceStatusWithdrawn indicates the service has been withdrawn.
+	ServiceStatusWithdrawn = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
+
+	// ServiceStatusRecognisedAtNationalLevel indicates the service is recognised at national level.
+	ServiceStatusRecognisedAtNationalLevel = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/recognisedatnationallevel"
+
+	// ServiceStatusDeprecatedAtNationalLevel indicates the service is deprecated at national level.
+	ServiceStatusDeprecatedAtNationalLevel = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/deprecatedatnationallevel"
+
+	// ServiceStatusSetByNationalLaw indicates the service status is set by national law.
+	ServiceStatusSetByNationalLaw = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/setbynationallaw"
+
+	// ServiceStatusUnderSupervision indicates the service is under supervision.
+	ServiceStatusUnderSupervision = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/undersupervision"
+)
+
+// --- TSL Type URIs ---
+
+const (
+	// TSLTypeEUGeneric identifies a generic EU trust list.
+	TSLTypeEUGeneric = "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric"
+
+	// TSLTypeEUListOfTheLists identifies the EU List of Trusted Lists (LOTL).
+	TSLTypeEUListOfTheLists = "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists"
+)
+
+// --- XML Struct Definitions ---
+
+// TrustServiceStatusList is the root element of an ETSI TS 119 612 trust list XML document.
+// It contains scheme information (metadata about the list) and optionally a list of
+// trust service providers with their services.
+type TrustServiceStatusList struct {
+	XMLName                  xml.Name                  `xml:"TrustServiceStatusList"`
+	ID                       string                    `xml:"Id,attr,omitempty"`
+	TSLTag                   string                    `xml:"TSLTag,attr,omitempty"`
+	SchemeInformation        SchemeInformation         `xml:"SchemeInformation"`
+	TrustServiceProviderList *TrustServiceProviderList `xml:"TrustServiceProviderList,omitempty"`
+}
+
+// IsLOTL returns true if this trust list is a List of Trusted Lists (LOTL),
+// determined by the TSLType field in SchemeInformation.
+func (tl *TrustServiceStatusList) IsLOTL() bool {
+	return tl.SchemeInformation.TSLType == TSLTypeEUListOfTheLists
+}
+
+// SchemeInformation contains metadata about the trust list, including the
+// scheme operator, territory, type, and pointers to other trust lists (for LOTLs).
+type SchemeInformation struct {
+	TSLVersionIdentifier       int                     `xml:"TSLVersionIdentifier"`
+	TSLSequenceNumber          int                     `xml:"TSLSequenceNumber"`
+	TSLType                    string                  `xml:"TSLType"`
+	SchemeOperatorName         InternationalNames      `xml:"SchemeOperatorName"`
+	SchemeName                 InternationalNames      `xml:"SchemeName"`
+	SchemeInformationURI       InternationalURIs       `xml:"SchemeInformationURI"`
+	StatusDeterminationApproach string                  `xml:"StatusDeterminationApproach"`
+	SchemeTerritory            string                  `xml:"SchemeTerritory"`
+	HistoricalInformationPeriod int                    `xml:"HistoricalInformationPeriod"`
+	ListIssueDateTime          string                  `xml:"ListIssueDateTime"`
+	NextUpdate                 NextUpdate              `xml:"NextUpdate"`
+	PointersToOtherTSL         *PointersToOtherTSL     `xml:"PointersToOtherTSL,omitempty"`
+}
+
+// NextUpdate holds the date/time when the next update of the trust list is expected.
+type NextUpdate struct {
+	DateTime string `xml:"dateTime"`
+}
+
+// InternationalNames holds a list of multilingual name values, each tagged with an xml:lang attribute.
+type InternationalNames struct {
+	Names []InternationalName `xml:"Name"`
+}
+
+// GetEnglish returns the English-language name, or the first available name if
+// no English name exists, or an empty string if no names are present.
+func (n InternationalNames) GetEnglish() string {
+	for _, name := range n.Names {
+		if strings.EqualFold(name.Lang, "en") {
+			return name.Value
+		}
+	}
+	if len(n.Names) > 0 {
+		return n.Names[0].Value
+	}
+	return ""
+}
+
+// InternationalName is a single multilingual name value with a language tag.
+type InternationalName struct {
+	Lang  string `xml:"lang,attr"`
+	Value string `xml:",chardata"`
+}
+
+// InternationalURIs holds a list of multilingual URI values.
+type InternationalURIs struct {
+	URIs []InternationalURI `xml:"URI"`
+}
+
+// InternationalURI is a single multilingual URI value with a language tag.
+type InternationalURI struct {
+	Lang  string `xml:"lang,attr"`
+	Value string `xml:",chardata"`
+}
+
+// --- Pointers to Other TSL (for LOTL) ---
+
+// PointersToOtherTSL contains references to other trust lists, typically
+// national trust lists pointed to by a LOTL.
+type PointersToOtherTSL struct {
+	OtherTSLPointers []OtherTSLPointer `xml:"OtherTSLPointer"`
+}
+
+// OtherTSLPointer represents a reference to another trust list, including its
+// download URL, digital identity for signature verification, and additional
+// metadata such as country code and TSL type.
+type OtherTSLPointer struct {
+	ServiceDigitalIdentities ServiceDigitalIdentities `xml:"ServiceDigitalIdentities"`
+	TSLLocation              string                   `xml:"TSLLocation"`
+	AdditionalInformation    AdditionalInformation    `xml:"AdditionalInformation"`
+}
+
+// GetSchemeTerritory extracts the country code from the pointer's additional information.
+func (p OtherTSLPointer) GetSchemeTerritory() string {
+	for _, info := range p.AdditionalInformation.OtherInformation {
+		if info.SchemeTerritory != "" {
+			return info.SchemeTerritory
+		}
+	}
+	return ""
+}
+
+// GetTSLType extracts the TSL type from the pointer's additional information.
+func (p OtherTSLPointer) GetTSLType() string {
+	for _, info := range p.AdditionalInformation.OtherInformation {
+		if info.TSLType != "" {
+			return info.TSLType
+		}
+	}
+	return ""
+}
+
+// AdditionalInformation holds supplementary metadata about a TSL pointer.
+type AdditionalInformation struct {
+	OtherInformation []OtherInformation `xml:"OtherInformation"`
+}
+
+// OtherInformation holds metadata fields found within a TSL pointer's additional information.
+// Only SchemeTerritory, TSLType, and SchemeOperatorName are extracted; other fields are ignored.
+type OtherInformation struct {
+	SchemeTerritory    string             `xml:"SchemeTerritory"`
+	TSLType            string             `xml:"TSLType"`
+	SchemeOperatorName InternationalNames `xml:"SchemeOperatorName"`
+}
+
+// --- Trust Service Providers ---
+
+// TrustServiceProviderList wraps the list of trust service providers in a trust list.
+type TrustServiceProviderList struct {
+	TrustServiceProviders []TrustServiceProvider `xml:"TrustServiceProvider"`
+}
+
+// TrustServiceProvider represents a single trust service provider (TSP) entry,
+// containing the provider's identity information and its trust services.
+type TrustServiceProvider struct {
+	TSPInformation TSPInformation `xml:"TSPInformation"`
+	TSPServices    TSPServices    `xml:"TSPServices"`
+}
+
+// TSPInformation holds identity and contact information for a trust service provider.
+type TSPInformation struct {
+	TSPName           InternationalNames `xml:"TSPName"`
+	TSPTradeName      InternationalNames `xml:"TSPTradeName"`
+	TSPInformationURI InternationalURIs  `xml:"TSPInformationURI"`
+}
+
+// TSPServices wraps the list of trust services offered by a TSP.
+type TSPServices struct {
+	TSPService []TSPService `xml:"TSPService"`
+}
+
+// TSPService represents a single trust service entry within a TSP.
+type TSPService struct {
+	ServiceInformation ServiceInformation  `xml:"ServiceInformation"`
+	ServiceHistory     *ServiceHistory     `xml:"ServiceHistory,omitempty"`
+}
+
+// ServiceInformation holds the core details of a trust service: its type,
+// status, digital identities (X.509 certificates), and extensions.
+type ServiceInformation struct {
+	ServiceTypeIdentifier          string                   `xml:"ServiceTypeIdentifier"`
+	ServiceName                    InternationalNames       `xml:"ServiceName"`
+	ServiceDigitalIdentity         ServiceDigitalIdentity   `xml:"ServiceDigitalIdentity"`
+	ServiceStatus                  string                   `xml:"ServiceStatus"`
+	StatusStartingTime             string                   `xml:"StatusStartingTime"`
+	ServiceInformationExtensions   *ServiceInformationExtensions `xml:"ServiceInformationExtensions,omitempty"`
+}
+
+// ServiceHistory contains historical service status entries.
+type ServiceHistory struct {
+	ServiceHistoryInstances []ServiceHistoryInstance `xml:"ServiceHistoryInstance"`
+}
+
+// ServiceHistoryInstance represents a historical status entry for a trust service.
+type ServiceHistoryInstance struct {
+	ServiceTypeIdentifier        string                        `xml:"ServiceTypeIdentifier"`
+	ServiceName                  InternationalNames            `xml:"ServiceName"`
+	ServiceDigitalIdentity       ServiceDigitalIdentity        `xml:"ServiceDigitalIdentity"`
+	ServiceStatus                string                        `xml:"ServiceStatus"`
+	StatusStartingTime           string                        `xml:"StatusStartingTime"`
+	ServiceInformationExtensions *ServiceInformationExtensions `xml:"ServiceInformationExtensions,omitempty"`
+}
+
+// ServiceInformationExtensions holds extension data for a service entry.
+type ServiceInformationExtensions struct {
+	Extensions []Extension `xml:"Extension"`
+}
+
+// Extension represents a single service information extension element.
+type Extension struct {
+	Critical                     bool   `xml:"Critical,attr"`
+	ExpiredCertsRevocationInfo   string `xml:"ExpiredCertsRevocationInfo,omitempty"`
+	AdditionalServiceInformation *AdditionalServiceInformation `xml:"AdditionalServiceInformation,omitempty"`
+}
+
+// AdditionalServiceInformation holds the URI of additional service information.
+type AdditionalServiceInformation struct {
+	URI InternationalURI `xml:"URI"`
+}
+
+// --- Digital Identity ---
+
+// ServiceDigitalIdentities wraps a list of digital identity containers (used in TSL pointers).
+type ServiceDigitalIdentities struct {
+	ServiceDigitalIdentity []ServiceDigitalIdentity `xml:"ServiceDigitalIdentity"`
+}
+
+// ServiceDigitalIdentity holds one or more digital identity entries for a trust service.
+// Each DigitalId may contain an X.509 certificate, subject name, or subject key identifier.
+type ServiceDigitalIdentity struct {
+	DigitalIds []DigitalId `xml:"DigitalId"`
+}
+
+// DigitalId represents a single digital identity entry. Exactly one of
+// X509Certificate, X509SubjectName, or X509SKI is typically populated.
+type DigitalId struct {
+	X509Certificate string `xml:"X509Certificate,omitempty"`
+	X509SubjectName string `xml:"X509SubjectName,omitempty"`
+	X509SKI         string `xml:"X509SKI,omitempty"`
+}
+
+// --- Parsing ---
+
+// ParseTrustList parses an ETSI TS 119 612 trust list XML document from raw bytes
+// into a TrustServiceStatusList struct.
+//
+// The function validates the basic structure but does not verify the XML digital
+// signature. Callers must ensure transport-level integrity (e.g. via HTTPS).
+func ParseTrustList(xmlData []byte) (*TrustServiceStatusList, error) {
+	var tl TrustServiceStatusList
+	if err := xml.Unmarshal(xmlData, &tl); err != nil {
+		return nil, fmt.Errorf("failed to parse trust list XML: %w", err)
+	}
+
+	return &tl, nil
+}
+
+// --- Certificate Extraction ---
+
+// ExtractServiceCertificates extracts X.509 certificates from a ServiceDigitalIdentity.
+// Each DigitalId entry with a non-empty X509Certificate field is base64-decoded and
+// parsed into an *x509.Certificate using common.ParseBase64Certificate.
+// Entries without X509Certificate data are skipped.
+// Returns an error if any certificate data is malformed.
+func ExtractServiceCertificates(identity ServiceDigitalIdentity) ([]*x509.Certificate, error) {
+	var certs []*x509.Certificate
+	for i, did := range identity.DigitalIds {
+		if did.X509Certificate == "" {
+			continue
+		}
+		cert, err := common.ParseBase64Certificate(did.X509Certificate)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse certificate at index %d: %w", i, err)
+		}
+		certs = append(certs, cert)
+	}
+	return certs, nil
+}
+
+// GetDistributionPoints extracts the national trust list URLs from a LOTL's
+// PointersToOtherTSL section. Only pointers with a TSLType of EUgeneric
+// (i.e. national trust lists, not other LOTLs) are included.
+// Each returned DistributionPoint includes the TSL URL and the scheme territory.
+func (tl *TrustServiceStatusList) GetDistributionPoints() []DistributionPoint {
+	if tl.SchemeInformation.PointersToOtherTSL == nil {
+		return nil
+	}
+	var points []DistributionPoint
+	for _, ptr := range tl.SchemeInformation.PointersToOtherTSL.OtherTSLPointers {
+		tslType := ptr.GetTSLType()
+		// Include only national TLs (EUgeneric), not pointers to other LOTLs
+		if tslType != TSLTypeEUGeneric {
+			continue
+		}
+		points = append(points, DistributionPoint{
+			TSLLocation:     ptr.TSLLocation,
+			SchemeTerritory: ptr.GetSchemeTerritory(),
+		})
+	}
+	return points
+}
+
+// DistributionPoint represents a pointer from a LOTL to a national trust list,
+// including the download URL and the country code.
+type DistributionPoint struct {
+	// TSLLocation is the URL from which the national trust list can be downloaded.
+	TSLLocation string
+	// SchemeTerritory is the ISO 3166-1 alpha-2 country code for the national trust list.
+	SchemeTerritory string
+}
+
+// GetTrustServices extracts all trust services from the trust list as a flat
+// list of TrustedService structs, enriched with the scheme territory from the
+// trust list metadata and the TSP name from the provider entry.
+func (tl *TrustServiceStatusList) GetTrustServices() ([]TrustedService, error) {
+	if tl.TrustServiceProviderList == nil {
+		return nil, nil
+	}
+	territory := tl.SchemeInformation.SchemeTerritory
+	var services []TrustedService
+	for _, tsp := range tl.TrustServiceProviderList.TrustServiceProviders {
+		tspName := tsp.TSPInformation.TSPName.GetEnglish()
+		for _, svc := range tsp.TSPServices.TSPService {
+			info := svc.ServiceInformation
+			certs, err := ExtractServiceCertificates(info.ServiceDigitalIdentity)
+			if err != nil {
+				return nil, fmt.Errorf("failed to extract certificates for service %q of TSP %q: %w",
+					info.ServiceName.GetEnglish(), tspName, err)
+			}
+			statusTime, err := parseDateTime(info.StatusStartingTime)
+			if err != nil {
+				logging.Log().Warnf("Failed to parse StatusStartingTime %q for service %q of TSP %q: %v",
+					info.StatusStartingTime, info.ServiceName.GetEnglish(), tspName, err)
+			}
+			services = append(services, TrustedService{
+				CountryCode:       territory,
+				TSPName:           tspName,
+				ServiceName:       info.ServiceName.GetEnglish(),
+				ServiceType:       info.ServiceTypeIdentifier,
+				ServiceStatus:     info.ServiceStatus,
+				StatusStartingTime: statusTime,
+				Certificates:      certs,
+			})
+		}
+	}
+	return services, nil
+}
+
+// TrustedService represents a single trust service extracted from a trust list,
+// with all the fields needed for trust validation.
+type TrustedService struct {
+	// CountryCode is the ISO 3166-1 alpha-2 country code from the trust list's SchemeTerritory.
+	CountryCode string
+	// TSPName is the English name of the trust service provider.
+	TSPName string
+	// ServiceName is the English name of the service.
+	ServiceName string
+	// ServiceType is the ETSI service type identifier URI.
+	ServiceType string
+	// ServiceStatus is the ETSI service status URI.
+	ServiceStatus string
+	// StatusStartingTime is the time from which the current status applies.
+	StatusStartingTime time.Time
+	// Certificates are the X.509 certificates associated with this service.
+	Certificates []*x509.Certificate
+}
+
+// IsQualified returns true if the service type URI indicates a qualified trust service.
+// Qualified services are identified by matching one of the known qualified service
+// type URIs defined in ETSI TS 119 612 (CA/QC, QTST, NationalRootCA-QC, EDS/Q, EDS/REM/Q).
+func (ts TrustedService) IsQualified() bool {
+	// Qualified service types per ETSI TS 119 612
+	qualifiedTypes := []string{
+		ServiceTypeCAQC,
+		ServiceTypeQTST,
+		ServiceTypeNationalRootCAQC,
+		ServiceTypeEDS,
+		ServiceTypeREMD,
+	}
+	for _, qt := range qualifiedTypes {
+		if ts.ServiceType == qt {
+			return true
+		}
+	}
+	return false
+}
+
+// IsGranted returns true if the service has the "granted" status.
+func (ts TrustedService) IsGranted() bool {
+	return ts.ServiceStatus == ServiceStatusGranted
+}
+
+// parseDateTime parses a date-time string in the format used by ETSI trust lists.
+// It tries RFC 3339 first, then falls back to the format without timezone offset.
+func parseDateTime(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, fmt.Errorf("empty date-time string")
+	}
+	// Try RFC 3339 (e.g. "2023-01-15T00:00:00Z")
+	t, err := time.Parse(time.RFC3339, s)
+	if err == nil {
+		return t, nil
+	}
+	// Try ISO 8601 without timezone (e.g. "2023-01-15T00:00:00")
+	t, err = time.Parse("2006-01-02T15:04:05", s)
+	if err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("failed to parse date-time %q: %w", s, err)
+}
