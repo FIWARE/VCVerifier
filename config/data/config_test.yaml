@@ -27,9 +27,6 @@ verifier:
       "gx:compliance":
          ValidFromBeforePolicy: {}
 
-ssiKit:
-  auditorURL: http://waltid:7003
-
 m2m:
   authEnabled: false
 configRepo:

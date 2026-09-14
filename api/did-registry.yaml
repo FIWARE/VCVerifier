@@ -77,7 +77,6 @@ components:
           items:
             type: string
             example: "https://www.w3.org/ns/did/v1"
-#       Standard defines list of strings but waltId provides object
 #        assertionMethod:
 #          description: "An assertionMethod property is used to specify a URL that contains information about a verificationMethod used for assertions."
 #          type: array

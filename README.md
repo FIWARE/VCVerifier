@@ -21,7 +21,6 @@ VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer 
         * [Database](#database)
         * [Refresh Token](#refresh-token)
         * [ConfigServer](#configserver)
-    * [WaltID SSIKit](#waltid-ssikit)
 * [Usage](#usage)
     * [Frontend-Integration](#frontend-integration)
     * [REST-Example](#rest-example)
@@ -52,7 +51,7 @@ The following actions occur in the interaction:
     1. the Verifier retrieves the Scope-Information from the Config-Service
 4. The user approves the wallet's interaction with the VCVerifier and the VerifiableCredential is presented via the OIDC4VP-flow.
 5. VCVerifier verifies the credential:
-    1. at WaltID-SSIKit with the configured set of policies
+    1. with the configured set of policies
     2. (Optional) if a Gaia-X compliant chain is provided
     3. that the credential is registered in the configured trusted-participants-registries
     4. that the issuer is allowed to issuer the credential with the given claims by one of the configured trusted-issuers-list(s)
@@ -690,14 +689,6 @@ The response will contain an object like already shown in [byValue](#byvalue).
 ## API
 
 The API implements enpoints defined in [OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-terminology) and [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html). The OpenAPI Specification of the implemented endpoints can be found at: [api/api.yaml](api/api.yaml).
-
-### Open issues
-
-The VCVerifier does currently not support all functionalities defined in the connected standards(e.g. [OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-terminology) and [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html)). Users should be aware of the following points:
-
-* the verifier does not offer any endpoint to proof its own identity
-* requests to the authentication-response endpoint do accept "presentation_submissions", but do not evaluate them
-* even thought the vp_token can contain multiple credentials and all of them will be verified, just the first one will be included in the JWT
 
 ## Testing
 
