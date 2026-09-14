@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
+  <SchemeInformation>
+    <TSLVersionIdentifier>5</TSLVersionIdentifier>
+    <TSLSequenceNumber>1</TSLSequenceNumber>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <SchemeOperatorName>
+      <Name xml:lang="en">Empty Operator</Name>
+    </SchemeOperatorName>
+    <SchemeName>
+      <Name xml:lang="en">Empty TL</Name>
+    </SchemeName>
+    <SchemeInformationURI>
+      <URI xml:lang="en">https://example.com/empty</URI>
+    </SchemeInformationURI>
+    <StatusDeterminationApproach>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/StatusDetn/EUappropriate</StatusDeterminationApproach>
+    <SchemeTerritory>XX</SchemeTerritory>
+    <HistoricalInformationPeriod>0</HistoricalInformationPeriod>
+    <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate>
+      <dateTime>2024-07-01T00:00:00Z</dateTime>
+    </NextUpdate>
+  </SchemeInformation>
+</TrustServiceStatusList>
