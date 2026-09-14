@@ -690,14 +690,6 @@ The response will contain an object like already shown in [byValue](#byvalue).
 
 The API implements enpoints defined in [OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-terminology) and [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html). The OpenAPI Specification of the implemented endpoints can be found at: [api/api.yaml](api/api.yaml).
 
-### Open issues
-
-The VCVerifier does currently not support all functionalities defined in the connected standards(e.g. [OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-terminology) and [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html)). Users should be aware of the following points:
-
-* the verifier does not offer any endpoint to proof its own identity
-* requests to the authentication-response endpoint do accept "presentation_submissions", but do not evaluate them
-* even thought the vp_token can contain multiple credentials and all of them will be verified, just the first one will be included in the JWT
-
 ## Testing
 
 ### Unit Tests
