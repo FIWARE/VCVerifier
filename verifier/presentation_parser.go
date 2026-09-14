@@ -196,11 +196,6 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 
 	return nil
 }
-
-func buildAddress(host, path string) string {
-	return strings.TrimSuffix(host, "/") + "/" + strings.TrimPrefix(path, "/")
-}
-
 // ParsePresentation parses a VP from either JWT or JSON-LD format and
 // verifies it. JWT VPs are verified via the configured JWTProofChecker,
 // JSON-LD VPs via the configured LDProofChecker. Both paths are fail-closed:
