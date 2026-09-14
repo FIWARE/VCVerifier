@@ -1,0 +1,39 @@
+server:
+  port: 3000
+
+eidas:
+  enabled: true
+  lotlUrl: "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
+  refreshInterval: 43200
+  countries:
+    - "DE"
+    - "FR"
+    - "ES"
+  maxWorkers: 3
+  fetchTimeout: 15
+
+configRepo:
+  services:
+    - id: testService
+      defaultOidcScope: eidasScope
+      oidcScopes:
+        eidasScope:
+          credentials:
+            - type: NaturalPersonCredential
+              trustedParticipantsLists:
+                - type: ebsi
+                  url: https://tir.example.com
+              eidasConfig:
+                enabled: true
+                allowedCountries:
+                  - "DE"
+                  - "FR"
+                requireQualified: true
+            - type: LegalEntityCredential
+              trustedIssuersLists:
+                - https://tir.example.com
+              eidasConfig:
+                enabled: true
+                allowedCountries:
+                  - "ES"
+                requireQualified: false
