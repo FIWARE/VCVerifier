@@ -160,6 +160,10 @@ type Credential struct {
 	// extracted from (e.g. "jwt_vc", "ldp_vc", "sd-jwt"). Set during parsing
 	// by the presentation parser.
 	format string
+	// rawToken stores the original JWT or SD-JWT bytes of this credential,
+	// when available. Used by the eIDAS validation service to extract x5c
+	// headers for certificate chain validation.
+	rawToken []byte
 }
 
 // Contents returns the structured content of the credential.
@@ -194,6 +198,20 @@ func (c *Credential) Format() string {
 // presentation parser to track how the credential was encoded.
 func (c *Credential) SetFormat(format string) {
 	c.format = format
+}
+
+// RawToken returns the original JWT or SD-JWT bytes of this credential, if
+// available. Returns nil when the credential was not parsed from a JWT/SD-JWT
+// or when the raw bytes were not preserved.
+func (c *Credential) RawToken() []byte {
+	return c.rawToken
+}
+
+// SetRawToken stores the original JWT or SD-JWT bytes of this credential.
+// Called by the presentation parser to preserve the raw token for downstream
+// validation (e.g. eIDAS x5c certificate extraction).
+func (c *Credential) SetRawToken(token []byte) {
+	c.rawToken = token
 }
 
 // ToRawJSON converts the credential to a JSON map representation.

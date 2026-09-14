@@ -1004,6 +1004,9 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 			logging.Log().Warnf("Failed to create credential from SD-JWT claims: %v", err)
 			return nil, err
 		}
+		// Preserve the raw SD-JWT VC bytes so downstream validators (e.g.
+		// eIDAS) can extract the x5c header for certificate chain validation.
+		credential.SetRawToken([]byte(vcString))
 		presentation.AddCredentials(credential)
 	}
 
