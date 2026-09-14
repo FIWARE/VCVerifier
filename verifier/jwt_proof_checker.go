@@ -264,17 +264,13 @@ func extractX5CFromToken(token []byte) ([]string, error) {
 	return result, nil
 }
 
+// parseCertificate decodes a base64-encoded DER X.509 certificate and parses it.
+// Delegates to common.ParseBase64Certificate for the shared parsing logic.
 func parseCertificate(certBase64 string) (*x509.Certificate, error) {
-	certDER, err := base64.StdEncoding.DecodeString(certBase64)
+	cert, err := common.ParseBase64Certificate(certBase64)
 	if err != nil {
-		logging.Log().Warnf("Failed to decode the certificate header. Error: %v", err)
+		logging.Log().Warnf("Failed to parse certificate header: %v", err)
 		return nil, ErrorPemDecodeFailed
-	}
-
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		logging.Log().Warnf("Failed to parse the certificate header. Error: %v", err)
-		return nil, err
 	}
 	return cert, nil
 }

@@ -13,77 +13,79 @@ package eidas
 
 import (
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/logging"
 )
 
 // XML namespace for ETSI TS 119 612 trust lists (v2).
-const TrustListNamespace = "http://uri.etsi.org/02231/v2#"
+const TrustListNamespace = "https://uri.etsi.org/02231/v2#"
 
 // TSLTag identifies the trust list format version.
-const TSLTag = "http://uri.etsi.org/19612/TSLTag"
+const TSLTag = "https://uri.etsi.org/19612/TSLTag"
 
 // --- Service Type Identifier URIs (ETSI TS 119 612 §5.5.1) ---
 
 const (
 	// ServiceTypeCAQC identifies a Certification Authority issuing qualified certificates.
-	ServiceTypeCAQC = "http://uri.etsi.org/TrstSvc/Svctype/CA/QC"
+	ServiceTypeCAQC = "https://uri.etsi.org/TrstSvc/Svctype/CA/QC"
 
 	// ServiceTypeQTST identifies a Qualified Time Stamping Authority.
-	ServiceTypeQTST = "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST"
+	ServiceTypeQTST = "https://uri.etsi.org/TrstSvc/Svctype/TSA/QTST"
 
 	// ServiceTypeTSA identifies a (non-qualified) Time Stamping Authority.
-	ServiceTypeTSA = "http://uri.etsi.org/TrstSvc/Svctype/TSA"
+	ServiceTypeTSA = "https://uri.etsi.org/TrstSvc/Svctype/TSA"
 
 	// ServiceTypeCA identifies a (non-qualified) Certification Authority.
-	ServiceTypeCA = "http://uri.etsi.org/TrstSvc/Svctype/CA"
+	ServiceTypeCA = "https://uri.etsi.org/TrstSvc/Svctype/CA"
 
 	// ServiceTypeIdV identifies an Identity Verification service.
-	ServiceTypeIdV = "http://uri.etsi.org/TrstSvc/Svctype/IdV"
+	ServiceTypeIdV = "https://uri.etsi.org/TrstSvc/Svctype/IdV"
 
 	// ServiceTypeNationalRootCAQC identifies a national root CA for qualified certificates.
-	ServiceTypeNationalRootCAQC = "http://uri.etsi.org/TrstSvc/Svctype/NationalRootCA-QC"
+	ServiceTypeNationalRootCAQC = "https://uri.etsi.org/TrstSvc/Svctype/NationalRootCA-QC"
 
 	// ServiceTypeEDS identifies an Electronic Delivery Service.
-	ServiceTypeEDS = "http://uri.etsi.org/TrstSvc/Svctype/EDS/Q"
+	ServiceTypeEDS = "https://uri.etsi.org/TrstSvc/Svctype/EDS/Q"
 
 	// ServiceTypeREMD identifies a Qualified Electronic Registered Delivery Service.
-	ServiceTypeREMD = "http://uri.etsi.org/TrstSvc/Svctype/EDS/REM/Q"
+	ServiceTypeREMD = "https://uri.etsi.org/TrstSvc/Svctype/EDS/REM/Q"
 )
 
 // --- Service Status URIs (ETSI TS 119 612 §5.5.4) ---
 
 const (
 	// ServiceStatusGranted indicates the service has been granted (active and trusted).
-	ServiceStatusGranted = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+	ServiceStatusGranted = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
 
 	// ServiceStatusWithdrawn indicates the service has been withdrawn.
-	ServiceStatusWithdrawn = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
+	ServiceStatusWithdrawn = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
 
 	// ServiceStatusRecognisedAtNationalLevel indicates the service is recognised at national level.
-	ServiceStatusRecognisedAtNationalLevel = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/recognisedatnationallevel"
+	ServiceStatusRecognisedAtNationalLevel = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/recognisedatnationallevel"
 
 	// ServiceStatusDeprecatedAtNationalLevel indicates the service is deprecated at national level.
-	ServiceStatusDeprecatedAtNationalLevel = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/deprecatedatnationallevel"
+	ServiceStatusDeprecatedAtNationalLevel = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/deprecatedatnationallevel"
 
 	// ServiceStatusSetByNationalLaw indicates the service status is set by national law.
-	ServiceStatusSetByNationalLaw = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/setbynationallaw"
+	ServiceStatusSetByNationalLaw = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/setbynationallaw"
 
-	// ServiceStatusSuperseded indicates the service has been superseded.
-	ServiceStatusSuperseded = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/undersupervision"
+	// ServiceStatusUnderSupervision indicates the service is under supervision.
+	ServiceStatusUnderSupervision = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/undersupervision"
 )
 
 // --- TSL Type URIs ---
 
 const (
 	// TSLTypeEUGeneric identifies a generic EU trust list.
-	TSLTypeEUGeneric = "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric"
+	TSLTypeEUGeneric = "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric"
 
 	// TSLTypeEUListOfTheLists identifies the EU List of Trusted Lists (LOTL).
-	TSLTypeEUListOfTheLists = "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists"
+	TSLTypeEUListOfTheLists = "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists"
 )
 
 // --- XML Struct Definitions ---
@@ -329,7 +331,8 @@ func ParseTrustList(xmlData []byte) (*TrustServiceStatusList, error) {
 
 // ExtractServiceCertificates extracts X.509 certificates from a ServiceDigitalIdentity.
 // Each DigitalId entry with a non-empty X509Certificate field is base64-decoded and
-// parsed into an *x509.Certificate. Entries without X509Certificate data are skipped.
+// parsed into an *x509.Certificate using common.ParseBase64Certificate.
+// Entries without X509Certificate data are skipped.
 // Returns an error if any certificate data is malformed.
 func ExtractServiceCertificates(identity ServiceDigitalIdentity) ([]*x509.Certificate, error) {
 	var certs []*x509.Certificate
@@ -337,36 +340,13 @@ func ExtractServiceCertificates(identity ServiceDigitalIdentity) ([]*x509.Certif
 		if did.X509Certificate == "" {
 			continue
 		}
-		cert, err := parseBase64Certificate(did.X509Certificate)
+		cert, err := common.ParseBase64Certificate(did.X509Certificate)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse certificate at index %d: %w", i, err)
 		}
 		certs = append(certs, cert)
 	}
 	return certs, nil
-}
-
-// parseBase64Certificate decodes a base64-encoded X.509 certificate and parses it.
-// Whitespace in the base64 data is stripped before decoding, as trust list XML
-// commonly formats certificate data with line breaks.
-func parseBase64Certificate(b64Data string) (*x509.Certificate, error) {
-	// Trust list XML often has whitespace/newlines in base64 data
-	cleaned := strings.Map(func(r rune) rune {
-		if r == ' ' || r == '\n' || r == '\r' || r == '\t' {
-			return -1
-		}
-		return r
-	}, b64Data)
-
-	derBytes, err := base64.StdEncoding.DecodeString(cleaned)
-	if err != nil {
-		return nil, fmt.Errorf("failed to base64-decode certificate: %w", err)
-	}
-	cert, err := x509.ParseCertificate(derBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse DER certificate: %w", err)
-	}
-	return cert, nil
 }
 
 // GetDistributionPoints extracts the national trust list URLs from a LOTL's
@@ -419,7 +399,11 @@ func (tl *TrustServiceStatusList) GetTrustServices() ([]TrustedService, error) {
 				return nil, fmt.Errorf("failed to extract certificates for service %q of TSP %q: %w",
 					info.ServiceName.GetEnglish(), tspName, err)
 			}
-			statusTime, _ := parseDateTime(info.StatusStartingTime)
+			statusTime, err := parseDateTime(info.StatusStartingTime)
+			if err != nil {
+				logging.Log().Warnf("Failed to parse StatusStartingTime %q for service %q of TSP %q: %v",
+					info.StatusStartingTime, info.ServiceName.GetEnglish(), tspName, err)
+			}
 			services = append(services, TrustedService{
 				CountryCode:       territory,
 				TSPName:           tspName,
@@ -454,8 +438,8 @@ type TrustedService struct {
 }
 
 // IsQualified returns true if the service type URI indicates a qualified trust service.
-// Qualified service type URIs are identified by containing "/QC", "/QTST", "/Q",
-// or "NationalRootCA-QC" in their path.
+// Qualified services are identified by matching one of the known qualified service
+// type URIs defined in ETSI TS 119 612 (CA/QC, QTST, NationalRootCA-QC, EDS/Q, EDS/REM/Q).
 func (ts TrustedService) IsQualified() bool {
 	// Qualified service types per ETSI TS 119 612
 	qualifiedTypes := []string{

@@ -586,21 +586,21 @@ func TestParseDateTime(t *testing.T) {
 
 func TestConstants(t *testing.T) {
 	// Verify namespace and tag constants are correct
-	assert.Equal(t, "http://uri.etsi.org/02231/v2#", TrustListNamespace)
-	assert.Equal(t, "http://uri.etsi.org/19612/TSLTag", TSLTag)
+	assert.Equal(t, "https://uri.etsi.org/02231/v2#", TrustListNamespace)
+	assert.Equal(t, "https://uri.etsi.org/19612/TSLTag", TSLTag)
 
 	// Verify service type URIs follow ETSI conventions
-	assert.Contains(t, ServiceTypeCAQC, "http://uri.etsi.org/TrstSvc/Svctype/")
-	assert.Contains(t, ServiceTypeQTST, "http://uri.etsi.org/TrstSvc/Svctype/")
-	assert.Contains(t, ServiceTypeCA, "http://uri.etsi.org/TrstSvc/Svctype/")
+	assert.Contains(t, ServiceTypeCAQC, "https://uri.etsi.org/TrstSvc/Svctype/")
+	assert.Contains(t, ServiceTypeQTST, "https://uri.etsi.org/TrstSvc/Svctype/")
+	assert.Contains(t, ServiceTypeCA, "https://uri.etsi.org/TrstSvc/Svctype/")
 
 	// Verify service status URIs follow ETSI conventions
-	assert.Contains(t, ServiceStatusGranted, "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/")
-	assert.Contains(t, ServiceStatusWithdrawn, "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/")
+	assert.Contains(t, ServiceStatusGranted, "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/")
+	assert.Contains(t, ServiceStatusWithdrawn, "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/")
 
 	// Verify TSL type URIs
-	assert.Contains(t, TSLTypeEUGeneric, "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/")
-	assert.Contains(t, TSLTypeEUListOfTheLists, "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/")
+	assert.Contains(t, TSLTypeEUGeneric, "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/")
+	assert.Contains(t, TSLTypeEUListOfTheLists, "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/")
 }
 
 func TestGetTrustServices_WithMultipleCertsPerService(t *testing.T) {
@@ -609,11 +609,11 @@ func TestGetTrustServices_WithMultipleCertsPerService(t *testing.T) {
 	cert2, b64Cert2 := generateTestCertificate(t, "Cert 2", true)
 
 	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
+<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>1</TSLSequenceNumber>
-    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeOperatorName><Name xml:lang="en">Test</Name></SchemeOperatorName>
     <SchemeName><Name xml:lang="en">Test</Name></SchemeName>
     <SchemeInformationURI><URI xml:lang="en">https://example.com</URI></SchemeInformationURI>
@@ -633,13 +633,13 @@ func TestGetTrustServices_WithMultipleCertsPerService(t *testing.T) {
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
             <ServiceName><Name xml:lang="en">Multi-Cert Service</Name></ServiceName>
             <ServiceDigitalIdentity>
               <DigitalId><X509Certificate>` + b64Cert1 + `</X509Certificate></DigitalId>
               <DigitalId><X509Certificate>` + b64Cert2 + `</X509Certificate></DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
             <StatusStartingTime>2024-01-01T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
         </TSPService>
@@ -663,11 +663,11 @@ func TestGetTrustServices_WithMultipleCertsPerService(t *testing.T) {
 
 func TestGetTrustServices_InvalidCertificate(t *testing.T) {
 	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
+<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>1</TSLSequenceNumber>
-    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeOperatorName><Name xml:lang="en">Test</Name></SchemeOperatorName>
     <SchemeName><Name xml:lang="en">Test</Name></SchemeName>
     <SchemeInformationURI><URI xml:lang="en">https://example.com</URI></SchemeInformationURI>
@@ -687,12 +687,12 @@ func TestGetTrustServices_InvalidCertificate(t *testing.T) {
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
             <ServiceName><Name xml:lang="en">Bad Cert Service</Name></ServiceName>
             <ServiceDigitalIdentity>
               <DigitalId><X509Certificate>dGhpcyBpcyBub3QgYSBjZXJ0aWZpY2F0ZQ==</X509Certificate></DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
             <StatusStartingTime>2024-01-01T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
         </TSPService>

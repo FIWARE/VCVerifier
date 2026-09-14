@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
+<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>1</TSLSequenceNumber>
-    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeOperatorName>
       <Name xml:lang="en">Test Operator</Name>
     </SchemeOperatorName>
@@ -13,7 +13,7 @@
     <SchemeInformationURI>
       <URI xml:lang="en">https://example.com/ws</URI>
     </SchemeInformationURI>
-    <StatusDeterminationApproach>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/StatusDetn/EUappropriate</StatusDeterminationApproach>
+    <StatusDeterminationApproach>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/StatusDetn/EUappropriate</StatusDeterminationApproach>
     <SchemeTerritory>DE</SchemeTerritory>
     <HistoricalInformationPeriod>0</HistoricalInformationPeriod>
     <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
@@ -35,7 +35,7 @@
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
             <ServiceName>
               <Name xml:lang="en">Whitespace Cert Service</Name>
             </ServiceName>
@@ -55,7 +55,7 @@
                 </X509Certificate>
               </DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
             <StatusStartingTime>2021-01-01T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
         </TSPService>
