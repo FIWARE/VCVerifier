@@ -25,6 +25,7 @@ import (
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
 	"github.com/fiware/VCVerifier/did"
+	"github.com/fiware/VCVerifier/eidas"
 	"github.com/fiware/VCVerifier/gaiax"
 	"github.com/fiware/VCVerifier/tir"
 	"github.com/google/uuid"
@@ -201,6 +202,9 @@ type CredentialVerifier struct {
 	// refreshTokenRepo is the database-backed store for refresh tokens.
 	// nil when refresh tokens are disabled.
 	refreshTokenRepo database.RefreshTokenRepository
+	// eidasConfig holds the global eIDAS trust list configuration, used to
+	// supply global country filters to the eIDAS validation context.
+	eidasConfig configModel.Eidas
 }
 
 // allow singleton access to the verifier
@@ -399,6 +403,38 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	ietfStatusListClient := NewCachingIETFStatusListClient(statusListHttpTimeout, statusListCacheExpiry, statusListJWTVerifier, clock)
 	credentialStatusVerificationService := NewCredentialStatusValidationService(statusListClient, ietfStatusListClient, clock)
 
+	// Construct the eIDAS validation service. When eIDAS is globally enabled,
+	// create a TrustListFetcher with background refresh; otherwise leave the
+	// service with a nil trust store so it acts as a pass-through (no HTTP
+	// requests, no goroutines, no memory).
+	var eidasValidationService EidasValidationService
+	if config.Eidas.Enabled {
+		opts := []eidas.FetcherOption{}
+		if config.Eidas.LotlURL != "" {
+			opts = append(opts, eidas.WithLOTLURL(config.Eidas.LotlURL))
+		}
+		if config.Eidas.RefreshInterval > 0 {
+			opts = append(opts, eidas.WithRefreshInterval(time.Duration(config.Eidas.RefreshInterval)*time.Second))
+		}
+		if len(config.Eidas.Countries) > 0 {
+			opts = append(opts, eidas.WithAllowedCountries(config.Eidas.Countries))
+		}
+		if config.Eidas.MaxWorkers > 0 {
+			opts = append(opts, eidas.WithMaxWorkers(config.Eidas.MaxWorkers))
+		}
+		if config.Eidas.FetchTimeout > 0 {
+			opts = append(opts, eidas.WithHTTPClient(&http.Client{
+				Timeout: time.Duration(config.Eidas.FetchTimeout) * time.Second,
+			}))
+		}
+		fetcher := eidas.NewTrustListFetcher(opts...)
+		fetcher.Start(context.Background())
+		eidasValidationService = EidasValidationService{trustStore: fetcher.Store()}
+		logging.Log().Info("eIDAS trust list fetcher started with background refresh")
+	} else {
+		logging.Log().Debug("eIDAS trust list feature is disabled")
+	}
+
 	key, err := initPrivateKey(verifierConfig.KeyAlgorithm, verifierConfig.GenerateKey, verifierConfig.KeyPath)
 
 	kid := verifierConfig.ClientIdentification.Id
@@ -437,13 +473,15 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		clock:             clock,
 		tokenSigner:       common.JwtTokenSigner{},
 		credentialsConfig: credentialsConfig,
-		validationServices: []ValidationService{
+		validationServices: initValidationServices(
 			&credentialsVerifier,
 			&externalGaiaXValidator,
 			&trustedParticipantVerificationService,
 			&trustedIssuerVerificationService,
 			&credentialStatusVerificationService,
-		},
+			&eidasValidationService,
+			config.Eidas.Enabled,
+		),
 		signingAlgorithm:       verifierConfig.KeyAlgorithm,
 		supportedRequestModes:  verifierConfig.SupportedModes,
 		fallbackRequestMode:    verifierConfig.RequestMode,
@@ -456,6 +494,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		refreshTokenEnabled:    verifierConfig.RefreshToken.Enabled,
 		refreshTokenExpiration: time.Duration(verifierConfig.RefreshToken.Expiration) * time.Minute,
 		refreshTokenRepo:       nil, // set below when enabled
+		eidasConfig:            config.Eidas,
 	}
 
 	logging.Log().Debug("Successfully initalized the verifier")
@@ -727,6 +766,11 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 			logging.Log().Warnf("Was not able to create the credential-status validation context. Credential will be rejected. Err: %v", err)
 			return 0, "", ErrorVerficationContextSetup
 		}
+		eidasValidationContext, err := v.getEidasValidationContext(clientId, scope, credentialTypes, v.eidasConfig)
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the eIDAS validation context. Credential will be rejected. Err: %v", err)
+			return 0, "", ErrorVerficationContextSetup
+		}
 		credentialsNeededForScope := getCredentialsNeededForScope(verificationContext, credentialsByType)
 
 		for _, credential := range credentialsNeededForScope {
@@ -748,7 +792,7 @@ func (v *CredentialVerifier) GenerateToken(clientId, subject, audience string, s
 				}
 			}
 			for _, verificationService := range v.validationServices {
-				ctx := selectValidationContext(verificationService, verificationContext, statusValidationContext)
+				ctx := selectValidationContext(verificationService, verificationContext, statusValidationContext, eidasValidationContext)
 				result, err := verificationService.ValidateVC(credential, ctx)
 				if err != nil {
 					logging.Log().Warnf("Failed to verify credential %s. Err: %v", logging.PrettyPrintObject(credential), err)
@@ -1019,6 +1063,11 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			logging.Log().Warnf("Was not able to create the credential-status validation context. Credential will be rejected. Err: %v", err)
 			return sameDevice, ErrorVerficationContextSetup
 		}
+		eidasValidationContext, err := v.getEidasValidationContext(loginSession.clientId, loginSession.scope, credential.Contents().Types, v.eidasConfig)
+		if err != nil {
+			logging.Log().Warnf("Was not able to create the eIDAS validation context. Credential will be rejected. Err: %v", err)
+			return sameDevice, ErrorVerficationContextSetup
+		}
 		//FIXME make it an error if no policy was checked at all( possible misconfiguration)
 		for _, verificationService := range v.validationServices {
 			if trustedChain {
@@ -1032,7 +1081,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			}
 
 			logging.Log().Debugf("Validate with context %v", verificationContext)
-			ctx := selectValidationContext(verificationService, verificationContext, statusValidationContext)
+			ctx := selectValidationContext(verificationService, verificationContext, statusValidationContext, eidasValidationContext)
 			result, err := verificationService.ValidateVC(credential, ctx)
 			if err != nil {
 				logging.Log().Warnf("Failed to verify credential %s. Err: %v", logging.PrettyPrintObject(credential), err)
@@ -1279,6 +1328,33 @@ func (v *CredentialVerifier) getCredentialStatusValidationContext(clientId strin
 	return CredentialStatusValidationContext{PerType: perType}, nil
 }
 
+// initValidationServices builds the ordered slice of ValidationService
+// instances used by the verifier. When eIDAS is globally disabled the
+// EidasValidationService is omitted so that a nil trustStore can never be
+// reached at runtime (defensive against per-credential eIDAS config being
+// set while the global flag is off).
+func initValidationServices(
+	credentialsVerifier *CredentialValidator,
+	gaiaXValidator *GaiaXRegistryValidationService,
+	trustedParticipant *TrustedParticipantValidationService,
+	trustedIssuer *TrustedIssuerValidationService,
+	statusVerification *CredentialStatusValidationService,
+	eidasValidation *EidasValidationService,
+	eidasEnabled bool,
+) []ValidationService {
+	services := []ValidationService{
+		credentialsVerifier,
+		gaiaXValidator,
+		trustedParticipant,
+		trustedIssuer,
+		statusVerification,
+	}
+	if eidasEnabled {
+		services = append(services, eidasValidation)
+	}
+	return services
+}
+
 // selectValidationContext picks the ValidationContext that the given
 // ValidationService expects. The verifier keeps a heterogeneous slice of
 // services but each service consumes exactly one context shape, so we
@@ -1289,10 +1365,12 @@ func (v *CredentialVerifier) getCredentialStatusValidationContext(clientId strin
 // (CredentialValidator, GaiaXRegistryValidationService,
 // TrustedParticipantValidationService, TrustedIssuerValidationService)
 // keep the exact behaviour they had before Step 6.
-func selectValidationContext(service ValidationService, trustContext TrustRegistriesValidationContext, statusContext CredentialStatusValidationContext) ValidationContext {
+func selectValidationContext(service ValidationService, trustContext TrustRegistriesValidationContext, statusContext CredentialStatusValidationContext, eidasContext EidasValidationContext) ValidationContext {
 	switch service.(type) {
 	case *CredentialStatusValidationService:
 		return statusContext
+	case *EidasValidationService:
+		return eidasContext
 	default:
 		return trustContext
 	}

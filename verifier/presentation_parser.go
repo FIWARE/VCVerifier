@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -1004,6 +1005,13 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 			logging.Log().Warnf("Failed to create credential from SD-JWT claims: %v", err)
 			return nil, err
 		}
+		// Extract and parse x5c certificates from the SD-JWT header so
+		// downstream validators (e.g. eIDAS) can use the already-parsed
+		// certificates directly. Not every SD-JWT carries an x5c header,
+		// so extraction failures are silently ignored here.
+		if x5cCerts := parseX5CCertificates([]byte(vcString)); len(x5cCerts) > 0 {
+			credential.SetX5CCertificates(x5cCerts)
+		}
 		presentation.AddCredentials(credential)
 	}
 
@@ -1056,4 +1064,27 @@ func verifyCnfBinding(cred *common.Credential, holderKey jwk.Key) error {
 	}
 
 	return nil
+}
+
+// parseX5CCertificates extracts and parses the x5c certificate chain from an
+// SD-JWT token's header. Returns the parsed certificates (leaf first, then
+// intermediates), or nil if the token has no x5c header or parsing fails.
+// This function is intentionally lenient: it returns nil instead of an error
+// because not every SD-JWT carries an x5c header.
+func parseX5CCertificates(token []byte) []*x509.Certificate {
+	x5cStrings, err := extractX5CFromToken(token)
+	if err != nil || len(x5cStrings) == 0 {
+		return nil
+	}
+
+	certs := make([]*x509.Certificate, 0, len(x5cStrings))
+	for _, certB64 := range x5cStrings {
+		cert, err := parseCertificate(certB64)
+		if err != nil {
+			logging.Log().Debugf("parseX5CCertificates: skipping unparseable certificate: %v", err)
+			return nil
+		}
+		certs = append(certs, cert)
+	}
+	return certs
 }
