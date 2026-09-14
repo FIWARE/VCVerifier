@@ -110,6 +110,10 @@ func Test_ReadConfig(t *testing.T) {
 					UpdateInterval: 30,
 				},
 				M2M: M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
+				Eidas: Eidas{
+					LotlURL:         "https://ec.europa.eu/tools/lotl/eu-lotl.xml",
+					RefreshInterval: 86400,
+				},
 				Database: Database{
 					Host:    "localhost",
 					Port:    5432,
@@ -161,6 +165,10 @@ func Test_ReadConfig(t *testing.T) {
 					DisableCaller: false,
 				},
 				M2M:        M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
+				Eidas: Eidas{
+					LotlURL:         "https://ec.europa.eu/tools/lotl/eu-lotl.xml",
+					RefreshInterval: 86400,
+				},
 				ConfigRepo: ConfigRepo{UpdateInterval: 30},
 				Database: Database{
 					Host:    "localhost",
@@ -213,6 +221,10 @@ func Test_ReadConfig(t *testing.T) {
 					LogRequests: true,
 				},
 				M2M: M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
+				Eidas: Eidas{
+					LotlURL:         "https://ec.europa.eu/tools/lotl/eu-lotl.xml",
+					RefreshInterval: 86400,
+				},
 				ConfigRepo: ConfigRepo{
 					UpdateInterval: 30,
 				},
@@ -375,4 +387,39 @@ func TestReadConfigHttpsIssuer(t *testing.T) {
 	assert.Equal(t, "https://til-pdc.ebsi.fiware.dev", cred.TrustedIssuersLists[0].Url)
 	assert.Equal(t, "ebsi-v5", cred.TrustedIssuersLists[1].Type)
 	assert.Equal(t, "https://til-v5.ebsi.fiware.dev", cred.TrustedIssuersLists[1].Url)
+}
+
+// TestReadConfig_EidasDefaults verifies that programmatic defaults are applied
+// to the global eIDAS configuration when the YAML file does not specify them.
+func TestReadConfig_EidasDefaults(t *testing.T) {
+	config.Reset()
+	// Use the empty test config — it has no eidas section.
+	gotConfig, err := ReadConfig("data/empty_test.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for empty config")
+
+	// Default LOTL URL must be the official EU LOTL.
+	assert.Equal(t, "https://ec.europa.eu/tools/lotl/eu-lotl.xml", gotConfig.Eidas.LotlURL,
+		"default LotlURL must be the official EU LOTL URL")
+	// Default refresh interval must be 86400 (24 hours).
+	assert.Equal(t, 86400, gotConfig.Eidas.RefreshInterval,
+		"default RefreshInterval must be 86400 seconds (24h)")
+	// Enabled must default to false.
+	assert.False(t, gotConfig.Eidas.Enabled,
+		"Eidas.Enabled must default to false")
+}
+
+// TestReadConfig_EidasExplicitValues verifies that explicit eIDAS configuration
+// values from YAML override the programmatic defaults.
+func TestReadConfig_EidasExplicitValues(t *testing.T) {
+	config.Reset()
+	gotConfig, err := ReadConfig("data/config_test_eidas.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for eIDAS config")
+
+	assert.True(t, gotConfig.Eidas.Enabled, "Eidas.Enabled must be true when set in config")
+	assert.Equal(t, "https://custom-lotl.example.com/lotl.xml", gotConfig.Eidas.LotlURL,
+		"LotlURL must match the configured value")
+	assert.Equal(t, 43200, gotConfig.Eidas.RefreshInterval,
+		"RefreshInterval must match the configured value")
+	assert.Equal(t, []string{"DE", "FR"}, gotConfig.Eidas.Countries,
+		"Countries must match the configured value")
 }

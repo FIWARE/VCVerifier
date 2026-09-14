@@ -124,6 +124,30 @@ type Credential struct {
 	// CredentialStatus when omitted so that the revocation check is active
 	// unless explicitly disabled.
 	CredentialStatus CredentialStatus `json:"credentialStatus" mapstructure:"credentialStatus"`
+	// EidasConfig holds the per-credential-type eIDAS 2.0 trust list validation
+	// configuration. When nil (absent), eIDAS validation is not performed for
+	// this credential type.
+	EidasConfig *EidasConfig `json:"eidasConfig,omitempty" mapstructure:"eidasConfig,omitempty"`
+}
+
+// EidasConfig holds the per-credential-type configuration for eIDAS 2.0 trust
+// list validation. When present on a Credential, eIDAS validation runs in
+// addition to any configured trustedParticipantsLists / trustedIssuersLists.
+type EidasConfig struct {
+	// Enabled toggles eIDAS 2.0 trust list validation for this credential type.
+	Enabled bool `json:"enabled" mapstructure:"enabled"`
+	// AllowedCountries restricts which national trusted lists are consulted.
+	// Empty means all countries from the LOTL are allowed.
+	AllowedCountries []string `json:"allowedCountries,omitempty" mapstructure:"allowedCountries,omitempty"`
+	// RequireQualified restricts to qualified trust services only.
+	// Defaults to true when the pointer is nil (absent).
+	RequireQualified *bool `json:"requireQualified,omitempty" mapstructure:"requireQualified,omitempty"`
+}
+
+// IsRequireQualified returns true when RequireQualified is nil (absent) or
+// explicitly true. The default behaviour is to require qualified trust services.
+func (ec *EidasConfig) IsRequireQualified() bool {
+	return ec.RequireQualified == nil || *ec.RequireQualified
 }
 
 func (c *Credential) UnmarshalJSON(data []byte) error {

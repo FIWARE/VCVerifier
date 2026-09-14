@@ -456,3 +456,49 @@ func TestConstants(t *testing.T) {
 		t.Error("TypeVerifiablePresentation mismatch")
 	}
 }
+
+// TestCredential_Format verifies that the format field can be set and read back
+// for all known credential format constants.
+func TestCredential_Format(t *testing.T) {
+	tests := []struct {
+		name   string
+		format string
+	}{
+		{name: "JWT VC format", format: FormatJWTVC},
+		{name: "LDP VC format", format: FormatLDPVC},
+		{name: "SD-JWT format", format: FormatSDJWT},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cred, err := CreateCredential(CredentialContents{
+				Types: []string{TypeVerifiableCredential},
+			}, CustomFields{})
+			if err != nil {
+				t.Fatalf("Failed to create credential: %v", err)
+			}
+			// Default format must be empty.
+			if cred.Format() != "" {
+				t.Errorf("Expected empty default format, got %q", cred.Format())
+			}
+			cred.SetFormat(tc.format)
+			if cred.Format() != tc.format {
+				t.Errorf("Expected format %q, got %q", tc.format, cred.Format())
+			}
+		})
+	}
+}
+
+// TestCredentialFormatConstants ensures the format constant values match their
+// expected string representations.
+func TestCredentialFormatConstants(t *testing.T) {
+	if FormatJWTVC != "jwt_vc" {
+		t.Errorf("FormatJWTVC mismatch: got %q", FormatJWTVC)
+	}
+	if FormatLDPVC != "ldp_vc" {
+		t.Errorf("FormatLDPVC mismatch: got %q", FormatLDPVC)
+	}
+	if FormatSDJWT != "sd-jwt" {
+		t.Errorf("FormatSDJWT mismatch: got %q", FormatSDJWT)
+	}
+}

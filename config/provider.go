@@ -39,5 +39,20 @@ func ReadConfig(configFile string) (configuration Configuration, err error) {
 		return
 	}
 
+	applyEidasDefaults(&configuration)
+
 	return configuration, nil
+}
+
+// applyEidasDefaults sets programmatic defaults for the global eIDAS
+// configuration. gookit/config and mapstructure do not honour Go default
+// struct tags, so values that must differ from the zero value are applied here
+// after the configuration has been parsed.
+func applyEidasDefaults(cfg *Configuration) {
+	if cfg.Eidas.LotlURL == "" {
+		cfg.Eidas.LotlURL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
+	}
+	if cfg.Eidas.RefreshInterval == 0 {
+		cfg.Eidas.RefreshInterval = 86400 // 24 hours in seconds
+	}
 }

@@ -69,6 +69,10 @@ type CredentialsConfig interface {
 	// Returns a zero-value config (Enabled == false) when nothing is configured
 	// or when the credential type is unknown.
 	GetCredentialStatusConfig(serviceIdentifier string, scope string, credentialType string) (credentialStatus config.CredentialStatus, err error)
+	// GetEidasConfig returns the per-credential eIDAS 2.0 trust list validation
+	// configuration for the given service, scope and credential type. Returns nil
+	// when no eIDAS configuration is set for this credential type.
+	GetEidasConfig(serviceIdentifier string, scope string, credentialType string) (eidasConfig *config.EidasConfig, err error)
 }
 
 // cacheBasedCredentialsConfig is a base implementation of CredentialsConfig that reads
@@ -369,6 +373,23 @@ func (cc cacheBasedCredentialsConfig) GetCredentialStatusConfig(serviceIdentifie
 	}
 	logging.Log().Debugf("No credential status config for %s - %s", serviceIdentifier, credentialType)
 	return config.CredentialStatus{}, nil
+}
+
+// GetEidasConfig returns the per-credential eIDAS 2.0 trust list validation
+// configuration for the given service, scope and credential type. Returns nil
+// when the credential type is unknown or has no eIDAS configuration block.
+func (cc cacheBasedCredentialsConfig) GetEidasConfig(serviceIdentifier string, scope string, credentialType string) (eidasConfig *config.EidasConfig, err error) {
+	logging.Log().Debugf("Get eIDAS config for %s - %s - %s.", serviceIdentifier, scope, credentialType)
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if hit {
+		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
+		if ok {
+			logging.Log().Debugf("Found eIDAS config for %s - %v", credentialType, credential.EidasConfig)
+			return credential.EidasConfig, nil
+		}
+	}
+	logging.Log().Debugf("No eIDAS config for %s - %s", serviceIdentifier, credentialType)
+	return nil, nil
 }
 
 // GetHolderVerification returns holder verification settings for the given credential type.
