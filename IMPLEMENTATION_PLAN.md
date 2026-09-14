@@ -2,7 +2,13 @@
 
 ## Overview
 
-Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing an ETSI TS 119 612 trust list client, a new `eidas` validation service, per-credential-type eIDAS configuration, SD-JWT format enforcement for eIDAS-configured credentials, and removal of the legacy external JAdES/did:elsi validation path. The new trust framework slots into the existing `ValidationService` chain alongside `ebsi`, `ebsi-v5`, and `gaia-x`.
+Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing an ETSI TS 119 612 trust list client, a new `eidas` validation service, per-credential-type eIDAS configuration, SD-JWT format enforcement for eIDAS-configured credentials, and removal of the legacy external JAdES/did:elsi validation path. The eIDAS validation is an **independent, additional validation step** — it does **not** replace or subsume the existing trusted participants / trusted issuers checks. When `eidasConfig` is present on a credential type in the credentials configuration, the eIDAS validation runs **in addition to** any configured `trustedParticipantsLists` and `trustedIssuersLists`.
+
+> **Note on standard references:** The ticket references "ETSI TS 119 602"; this plan targets ETSI TS 119 612 ("EU Trusted Lists"), which is the standard defining the XML schema and trust list structure for the EU trust framework. TS 119 602 does not exist as a published standard — 119 612 is the correct reference.
+
+### Scope — QEAA Extension Checks
+
+The ticket requests "configuration of the Credential Types to be checked for eIDAS2.0 conformance and as extension checks for QEAA". In this plan, QEAA (Qualified Electronic Attestation of Attributes) support is scoped to **trust list–based validation**: checking that the credential's issuer certificate chains up to a qualified trust service listed in the EU Trusted Lists. Additional QEAA validation requirements that may emerge from the EUDI ARF (e.g., attestation schema validation, PID-specific checks, specific OID extension assertions) are **deliberately deferred** to a follow-up ticket once the base eIDAS trust list infrastructure is in place. The `RequireQualified` flag controls whether only qualified trust services (service type URIs ending in `/Qc*`) are accepted.
 
 ## Steps
 
@@ -13,8 +19,9 @@ Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing a
 **What to do:**
 - Create directory `eidas/` with a `trustlist.go` file.
 - Define Go structs matching the ETSI TS 119 612 XML schema for trust lists: `TrustServiceStatusList` (root), `SchemeInformation` (territory, type, operator name, distribution points for LOTL), `TrustServiceProviderList`, `TrustServiceProvider`, `TSPService` (service type, status, digital identities/X.509 certificates, service information extensions).
-- Use Go stdlib `encoding/xml` for parsing — no external XML library needed.
+- Use Go stdlib `encoding/xml` for parsing.
 - Focus on the fields needed for trust validation: service type identifiers (e.g. `http://uri.etsi.org/TrstSvc/Svctype/...` for qualified/non-qualified services), service status URIs (granted, withdrawn, etc.), X.509 certificates embedded in `ServiceDigitalIdentity`, and the `SchemeTerritory` (ISO 3166-1 alpha-2 country code).
+- **Known limitation — XML digital signatures:** ETSI TS 119 612 §5.7 requires trust lists to carry an XMLDSig enveloped signature, and a conformant consumer must verify it before trusting the content. Go's stdlib `encoding/xml` cannot verify XMLDSig. This plan **defers** XMLDSig verification to a follow-up: the initial implementation fetches trust lists over HTTPS only, relies on TLS for transport-level integrity, and logs a warning that XMLDSig verification is not performed. A follow-up ticket should add XMLDSig verification using a dedicated library (e.g. `russellhaering/goxmldsig` or similar) before production deployment. The `TrustListFetcher` should be structured so the signature verification step can be inserted without changing the caller interface.
 - Define constants for relevant ETSI service type URIs (QCert for ESig, QCert for ESeal, qualified and non-qualified certificate authority types per ETSI TS 119 612 §5.5.1).
 - Define constants for service status URIs: `granted`, `withdrawn`, `recognisedatnationallevel`, etc.
 - Write a `ParseTrustList(xmlData []byte) (*TrustServiceStatusList, error)` function.
@@ -71,16 +78,40 @@ Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing a
 
 ---
 
-### Step 3: eIDAS Configuration and SD-JWT Format Enforcement
+### Step 3: eIDAS Configuration and Credential Format Tracking
 
-**Goal:** Extend the configuration model to support eIDAS trust list entries on credentials and enforce that eIDAS-configured credentials use SD-JWT format only.
+**Goal:** Extend the configuration model to support per-credential-type eIDAS configuration as part of the credential config (alongside `trustedParticipantsLists`, `trustedIssuersLists`, etc.) and add credential format tracking through the parsing pipeline.
+
+**Architecture note:** eIDAS is **not** a new trust list type like `ebsi` or `gaia-x`. It is an independent, additional validation step configured per credential type. When `eidasConfig.enabled` is true for a credential type, the eIDAS validation runs **in addition to** whatever `trustedParticipantsLists` / `trustedIssuersLists` are configured for that credential. Do **not** add any `typeEidas` constant to `trustedparticipant.go`.
 
 **What to do:**
-- Add the `eidas` trust list type constant in `verifier/trustedparticipant.go` (alongside `typeEbsi`, `typeEbsiV5`, `typeGaiaX`):
-  ```go
-  const typeEidas = "eidas"
+- Add `eidasConfig` to the `Credential` schema in `api/credentials-config.yaml` as a new optional property on the `Credential` object (line 188), alongside `trustedParticipantsLists`, `holderVerification`, etc.:
+  ```yaml
+  eidasConfig:
+    $ref: '#/components/schemas/EidasConfig'
   ```
-- Extend `config.Credential` in `config/configClient.go` with an optional eIDAS-specific configuration block:
+  Define the `EidasConfig` schema:
+  ```yaml
+  EidasConfig:
+    type: object
+    description: eIDAS 2.0 trust list validation configuration for this credential type.
+    properties:
+      enabled:
+        type: boolean
+        default: false
+        description: Whether eIDAS 2.0 trust list validation is enabled for this credential type.
+      allowedCountries:
+        type: array
+        description: Restrict which national trusted lists are consulted. Empty means all countries from the LOTL are allowed.
+        items:
+          type: string
+        example: ["DE", "FR", "ES"]
+      requireQualified:
+        type: boolean
+        default: true
+        description: Whether to restrict to qualified trust services only.
+  ```
+- Mirror in Go: extend `config.Credential` in `config/configClient.go` with an optional eIDAS-specific configuration block:
   ```go
   type EidasConfig struct {
       // Enabled toggles eIDAS 2.0 trust list validation for this credential type.
@@ -88,37 +119,45 @@ Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing a
       // AllowedCountries restricts which national trusted lists are consulted.
       // Empty means all countries from the LOTL are allowed.
       AllowedCountries []string `json:"allowedCountries,omitempty" mapstructure:"allowedCountries,omitempty"`
-      // RequireQualified restricts to qualified trust services only (default: true).
+      // RequireQualified restricts to qualified trust services only.
+      // Defaults to true — set programmatically, not via struct tag.
       RequireQualified *bool `json:"requireQualified,omitempty" mapstructure:"requireQualified,omitempty"`
   }
   ```
   Add `EidasConfig *EidasConfig` field to the `Credential` struct.
-- Add `eidas` section to the global `config.Configuration` struct:
+- Add `eidas` section to the global `config.Configuration` struct for LOTL fetch settings:
   ```go
   type EidasGlobal struct {
       // LotlUrl is the URL of the EU List of Trusted Lists.
-      LotlUrl string `mapstructure:"lotlUrl" default:"https://ec.europa.eu/tools/lotl/eu-lotl.xml"`
+      LotlUrl string `mapstructure:"lotlUrl"`
       // RefreshInterval is how often (in seconds) to re-fetch trust lists.
-      RefreshInterval int `mapstructure:"refreshInterval" default:"86400"`
+      RefreshInterval int `mapstructure:"refreshInterval"`
       // Countries is the global list of allowed country codes (can be overridden per-credential).
       Countries []string `mapstructure:"countries,omitempty"`
   }
   ```
-- Add SD-JWT format enforcement: in the credential validation path (`verifier/verifier.go`), before running validation services for a credential whose `EidasConfig.Enabled` is true, check that the credential was parsed from an SD-JWT presentation. The `common.Credential` or `common.Presentation` needs a way to indicate its source format. Options:
-  - Add a `Format` field to `common.Credential` (e.g. `"sd-jwt"`, `"jwt_vc"`, `"ldp_vc"`) set during parsing in `presentation_parser.go`.
-  - Check the format in the eIDAS validation service and return an error (HTTP 400) if the credential is not SD-JWT.
-- In `presentation_parser.go`, set the format on each credential during parsing:
+  **Important:** Do not use `default:"..."` struct tags — gookit/config and mapstructure do not honor them. Instead, set defaults programmatically after `ReadConfig()` returns:
+  ```go
+  if cfg.Eidas.LotlUrl == "" {
+      cfg.Eidas.LotlUrl = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
+  }
+  if cfg.Eidas.RefreshInterval == 0 {
+      cfg.Eidas.RefreshInterval = 86400
+  }
+  ```
+  Similarly, `RequireQualified` defaults to `true` when the pointer is nil.
+- Add credential format tracking: add a `Format` field to `common.Credential` (e.g. `"sd-jwt"`, `"jwt_vc"`, `"ldp_vc"`) set during parsing in `presentation_parser.go`:
   - `parseJWTPresentation` → `"jwt_vc"`
   - `parseJSONLDPresentation` → `"ldp_vc"`
   - `ParseWithSdJwt` → `"sd-jwt"`
+  Note: SD-JWT format enforcement itself is **not** done here — it belongs in the `EidasValidationService.ValidateVC` (Step 4), where the eIDAS config is consulted and where the rejection error originates.
 - Add the `CredentialsConfig` interface method to retrieve eIDAS config: `GetEidasConfig(serviceIdentifier, scope, credentialType string) (*config.EidasConfig, error)`.
-- Validate at config load time that eIDAS-enabled credential types are only used with SD-JWT presentation definitions (warn if the presentation definition format filter doesn't include SD-JWT).
-- Add unit tests for config parsing and SD-JWT enforcement.
+- Add unit tests for config parsing, format tracking, and eIDAS config retrieval.
 
 **Files:**
-- `config/config.go` (modified — add `EidasGlobal` struct and field)
+- `api/credentials-config.yaml` (modified — add `eidasConfig` property and `EidasConfig` schema)
+- `config/config.go` (modified — add `EidasGlobal` struct and field, programmatic defaults)
 - `config/configClient.go` (modified — add `EidasConfig` struct and field on `Credential`)
-- `verifier/trustedparticipant.go` (modified — add `typeEidas` constant)
 - `common/credential.go` or equivalent (modified — add Format field if not present)
 - `verifier/presentation_parser.go` (modified — set format on credentials during parsing)
 - `verifier/credentialsConfig.go` (modified — add `GetEidasConfig` method to interface)
@@ -127,15 +166,16 @@ Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing a
 
 **Acceptance criteria:**
 - `go test ./... -v` passes.
-- Configuration with `eidas.enabled: true` on a credential type is parsed correctly.
-- Credential format is tracked through the parsing pipeline.
-- An eIDAS-configured credential presented as JSON-LD or plain JWT is rejected before trust validation runs.
+- `eidasConfig` is defined in `api/credentials-config.yaml` as part of the `Credential` schema.
+- Configuration with `eidasConfig.enabled: true` on a credential type is parsed correctly.
+- Credential format is tracked through the parsing pipeline (but format enforcement is deferred to Step 4).
+- Programmatic defaults are applied for global eIDAS settings.
 
 ---
 
 ### Step 4: eIDAS Validation Service
 
-**Goal:** Implement the `EidasValidationService` that validates SD-JWT credentials against the cached ETSI trust lists.
+**Goal:** Implement the `EidasValidationService` that validates SD-JWT credentials against the cached ETSI trust lists. This service runs **in addition to** any configured trusted participants / trusted issuers checks — it does not replace them.
 
 **What to do:**
 - Create `verifier/eidas_validation.go` with `EidasValidationService`:
@@ -148,19 +188,34 @@ Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing a
 - The `ValidateVC` method:
   1. Extract the validation context to get eIDAS config for the credential's type.
   2. If no eIDAS config is enabled for this credential type, return `true` (pass-through, same pattern as other services when no config is specified).
-  3. Enforce SD-JWT format — reject with a descriptive error if the credential was not parsed from SD-JWT.
-  4. Extract the issuer's X.509 certificate from the SD-JWT's key binding or header (the `x5c` header parameter).
+  3. **Enforce SD-JWT format** — check the credential's `Format` field (set in Step 3). If the credential was not parsed from SD-JWT (`Format != "sd-jwt"`), reject with a descriptive error (HTTP 400). This is the **single location** for SD-JWT format enforcement — Step 3 only tracks the format, it does not enforce it.
+  4. Extract the issuer's X.509 certificate from the SD-JWT's `x5c` header parameter. Note: check whether `extractX5CFromToken()` in `jwt_proof_checker.go` (currently used by the did:elsi path) can be reused or adapted before Step 5 deletes the elsi code.
   5. Query the `TrustStore` for matching trusted services, filtered by:
-     - Country codes from the credential's `EidasConfig.AllowedCountries` (or global config).
+     - Country codes from the credential's `EidasConfig.AllowedCountries` (or global config if empty).
      - Service type (qualified vs non-qualified, based on `RequireQualified`).
      - Service status (`granted` only).
-  6. Verify the issuer's certificate against the trust service's certificates (certificate chain matching).
-  7. Return `true` if a matching trusted service is found, `false` with an appropriate error otherwise.
+  6. **Verify the issuer's certificate against the trust list using PKIX chain building.** Real eIDAS trust lists publish CA certificates, not leaf certificates, so simple byte comparison will not work for most issuers. Use Go's `x509.Certificate.Verify()` with an `x509.VerifyOptions` whose `Roots` pool is populated from the trust service's X.509 certificates:
+     ```go
+     roots := x509.NewCertPool()
+     for _, cert := range trustedService.Certificates {
+         roots.AddCert(cert)
+     }
+     opts := x509.VerifyOptions{
+         Roots: roots,
+         // KeyUsages filtered as appropriate for the service type
+     }
+     _, err := issuerCert.Verify(opts)
+     ```
+     If the `x5c` header contains intermediate certificates, include them in `opts.Intermediates`. A successful `Verify()` call means the issuer certificate chains up to a trusted CA in the trust list.
+  7. Return `true` if a matching trusted service is found and certificate validation passes, `false` with an appropriate error otherwise.
 - Create a new `EidasValidationContext` (or extend `TrustRegistriesValidationContext`) to carry eIDAS config per-credential-type into the validation service. Update `selectValidationContext` in `verifier.go` to route the eIDAS context to the eIDAS service.
 - Wire the service into `InitVerifier` in `verifier.go`:
   - Initialize the `TrustListFetcher` from config.
-  - Add `&eidasValidationService` to the `validationServices` slice (after trusted issuer, before credential status).
-- Add unit tests in `verifier/eidas_validation_test.go` with mock `TrustStore`.
+  - Add `&eidasValidationService` to the `validationServices` slice. This runs independently of the trusted issuers / trusted participants services — both run for a given credential if both are configured.
+- Add unit tests in `verifier/eidas_validation_test.go` with mock `TrustStore`, covering:
+  - SD-JWT format rejection for JWT and JSON-LD credentials.
+  - Certificate chain validation with CA certs (not just leaf matching).
+  - Pass-through for credential types without eIDAS config.
 
 **Files:**
 - `verifier/eidas_validation.go` (new)
@@ -173,6 +228,8 @@ Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing a
 - eIDAS validation service correctly validates/rejects credentials based on trust list data.
 - Service is a no-op (pass-through) for credential types without eIDAS config.
 - SD-JWT format is enforced with clear error messaging.
+- Certificate validation uses PKIX chain building (`x509.Certificate.Verify()`), not byte comparison.
+- eIDAS validation runs independently of and in addition to trusted participants / trusted issuers checks.
 
 ---
 
@@ -273,7 +330,7 @@ Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing a
     countries: []
   ```
 - Add config example showing per-credential eIDAS configuration in service scopes.
-- Update the OpenAPI spec `api/credentials-config.yaml` if needed to add `eidasConfig` to the credential schema.
+- Verify that `api/credentials-config.yaml` has the `eidasConfig` property on the `Credential` schema (added in Step 3).
 - Run the full test suite: `go test ./... -v`.
 
 **Files:**
@@ -282,7 +339,7 @@ Add eIDAS 2.0 conformant credential verification to VCVerifier by implementing a
 - `config/data/eidas-basic.yaml` (new)
 - `config/data/eidas-countries.yaml` (new)
 - `server.yaml` (modified — add eidas section)
-- `api/credentials-config.yaml` (modified if needed)
+- `api/credentials-config.yaml` (verified — `eidasConfig` added in Step 3)
 
 **Acceptance criteria:**
 - `go test ./... -v` passes, including all new integration tests.
