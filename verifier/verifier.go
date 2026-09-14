@@ -473,14 +473,15 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		clock:             clock,
 		tokenSigner:       common.JwtTokenSigner{},
 		credentialsConfig: credentialsConfig,
-		validationServices: []ValidationService{
+		validationServices: initValidationServices(
 			&credentialsVerifier,
 			&externalGaiaXValidator,
 			&trustedParticipantVerificationService,
 			&trustedIssuerVerificationService,
 			&credentialStatusVerificationService,
 			&eidasValidationService,
-		},
+			config.Eidas.Enabled,
+		),
 		signingAlgorithm:       verifierConfig.KeyAlgorithm,
 		supportedRequestModes:  verifierConfig.SupportedModes,
 		fallbackRequestMode:    verifierConfig.RequestMode,
@@ -1325,6 +1326,33 @@ func (v *CredentialVerifier) getCredentialStatusValidationContext(clientId strin
 		perType[credentialType] = statusConfig
 	}
 	return CredentialStatusValidationContext{PerType: perType}, nil
+}
+
+// initValidationServices builds the ordered slice of ValidationService
+// instances used by the verifier. When eIDAS is globally disabled the
+// EidasValidationService is omitted so that a nil trustStore can never be
+// reached at runtime (defensive against per-credential eIDAS config being
+// set while the global flag is off).
+func initValidationServices(
+	credentialsVerifier *CredentialValidator,
+	gaiaXValidator *GaiaXRegistryValidationService,
+	trustedParticipant *TrustedParticipantValidationService,
+	trustedIssuer *TrustedIssuerValidationService,
+	statusVerification *CredentialStatusValidationService,
+	eidasValidation *EidasValidationService,
+	eidasEnabled bool,
+) []ValidationService {
+	services := []ValidationService{
+		credentialsVerifier,
+		gaiaXValidator,
+		trustedParticipant,
+		trustedIssuer,
+		statusVerification,
+	}
+	if eidasEnabled {
+		services = append(services, eidasValidation)
+	}
+	return services
 }
 
 // selectValidationContext picks the ValidationContext that the given

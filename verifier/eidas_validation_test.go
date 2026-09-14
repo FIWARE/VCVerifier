@@ -6,9 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -92,51 +89,6 @@ func generateTestLeaf(t *testing.T, ca testCA) testLeaf {
 	return testLeaf{cert: cert, certDER: certDER, key: key}
 }
 
-// buildFakeSDJWT constructs a minimal JWT-shaped token string with an x5c
-// header for testing extractX5CFromToken. The payload and signature are
-// stubs — only the header is meaningful.
-func buildFakeSDJWT(t *testing.T, certDERs ...[]byte) []byte {
-	t.Helper()
-
-	x5c := make([]string, len(certDERs))
-	for i, der := range certDERs {
-		x5c[i] = base64.StdEncoding.EncodeToString(der)
-	}
-
-	header := map[string]interface{}{
-		"alg": "ES256",
-		"typ": "vc+sd-jwt",
-		"x5c": x5c,
-	}
-	headerJSON, err := json.Marshal(header)
-	require.NoError(t, err)
-
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
-	payloadB64 := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"test"}`))
-	signatureB64 := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
-
-	return []byte(headerB64 + "." + payloadB64 + "." + signatureB64)
-}
-
-// buildFakeSDJWTNoX5C constructs a minimal JWT-shaped token string without an
-// x5c header.
-func buildFakeSDJWTNoX5C(t *testing.T) []byte {
-	t.Helper()
-
-	header := map[string]interface{}{
-		"alg": "ES256",
-		"typ": "vc+sd-jwt",
-	}
-	headerJSON, err := json.Marshal(header)
-	require.NoError(t, err)
-
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
-	payloadB64 := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"test"}`))
-	signatureB64 := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
-
-	return []byte(headerB64 + "." + payloadB64 + "." + signatureB64)
-}
-
 // setupTrustStore creates a TrustStore populated with the given services for
 // a specific country code.
 func setupTrustStore(t *testing.T, countryCode string, services []eidas.TrustedService) *eidas.TrustStore {
@@ -146,18 +98,20 @@ func setupTrustStore(t *testing.T, countryCode string, services []eidas.TrustedS
 	return store
 }
 
-// makeCredential creates a Credential with the given types, format, and
-// optional raw token bytes. Panics on error (test helper only).
-func makeEidasTestCredential(types []string, format string, rawToken []byte) *common.Credential {
+// makeEidasTestCredential creates a Credential with the given types, format,
+// and optional pre-parsed x5c certificates. The certificates are set directly
+// on the credential — the same way the presentation parser populates them
+// during SD-JWT parsing.
+func makeEidasTestCredential(types []string, format string, certs []*x509.Certificate) *common.Credential {
 	cred, err := common.CreateCredential(common.CredentialContents{
 		Types: types,
 	}, nil)
 	if err != nil {
-		panic(fmt.Sprintf("makeCredential: %v", err))
+		panic("makeEidasTestCredential: " + err.Error())
 	}
 	cred.SetFormat(format)
-	if rawToken != nil {
-		cred.SetRawToken(rawToken)
+	if len(certs) > 0 {
+		cred.SetX5CCertificates(certs)
 	}
 	return cred
 }
@@ -250,7 +204,7 @@ func TestEidasValidation_FormatRejection(t *testing.T) {
 	}
 }
 
-func TestEidasValidation_NoRawToken(t *testing.T) {
+func TestEidasValidation_NoCertificates(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	service := &EidasValidationService{trustStore: eidas.NewTrustStore()}
@@ -261,31 +215,12 @@ func TestEidasValidation_NoRawToken(t *testing.T) {
 		},
 	}
 
-	// SD-JWT format but no raw token stored.
+	// SD-JWT format but no x5c certificates set (simulates a token without x5c header).
 	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, nil)
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.False(t, result)
-	assert.ErrorIs(t, err, ErrorEidasNoRawToken)
-}
-
-func TestEidasValidation_NoX5CHeader(t *testing.T) {
-	logging.Configure(LOGGING_CONFIG)
-
-	service := &EidasValidationService{trustStore: eidas.NewTrustStore()}
-
-	ctx := EidasValidationContext{
-		PerType: map[string]*configModel.EidasConfig{
-			"EidasCredential": {Enabled: true},
-		},
-	}
-
-	rawToken := buildFakeSDJWTNoX5C(t)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
-
-	result, err := service.ValidateVC(cred, ctx)
-	assert.False(t, result)
-	assert.ErrorIs(t, err, ErrorEidasNoX5CHeader)
+	assert.ErrorIs(t, err, ErrorEidasNoCertificates)
 }
 
 // TestEidasValidation_CertificateChainSuccess verifies the happy path: a leaf
@@ -314,8 +249,7 @@ func TestEidasValidation_CertificateChainSuccess(t *testing.T) {
 		},
 	}
 
-	rawToken := buildFakeSDJWT(t, leaf.certDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.NoError(t, err)
@@ -350,8 +284,7 @@ func TestEidasValidation_UntrustedIssuer(t *testing.T) {
 		},
 	}
 
-	rawToken := buildFakeSDJWT(t, leaf.certDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.False(t, result)
@@ -392,8 +325,7 @@ func TestEidasValidation_QualifiedOnlyFilter(t *testing.T) {
 		},
 	}
 
-	rawToken := buildFakeSDJWT(t, leaf.certDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.False(t, result, "should reject when only non-qualified services exist but RequireQualified is true")
@@ -432,8 +364,7 @@ func TestEidasValidation_NonQualifiedAllowed(t *testing.T) {
 		},
 	}
 
-	rawToken := buildFakeSDJWT(t, leaf.certDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.NoError(t, err)
@@ -468,8 +399,7 @@ func TestEidasValidation_CountryFilter(t *testing.T) {
 		},
 	}
 
-	rawToken := buildFakeSDJWT(t, leaf.certDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.False(t, result, "should reject when trusted CA is in a non-allowed country")
@@ -504,8 +434,7 @@ func TestEidasValidation_GlobalCountryFallback(t *testing.T) {
 		GlobalCountries: []string{"ES"},
 	}
 
-	rawToken := buildFakeSDJWT(t, leaf.certDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.NoError(t, err)
@@ -539,8 +468,7 @@ func TestEidasValidation_NoCountryFilterSearchesAll(t *testing.T) {
 		// No global countries either.
 	}
 
-	rawToken := buildFakeSDJWT(t, leaf.certDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.NoError(t, err)
@@ -607,9 +535,10 @@ func TestEidasValidation_IntermediateCertificates(t *testing.T) {
 		},
 	}
 
-	// x5c contains leaf + intermediate (root is the trust anchor in the store).
-	rawToken := buildFakeSDJWT(t, leafDER, intermediateDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
+	// x5c chain: leaf + intermediate (root is the trust anchor in the store).
+	leafCert, err := x509.ParseCertificate(leafDER)
+	require.NoError(t, err)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leafCert, intermediateCert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.NoError(t, err)
@@ -687,8 +616,7 @@ func TestEidasValidation_MultipleCredentialTypes(t *testing.T) {
 		},
 	}
 
-	rawToken := buildFakeSDJWT(t, leaf.certDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "SpecificType"}, common.FormatSDJWT, rawToken)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "SpecificType"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.NoError(t, err)
@@ -713,8 +641,7 @@ func TestEidasValidation_EmptyTrustStore(t *testing.T) {
 		},
 	}
 
-	rawToken := buildFakeSDJWT(t, leaf.certDER)
-	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, rawToken)
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
 
 	result, err := service.ValidateVC(cred, ctx)
 	assert.False(t, result)

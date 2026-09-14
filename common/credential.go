@@ -1,6 +1,7 @@
 package common
 
 import (
+	"crypto/x509"
 	"encoding/json"
 	"time"
 )
@@ -160,10 +161,12 @@ type Credential struct {
 	// extracted from (e.g. "jwt_vc", "ldp_vc", "sd-jwt"). Set during parsing
 	// by the presentation parser.
 	format string
-	// rawToken stores the original JWT or SD-JWT bytes of this credential,
-	// when available. Used by the eIDAS validation service to extract x5c
-	// headers for certificate chain validation.
-	rawToken []byte
+	// x5cCertificates holds the parsed X.509 certificate chain from the
+	// SD-JWT's x5c header, when available. The first entry is the leaf
+	// (issuer) certificate; subsequent entries are intermediates.
+	// Populated during SD-JWT parsing so downstream validators (e.g. eIDAS)
+	// can use the already-parsed certificates directly.
+	x5cCertificates []*x509.Certificate
 }
 
 // Contents returns the structured content of the credential.
@@ -200,18 +203,20 @@ func (c *Credential) SetFormat(format string) {
 	c.format = format
 }
 
-// RawToken returns the original JWT or SD-JWT bytes of this credential, if
-// available. Returns nil when the credential was not parsed from a JWT/SD-JWT
-// or when the raw bytes were not preserved.
-func (c *Credential) RawToken() []byte {
-	return c.rawToken
+// X5CCertificates returns the parsed X.509 certificate chain from the
+// SD-JWT's x5c header, if available. The first entry is the leaf (issuer)
+// certificate; subsequent entries are intermediates. Returns nil when the
+// credential was not parsed from an SD-JWT or when no x5c header was present.
+func (c *Credential) X5CCertificates() []*x509.Certificate {
+	return c.x5cCertificates
 }
 
-// SetRawToken stores the original JWT or SD-JWT bytes of this credential.
-// Called by the presentation parser to preserve the raw token for downstream
-// validation (e.g. eIDAS x5c certificate extraction).
-func (c *Credential) SetRawToken(token []byte) {
-	c.rawToken = token
+// SetX5CCertificates stores the parsed X.509 certificate chain extracted from
+// the SD-JWT's x5c header. Called by the presentation parser during SD-JWT
+// parsing so downstream validators (e.g. eIDAS) can use the already-parsed
+// certificates directly without re-parsing the raw token.
+func (c *Credential) SetX5CCertificates(certs []*x509.Certificate) {
+	c.x5cCertificates = certs
 }
 
 // ToRawJSON converts the credential to a JSON map representation.

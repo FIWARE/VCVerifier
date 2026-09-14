@@ -3,13 +3,11 @@ package verifier
 import (
 	"crypto/x509"
 	"errors"
-	"fmt"
 
+	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/eidas"
 	"github.com/fiware/VCVerifier/logging"
-
-	configModel "github.com/fiware/VCVerifier/config"
 )
 
 // --- Error variables for eIDAS validation ---
@@ -18,17 +16,9 @@ import (
 // validation enabled was not presented in SD-JWT format.
 var ErrorEidasSDJWTRequired = errors.New("eidas_validation_requires_sd_jwt_format")
 
-// ErrorEidasNoX5CHeader is returned when an SD-JWT credential does not
-// contain an x5c header with the issuer's certificate.
-var ErrorEidasNoX5CHeader = errors.New("eidas_no_x5c_certificate_in_header")
-
-// ErrorEidasCertificateParseFailed is returned when the x5c certificate in
-// the SD-JWT header cannot be parsed.
-var ErrorEidasCertificateParseFailed = errors.New("eidas_certificate_parse_failed")
-
-// ErrorEidasNoRawToken is returned when the credential does not carry raw
-// token bytes needed for x5c extraction.
-var ErrorEidasNoRawToken = errors.New("eidas_no_raw_token_available")
+// ErrorEidasNoCertificates is returned when the credential does not carry
+// parsed x5c certificates needed for trust list validation.
+var ErrorEidasNoCertificates = errors.New("eidas_no_x5c_certificates_available")
 
 // ErrorEidasUntrustedIssuer is returned when the issuer's certificate does
 // not chain up to any trusted service in the eIDAS trust list.
@@ -128,41 +118,18 @@ func (evs *EidasValidationService) ValidateVC(verifiableCredential *common.Crede
 		return false, ErrorEidasSDJWTRequired
 	}
 
-	// --- Extract x5c certificates from raw SD-JWT ---
-	rawToken := verifiableCredential.RawToken()
-	if len(rawToken) == 0 {
-		logging.Log().Warn("EidasValidationService: credential has no raw token for x5c extraction")
-		return false, ErrorEidasNoRawToken
+	// --- Use pre-parsed x5c certificates from SD-JWT header ---
+	// The certificates are extracted and parsed during SD-JWT parsing in the
+	// presentation parser, so we use them directly here instead of
+	// re-parsing the raw token.
+	x5cCerts := verifiableCredential.X5CCertificates()
+	if len(x5cCerts) == 0 {
+		logging.Log().Warn("EidasValidationService: credential has no x5c certificates")
+		return false, ErrorEidasNoCertificates
 	}
 
-	x5cStrings, err := extractX5CFromToken(rawToken)
-	if err != nil {
-		logging.Log().Warnf("EidasValidationService: failed to extract x5c from token: %v", err)
-		return false, ErrorEidasNoX5CHeader
-	}
-
-	if len(x5cStrings) == 0 {
-		logging.Log().Warn("EidasValidationService: x5c header is empty")
-		return false, ErrorEidasNoX5CHeader
-	}
-
-	// Parse the leaf certificate (first entry in x5c).
-	leafCert, err := parseCertificate(x5cStrings[0])
-	if err != nil {
-		logging.Log().Warnf("EidasValidationService: failed to parse leaf certificate: %v", err)
-		return false, ErrorEidasCertificateParseFailed
-	}
-
-	// Parse intermediate certificates (remaining x5c entries), if any.
-	var intermediates []*x509.Certificate
-	for i := 1; i < len(x5cStrings); i++ {
-		intermCert, err := parseCertificate(x5cStrings[i])
-		if err != nil {
-			logging.Log().Warnf("EidasValidationService: failed to parse intermediate certificate at index %d: %v", i, err)
-			return false, ErrorEidasCertificateParseFailed
-		}
-		intermediates = append(intermediates, intermCert)
-	}
+	leafCert := x5cCerts[0]
+	intermediates := x5cCerts[1:]
 
 	// --- Determine service type filter ---
 	var serviceTypes []string
@@ -280,11 +247,3 @@ func (v *CredentialVerifier) getEidasValidationContext(clientId string, scope st
 	}, nil
 }
 
-// serviceTypeNames returns a human-readable summary of the service types used
-// for eIDAS validation. Useful for error messages and logging.
-func serviceTypeNames(requireQualified bool) string {
-	if requireQualified {
-		return fmt.Sprintf("qualified CA types (%v)", qualifiedServiceTypes)
-	}
-	return fmt.Sprintf("all CA types (%v)", allCertificateServiceTypes)
-}
