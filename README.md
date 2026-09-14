@@ -21,7 +21,6 @@ VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer 
         * [Database](#database)
         * [Refresh Token](#refresh-token)
         * [ConfigServer](#configserver)
-    * [WaltID SSIKit](#waltid-ssikit)
 * [Usage](#usage)
     * [Frontend-Integration](#frontend-integration)
     * [REST-Example](#rest-example)
@@ -52,7 +51,7 @@ The following actions occur in the interaction:
     1. the Verifier retrieves the Scope-Information from the Config-Service
 4. The user approves the wallet's interaction with the VCVerifier and the VerifiableCredential is presented via the OIDC4VP-flow.
 5. VCVerifier verifies the credential:
-    1. at WaltID-SSIKit with the configured set of policies
+    1. with the configured set of policies
     2. (Optional) if a Gaia-X compliant chain is provided
     3. that the credential is registered in the configured trusted-participants-registries
     4. that the issuer is allowed to issuer the credential with the given claims by one of the configured trusted-issuers-list(s)
