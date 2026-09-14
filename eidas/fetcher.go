@@ -152,13 +152,17 @@ func (f *TrustListFetcher) Store() *TrustStore {
 // Start begins the background refresh goroutine. It performs an initial fetch
 // immediately and then refreshes at the configured interval.
 //
-// Calling Start on an already-running fetcher is a no-op.
+// Calling Start on an already-running fetcher is a no-op. A stopped fetcher
+// may be restarted by calling Start again.
 func (f *TrustListFetcher) Start(ctx context.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.running {
 		return
 	}
+	// Recreate channels so a previously stopped fetcher can be restarted.
+	f.stopCh = make(chan struct{})
+	f.stopped = make(chan struct{})
 	f.running = true
 	go f.refreshLoop(ctx)
 }
@@ -267,7 +271,9 @@ func (f *TrustListFetcher) filterDistributionPoints(points []DistributionPoint) 
 }
 
 // fetchNationalTLs fetches and parses the national trust lists concurrently
-// using a bounded worker pool, then updates the TrustStore.
+// using a bounded worker pool, then updates the TrustStore. Countries that
+// were previously loaded but are no longer present in the current set of
+// distribution points are pruned from the store.
 func (f *TrustListFetcher) fetchNationalTLs(ctx context.Context, points []DistributionPoint) {
 	type fetchResult struct {
 		countryCode string
@@ -311,6 +317,10 @@ func (f *TrustListFetcher) fetchNationalTLs(ctx context.Context, points []Distri
 		close(results)
 	}()
 
+	// Track which countries were successfully refreshed so stale entries
+	// can be pruned afterward.
+	refreshedCountries := make(map[string]struct{}, len(points))
+
 	// Collect results and update the store.
 	for res := range results {
 		if res.err != nil {
@@ -319,7 +329,19 @@ func (f *TrustListFetcher) fetchNationalTLs(ctx context.Context, points []Distri
 			continue
 		}
 		f.store.Update(res.countryCode, res.services)
+		refreshedCountries[res.countryCode] = struct{}{}
 	}
+
+	// Build the set of countries that should be in the store: all countries
+	// from the current distribution points (even those that failed to fetch,
+	// so we don't prune on transient errors).
+	expectedCountries := make(map[string]struct{}, len(points))
+	for _, p := range points {
+		expectedCountries[p.SchemeTerritory] = struct{}{}
+	}
+
+	// Remove countries no longer present in the LOTL or allowed-countries set.
+	f.store.RemoveCountriesNotIn(expectedCountries)
 }
 
 // fetchAndParseNationalTL fetches a single national trust list and extracts
@@ -389,9 +411,9 @@ func parseCacheControlMaxAge(header string) time.Duration {
 	}
 
 	for _, directive := range strings.Split(header, ",") {
-		directive = strings.TrimSpace(directive)
-		if strings.HasPrefix(strings.ToLower(directive), cacheControlMaxAge) {
-			valueStr := directive[len(cacheControlMaxAge):]
+		lower := strings.TrimSpace(strings.ToLower(directive))
+		if strings.HasPrefix(lower, cacheControlMaxAge) {
+			valueStr := lower[len(cacheControlMaxAge):]
 			seconds, err := strconv.ParseInt(valueStr, 10, 64)
 			if err == nil && seconds > 0 {
 				return time.Duration(seconds) * time.Second

@@ -84,6 +84,8 @@ The ticket requests "configuration of the Credential Types to be checked for eID
 
 **Architecture note:** eIDAS is **not** a new trust list type like `ebsi` or `gaia-x`. It is an independent, additional validation step configured per credential type. When `eidasConfig.enabled` is true for a credential type, the eIDAS validation runs **in addition to** whatever `trustedParticipantsLists` / `trustedIssuersLists` are configured for that credential. Do **not** add any `typeEidas` constant to `trustedparticipant.go`.
 
+**Global feature gate:** The global `eidas.enabled` flag in `config.Configuration` (added in Step 2) controls whether the eIDAS feature is active for the whole verifier. When `eidas.enabled` is `false` (the default), the trust list fetcher must **not** be started (no background resource consumption), and any per-credential `eidasConfig.enabled: true` in the credentials configuration must be **rejected with HTTP 400** during config validation/loading, with an error message indicating that the global eIDAS feature is disabled. This validation must be added to the `GetEidasConfig` method (or wherever per-credential eIDAS config is resolved) and to the Credentials Config Service's create/update endpoints.
+
 **What to do:**
 - Add `eidasConfig` to the `Credential` schema in `api/credentials-config.yaml` as a new optional property on the `Credential` object (line 188), alongside `trustedParticipantsLists`, `holderVerification`, etc.:
   ```yaml
@@ -210,7 +212,7 @@ The ticket requests "configuration of the Credential Types to be checked for eID
   7. Return `true` if a matching trusted service is found and certificate validation passes, `false` with an appropriate error otherwise.
 - Create a new `EidasValidationContext` (or extend `TrustRegistriesValidationContext`) to carry eIDAS config per-credential-type into the validation service. Update `selectValidationContext` in `verifier.go` to route the eIDAS context to the eIDAS service.
 - Wire the service into `InitVerifier` in `verifier.go`:
-  - Initialize the `TrustListFetcher` from config.
+  - **Check `config.Eidas.Enabled` first.** Only initialize the `TrustListFetcher` and start background refresh when the global flag is true. When false, do **not** create the fetcher — no background goroutines, no HTTP requests, no memory for the trust store.
   - Add `&eidasValidationService` to the `validationServices` slice. This runs independently of the trusted issuers / trusted participants services — both run for a given credential if both are configured.
 - Add unit tests in `verifier/eidas_validation_test.go` with mock `TrustStore`, covering:
   - SD-JWT format rejection for JWT and JSON-LD credentials.

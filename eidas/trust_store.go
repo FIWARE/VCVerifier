@@ -34,7 +34,7 @@ func (ts *TrustStore) Update(countryCode string, services []TrustedService) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.services[countryCode] = services
-	logging.Log().Infof("TrustStore: updated %d services for country %s", len(services), countryCode)
+	logging.Log().Debugf("TrustStore: updated %d services for country %s", len(services), countryCode)
 }
 
 // Clear removes all cached trust services.
@@ -42,6 +42,21 @@ func (ts *TrustStore) Clear() {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.services = make(map[string][]TrustedService)
+}
+
+// RemoveCountriesNotIn removes trust services for any country code that is
+// not present in the given set. This is used during refresh to prune stale
+// entries for countries that were removed from the LOTL or the allowed-countries
+// configuration.
+func (ts *TrustStore) RemoveCountriesNotIn(keepCountries map[string]struct{}) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	for code := range ts.services {
+		if _, keep := keepCountries[code]; !keep {
+			logging.Log().Debugf("TrustStore: pruning stale country %s", code)
+			delete(ts.services, code)
+		}
+	}
 }
 
 // GetTrustedServices returns trust services matching the given filters.

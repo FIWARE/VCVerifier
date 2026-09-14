@@ -65,6 +65,7 @@ type Configuration struct {
 	Logging      logging.LoggingConfig `mapstructure:"logging"`
 	ConfigRepo   ConfigRepo            `mapstructure:"configRepo"`
 	M2M          M2M                   `mapstructure:"m2m"`
+	Eidas        Eidas                 `mapstructure:"eidas"`
 	Elsi         Elsi                  `mapstructure:"elsi"`
 	Database     Database              `mapstructure:"database"`
 	ConfigServer ConfigServer          `mapstructure:"configServer"`
@@ -257,6 +258,16 @@ type ClientIdentification struct {
 	CertificatePath string `mapstructure:"certificatePath"`
 	// Kid used when key certificate does not include it. If both are missing, id is used
 	Kid string `mapstructure:"kid"`
+}
+
+// Eidas holds the global configuration for the eIDAS 2.0 trust list feature.
+// When Enabled is false (the default), the trust list fetcher is not started and
+// any per-credential eIDAS configuration is rejected at config validation time.
+type Eidas struct {
+	// Enabled controls whether the eIDAS 2.0 trust list feature is active.
+	// When false, no trust lists are fetched and per-credential eIDAS configs
+	// are rejected with an error.
+	Enabled bool `mapstructure:"enabled" default:"false"`
 }
 
 type Elsi struct {

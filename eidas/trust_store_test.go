@@ -106,6 +106,32 @@ func TestTrustStore_Clear(t *testing.T) {
 	assert.Empty(t, store.CountryCodesLoaded())
 }
 
+func TestTrustStore_RemoveCountriesNotIn(t *testing.T) {
+	store := NewTrustStore()
+	store.Update("DE", []TrustedService{{CountryCode: "DE", ServiceName: "S1"}})
+	store.Update("FR", []TrustedService{{CountryCode: "FR", ServiceName: "S2"}})
+	store.Update("ES", []TrustedService{{CountryCode: "ES", ServiceName: "S3"}})
+	assert.Equal(t, 3, store.ServiceCount())
+
+	// Keep only DE and ES.
+	keep := map[string]struct{}{"DE": {}, "ES": {}}
+	store.RemoveCountriesNotIn(keep)
+
+	assert.Equal(t, 2, store.ServiceCount())
+	assert.ElementsMatch(t, []string{"DE", "ES"}, store.CountryCodesLoaded())
+	assert.Empty(t, store.GetTrustedServices("FR", nil, false))
+}
+
+func TestTrustStore_RemoveCountriesNotIn_EmptyKeepRemovesAll(t *testing.T) {
+	store := NewTrustStore()
+	store.Update("DE", []TrustedService{{CountryCode: "DE", ServiceName: "S1"}})
+	store.Update("FR", []TrustedService{{CountryCode: "FR", ServiceName: "S2"}})
+
+	store.RemoveCountriesNotIn(map[string]struct{}{})
+	assert.Equal(t, 0, store.ServiceCount())
+	assert.Empty(t, store.CountryCodesLoaded())
+}
+
 func TestTrustStore_GetTrustedServices_ByCountry(t *testing.T) {
 	store := NewTrustStore()
 	store.Update("DE", []TrustedService{

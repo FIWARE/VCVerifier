@@ -484,6 +484,39 @@ func TestTrustListFetcher_StartIsIdempotent(t *testing.T) {
 	f.Stop()
 }
 
+func TestTrustListFetcher_StartAfterStop(t *testing.T) {
+	var fetchCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetchCount.Add(1)
+		lotlXML := fmt.Sprintf(lotlTemplate, "")
+		fmt.Fprint(w, lotlXML)
+	}))
+	defer server.Close()
+
+	f := NewTrustListFetcher(
+		WithLOTLURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithRefreshInterval(MinRefreshInterval),
+	)
+
+	// First lifecycle: start and stop.
+	f.Start(context.Background())
+	require.Eventually(t, func() bool {
+		return fetchCount.Load() >= 1
+	}, 5*time.Second, 50*time.Millisecond, "first start: initial fetch should complete")
+	f.Stop()
+
+	countAfterFirstStop := fetchCount.Load()
+
+	// Second lifecycle: start again after stop — must not panic.
+	f.Start(context.Background())
+	require.Eventually(t, func() bool {
+		return fetchCount.Load() > countAfterFirstStop
+	}, 5*time.Second, 50*time.Millisecond, "second start: initial fetch should complete")
+	f.Stop()
+}
+
 func TestTrustListFetcher_StopIsIdempotent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		lotlXML := fmt.Sprintf(lotlTemplate, "")
@@ -599,6 +632,60 @@ func TestTrustListFetcher_Refresh_UpdatesExistingData(t *testing.T) {
 	services = store.GetTrustedServices("DE", nil, false)
 	require.Len(t, services, 1)
 	assert.Equal(t, ServiceStatusWithdrawn, services[0].ServiceStatus)
+}
+
+func TestTrustListFetcher_Refresh_PrunesStaleCountries(t *testing.T) {
+	// First refresh loads DE and FR. Second refresh only includes DE.
+	// FR should be pruned from the store after the second refresh.
+	deTL := makeNationalTLXML("DE", ServiceTypeCAQC, ServiceStatusGranted)
+	frTL := makeNationalTLXML("FR", ServiceTypeCA, ServiceStatusGranted)
+
+	deServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, deTL)
+	}))
+	defer deServer.Close()
+
+	frServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, frTL)
+	}))
+	defer frServer.Close()
+
+	// Build two LOTL versions: one with DE+FR, one with only DE.
+	dePointer := fmt.Sprintf(pointerTemplate, "DE", deServer.URL, "DE")
+	frPointer := fmt.Sprintf(pointerTemplate, "FR", frServer.URL, "FR")
+	lotlWithBoth := fmt.Sprintf(lotlTemplate, dePointer+"\n"+frPointer)
+	lotlWithDE := fmt.Sprintf(lotlTemplate, dePointer)
+
+	var currentLOTL atomic.Value
+	currentLOTL.Store(lotlWithBoth)
+
+	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, currentLOTL.Load().(string))
+	}))
+	defer lotlServer.Close()
+
+	store := NewTrustStore()
+	f := NewTrustListFetcher(
+		WithLOTLURL(lotlServer.URL),
+		WithHTTPClient(lotlServer.Client()),
+		WithTrustStore(store),
+	)
+
+	// First refresh: both DE and FR loaded.
+	err := f.Refresh(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, store.ServiceCount())
+	assert.ElementsMatch(t, []string{"DE", "FR"}, store.CountryCodesLoaded())
+
+	// Switch LOTL to only include DE.
+	currentLOTL.Store(lotlWithDE)
+
+	// Second refresh: FR should be pruned.
+	err = f.Refresh(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, store.ServiceCount())
+	assert.Contains(t, store.CountryCodesLoaded(), "DE")
+	assert.NotContains(t, store.CountryCodesLoaded(), "FR")
 }
 
 // --- Cache-Control max-age parsing tests ---
