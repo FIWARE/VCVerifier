@@ -329,7 +329,8 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 	return pres, nil
 }
 
-// parseJWTCredential parses and verifies a JWT-encoded VC.
+// parseJWTCredential parses and verifies a JWT-encoded VC and sets the
+// credential format to FormatJWTVC.
 func (cpp *ConfigurablePresentationParser) parseJWTCredential(tokenBytes []byte) (*common.Credential, error) {
 	var payload []byte
 	var err error
@@ -347,7 +348,12 @@ func (cpp *ConfigurablePresentationParser) parseJWTCredential(tokenBytes []byte)
 		return nil, err
 	}
 
-	return jwtClaimsToCredential(claims)
+	cred, err := jwtClaimsToCredential(claims)
+	if err != nil {
+		return nil, err
+	}
+	cred.SetFormat(common.FormatJWTVC)
+	return cred, nil
 }
 
 // jwtClaimsToCredential maps JWT VC claims to a common.Credential.
@@ -886,6 +892,7 @@ func parseJSONLDCredential(vcMap map[string]interface{}) (*common.Credential, er
 		cred.SetProofs(proofs)
 	}
 
+	cred.SetFormat(common.FormatLDPVC)
 	return cred, nil
 }
 
@@ -927,7 +934,12 @@ func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interfa
 		contents.ValidUntil = &t
 	}
 
-	return common.CreateCredential(contents, common.CustomFields{})
+	cred, err := common.CreateCredential(contents, common.CustomFields{})
+	if err != nil {
+		return nil, err
+	}
+	cred.SetFormat(common.FormatSDJWT)
+	return cred, nil
 }
 
 func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentation *common.Presentation, err error) {

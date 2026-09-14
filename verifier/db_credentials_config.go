@@ -222,3 +222,17 @@ func (dbc DbBackedCredentialsConfig) GetCredentialStatusConfig(serviceIdentifier
 	}
 	return credential.CredentialStatus, nil
 }
+
+// GetEidasConfig returns the per-credential eIDAS 2.0 trust list validation
+// configuration for the given service, scope and credential type.
+func (dbc DbBackedCredentialsConfig) GetEidasConfig(serviceIdentifier string, scope string, credentialType string) (*config.EidasConfig, error) {
+	svc, err := dbc.getService(serviceIdentifier)
+	if err != nil {
+		return nil, nil
+	}
+	credential, ok := svc.GetCredential(scope, credentialType)
+	if !ok {
+		return nil, nil
+	}
+	return credential.EidasConfig, nil
+}

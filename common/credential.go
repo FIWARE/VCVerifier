@@ -134,6 +134,19 @@ type CredentialContents struct {
 	RefreshService []TypedID
 }
 
+// Credential format constants identify how a credential was encoded in the
+// presentation it was extracted from.
+const (
+	// FormatJWTVC identifies a JWT-encoded Verifiable Credential.
+	FormatJWTVC = "jwt_vc"
+
+	// FormatLDPVC identifies a JSON-LD Verifiable Credential with Linked Data Proofs.
+	FormatLDPVC = "ldp_vc"
+
+	// FormatSDJWT identifies an SD-JWT Verifiable Credential.
+	FormatSDJWT = "sd-jwt"
+)
+
 // Credential represents a Verifiable Credential.
 type Credential struct {
 	contents     CredentialContents
@@ -143,6 +156,10 @@ type Credential struct {
 	// proofs holds the Linked Data Proofs attached to this credential, if any.
 	// Populated during JSON-LD credential parsing.
 	proofs []*LDProof
+	// format records how the credential was encoded in the presentation it was
+	// extracted from (e.g. "jwt_vc", "ldp_vc", "sd-jwt"). Set during parsing
+	// by the presentation parser.
+	format string
 }
 
 // Contents returns the structured content of the credential.
@@ -164,6 +181,19 @@ func (c *Credential) Proofs() []*LDProof {
 // SetProofs stores Linked Data Proofs on this credential.
 func (c *Credential) SetProofs(proofs []*LDProof) {
 	c.proofs = proofs
+}
+
+// Format returns the credential format identifier (e.g. "jwt_vc", "ldp_vc",
+// "sd-jwt") set during parsing. Returns an empty string when the format has
+// not been set.
+func (c *Credential) Format() string {
+	return c.format
+}
+
+// SetFormat records the credential format identifier. This is set by the
+// presentation parser to track how the credential was encoded.
+func (c *Credential) SetFormat(format string) {
+	c.format = format
 }
 
 // ToRawJSON converts the credential to a JSON map representation.

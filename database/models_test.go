@@ -392,3 +392,45 @@ func TestDCQLDB_FromVO(t *testing.T) {
 	assert.True(t, db.Credentials[0].RequireCryptographicHolderBinding)
 	assert.Len(t, db.CredentialSets, 1)
 }
+
+// ---------------------------------------------------------------------------
+// CredentialDB — EidasConfig VO / FromVO round-trip
+// ---------------------------------------------------------------------------
+
+// TestCredentialDB_RoundTrip_EidasConfig verifies that a Credential with an
+// EidasConfig survives a full FromVO() → VO() round-trip with all fields
+// preserved. This mirrors the TestCredentialDB_RoundTrip_V5 pattern.
+func TestCredentialDB_RoundTrip_EidasConfig(t *testing.T) {
+	requireQualified := true
+	original := config.Credential{
+		Type: "VerifiableCredential",
+		EidasConfig: &config.EidasConfig{
+			Enabled:          true,
+			AllowedCountries: []string{"DE", "FR", "ES"},
+			RequireQualified: &requireQualified,
+		},
+	}
+
+	db := CredentialDB{}.FromVO(original)
+	roundTripped := db.VO()
+
+	assert.Equal(t, original.Type, roundTripped.Type)
+	assert.NotNil(t, roundTripped.EidasConfig, "EidasConfig must survive the round-trip")
+	assert.Equal(t, original.EidasConfig.Enabled, roundTripped.EidasConfig.Enabled)
+	assert.Equal(t, original.EidasConfig.AllowedCountries, roundTripped.EidasConfig.AllowedCountries)
+	assert.Equal(t, original.EidasConfig.RequireQualified, roundTripped.EidasConfig.RequireQualified)
+}
+
+// TestCredentialDB_RoundTrip_EidasConfig_Nil verifies that a Credential
+// without EidasConfig (nil pointer) round-trips correctly.
+func TestCredentialDB_RoundTrip_EidasConfig_Nil(t *testing.T) {
+	original := config.Credential{
+		Type:        "VerifiableCredential",
+		EidasConfig: nil,
+	}
+
+	db := CredentialDB{}.FromVO(original)
+	roundTripped := db.VO()
+
+	assert.Nil(t, roundTripped.EidasConfig, "nil EidasConfig must remain nil after round-trip")
+}

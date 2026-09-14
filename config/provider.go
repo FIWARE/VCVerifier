@@ -6,6 +6,15 @@ import (
 	"github.com/mitchellh/mapstructure"
 )
 
+const (
+	// DefaultLotlURL is the official EU List of Trusted Lists (LOTL) URL,
+	// used as the default when no explicit lotlUrl is configured.
+	DefaultLotlURL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
+	// DefaultEidasRefreshInterval is the default interval in seconds between
+	// background trust list refreshes (24 hours).
+	DefaultEidasRefreshInterval = 86400
+)
+
 // read the config from the config file
 func ReadConfig(configFile string) (configuration Configuration, err error) {
 	config.WithOptions(func(opt *config.Options) {
@@ -39,5 +48,20 @@ func ReadConfig(configFile string) (configuration Configuration, err error) {
 		return
 	}
 
+	applyEidasDefaults(&configuration)
+
 	return configuration, nil
+}
+
+// applyEidasDefaults sets programmatic defaults for the global eIDAS
+// configuration. gookit/config and mapstructure do not honour Go default
+// struct tags, so values that must differ from the zero value are applied here
+// after the configuration has been parsed.
+func applyEidasDefaults(cfg *Configuration) {
+	if cfg.Eidas.LotlURL == "" {
+		cfg.Eidas.LotlURL = DefaultLotlURL
+	}
+	if cfg.Eidas.RefreshInterval == 0 {
+		cfg.Eidas.RefreshInterval = DefaultEidasRefreshInterval
+	}
 }
