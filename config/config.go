@@ -65,6 +65,7 @@ type Configuration struct {
 	Logging      logging.LoggingConfig `mapstructure:"logging"`
 	ConfigRepo   ConfigRepo            `mapstructure:"configRepo"`
 	M2M          M2M                   `mapstructure:"m2m"`
+	Eidas        Eidas                 `mapstructure:"eidas"`
 	Elsi         Elsi                  `mapstructure:"elsi"`
 	Database     Database              `mapstructure:"database"`
 	ConfigServer ConfigServer          `mapstructure:"configServer"`
@@ -257,6 +258,35 @@ type ClientIdentification struct {
 	CertificatePath string `mapstructure:"certificatePath"`
 	// Kid used when key certificate does not include it. If both are missing, id is used
 	Kid string `mapstructure:"kid"`
+}
+
+// Eidas holds the global configuration for the eIDAS 2.0 trust list feature.
+// When Enabled is false (the default), the trust list fetcher is not started
+// (no background goroutines, no HTTP requests, no memory for the trust store),
+// and any per-credential eIDAS configuration is rejected at config validation
+// time with HTTP 400.
+type Eidas struct {
+	// Enabled controls whether the eIDAS 2.0 trust list feature is active.
+	// When false, no trust lists are fetched and per-credential eIDAS configs
+	// are rejected with an error.
+	Enabled bool `mapstructure:"enabled" default:"false"`
+	// LotlURL is the URL of the EU List of Trusted Lists (LOTL).
+	// Defaults to the official EU LOTL URL when empty.
+	LotlURL string `mapstructure:"lotlUrl"`
+	// RefreshInterval is the interval in seconds between background trust list
+	// refreshes. Clamped to [3600, 604800] (1 hour – 7 days). Defaults to
+	// 86400 (24 hours) when zero.
+	RefreshInterval int `mapstructure:"refreshInterval"`
+	// Countries restricts which national trusted lists are fetched by ISO 3166-1
+	// alpha-2 country code (e.g. ["DE", "FR", "ES"]). Empty means all countries
+	// from the LOTL are allowed.
+	Countries []string `mapstructure:"countries,omitempty"`
+	// MaxWorkers is the maximum number of concurrent HTTP fetches for national
+	// trust lists. Defaults to 5 when zero.
+	MaxWorkers int `mapstructure:"maxWorkers"`
+	// FetchTimeout is the HTTP timeout in seconds for fetching a single trust
+	// list. Defaults to 30 when zero.
+	FetchTimeout int `mapstructure:"fetchTimeout"`
 }
 
 type Elsi struct {
