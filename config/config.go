@@ -66,7 +66,6 @@ type Configuration struct {
 	ConfigRepo   ConfigRepo            `mapstructure:"configRepo"`
 	M2M          M2M                   `mapstructure:"m2m"`
 	Eidas        Eidas                 `mapstructure:"eidas"`
-	Elsi         Elsi                  `mapstructure:"elsi"`
 	Database     Database              `mapstructure:"database"`
 	ConfigServer ConfigServer          `mapstructure:"configServer"`
 }
@@ -287,19 +286,6 @@ type Eidas struct {
 	// FetchTimeout is the HTTP timeout in seconds for fetching a single trust
 	// list. Defaults to 30 when zero.
 	FetchTimeout int `mapstructure:"fetchTimeout"`
-}
-
-type Elsi struct {
-	// should the support for did:elsi be enabled
-	Enabled bool `mapstructure:"enabled" default:"false"`
-	// endpoint of the validation service to be used for JAdES signatures
-	ValidationEndpoint *ValidationEndpoint `mapstructure:"validationEndpoint"`
-}
-
-type ValidationEndpoint struct {
-	Host           string `mapstructure:"host"`
-	ValidationPath string `mapstructure:"validationPath" default:"/validateSignature"`
-	HealthPath     string `mapstructure:"healthPath" default:"/q/health/ready"`
 }
 
 type Policies struct {
