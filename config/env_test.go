@@ -114,21 +114,6 @@ func TestApplyEnvOverrides_InvalidBoolReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "VCVERIFIER_M2M_AUTH_ENABLED")
 }
 
-func TestApplyEnvOverrides_NestedPointerStructAllocated(t *testing.T) {
-	t.Setenv("VCVERIFIER_ELSI_VALIDATION_ENDPOINT_HOST", "https://validator.example.com")
-
-	cfg := Configuration{}
-	require.NoError(t, ApplyEnvOverrides(&cfg))
-	require.NotNil(t, cfg.Elsi.ValidationEndpoint)
-	assert.Equal(t, "https://validator.example.com", cfg.Elsi.ValidationEndpoint.Host)
-}
-
-func TestApplyEnvOverrides_PointerStructNotAllocatedWithoutEnv(t *testing.T) {
-	cfg := Configuration{}
-	require.NoError(t, ApplyEnvOverrides(&cfg))
-	assert.Nil(t, cfg.Elsi.ValidationEndpoint)
-}
-
 func TestApplyEnvOverrides_NestedStructField(t *testing.T) {
 	t.Setenv("VCVERIFIER_VERIFIER_CLIENT_IDENTIFICATION_KEY_PATH", "/keys/client.pem")
 

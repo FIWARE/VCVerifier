@@ -1,7 +1,6 @@
 package verifier
 
 import (
-	"context"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -13,7 +12,6 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/did"
-	"github.com/fiware/VCVerifier/jades"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/hellofresh/health-go/v5"
 	"github.com/lestrrat-go/jwx/v3/jwk"
@@ -28,8 +26,6 @@ const ldDocLoaderCacheTTL = 1 * time.Hour
 // the JSON-LD document loader cache.
 const ldDocLoaderCacheCleanup = 10 * time.Minute
 
-var ErrorNoValidationEndpoint = errors.New("no_validation_endpoint_configured")
-var ErrorNoValidationHost = errors.New("no_validation_host_configured")
 var ErrorInvalidSdJwt = errors.New("credential_is_not_sd_jwt")
 var ErrorPresentationNoCredentials = errors.New("presentation_not_contains_credentials")
 var ErrorInvalidProof = errors.New("invalid_vp_proof")
@@ -157,37 +153,12 @@ func GetPresentationParser() PresentationParser {
 	return presentationParser
 }
 
-// init the presentation parser depending on the config, either with or without did:elsi support
+// InitPresentationParser initialises the presentation parser from the
+// given configuration. It sets up the DID registry, HTTPS issuer resolver,
+// JWT proof checker and LD proof checker used for all subsequent VP/VC
+// verification.
 func InitPresentationParser(config *configModel.Configuration, healthCheck *health.Health) error {
-	elsiConfig := &config.Elsi
-	err := validateConfig(elsiConfig)
-	if err != nil {
-		logging.Log().Warnf("No valid elsi configuration provided. Error: %v", err)
-		return err
-	}
-
 	registry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
-
-	var jAdESValidator jades.JAdESValidator
-	if elsiConfig.Enabled {
-		externalValidator := &jades.ExternalJAdESValidator{
-			HttpClient:        &http.Client{},
-			ValidationAddress: buildAddress(elsiConfig.ValidationEndpoint.Host, elsiConfig.ValidationEndpoint.ValidationPath),
-			HealthAddress:     buildAddress(elsiConfig.ValidationEndpoint.Host, elsiConfig.ValidationEndpoint.HealthPath),
-		}
-		jAdESValidator = externalValidator
-
-		if err := healthCheck.Register(health.Config{
-			Name:      "JAdES-Validator",
-			Timeout:   time.Second * 5,
-			SkipOnErr: false,
-			Check: func(ctx context.Context) error {
-				return externalValidator.IsReady()
-			},
-		}); err != nil {
-			logging.Log().Errorf("Failed to register JAdES-Validator health check: %v", err)
-		}
-	}
 
 	// Create the HTTPS issuer resolver for metadata-based key discovery.
 	// Uses a dedicated cache with the same cleanup pattern as other verifier caches.
@@ -197,7 +168,7 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 		WithAllowPrivateAddresses(config.Verifier.HttpsIssuerAllowPrivateNetworks)
 	globalHttpsIssuerResolver = httpsResolver
 
-	checker := NewJWTProofChecker(registry, jAdESValidator).WithHttpsResolver(httpsResolver)
+	checker := NewJWTProofChecker(registry).WithHttpsResolver(httpsResolver)
 	globalProofChecker = checker
 
 	// Set up the document loader for JSON-LD context resolution and create
@@ -225,24 +196,6 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 
 	return nil
 }
-
-func validateConfig(elsiConfig *configModel.Elsi) error {
-	if !elsiConfig.Enabled {
-		return nil
-	}
-	if elsiConfig.ValidationEndpoint == nil {
-		return ErrorNoValidationEndpoint
-	}
-	if elsiConfig.ValidationEndpoint.Host == "" {
-		return ErrorNoValidationHost
-	}
-	return nil
-}
-
-func buildAddress(host, path string) string {
-	return strings.TrimSuffix(host, "/") + "/" + strings.TrimPrefix(path, "/")
-}
-
 // ParsePresentation parses a VP from either JWT or JSON-LD format and
 // verifies it. JWT VPs are verified via the configured JWTProofChecker,
 // JSON-LD VPs via the configured LDProofChecker. Both paths are fail-closed:

@@ -343,21 +343,6 @@ func TestLDProofChecker_VerifyPresentation(t *testing.T) {
 			wantErr:        true,
 		},
 		{
-			name:   "did_elsi_rejected",
-			vpJSON: vpWithoutProof,
-			proof: &common.LDProof{
-				Type:               common.ProofTypeJsonWebSignature2020,
-				Created:            "2024-01-01T00:00:00Z",
-				VerificationMethod: "did:elsi:some-org#key-1",
-				ProofPurpose:       common.ProofPurposeAuthentication,
-				JWS:                proof.JWS,
-			},
-			expectedHolder: "did:elsi:some-org",
-			registry:       registry,
-			wantErr:        true,
-			wantErrIs:      ErrorDidElsiNotSupportedForLDProof,
-		},
-		{
 			name:   "empty_verification_method_rejected",
 			vpJSON: vpWithoutProof,
 			proof: &common.LDProof{
@@ -720,28 +705,6 @@ func TestExtractDIDAndFragment(t *testing.T) {
 			gotDID, gotKid := ExtractDIDAndFragment(tc.input)
 			assert.Equal(t, tc.wantDID, gotDID)
 			assert.Equal(t, tc.wantKid, gotKid)
-		})
-	}
-}
-
-// TestIsDidElsi verifies the did:elsi detection helper.
-func TestIsDidElsi(t *testing.T) {
-	type testCase struct {
-		name string
-		did  string
-		want bool
-	}
-
-	tests := []testCase{
-		{name: "elsi", did: "did:elsi:some-org", want: true},
-		{name: "web", did: "did:web:example.com", want: false},
-		{name: "key", did: "did:key:z6Mk...", want: false},
-		{name: "empty", did: "", want: false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, IsDidElsi(tc.did))
 		})
 	}
 }

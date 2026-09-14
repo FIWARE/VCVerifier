@@ -84,8 +84,6 @@ func (lpc *LDProofChecker) WithHttpsResolver(resolver HttpsIssuerResolver) *LDPr
 // Returns the resolved public key on success (for downstream holder binding),
 // or an error describing the verification failure.
 //
-// did:elsi is explicitly rejected because JAdES is JWS-based and does not
-// apply to Linked Data Proofs.
 func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDProof, expectedHolder string) (jwk.Key, error) {
 	if expectedHolder == "" {
 		logging.Log().Warn("JSON-LD VP has no holder — the proof cannot be bound to a presenter")
@@ -126,8 +124,6 @@ func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDPro
 // checks key off the claimed issuer, so a proof that is not bound to it
 // proves nothing about who issued the credential.
 //
-// did:elsi is explicitly rejected because JAdES is JWS-based and does not
-// apply to Linked Data Proofs.
 func (lpc *LDProofChecker) VerifyCredential(vcJSON []byte, proof *common.LDProof, expectedIssuer string) error {
 	if expectedIssuer == "" {
 		logging.Log().Warn("JSON-LD VC has no issuer — the proof cannot be bound to an issuer")
@@ -188,9 +184,9 @@ func (lpc *LDProofChecker) assertProofSigner(proof *common.LDProof, expectedDID 
 	return signerDID, nil
 }
 
-// resolveProofKeys rejects did:elsi and resolves the proof's verification
-// method to the candidate public keys, requiring the key to be authorized for
-// the given verification relationship.
+// resolveProofKeys resolves the proof's verification method to the candidate
+// public keys, requiring the key to be authorized for the given verification
+// relationship.
 //
 // DID resolution always yields exactly one key. An HTTPS signer whose
 // verificationMethod carries no fragment can yield several, because a JWKS
@@ -202,12 +198,6 @@ func (lpc *LDProofChecker) resolveProofKeys(proof *common.LDProof, signerDID str
 	// Resolve HTTPS-based signer identifiers via well-known metadata + JWKS.
 	if isHttpsIssuer(signerDID) {
 		return lpc.resolveHttpsProofKeys(proof.VerificationMethod, signerDID, relationship)
-	}
-
-	// Reject did:elsi — JAdES is JWS-based and does not apply to LD proofs.
-	if IsDidElsi(signerDID) {
-		logging.Log().Warnf("Rejecting did:elsi in LD-proof context: %s", signerDID)
-		return nil, ErrorDidElsiNotSupportedForLDProof
 	}
 
 	key, err := ResolveKeyForRelationship(lpc.registry, signerDID, kid, relationship)
