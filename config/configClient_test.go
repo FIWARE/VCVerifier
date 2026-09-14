@@ -519,6 +519,14 @@ func TestEidasConfig_IsRequireQualified(t *testing.T) {
 			assert.Equal(t, tc.expected, tc.config.IsRequireQualified())
 		})
 	}
+
+	// Verify nil receiver safety — GetEidasConfig legitimately returns nil,
+	// so callers must be able to chain .IsRequireQualified() without a panic.
+	t.Run("nil receiver defaults to true", func(t *testing.T) {
+		var nilConfig *EidasConfig
+		assert.True(t, nilConfig.IsRequireQualified(),
+			"nil *EidasConfig should default to requiring qualified trust services")
+	})
 }
 
 func Test_DCQL_MarshalJSON_OmitsUnsetOptionalArrays(t *testing.T) {

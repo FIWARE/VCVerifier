@@ -111,8 +111,8 @@ func Test_ReadConfig(t *testing.T) {
 				},
 				M2M: M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				Eidas: Eidas{
-					LotlURL:         "https://ec.europa.eu/tools/lotl/eu-lotl.xml",
-					RefreshInterval: 86400,
+					LotlURL:         DefaultLotlURL,
+					RefreshInterval: DefaultEidasRefreshInterval,
 				},
 				Database: Database{
 					Host:    "localhost",
@@ -166,8 +166,8 @@ func Test_ReadConfig(t *testing.T) {
 				},
 				M2M:        M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				Eidas: Eidas{
-					LotlURL:         "https://ec.europa.eu/tools/lotl/eu-lotl.xml",
-					RefreshInterval: 86400,
+					LotlURL:         DefaultLotlURL,
+					RefreshInterval: DefaultEidasRefreshInterval,
 				},
 				ConfigRepo: ConfigRepo{UpdateInterval: 30},
 				Database: Database{
@@ -222,8 +222,8 @@ func Test_ReadConfig(t *testing.T) {
 				},
 				M2M: M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				Eidas: Eidas{
-					LotlURL:         "https://ec.europa.eu/tools/lotl/eu-lotl.xml",
-					RefreshInterval: 86400,
+					LotlURL:         DefaultLotlURL,
+					RefreshInterval: DefaultEidasRefreshInterval,
 				},
 				ConfigRepo: ConfigRepo{
 					UpdateInterval: 30,
@@ -398,11 +398,11 @@ func TestReadConfig_EidasDefaults(t *testing.T) {
 	assert.NoError(t, err, "ReadConfig should not return an error for empty config")
 
 	// Default LOTL URL must be the official EU LOTL.
-	assert.Equal(t, "https://ec.europa.eu/tools/lotl/eu-lotl.xml", gotConfig.Eidas.LotlURL,
+	assert.Equal(t, DefaultLotlURL, gotConfig.Eidas.LotlURL,
 		"default LotlURL must be the official EU LOTL URL")
-	// Default refresh interval must be 86400 (24 hours).
-	assert.Equal(t, 86400, gotConfig.Eidas.RefreshInterval,
-		"default RefreshInterval must be 86400 seconds (24h)")
+	// Default refresh interval must be DefaultEidasRefreshInterval (24 hours).
+	assert.Equal(t, DefaultEidasRefreshInterval, gotConfig.Eidas.RefreshInterval,
+		"default RefreshInterval must be %d seconds (24h)", DefaultEidasRefreshInterval)
 	// Enabled must default to false.
 	assert.False(t, gotConfig.Eidas.Enabled,
 		"Eidas.Enabled must default to false")

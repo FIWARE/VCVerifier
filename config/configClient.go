@@ -144,9 +144,15 @@ type EidasConfig struct {
 	RequireQualified *bool `json:"requireQualified,omitempty" mapstructure:"requireQualified,omitempty"`
 }
 
-// IsRequireQualified returns true when RequireQualified is nil (absent) or
-// explicitly true. The default behaviour is to require qualified trust services.
+// IsRequireQualified returns true when the receiver is nil, when
+// RequireQualified is nil (absent), or when it is explicitly true. A nil
+// receiver returns true so that callers can safely chain the call on the
+// result of GetEidasConfig without a nil guard — the safe default is to
+// require qualified trust services.
 func (ec *EidasConfig) IsRequireQualified() bool {
+	if ec == nil {
+		return true
+	}
 	return ec.RequireQualified == nil || *ec.RequireQualified
 }
 

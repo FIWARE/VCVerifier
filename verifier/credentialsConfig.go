@@ -384,7 +384,12 @@ func (cc cacheBasedCredentialsConfig) GetEidasConfig(serviceIdentifier string, s
 	if hit {
 		credential, ok := cacheEntry.(config.ConfiguredService).GetCredential(scope, credentialType)
 		if ok {
-			logging.Log().Debugf("Found eIDAS config for %s - %v", credentialType, credential.EidasConfig)
+			if credential.EidasConfig != nil {
+				logging.Log().Debugf("Found eIDAS config for %s - Enabled: %v, AllowedCountries: %v, RequireQualified: %v",
+					credentialType, credential.EidasConfig.Enabled, credential.EidasConfig.AllowedCountries, credential.EidasConfig.IsRequireQualified())
+			} else {
+				logging.Log().Debugf("No eIDAS config for credential type %s", credentialType)
+			}
 			return credential.EidasConfig, nil
 		}
 	}
