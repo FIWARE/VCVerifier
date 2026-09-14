@@ -249,6 +249,12 @@ func TestDbBackedCredentialsConfig_AllInterfaceMethods(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, flat)
 	})
+
+	t.Run("GetEidasConfig_NilWhenNotConfigured", func(t *testing.T) {
+		ec, err := cc.GetEidasConfig("test-svc", "myScope", "TestCredential")
+		require.NoError(t, err)
+		assert.Nil(t, ec, "GetEidasConfig must return nil when no eidasConfig is set on the credential")
+	})
 }
 
 func TestDbBackedCredentialsConfig_ServiceNotFound(t *testing.T) {
@@ -471,6 +477,62 @@ func TestInitCredentialsConfig_SelectsHTTPWhenNoRepo(t *testing.T) {
 
 	_, ok := cc.(ServiceBackedCredentialsConfig)
 	assert.True(t, ok, "expected ServiceBackedCredentialsConfig when repo is nil and endpoint is set")
+}
+
+// TestDbBackedCredentialsConfig_GetEidasConfig verifies that
+// DbBackedCredentialsConfig.GetEidasConfig returns the per-credential eIDAS
+// configuration when it is set, and nil when it is absent or the credential is
+// unknown.
+func TestDbBackedCredentialsConfig_GetEidasConfig(t *testing.T) {
+	requireQualified := true
+	eidasCfg := &config.EidasConfig{
+		Enabled:          true,
+		AllowedCountries: []string{"DE", "FR"},
+		RequireQualified: &requireQualified,
+	}
+
+	svc := config.ConfiguredService{
+		Id:               "eidas-svc",
+		DefaultOidcScope: "eidasScope",
+		ServiceScopes: map[string]config.ScopeEntry{
+			"eidasScope": {
+				Credentials: []config.Credential{
+					{Type: "EidasCredential", EidasConfig: eidasCfg},
+					{Type: "PlainCredential"},
+				},
+			},
+		},
+	}
+	repo := &mockServiceRepository{services: []config.ConfiguredService{svc}}
+	cc, err := InitDbBackedCredentialsConfig(&config.ConfigRepo{}, repo)
+	require.NoError(t, err)
+
+	t.Run("returns eIDAS config when configured", func(t *testing.T) {
+		got, err := cc.GetEidasConfig("eidas-svc", "eidasScope", "EidasCredential")
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.True(t, got.Enabled)
+		assert.Equal(t, []string{"DE", "FR"}, got.AllowedCountries)
+		assert.True(t, got.IsRequireQualified())
+	})
+
+	t.Run("returns nil when credential has no eidasConfig", func(t *testing.T) {
+		got, err := cc.GetEidasConfig("eidas-svc", "eidasScope", "PlainCredential")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("returns nil for unknown credential type", func(t *testing.T) {
+		got, err := cc.GetEidasConfig("eidas-svc", "eidasScope", "Unknown")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("returns nil for unknown service", func(t *testing.T) {
+		got, err := cc.GetEidasConfig("nonexistent", "eidasScope", "EidasCredential")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
 }
 
 func TestInitCredentialsConfig_SelectsStaticWhenNoRepoNoEndpoint(t *testing.T) {
