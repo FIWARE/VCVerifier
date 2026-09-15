@@ -81,6 +81,9 @@ func (lpc *LDProofChecker) WithHttpsResolver(resolver HttpsIssuerResolver) *LDPr
 // empty: an unbound presentation proof only proves that somebody signed the
 // document, not that the presenter did.
 //
+// did:elsi signers are explicitly rejected — did:elsi uses JWS/JAdES
+// signatures, not Linked Data Proofs.
+//
 // Returns the resolved public key on success (for downstream holder binding),
 // or an error describing the verification failure.
 //
@@ -123,6 +126,9 @@ func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDPro
 // given in object form). It must not be empty — downstream trust-registry
 // checks key off the claimed issuer, so a proof that is not bound to it
 // proves nothing about who issued the credential.
+//
+// did:elsi signers are explicitly rejected — did:elsi uses JWS/JAdES
+// signatures, not Linked Data Proofs.
 //
 func (lpc *LDProofChecker) VerifyCredential(vcJSON []byte, proof *common.LDProof, expectedIssuer string) error {
 	if expectedIssuer == "" {
@@ -194,6 +200,12 @@ func (lpc *LDProofChecker) assertProofSigner(proof *common.LDProof, expectedDID 
 // find the one the proof verifies with.
 func (lpc *LDProofChecker) resolveProofKeys(proof *common.LDProof, signerDID string, relationship string) ([]jwk.Key, error) {
 	_, kid := ExtractDIDAndFragment(proof.VerificationMethod)
+
+	// did:elsi uses JWS/JAdES signatures, not Linked Data Proofs.
+	if IsDidElsi(signerDID) {
+		logging.Log().Warnf("did:elsi signer %s cannot use Linked Data Proofs — only JWS is supported", signerDID)
+		return nil, ErrorDidElsiNotSupportedForLDProof
+	}
 
 	// Resolve HTTPS-based signer identifiers via well-known metadata + JWKS.
 	if isHttpsIssuer(signerDID) {

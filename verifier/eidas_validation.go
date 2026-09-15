@@ -175,56 +175,16 @@ func (evs *EidasValidationService) ValidateVC(verifiableCredential *common.Crede
 //
 // Returns true if the leaf certificate successfully verifies against any
 // trusted service's certificates.
+//
+// Delegates to the shared eidas.VerifyCertificateChain function.
 func (evs *EidasValidationService) verifyCertificateAgainstTrustStore(
 	leafCert *x509.Certificate,
 	intermediates []*x509.Certificate,
 	countryCode string,
 	serviceTypes []string,
 ) bool {
-	trustedServices := evs.trustStore.GetTrustedServices(countryCode, serviceTypes, true)
-	if len(trustedServices) == 0 {
-		logging.Log().Debugf("EidasValidationService: no trusted services found for country %q, types %v", countryCode, serviceTypes)
-		return false
-	}
-
-	// Build an intermediate certificate pool if we have any.
-	var intermediatePool *x509.CertPool
-	if len(intermediates) > 0 {
-		intermediatePool = x509.NewCertPool()
-		for _, ic := range intermediates {
-			intermediatePool.AddCert(ic)
-		}
-	}
-
-	for _, svc := range trustedServices {
-		if len(svc.Certificates) == 0 {
-			continue
-		}
-
-		roots := x509.NewCertPool()
-		for _, cert := range svc.Certificates {
-			roots.AddCert(cert)
-		}
-
-		opts := x509.VerifyOptions{
-			Roots:         roots,
-			Intermediates: intermediatePool,
-			// We only care about chain validity, not specific key usages,
-			// because eIDAS trust list certificates are CA certificates that
-			// may not have ExtKeyUsage set. An empty KeyUsages slice means
-			// x509.ExtKeyUsageServerAuth is checked by default in Go, so we
-			// explicitly set it to x509.ExtKeyUsageAny to accept any usage.
-			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-		}
-
-		if _, err := leafCert.Verify(opts); err == nil {
-			logging.Log().Debugf("EidasValidationService: certificate chains to trusted service %q (TSP: %s, country: %s)",
-				svc.ServiceName, svc.TSPName, svc.CountryCode)
-			return true
-		}
-	}
-
-	return false
+	err := eidas.VerifyCertificateChain(leafCert, intermediates, evs.trustStore, countryCode, serviceTypes)
+	return err == nil
 }
 
 // getEidasValidationContext builds an EidasValidationContext for the given

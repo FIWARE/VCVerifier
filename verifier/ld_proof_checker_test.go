@@ -754,3 +754,56 @@ func didKeyFromP256(t *testing.T, pub *ecdsa.PublicKey) string {
 	require.NoError(t, err)
 	return "did:key:" + encoded
 }
+
+// TestLDProofChecker_RejectsDidElsi verifies that LD proof verification
+// rejects did:elsi signers with ErrorDidElsiNotSupportedForLDProof, because
+// did:elsi uses JWS/JAdES signatures rather than Linked Data Proofs.
+func TestLDProofChecker_RejectsDidElsi(t *testing.T) {
+	// Create a minimal setup — the proof's verificationMethod is a did:elsi DID
+	// so the checker should reject before attempting any key resolution.
+	elsiDID := "did:elsi:VATES-B12345678"
+
+	registry := did.NewRegistry()
+	docLoader, err := common.NewEmbeddedContextLoader(nil)
+	require.NoError(t, err)
+	checker := NewLDProofChecker(registry, docLoader)
+
+	tests := []struct {
+		name            string
+		expectedHolder  string
+		verifyFunc      func() error
+		proofPurpose    string
+	}{
+		{
+			name:           "VP proof with did:elsi holder is rejected",
+			expectedHolder: elsiDID,
+			proofPurpose:   common.ProofPurposeAuthentication,
+		},
+		{
+			name:           "VC proof with did:elsi issuer is rejected",
+			expectedHolder: elsiDID,
+			proofPurpose:   common.ProofPurposeAssertionMethod,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proof := &common.LDProof{
+				VerificationMethod: elsiDID + "#key-1",
+				ProofPurpose:       tc.proofPurpose,
+			}
+
+			if tc.proofPurpose == common.ProofPurposeAuthentication {
+				// VerifyPresentation path
+				_, err := checker.VerifyPresentation([]byte("{}"), proof, elsiDID)
+				assert.Error(t, err)
+				assert.ErrorIs(t, err, ErrorDidElsiNotSupportedForLDProof)
+			} else {
+				// VerifyCredential path
+				err := checker.VerifyCredential([]byte("{}"), proof, elsiDID)
+				assert.Error(t, err)
+				assert.ErrorIs(t, err, ErrorDidElsiNotSupportedForLDProof)
+			}
+		})
+	}
+}

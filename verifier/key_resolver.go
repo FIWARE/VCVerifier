@@ -70,6 +70,23 @@ func (kr *VdrKeyResolver) ResolvePublicKeyFromDID(kid string) (key jwk.Key, err 
 // assertionMethod being used to authenticate a presentation).
 var ErrorVerificationRelationshipNotAllowed = errors.New("verification_method_not_allowed_for_relationship")
 
+// didElsiMethodPrefix is the DID method prefix for the did:elsi method
+// (Alastria's eIDAS-based DID method). The method-specific identifier after
+// this prefix is an ETSI EN 319 412-1 organizationIdentifier.
+const didElsiMethodPrefix = "did:elsi:"
+
+// ErrorDidElsiNotSupportedForLDProof is returned when an LD proof's signer
+// uses the did:elsi method. did:elsi uses JWS/JAdES signatures, not Linked
+// Data Proofs, so LD proof verification is explicitly unsupported.
+var ErrorDidElsiNotSupportedForLDProof = errors.New("did_elsi_not_supported_for_ld_proofs")
+
+// IsDidElsi returns true if the given DID string uses the did:elsi method.
+// The did:elsi method identifies organizations using their eIDAS
+// organizationIdentifier (e.g. "did:elsi:VATES-B12345678").
+func IsDidElsi(didStr string) bool {
+	return strings.HasPrefix(didStr, didElsiMethodPrefix) && len(didStr) > len(didElsiMethodPrefix)
+}
+
 // ResolveKeyFromDID resolves a DID to a public JWK key by querying the
 // given did.Registry. The didStr is the full DID (e.g., "did:key:z6Mk..."),
 // and kid is the key identifier used to select the correct verification
