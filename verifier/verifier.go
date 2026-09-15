@@ -430,7 +430,13 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		fetcher := eidas.NewTrustListFetcher(opts...)
 		fetcher.Start(context.Background())
 		eidasValidationService = EidasValidationService{trustStore: fetcher.Store()}
+		// Inject the trust store into the global JWT proof checker so did:elsi
+		// JWTs can be verified against the EU Trusted Lists.  WithTrustStore
+		// mutates the receiver in place (same pattern as WithHttpsResolver),
+		// so we don't need to reassign the global.
+		GetProofChecker().WithTrustStore(fetcher.Store())
 		logging.Log().Info("eIDAS trust list fetcher started with background refresh")
+		logging.Log().Info("did:elsi support enabled via eIDAS trust store")
 	} else {
 		logging.Log().Debug("eIDAS trust list feature is disabled")
 	}
