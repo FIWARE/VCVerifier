@@ -647,3 +647,158 @@ func TestEidasValidation_EmptyTrustStore(t *testing.T) {
 	assert.False(t, result)
 	assert.ErrorIs(t, err, ErrorEidasUntrustedIssuer)
 }
+
+// TestEidasValidation_WithdrawnServiceStatus verifies that a certificate
+// signed by a CA whose trust service status is "withdrawn" is rejected.
+func TestEidasValidation_WithdrawnServiceStatus(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	ca := generateTestCA(t, "IT")
+	leaf := generateTestLeaf(t, ca)
+
+	withdrawnService := eidas.TrustedService{
+		CountryCode:   "IT",
+		TSPName:       "Italian TSP SpA",
+		ServiceName:   "Italian QC CA (Withdrawn)",
+		ServiceType:   eidas.ServiceTypeCAQC,
+		ServiceStatus: eidas.ServiceStatusWithdrawn,
+		Certificates:  []*x509.Certificate{ca.cert},
+	}
+
+	store := setupTrustStore(t, "IT", []eidas.TrustedService{withdrawnService})
+	service := &EidasValidationService{trustStore: store}
+
+	ctx := EidasValidationContext{
+		PerType: map[string]*configModel.EidasConfig{
+			"EidasCredential": {Enabled: true, AllowedCountries: []string{"IT"}},
+		},
+	}
+
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
+
+	result, err := service.ValidateVC(cred, ctx)
+	assert.False(t, result, "should reject when trusted service status is withdrawn")
+	assert.ErrorIs(t, err, ErrorEidasUntrustedIssuer)
+}
+
+// TestEidasValidation_MultipleAllowedCountries verifies that the validation
+// iterates through multiple allowed countries and finds a match even when it
+// is not in the first country.
+func TestEidasValidation_MultipleAllowedCountries(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	deCA := generateTestCA(t, "DE")
+	frCA := generateTestCA(t, "FR")
+	frLeaf := generateTestLeaf(t, frCA)
+
+	store := eidas.NewTrustStore()
+	store.Update("DE", []eidas.TrustedService{{
+		CountryCode:   "DE",
+		TSPName:       "German TSP",
+		ServiceName:   "German QC CA",
+		ServiceType:   eidas.ServiceTypeCAQC,
+		ServiceStatus: eidas.ServiceStatusGranted,
+		Certificates:  []*x509.Certificate{deCA.cert},
+	}})
+	store.Update("FR", []eidas.TrustedService{{
+		CountryCode:   "FR",
+		TSPName:       "French TSP",
+		ServiceName:   "French QC CA",
+		ServiceType:   eidas.ServiceTypeCAQC,
+		ServiceStatus: eidas.ServiceStatusGranted,
+		Certificates:  []*x509.Certificate{frCA.cert},
+	}})
+
+	service := &EidasValidationService{trustStore: store}
+
+	ctx := EidasValidationContext{
+		PerType: map[string]*configModel.EidasConfig{
+			"EidasCredential": {
+				Enabled:          true,
+				AllowedCountries: []string{"DE", "FR"}, // FR is second
+			},
+		},
+	}
+
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{frLeaf.cert})
+
+	result, err := service.ValidateVC(cred, ctx)
+	assert.NoError(t, err)
+	assert.True(t, result, "should find matching CA in second allowed country")
+}
+
+// TestEidasValidation_GlobalCountryRestricts verifies that the global country
+// filter acts as a restriction (not just a fallback) when the per-credential
+// config has no AllowedCountries.
+func TestEidasValidation_GlobalCountryRestricts(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	deCA := generateTestCA(t, "DE")
+	deLeaf := generateTestLeaf(t, deCA)
+
+	store := setupTrustStore(t, "DE", []eidas.TrustedService{{
+		CountryCode:   "DE",
+		TSPName:       "German TSP",
+		ServiceName:   "German QC CA",
+		ServiceType:   eidas.ServiceTypeCAQC,
+		ServiceStatus: eidas.ServiceStatusGranted,
+		Certificates:  []*x509.Certificate{deCA.cert},
+	}})
+
+	service := &EidasValidationService{trustStore: store}
+
+	ctx := EidasValidationContext{
+		PerType: map[string]*configModel.EidasConfig{
+			"EidasCredential": {
+				Enabled: true,
+				// No AllowedCountries on per-credential → falls back to global
+			},
+		},
+		GlobalCountries: []string{"FR"}, // Global says only FR, but cert is from DE
+	}
+
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{deLeaf.cert})
+
+	result, err := service.ValidateVC(cred, ctx)
+	assert.False(t, result, "should reject when global country filter excludes the trusted CA's country")
+	assert.ErrorIs(t, err, ErrorEidasUntrustedIssuer)
+}
+
+// TestEidasValidation_RequireQualifiedNilDefaultsToTrue verifies that when
+// RequireQualified is nil, IsRequireQualified() defaults to true and rejects
+// non-qualified services.
+func TestEidasValidation_RequireQualifiedNilDefaultsToTrue(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	ca := generateTestCA(t, "ES")
+	leaf := generateTestLeaf(t, ca)
+
+	// Register under a non-qualified service type.
+	nonQualifiedService := eidas.TrustedService{
+		CountryCode:   "ES",
+		TSPName:       "Spanish TSP",
+		ServiceName:   "Spanish Non-Qualified CA",
+		ServiceType:   eidas.ServiceTypeCA,
+		ServiceStatus: eidas.ServiceStatusGranted,
+		Certificates:  []*x509.Certificate{ca.cert},
+	}
+
+	store := setupTrustStore(t, "ES", []eidas.TrustedService{nonQualifiedService})
+	service := &EidasValidationService{trustStore: store}
+
+	ctx := EidasValidationContext{
+		PerType: map[string]*configModel.EidasConfig{
+			"EidasCredential": {
+				Enabled:          true,
+				RequireQualified: nil, // nil defaults to true via IsRequireQualified()
+				AllowedCountries: []string{"ES"},
+			},
+		},
+	}
+
+	cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
+
+	result, err := service.ValidateVC(cred, ctx)
+	assert.False(t, result, "should reject non-qualified service when RequireQualified is nil (defaults to true)")
+	assert.ErrorIs(t, err, ErrorEidasUntrustedIssuer)
+}
