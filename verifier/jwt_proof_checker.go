@@ -27,9 +27,6 @@ const JWSHeaderX5C = "x5c"
 // DidElsiPrefix is the DID method prefix for did:elsi (Alastria's eIDAS-based DID method).
 const DidElsiPrefix = "did:elsi:"
 
-// DidPartsSeparator separates the components of a DID string.
-const DidPartsSeparator = ":"
-
 // oidOrganizationIdentifier is the ASN.1 OID 2.5.4.97 for the
 // organizationIdentifier attribute in X.509 certificate subjects,
 // as defined by ETSI EN 319 412-1.
@@ -129,7 +126,13 @@ func (jpc *JWTProofChecker) VerifyJWTAndReturnKey(token []byte) ([]byte, jwk.Key
 	// Handle did:elsi issuers via X.509 certificate chain + eIDAS trust list.
 	// For did:elsi, the iss claim from the payload is authoritative (not kid),
 	// since the certificate carries the key, not a DID document.
-	if isDidElsiMethod(issuerDID) {
+	// Guard: when dispatch was triggered by kid, ensure iss is also did:elsi
+	// to prevent a mismatch where kid=did:elsi:A but iss=did:elsi:B or non-elsi.
+	if IsDidElsi(issuerDID) {
+		if !IsDidElsi(issFromPayload) {
+			logging.Log().Warnf("did:elsi dispatch triggered by kid (%s) but iss claim (%s) is not a did:elsi DID", issuerDID, issFromPayload)
+			return nil, nil, ErrorNoDIDInJWT
+		}
 		return jpc.verifyElsiJWT(token, issFromPayload, headers)
 	}
 
@@ -251,14 +254,6 @@ func parseCertificate(certBase64 string) (*x509.Certificate, error) {
 		return nil, ErrorPemDecodeFailed
 	}
 	return cert, nil
-}
-
-// isDidElsiMethod returns true when the DID uses the did:elsi method prefix
-// and has a non-empty method-specific identifier. The did:elsi spec (Alastria)
-// defines the method-specific identifier as an ETSI EN 319 412-1
-// organizationIdentifier (e.g. "VATES-B12345678").
-func isDidElsiMethod(did string) bool {
-	return strings.HasPrefix(did, DidElsiPrefix) && len(did) > len(DidElsiPrefix)
 }
 
 // validateElsiIssuer verifies that the did:elsi DID's method-specific

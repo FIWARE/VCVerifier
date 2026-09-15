@@ -422,7 +422,7 @@ func createTestTrustStore(t *testing.T, caCert *x509.Certificate) *eidas.TrustSt
 
 // --- did:elsi tests ---
 
-func TestIsDidElsiMethod(t *testing.T) {
+func TestIsDidElsi(t *testing.T) {
 	tests := []struct {
 		name     string
 		did      string
@@ -441,7 +441,7 @@ func TestIsDidElsiMethod(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, isDidElsiMethod(tc.did))
+			assert.Equal(t, tc.expected, IsDidElsi(tc.did))
 		})
 	}
 }
@@ -649,4 +649,49 @@ func TestVerifyJWT_DidElsi_DispatchesToElsiPath(t *testing.T) {
 
 	// HTTPS resolver should NOT have been called
 	assert.Empty(t, mockResolver.calledURL, "HTTPS resolver should not be called for did:elsi issuers")
+}
+
+func TestVerifyJWT_DidElsi_KidElsiButIssMismatch(t *testing.T) {
+	// When the kid header carries a did:elsi DID but the iss claim does not
+	// start with "did:elsi:", the guard rejects the token with ErrorNoDIDInJWT.
+	// This prevents a malformed JWT where kid: "did:elsi:A#k" and iss: "did:web:B"
+	// from entering the elsi path with a non-elsi issuer.
+	privKey, _ := generateTestECKeyPair(t, "")
+
+	tests := []struct {
+		name string
+		kid  string
+		iss  string
+	}{
+		{
+			name: "kid is did:elsi but iss is did:web",
+			kid:  "did:elsi:VATES-B12345678#key-1",
+			iss:  "did:web:example.com",
+		},
+		{
+			name: "kid is did:elsi but iss is HTTPS URL",
+			kid:  "did:elsi:VATES-B12345678#key-1",
+			iss:  "https://issuer.example.com",
+		},
+		{
+			name: "kid is did:elsi but iss is empty",
+			kid:  "did:elsi:VATES-B12345678#key-1",
+			iss:  "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := signTestJWT(t, privKey, tc.kid, map[string]interface{}{
+				"iss": tc.iss,
+			})
+
+			store := eidas.NewTrustStore()
+			registry := did.NewRegistry()
+			checker := NewJWTProofChecker(registry).WithTrustStore(store)
+
+			_, _, err := checker.VerifyJWTAndReturnKey(token)
+			assert.ErrorIs(t, err, ErrorNoDIDInJWT)
+		})
+	}
 }
