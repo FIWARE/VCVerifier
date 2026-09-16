@@ -88,7 +88,7 @@ Create a new standalone documentation file with in-depth, user-focused coverage 
 #### 1b. Update README.md — Restructure eIDAS sections
 
 **1. Update the Table of Contents** (currently lines 11-32):
-- Add entries for the new eIDAS sections under "Trust Anchor Integration":
+- **Note:** The current ToC has no entry for "Trust Anchor Integration" — that `##` heading exists at line 435 but was never added to the ToC. First add a `* [Trust Anchor Integration](#trust-anchor-integration)` parent entry (with its existing sub-sections `EBSI TIR`, `Gaia-X Registry`, `Mixed usage`), then add the new eIDAS entries beneath it:
   - `eIDAS 2.0 Trust List Verification` (new umbrella section)
     - `Global eIDAS Configuration`
     - `SD-JWT Credential Validation`
@@ -100,7 +100,7 @@ Create a new standalone documentation file with in-depth, user-focused coverage 
 - Link to `docs/eidas-verification.md` for the full reference.
 - Subsection on **Global eIDAS Configuration** with all six config fields in a table.
 - Subsection on **SD-JWT Credential Validation** with a minimal config example showing `eidasConfig` inside a credential entry.
-- Relocate the existing **did:elsi** content (currently lines 531-593) as a subsection under the new eIDAS section. Update its introductory text to reference the broader eIDAS context. Change its heading level from `###` to `####` since it's now nested.
+- Relocate the existing **did:elsi** content (currently lines 531-593) as a subsection under the new eIDAS section. Update its introductory text to reference the broader eIDAS context. Change its heading level from `###` to `####` since it's now nested. **Heading depth note:** The current did:elsi section uses `####` sub-headings ("What is did:elsi?", "Prerequisites", "Configuration", etc.). Nesting under `####` would push them to `#####` (five levels deep), which is valid Markdown but awkward to read and poorly rendered by some tools. Instead, convert the current `####` sub-headings to **bold text paragraphs** (e.g., `**What is did:elsi?**`) to keep the content well-organized without excessive nesting.
 
 **3. Update the main Configuration section** (line ~83):
 - Add the `eidas:` block to the main configuration YAML example (currently entirely absent from the README YAML — only in commented-out `server.yaml`). Include all six fields with comments.
