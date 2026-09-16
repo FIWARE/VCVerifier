@@ -634,7 +634,7 @@ credentials:
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Toggle eIDAS validation for this credential type. |
 | `allowedCountries` | string list | `[]` (falls back to global) | Per-credential country filter. Overrides `eidas.countries` when non-empty. |
-| `requireQualified` | bool | `true` | When `true`, only qualified trust services (QTSPs) are accepted. |
+| `requireQualified` | bool pointer | `true` | When `true`, only qualified trust services (QTSPs) are accepted. When `false`, non-qualified CAs are also accepted. Omitting the field defaults to `true`. |
 
 eIDAS validation is an **additional** check — it runs alongside trusted participants/issuers lists, holder verification, and revocation checks. It requires **SD-JWT format** — JWT-VC and JSON-LD credentials are rejected with `eidas_validation_requires_sd_jwt_format` if `eidasConfig` is enabled. The global `eidas.enabled` must be `true`.
 
