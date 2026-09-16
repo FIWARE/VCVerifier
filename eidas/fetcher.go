@@ -381,7 +381,7 @@ func (f *TrustListFetcher) fetchURL(ctx context.Context, url string) ([]byte, ti
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to fetch %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, 0, fmt.Errorf("unexpected status code %d for %s", resp.StatusCode, url)

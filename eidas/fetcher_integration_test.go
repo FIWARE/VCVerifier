@@ -29,10 +29,10 @@ func init() {
 
 // testTLInfra bundles httptest servers for a LOTL and national TLs.
 type testTLInfra struct {
-	lotlServer    *httptest.Server
-	nationalTLs   map[string]*httptest.Server
-	lotlXML       *atomic.Value
-	nationalXMLs  map[string]*atomic.Value
+	lotlServer   *httptest.Server
+	nationalTLs  map[string]*httptest.Server
+	lotlXML      *atomic.Value
+	nationalXMLs map[string]*atomic.Value
 }
 
 // newTestTLInfra creates a test infrastructure with LOTL and national TL
@@ -57,7 +57,7 @@ func newTestTLInfra(t *testing.T, countryCodes []string) *testTLInfra {
 			return func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/xml")
 				w.WriteHeader(http.StatusOK)
-				fmt.Fprint(w, store.Load().(string))
+				_, _ = fmt.Fprint(w, store.Load().(string))
 			}
 		}(xmlStore)))
 		infra.nationalTLs[cc] = srv
@@ -75,7 +75,7 @@ func newTestTLInfra(t *testing.T, countryCodes []string) *testTLInfra {
 		w.Header().Set("Content-Type", "application/xml")
 		w.Header().Set("Cache-Control", "max-age=3600")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, infra.lotlXML.Load().(string))
+		_, _ = fmt.Fprint(w, infra.lotlXML.Load().(string))
 	}))
 
 	return infra
@@ -238,7 +238,7 @@ func TestFetcherIntegration_ErrorHandling_UnavailableLOTL(t *testing.T) {
 func TestFetcherIntegration_ErrorHandling_MalformedLOTLXML(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
-		fmt.Fprint(w, "<invalid><xml>>>{{{not closed")
+		_, _ = fmt.Fprint(w, "<invalid><xml>>>{{{not closed")
 	}))
 	defer server.Close()
 
@@ -303,7 +303,7 @@ func TestFetcherIntegration_BackgroundStartStopLifecycle(t *testing.T) {
 	countingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fetchCount.Add(1)
 		w.Header().Set("Content-Type", "application/xml")
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer countingServer.Close()
 
@@ -360,7 +360,7 @@ func TestFetcherIntegration_CountryFilterInFetcher(t *testing.T) {
 				esRequested.Store(true)
 			}
 			w.Header().Set("Content-Type", "application/xml")
-			fmt.Fprint(w, xmlStore.Load().(string))
+			_, _ = fmt.Fprint(w, xmlStore.Load().(string))
 		}))
 		infra.nationalTLs[ccLocal] = newSrv
 	}

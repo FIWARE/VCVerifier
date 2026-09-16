@@ -396,7 +396,8 @@ func TestTrustStore_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			cc := "C" + string(rune('A'+id%26))
 			for j := 0; j < numOperations; j++ {
-				if j%3 == 0 {
+				switch j % 3 {
+				case 0:
 					// Writer.
 					store.Update(cc, []TrustedService{
 						{
@@ -407,10 +408,10 @@ func TestTrustStore_ConcurrentAccess(t *testing.T) {
 							Certificates:  []*x509.Certificate{cert},
 						},
 					})
-				} else if j%3 == 1 {
+				case 1:
 					// Reader - GetTrustedServices.
 					_ = store.GetTrustedServices(cc, nil, false)
-				} else {
+				default:
 					// Reader - IsTrustedService.
 					_ = store.IsTrustedService(cert, cc, nil)
 				}

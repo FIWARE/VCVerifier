@@ -110,18 +110,18 @@ func (tl *TrustServiceStatusList) IsLOTL() bool {
 // SchemeInformation contains metadata about the trust list, including the
 // scheme operator, territory, type, and pointers to other trust lists (for LOTLs).
 type SchemeInformation struct {
-	TSLVersionIdentifier       int                     `xml:"TSLVersionIdentifier"`
-	TSLSequenceNumber          int                     `xml:"TSLSequenceNumber"`
-	TSLType                    string                  `xml:"TSLType"`
-	SchemeOperatorName         InternationalNames      `xml:"SchemeOperatorName"`
-	SchemeName                 InternationalNames      `xml:"SchemeName"`
-	SchemeInformationURI       InternationalURIs       `xml:"SchemeInformationURI"`
-	StatusDeterminationApproach string                  `xml:"StatusDeterminationApproach"`
-	SchemeTerritory            string                  `xml:"SchemeTerritory"`
-	HistoricalInformationPeriod int                    `xml:"HistoricalInformationPeriod"`
-	ListIssueDateTime          string                  `xml:"ListIssueDateTime"`
-	NextUpdate                 NextUpdate              `xml:"NextUpdate"`
-	PointersToOtherTSL         *PointersToOtherTSL     `xml:"PointersToOtherTSL,omitempty"`
+	TSLVersionIdentifier        int                 `xml:"TSLVersionIdentifier"`
+	TSLSequenceNumber           int                 `xml:"TSLSequenceNumber"`
+	TSLType                     string              `xml:"TSLType"`
+	SchemeOperatorName          InternationalNames  `xml:"SchemeOperatorName"`
+	SchemeName                  InternationalNames  `xml:"SchemeName"`
+	SchemeInformationURI        InternationalURIs   `xml:"SchemeInformationURI"`
+	StatusDeterminationApproach string              `xml:"StatusDeterminationApproach"`
+	SchemeTerritory             string              `xml:"SchemeTerritory"`
+	HistoricalInformationPeriod int                 `xml:"HistoricalInformationPeriod"`
+	ListIssueDateTime           string              `xml:"ListIssueDateTime"`
+	NextUpdate                  NextUpdate          `xml:"NextUpdate"`
+	PointersToOtherTSL          *PointersToOtherTSL `xml:"PointersToOtherTSL,omitempty"`
 }
 
 // NextUpdate holds the date/time when the next update of the trust list is expected.
@@ -243,19 +243,19 @@ type TSPServices struct {
 
 // TSPService represents a single trust service entry within a TSP.
 type TSPService struct {
-	ServiceInformation ServiceInformation  `xml:"ServiceInformation"`
-	ServiceHistory     *ServiceHistory     `xml:"ServiceHistory,omitempty"`
+	ServiceInformation ServiceInformation `xml:"ServiceInformation"`
+	ServiceHistory     *ServiceHistory    `xml:"ServiceHistory,omitempty"`
 }
 
 // ServiceInformation holds the core details of a trust service: its type,
 // status, digital identities (X.509 certificates), and extensions.
 type ServiceInformation struct {
-	ServiceTypeIdentifier          string                   `xml:"ServiceTypeIdentifier"`
-	ServiceName                    InternationalNames       `xml:"ServiceName"`
-	ServiceDigitalIdentity         ServiceDigitalIdentity   `xml:"ServiceDigitalIdentity"`
-	ServiceStatus                  string                   `xml:"ServiceStatus"`
-	StatusStartingTime             string                   `xml:"StatusStartingTime"`
-	ServiceInformationExtensions   *ServiceInformationExtensions `xml:"ServiceInformationExtensions,omitempty"`
+	ServiceTypeIdentifier        string                        `xml:"ServiceTypeIdentifier"`
+	ServiceName                  InternationalNames            `xml:"ServiceName"`
+	ServiceDigitalIdentity       ServiceDigitalIdentity        `xml:"ServiceDigitalIdentity"`
+	ServiceStatus                string                        `xml:"ServiceStatus"`
+	StatusStartingTime           string                        `xml:"StatusStartingTime"`
+	ServiceInformationExtensions *ServiceInformationExtensions `xml:"ServiceInformationExtensions,omitempty"`
 }
 
 // ServiceHistory contains historical service status entries.
@@ -280,8 +280,8 @@ type ServiceInformationExtensions struct {
 
 // Extension represents a single service information extension element.
 type Extension struct {
-	Critical                     bool   `xml:"Critical,attr"`
-	ExpiredCertsRevocationInfo   string `xml:"ExpiredCertsRevocationInfo,omitempty"`
+	Critical                     bool                          `xml:"Critical,attr"`
+	ExpiredCertsRevocationInfo   string                        `xml:"ExpiredCertsRevocationInfo,omitempty"`
 	AdditionalServiceInformation *AdditionalServiceInformation `xml:"AdditionalServiceInformation,omitempty"`
 }
 
@@ -405,13 +405,13 @@ func (tl *TrustServiceStatusList) GetTrustServices() ([]TrustedService, error) {
 					info.StatusStartingTime, info.ServiceName.GetEnglish(), tspName, err)
 			}
 			services = append(services, TrustedService{
-				CountryCode:       territory,
-				TSPName:           tspName,
-				ServiceName:       info.ServiceName.GetEnglish(),
-				ServiceType:       info.ServiceTypeIdentifier,
-				ServiceStatus:     info.ServiceStatus,
+				CountryCode:        territory,
+				TSPName:            tspName,
+				ServiceName:        info.ServiceName.GetEnglish(),
+				ServiceType:        info.ServiceTypeIdentifier,
+				ServiceStatus:      info.ServiceStatus,
 				StatusStartingTime: statusTime,
-				Certificates:      certs,
+				Certificates:       certs,
 			})
 		}
 	}

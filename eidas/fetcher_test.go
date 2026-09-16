@@ -194,14 +194,14 @@ func TestTrustListFetcher_Refresh_FullHierarchy(t *testing.T) {
 	deServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, deTL)
+		_, _ = fmt.Fprint(w, deTL)
 	}))
 	defer deServer.Close()
 
 	frServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, frTL)
+		_, _ = fmt.Fprint(w, frTL)
 	}))
 	defer frServer.Close()
 
@@ -214,7 +214,7 @@ func TestTrustListFetcher_Refresh_FullHierarchy(t *testing.T) {
 		w.Header().Set("Content-Type", "application/xml")
 		w.Header().Set("Cache-Control", "max-age=3600")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer lotlServer.Close()
 
@@ -249,12 +249,12 @@ func TestTrustListFetcher_Refresh_WithCountryFilter(t *testing.T) {
 	frTL := makeNationalTLXML("FR", ServiceTypeCA, ServiceStatusGranted)
 
 	deServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, deTL)
+		_, _ = fmt.Fprint(w, deTL)
 	}))
 	defer deServer.Close()
 
 	frServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, frTL)
+		_, _ = fmt.Fprint(w, frTL)
 	}))
 	defer frServer.Close()
 
@@ -263,7 +263,7 @@ func TestTrustListFetcher_Refresh_WithCountryFilter(t *testing.T) {
 	lotlXML := fmt.Sprintf(lotlTemplate, dePointer+"\n"+frPointer)
 
 	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer lotlServer.Close()
 
@@ -302,7 +302,7 @@ func TestTrustListFetcher_Refresh_LOTLFetchError(t *testing.T) {
 
 func TestTrustListFetcher_Refresh_InvalidLOTLXML(t *testing.T) {
 	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "not xml")
+		_, _ = fmt.Fprint(w, "not xml")
 	}))
 	defer lotlServer.Close()
 
@@ -320,7 +320,7 @@ func TestTrustListFetcher_Refresh_NotALOTL(t *testing.T) {
 	// Serve a national TL (EUgeneric) where a LOTL is expected.
 	nationalXML := makeNationalTLXML("DE", ServiceTypeCAQC, ServiceStatusGranted)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, nationalXML)
+		_, _ = fmt.Fprint(w, nationalXML)
 	}))
 	defer server.Close()
 
@@ -338,7 +338,7 @@ func TestTrustListFetcher_Refresh_NoDistributionPoints(t *testing.T) {
 	// LOTL with no pointers.
 	lotlXML := fmt.Sprintf(lotlTemplate, "") // empty pointers
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer server.Close()
 
@@ -364,7 +364,7 @@ func TestTrustListFetcher_Refresh_NationalTLFetchError(t *testing.T) {
 	defer deServer.Close()
 
 	frServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, frTL)
+		_, _ = fmt.Fprint(w, frTL)
 	}))
 	defer frServer.Close()
 
@@ -373,7 +373,7 @@ func TestTrustListFetcher_Refresh_NationalTLFetchError(t *testing.T) {
 	lotlXML := fmt.Sprintf(lotlTemplate, dePointer+"\n"+frPointer)
 
 	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer lotlServer.Close()
 
@@ -395,7 +395,7 @@ func TestTrustListFetcher_Refresh_NationalTLFetchError(t *testing.T) {
 
 func TestTrustListFetcher_Refresh_NationalTLInvalidXML(t *testing.T) {
 	deServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "invalid xml garbage")
+		_, _ = fmt.Fprint(w, "invalid xml garbage")
 	}))
 	defer deServer.Close()
 
@@ -403,7 +403,7 @@ func TestTrustListFetcher_Refresh_NationalTLInvalidXML(t *testing.T) {
 	lotlXML := fmt.Sprintf(lotlTemplate, dePointer)
 
 	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer lotlServer.Close()
 
@@ -439,7 +439,7 @@ func TestTrustListFetcher_StartStop(t *testing.T) {
 		fetchCount.Add(1)
 		// Return a valid LOTL with no distribution points.
 		lotlXML := fmt.Sprintf(lotlTemplate, "")
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer server.Close()
 
@@ -467,7 +467,7 @@ func TestTrustListFetcher_StartStop(t *testing.T) {
 func TestTrustListFetcher_StartIsIdempotent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		lotlXML := fmt.Sprintf(lotlTemplate, "")
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer server.Close()
 
@@ -490,7 +490,7 @@ func TestTrustListFetcher_StartAfterStop(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fetchCount.Add(1)
 		lotlXML := fmt.Sprintf(lotlTemplate, "")
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer server.Close()
 
@@ -520,7 +520,7 @@ func TestTrustListFetcher_StartAfterStop(t *testing.T) {
 func TestTrustListFetcher_StopIsIdempotent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		lotlXML := fmt.Sprintf(lotlTemplate, "")
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer server.Close()
 
@@ -558,7 +558,7 @@ func TestTrustListFetcher_ConcurrentNationalTLFetch(t *testing.T) {
 		ccLocal := cc
 		tlXML := makeNationalTLXML(ccLocal, ServiceTypeCAQC, ServiceStatusGranted)
 		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprint(w, tlXML)
+			_, _ = fmt.Fprint(w, tlXML)
 		}))
 		defer servers[i].Close()
 
@@ -567,7 +567,7 @@ func TestTrustListFetcher_ConcurrentNationalTLFetch(t *testing.T) {
 
 	lotlXML := fmt.Sprintf(lotlTemplate, strings.Join(pointers, "\n"))
 	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer lotlServer.Close()
 
@@ -599,7 +599,7 @@ func TestTrustListFetcher_Refresh_UpdatesExistingData(t *testing.T) {
 			status = ServiceStatusWithdrawn
 		}
 		tlXML := makeNationalTLXML("DE", ServiceTypeCAQC, status)
-		fmt.Fprint(w, tlXML)
+		_, _ = fmt.Fprint(w, tlXML)
 	}))
 	defer deServer.Close()
 
@@ -607,7 +607,7 @@ func TestTrustListFetcher_Refresh_UpdatesExistingData(t *testing.T) {
 	lotlXML := fmt.Sprintf(lotlTemplate, dePointer)
 
 	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, lotlXML)
+		_, _ = fmt.Fprint(w, lotlXML)
 	}))
 	defer lotlServer.Close()
 
@@ -641,12 +641,12 @@ func TestTrustListFetcher_Refresh_PrunesStaleCountries(t *testing.T) {
 	frTL := makeNationalTLXML("FR", ServiceTypeCA, ServiceStatusGranted)
 
 	deServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, deTL)
+		_, _ = fmt.Fprint(w, deTL)
 	}))
 	defer deServer.Close()
 
 	frServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, frTL)
+		_, _ = fmt.Fprint(w, frTL)
 	}))
 	defer frServer.Close()
 
@@ -660,7 +660,7 @@ func TestTrustListFetcher_Refresh_PrunesStaleCountries(t *testing.T) {
 	currentLOTL.Store(lotlWithBoth)
 
 	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, currentLOTL.Load().(string))
+		_, _ = fmt.Fprint(w, currentLOTL.Load().(string))
 	}))
 	defer lotlServer.Close()
 
@@ -777,7 +777,7 @@ func TestTrustListFetcher_FetchURL_CacheControlHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "max-age=7200")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "test body")
+		_, _ = fmt.Fprint(w, "test body")
 	}))
 	defer server.Close()
 
@@ -791,7 +791,7 @@ func TestTrustListFetcher_FetchURL_CacheControlHeader(t *testing.T) {
 func TestTrustListFetcher_FetchURL_NoCacheControl(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "test body")
+		_, _ = fmt.Fprint(w, "test body")
 	}))
 	defer server.Close()
 

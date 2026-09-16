@@ -41,12 +41,12 @@ func generateTestCertificate(t *testing.T, cn string, isCA bool) (*x509.Certific
 	require.NoError(t, err)
 
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
-		NotAfter:     time.Date(2030, 12, 31, 23, 59, 59, 0, time.UTC),
-		IsCA:         isCA,
-		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2030, 12, 31, 23, 59, 59, 0, time.UTC),
+		IsCA:                  isCA,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: isCA,
 	}
 	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
@@ -282,11 +282,11 @@ func TestExtractServiceCertificates(t *testing.T) {
 	_, b64Cert := generateTestCertificate(t, "Test Cert", true)
 
 	tests := []struct {
-		name        string
-		identity    ServiceDigitalIdentity
-		wantCount   int
-		wantErr     bool
-		wantErrMsg  string
+		name       string
+		identity   ServiceDigitalIdentity
+		wantCount  int
+		wantErr    bool
+		wantErrMsg string
 	}{
 		{
 			name: "single certificate",
@@ -712,9 +712,9 @@ func TestGetTrustServices_InvalidCertificate(t *testing.T) {
 
 func TestIsLOTL(t *testing.T) {
 	tests := []struct {
-		name   string
+		name    string
 		tslType string
-		isLOTL bool
+		isLOTL  bool
 	}{
 		{
 			name:    "LOTL type",
