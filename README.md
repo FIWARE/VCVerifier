@@ -528,6 +528,70 @@ configRepo:
                   url: https://registry.lab.gaia-x.eu
 ```
 
+### did:elsi — eIDAS Trust List Verification
+
+#### What is did:elsi?
+
+`did:elsi` is a [DID method](https://www.w3.org/TR/did-core/) based on the European [eIDAS](https://digital-strategy.ec.europa.eu/en/policies/eidas-regulation) framework. It identifies organizations using their eIDAS `organizationIdentifier` as defined in [ETSI EN 319 412-1](https://www.etsi.org/deliver/etsi_en/319400_319499/31941201/01.04.02_20/en_31941201v010402a.pdf), carried in the X.509 certificate's Subject field (OID 2.5.4.97).
+
+Example DID: `did:elsi:VATES-B12345678`
+
+Verifiable Credentials issued by `did:elsi` identifiers carry the issuer's X.509 certificate chain in the JWT `x5c` header. VCVerifier verifies the JWT signature using the certificate's public key, binds the DID to the certificate's organization identifier, and validates the certificate chain against the [EU Trusted Lists](https://esignature.ec.europa.eu/efda/tl-browser/) ([ETSI TS 119 612](https://www.etsi.org/deliver/etsi_ts/119600_119699/119612/02.02.01_60/ts_119612v020201p.pdf)).
+
+#### Prerequisites
+
+The eIDAS feature must be globally enabled for `did:elsi` verification to work. The `eidas` section in `server.yaml` must have `enabled: true`. Without it, any `did:elsi` credential is rejected with the error `eidas_trust_store_required_for_did_elsi`.
+
+#### Configuration
+
+Add the following section to your `server.yaml`:
+
+```yaml
+eidas:
+    # Activate the eIDAS trust list fetcher and enable did:elsi credential verification.
+    enabled: true
+    # URL of the EU List of Trusted Lists (LOTL). The default points to the
+    # official EU LOTL. Override only for testing or if the EU changes the URL.
+    lotlUrl: "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
+    # How often (in seconds) to re-fetch and refresh the trust lists.
+    # Clamped to [3600, 604800] (1 hour – 7 days). Default: 86400 (24 hours).
+    refreshInterval: 86400
+    # Optional list of ISO 3166-1 alpha-2 country codes to restrict which
+    # national trusted lists are consulted. Empty means all countries in the
+    # LOTL are used.
+    countries: []  # e.g. ["DE", "FR", "ES"]
+```
+
+| Field | Description |
+|---|---|
+| `enabled` | Activates the eIDAS trust list fetcher and enables `did:elsi` credential verification. |
+| `lotlUrl` | URL of the EU List of Trusted Lists (LOTL). The default points to the official EU LOTL. Override only for testing or if the EU changes the URL. |
+| `refreshInterval` | How often (in seconds) to re-fetch and refresh the trust lists. Clamped to 1 hour – 7 days. Default is 86400 (24 hours). |
+| `countries` | Optional list of [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) country codes to restrict which national trusted lists are consulted. Empty means all countries in the LOTL are used. |
+
+#### How verification works
+
+When VCVerifier receives a credential issued by a `did:elsi` identifier, it performs the following steps:
+
+1. **Extract the certificate chain** — The `x5c` header of the JWT is parsed to obtain the issuer's X.509 certificate chain.
+2. **Bind the DID to the certificate** — The DID's method-specific identifier (e.g. `VATES-B12345678`) is matched against the certificate's `organizationIdentifier` (OID 2.5.4.97). If they do not match, verification fails.
+3. **Verify the JWT signature** — The JWT signature is verified using the leaf certificate's public key.
+4. **Validate the certificate chain** — The certificate chain is validated against the cached EU Trusted Lists. The issuer's certificate must chain up to a trust service provider listed in the LOTL.
+
+> :warning: **JSON-LD not supported:** `did:elsi` only supports JWT-format credentials. JSON-LD (Linked Data Proof) presentations with `did:elsi` signers are explicitly rejected — `did:elsi` uses JWS signatures, not LD proofs.
+
+#### Interaction with other trust anchors
+
+The `did:elsi` trust validation via the EU Trusted Lists is independent of the [EBSI TIR](#ebsi-tir) and [Gaia-X Registry](#gaia-x-registry) trust anchors. If a credential type also has `trustedParticipantsLists` or `trustedIssuersLists` configured, those checks run **in addition** to the eIDAS certificate chain validation — all configured checks must pass.
+
+#### Troubleshooting
+
+| Error | Meaning | Resolution |
+|---|---|---|
+| `eidas_trust_store_required_for_did_elsi` | The global eIDAS feature is disabled. | Set `eidas.enabled: true` in `server.yaml` and restart the verifier. |
+| `did_elsi_issuer_validation_failed` | The DID's organization identifier does not match the certificate's Subject (OID 2.5.4.97). | Check that the issuer's DID suffix matches the `organizationIdentifier` in the X.509 certificate. |
+| `did_elsi_certificate_not_trusted` | The issuer's certificate does not chain to any trusted service in the EU Trusted Lists. | Verify that the issuer is registered with a trust service provider in the configured countries. If using `countries`, ensure the issuer's country is included. |
+
 ### Credential revocation list
 
 The verifier can check incoming credentials against two revocation-list formats:
