@@ -1,183 +1,126 @@
-# Implementation Plan: Add back did:elsi support
+# Implementation Plan: Document eIDAS 2.0 conformant credentials verification
 
 ## Overview
 
-Re-add `did:elsi` DID method support that was removed during ticket-55's Step 5, routing verification through the newly built internal eIDAS trust list infrastructure instead of the old external JAdES service. The `did:elsi` method (Alastria's eIDAS-based DID method) uses X.509 certificates carried in the JWT `x5c` header; the leaf certificate's `organizationIdentifier` (OID 2.5.4.97) must match the DID suffix, the JWT signature is verified using the certificate's public key, and the certificate must chain up to a trusted CA in the EU Trusted Lists via the `eidas.TrustStore`.
+Add comprehensive user-facing documentation for the eIDAS 2.0 trust list verification feature in VCVerifier. The existing README only documents `did:elsi` verification under one subsection (lines 531-593) — this plan restructures and expands the eIDAS documentation to cover the full feature: global configuration (including undocumented `maxWorkers` and `fetchTimeout` fields), per-credential SD-JWT validation via `eidasConfig`, the `did:elsi` DID method, and operational guidance. All changes are documentation-only (Markdown files); no code changes are needed.
 
 ## Steps
 
-### Step 1: Re-add did:elsi JWT proof verification with eIDAS trust list validation
+### Step 1: Add comprehensive eIDAS 2.0 documentation to README and docs/
 
-**Goal:** Restore `did:elsi` as a recognized DID method in the JWT and LD proof paths, using the eIDAS trust store for certificate chain validation instead of the removed external JAdES service.
-
-**What to do:**
-
-**`verifier/jwt_proof_checker.go`** — Core verification logic:
-- Add `trustStore *eidas.TrustStore` field to `JWTProofChecker` struct.
-- Add `WithTrustStore(store *eidas.TrustStore) *JWTProofChecker` method (method-chaining pattern matching `WithHttpsResolver`).
-- Re-add constants: `DidElsiPrefix = "did:elsi:"`, `DidPartsSeparator = ":"`.
-- Re-add error variables: `ErrorEidasRequiredForElsi` (returned when trust store is nil), `ErrorIssuerValidationFailed` (issuer DID doesn't match certificate), `ErrorElsiUntrustedCertificate` (certificate doesn't chain to any trusted CA in trust list).
-- Re-add `isDidElsiMethod(did string) bool` — returns true when the DID has the `did:elsi:` prefix and a non-empty method-specific identifier. Note: the did:elsi spec (Alastria) defines the method-specific identifier as an ETSI EN 319 412-1 `organizationIdentifier`, which uses a dash-separated format (e.g. `VATES-B12345678`), not colons. The check should validate `strings.HasPrefix(did, "did:elsi:") && len(did) > len("did:elsi:")` rather than counting colon-separated parts, since future identifiers may have different internal structure. This matches the original implementation's intent of detecting the did:elsi method prefix.
-- Re-add `validateElsiIssuer(certificate *x509.Certificate, issuerDid string) error` — extracts `organizationIdentifier` (OID 2.5.4.97) from the certificate's Subject and verifies the DID suffix matches it.
-- Add `verifyElsiJWT(token []byte, issuerDID string, headers jws.Headers) ([]byte, jwk.Key, error)`:
-  1. Check `jpc.trustStore != nil` — fail with `ErrorEidasRequiredForElsi` if missing.
-  2. Call `extractX5CFromToken(token)` to get the base64-encoded certificate chain from the `x5c` header (function already exists in the file).
-  3. Parse the leaf certificate via `parseCertificate(certChain[0])` (function already exists).
-  4. Call `validateElsiIssuer(leafCert, issuerDID)` to bind the DID to the certificate.
-  5. Convert the leaf certificate's public key to a JWK via `jwk.Import(leafCert.PublicKey)`.
-  6. Verify the JWT signature using `verifyJWSWithCandidateKeys(token, headers, []jwk.Key{pubKey})` (shared JWS verification function already exists in `jws_verification.go`).
-  7. Parse any intermediate certificates from the chain.
-  8. Verify the certificate chains to a trusted CA using PKIX chain building against the trust store. **Refactoring opportunity:** The PKIX chain verification logic (~30 lines: query trusted services, build `x509.VerifyOptions` with roots, call `leafCert.Verify(opts)`) already exists in `EidasValidationService.verifyCertificateAgainstTrustStore`. Extract this into a shared helper function (e.g. `VerifyCertificateChain(cert *x509.Certificate, intermediates []*x509.Certificate, store *TrustStore, countries []string, serviceTypes []string) error`) on `eidas.TrustStore` or in a new `eidas/verify.go`, so both `EidasValidationService.ValidateVC` and `verifyElsiJWT` call it. This avoids duplication that could drift over time. Reuse the existing `allCertificateServiceTypes` slice from `eidas_validation.go` (which already defines the qualified + non-qualified service type URIs) rather than defining a second copy. Search all countries (empty country code) since did:elsi itself does not carry per-credential country/qualified filters.
-  9. Return `(payload, verifiedKey, nil)` on success.
-- Wire did:elsi detection into `VerifyJWTAndReturnKey()`: after extracting `issuerDID`, check `isDidElsiMethod(issuerDID)` **before** the HTTPS issuer and DID resolution branches. For did:elsi, the `iss` claim from the payload is authoritative (not `kid`), matching the old behavior.
-- Update the doc comment on `JWTProofChecker` struct to mention did:elsi support via eIDAS trust lists.
-
-**`verifier/key_resolver.go`** — Re-add did:elsi detection for LD proof path:
-- Re-add `didElsiMethodPrefix = "did:elsi:"` constant.
-- Re-add `ErrorDidElsiNotSupportedForLDProof` error variable.
-- Re-add `IsDidElsi(didStr string) bool` function.
-
-**`verifier/ld_proof_checker.go`** — Re-add did:elsi rejection in LD proof path:
-- In `resolveProofKeys()`, add a check for `IsDidElsi(signerDID)` **before** the DID resolution call. Return `ErrorDidElsiNotSupportedForLDProof`. This is correct because did:elsi uses JWS/JAdES signatures, not Linked Data Proofs.
-- Update doc comments on `VerifyPresentation` and `VerifyCredential` to mention that did:elsi is explicitly rejected.
-
-**`verifier/jwt_proof_checker_test.go`** — Unit tests:
-- Test `isDidElsiMethod()` with valid and invalid inputs (table-driven).
-- Test `validateElsiIssuer()` with matching and non-matching organization identifiers.
-- Test `verifyElsiJWT()` with:
-  - A valid did:elsi JWT (self-signed test certificate, matching org identifier, mock trust store returning matching trusted services) → success.
-  - Missing x5c header → `ErrorNoCertInHeader`.
-  - Organization identifier mismatch → `ErrorIssuerValidationFailed`.
-  - Trust store is nil (eIDAS disabled) → `ErrorEidasRequiredForElsi`.
-  - Certificate does not chain to any trusted service → `ErrorElsiUntrustedCertificate`.
-- Test `VerifyJWTAndReturnKey()` dispatches to `verifyElsiJWT` when issuer is `did:elsi:*`.
-
-**`verifier/ld_proof_checker_test.go`** — Test did:elsi rejection:
-- Test that LD proof verification rejects a did:elsi signer with `ErrorDidElsiNotSupportedForLDProof`.
-
-**Files:**
-- `verifier/jwt_proof_checker.go` (modified)
-- `verifier/jwt_proof_checker_test.go` (modified)
-- `verifier/key_resolver.go` (modified)
-- `verifier/ld_proof_checker.go` (modified)
-- `verifier/ld_proof_checker_test.go` (modified)
-
-**Acceptance criteria:**
-- `go build ./...` succeeds.
-- `go test ./verifier/... -v` passes with all new tests green.
-- `isDidElsiMethod("did:elsi:VATES-12345678")` returns true (prefix + non-empty suffix).
-- `isDidElsiMethod("did:key:z6Mk...")` returns false (wrong method prefix).
-- `isDidElsiMethod("did:elsi:")` returns false (empty method-specific identifier).
-- `validateElsiIssuer` correctly binds the DID suffix to the certificate's OID 2.5.4.97.
-- JWT signature verification uses the certificate's public key via standard JWS, not an external service.
-- Certificate trust verification uses `eidas.TrustStore` with PKIX chain building.
-- LD proof path rejects did:elsi with `ErrorDidElsiNotSupportedForLDProof`.
-
----
-
-### Step 2: Wire eIDAS trust store into JWTProofChecker and add integration tests
-
-**Goal:** Connect the eIDAS trust store to the JWT proof checker during verifier initialization so did:elsi credentials are verified against the real trust list infrastructure, and add integration-level tests exercising the full flow.
+**Goal:** Restructure and expand the eIDAS documentation so operators can configure and use both SD-JWT eIDAS validation and did:elsi verification without reading source code.
 
 **What to do:**
 
-**`verifier/verifier.go`** — Wire trust store into proof checker:
-- In `InitVerifier()`, after the eIDAS fetcher is created and started (line ~432), inject the trust store into the global proof checker via `GetProofChecker().WithTrustStore(fetcher.Store())`. Note on mutation semantics: `WithTrustStore` follows the same pattern as `WithHttpsResolver` — it mutates the receiver's field in place and returns the same `*JWTProofChecker` pointer. This means `GetProofChecker().WithTrustStore(...)` works correctly without needing to reassign the global, because the returned pointer is the same object.
-- This must happen **after** `InitPresentationParser` has been called (which creates the global proof checker) and **after** the fetcher is started. The current init order in `main.go` is: `InitPresentationParser` → `InitVerifier`, so this naturally works.
-- When eIDAS is disabled (`config.Eidas.Enabled == false`), the proof checker's trust store remains nil, and any did:elsi JWT will fail with `ErrorEidasRequiredForElsi`.
-- Add a log message: `"did:elsi support enabled via eIDAS trust store"` when the trust store is injected.
+#### 1a. Create `docs/eidas-verification.md` — Detailed eIDAS 2.0 Reference
 
-**`verifier/presentation_parser.go`** — No changes needed:
-- `NewJWTProofChecker(registry)` signature is unchanged.
-- `WithTrustStore()` is called later in `InitVerifier`, not here.
+Create a new standalone documentation file with in-depth, user-focused coverage of the eIDAS 2.0 trust list verification feature. This file should cover the following sections:
 
-**`verifier/elsi_integration_test.go`** — Integration tests:
-- Test the full did:elsi verification flow end-to-end using a mock trust store populated with test CA certificates:
-  - **Happy path:** Generate a test CA certificate and leaf certificate. Create an `eidas.TrustStore`, populate it with the CA certificate as a trusted service. Create a JWTProofChecker with the trust store. Build a JWT signed by the leaf certificate's private key, with `iss: "did:elsi:VATES-ORG123"` and the leaf cert (+ CA cert as intermediate) in the `x5c` header. The leaf cert's Subject contains OID 2.5.4.97 = `"VATES-ORG123"`. Verify the JWT succeeds.
-  - **Untrusted issuer:** Same setup but with a different CA in the trust store (certificate doesn't chain to any trusted service) → `ErrorElsiUntrustedCertificate`.
-  - **Issuer DID mismatch:** The cert's org identifier doesn't match the DID → `ErrorIssuerValidationFailed`.
-  - **eIDAS disabled:** No trust store on the proof checker → `ErrorEidasRequiredForElsi`.
-  - **LD proof rejection:** Attempt to verify an LD proof with a did:elsi signer → `ErrorDidElsiNotSupportedForLDProof`.
-  - **Non-did:elsi JWT unchanged:** Verify that standard DID method JWTs (did:key, did:web) still work without trust store involvement.
-- Use table-driven tests with `t.Run()` loops.
-- Create test helper functions for:
-  - Generating self-signed CA and leaf certificates with organization identifier (OID 2.5.4.97).
-  - Building signed JWTs with x5c headers.
+**1. Introduction & Purpose**
+- What eIDAS 2.0 trust list verification does in VCVerifier (1-2 paragraphs).
+- Two verification paths: SD-JWT credentials (per-credential `eidasConfig`) and `did:elsi` credentials (automatic via global eIDAS toggle).
+- Link to the [EU Trusted Lists browser](https://esignature.ec.europa.eu/efda/tl-browser/) and [ETSI TS 119 612](https://www.etsi.org/deliver/etsi_ts/119600_119699/119612/02.02.01_60/ts_119612v020201p.pdf) spec for context.
 
-**`verifier/verifier_test.go`** (if applicable) — Verify wiring:
-- If there are existing tests for `InitVerifier`, add a case verifying the proof checker receives the trust store when eIDAS is enabled.
+**2. How It Works (conceptual overview for operators, not code-level)**
+- Background trust list fetching: VCVerifier fetches the EU List of Trusted Lists (LOTL), discovers national trusted lists, and caches all trust service providers (TSPs) and their CA certificates in memory.
+- Periodic refresh: trust lists are re-fetched on a configurable interval.
+- Certificate chain validation: when a credential is presented, the issuer's X.509 certificate is validated against the cached trust store using standard PKIX chain building (the same mechanism browsers use for TLS).
+- Qualified vs. non-qualified trust services: explain the distinction — qualified trust services (QTSPs) are subject to stricter EU regulatory oversight. The `requireQualified` field (default: `true`) controls whether only qualified service types (`CA/QC`, `NationalRootCA-QC`) or also non-qualified CAs (`CA/PKC`) are accepted.
+
+**3. Global Configuration Reference**
+- Full `eidas:` block in `server.yaml` with all six fields documented:
+  - `enabled` (bool, default: `false`) — master toggle for the entire eIDAS feature
+  - `lotlUrl` (string, default: `https://ec.europa.eu/tools/lotl/eu-lotl.xml`) — URL of the List of Trusted Lists
+  - `refreshInterval` (int, default: `86400`) — seconds between background refreshes, clamped to [3600, 604800]
+  - `countries` (string list, default: empty = all) — ISO 3166-1 alpha-2 country code filter
+  - `maxWorkers` (int, default: `5`) — maximum concurrent national trust list fetches during refresh
+  - `fetchTimeout` (int, default: `30`) — HTTP timeout in seconds per trust list fetch
+- Annotated YAML example showing all fields.
+- Explain what happens when `enabled: false` (default): no background fetching, no memory for trust store, `did:elsi` credentials rejected with error, per-credential `eidasConfig` rejected with HTTP 400.
+
+**4. SD-JWT Credential Validation (per-credential eidasConfig)**
+- Explain the use case: validating that an SD-JWT credential's issuer holds a certificate trusted by the EU Trusted Lists. This is the primary eIDAS 2.0 verification path for credentials that carry issuer certificates in the SD-JWT `x5c` header.
+- Show the per-credential `eidasConfig` block that sits inside each credential entry (alongside `trustedParticipantsLists`, `trustedIssuersLists`, `holderVerification`, `credentialStatus`):
+  ```yaml
+  eidasConfig:
+    enabled: true
+    allowedCountries: ["DE", "FR"]
+    requireQualified: true
+  ```
+- Document each field:
+  - `enabled` (bool) — toggle eIDAS validation for this credential type
+  - `allowedCountries` (string list, optional) — per-credential country filter; when non-empty, overrides the global `eidas.countries`; when empty, falls back to global
+  - `requireQualified` (bool pointer, default: `true`) — when true, only qualified trust services (QTSPs) are accepted; when false, non-qualified CAs are also accepted
+- Full annotated `server.yaml` example showing a service with two credential types: one with eIDAS enabled and one without.
+- Note: eIDAS validation is an **additional** check — it runs alongside (not instead of) trusted participants/issuers list checks and revocation checks. All configured checks must pass.
+- Note: eIDAS validation **requires SD-JWT format**. JWT-VC and JSON-LD credentials will be rejected with `eidas_validation_requires_sd_jwt_format` if `eidasConfig` is enabled for their type.
+- Note: the global `eidas.enabled` must be `true` for per-credential `eidasConfig` to work. If the global toggle is off, attempting to enable `eidasConfig` on a credential type results in an HTTP 400 error.
+
+**5. did:elsi Verification**
+- Brief explanation of the `did:elsi` DID method (link to the README section for quick reference).
+- Clarify that `did:elsi` verification is automatically enabled when the global `eidas.enabled` is `true` — no per-credential config needed.
+- How it works: `x5c` header extraction → DID-to-certificate binding via `organizationIdentifier` OID 2.5.4.97 → JWT signature verification → certificate chain validation against trust store.
+- `did:elsi` only supports JWT format; JSON-LD/Linked Data Proof presentations are explicitly rejected.
+- `did:elsi` searches all countries and all certificate service types (qualified + non-qualified) — unlike per-credential eIDAS validation, there is no per-credential country or qualified filter for `did:elsi`.
+
+**6. Interaction with Other Trust Anchors**
+- eIDAS certificate chain validation is independent of EBSI TIR and Gaia-X Registry.
+- A credential can be validated by both eIDAS and EBSI/Gaia-X if both are configured — all checks must pass.
+- `did:elsi` issuers can also be registered in trusted participants/issuers lists if desired.
+
+**7. Dynamic Configuration via Credentials Config Service**
+- Note that `eidasConfig` is supported by the [Credentials Config Service](https://github.com/FIWARE/credentials-config-service) (version ≥2.0.0), allowing dynamic per-credential eIDAS configuration without restarts.
+- The global `eidas:` settings (LOTL URL, refresh interval, etc.) remain in `server.yaml` and require a restart to change.
+
+**8. Troubleshooting**
+- Table of error messages with meanings and resolutions, covering both SD-JWT and `did:elsi` paths:
+  - `eidas_validation_requires_sd_jwt_format` — `eidasConfig` enabled but credential is not SD-JWT format
+  - `eidas_no_x5c_certificates_available` — SD-JWT credential lacks `x5c` certificates in header
+  - `eidas_issuer_not_trusted_by_trust_list` — certificate doesn't chain to any trusted service
+  - `eidas_trust_store_required_for_did_elsi` — global eIDAS disabled but `did:elsi` credential received
+  - `did_elsi_issuer_validation_failed` — DID suffix doesn't match certificate's `organizationIdentifier`
+  - `did_elsi_certificate_not_trusted` — `did:elsi` certificate not trusted by trust list
+- Operational tips:
+  - Initial trust list fetch may take 30-60 seconds on startup; watch logs for `TrustStore: updated N services for country XX` messages to confirm successful loading.
+  - If no trust services are loaded, verify that the LOTL URL is reachable from the verifier's network and that the `countries` filter is not too restrictive.
+  - The `maxWorkers` and `fetchTimeout` fields can be tuned for environments with slow or unreliable network access to the EU trust list servers.
+
+#### 1b. Update README.md — Restructure eIDAS sections
+
+**1. Update the Table of Contents** (currently lines 11-32):
+- **Note:** The current ToC has no entry for "Trust Anchor Integration" — that `##` heading exists at line 435 but was never added to the ToC. First add a `* [Trust Anchor Integration](#trust-anchor-integration)` parent entry (with its existing sub-sections `EBSI TIR`, `Gaia-X Registry`, `Mixed usage`), then add the new eIDAS entries beneath it:
+  - `eIDAS 2.0 Trust List Verification` (new umbrella section)
+    - `Global eIDAS Configuration`
+    - `SD-JWT Credential Validation`
+    - `did:elsi — eIDAS Trust List Verification` (existing, relocated under umbrella)
+
+**2. Add a new `### eIDAS 2.0 Trust List Verification` section** (replacing the current standalone `did:elsi` section at line 531):
+- 2-3 paragraph overview: what eIDAS 2.0 trust list verification is, the two verification paths (SD-JWT per-credential and `did:elsi` automatic), and how to enable it.
+- Quick-start configuration example (global `eidas:` block + one per-credential `eidasConfig` example).
+- Link to `docs/eidas-verification.md` for the full reference.
+- Subsection on **Global eIDAS Configuration** with all six config fields in a table.
+- Subsection on **SD-JWT Credential Validation** with a minimal config example showing `eidasConfig` inside a credential entry.
+- Relocate the existing **did:elsi** content (currently lines 531-593) as a subsection under the new eIDAS section. Update its introductory text to reference the broader eIDAS context. Change its heading level from `###` to `####` since it's now nested. **Heading depth note:** The current did:elsi section uses `####` sub-headings ("What is did:elsi?", "Prerequisites", "Configuration", etc.). Nesting under `####` would push them to `#####` (five levels deep), which is valid Markdown but awkward to read and poorly rendered by some tools. Instead, convert the current `####` sub-headings to **bold text paragraphs** (e.g., `**What is did:elsi?**`) to keep the content well-organized without excessive nesting.
+
+**3. Update the main Configuration section** (line ~83):
+- Add the `eidas:` block to the main configuration YAML example (currently entirely absent from the README YAML — only in commented-out `server.yaml`). Include all six fields with comments.
+- Add an `eidasConfig` example to the per-credential section (only `holderVerification` and `credentialStatus` are currently shown inline).
+
+**4. Verify internal links** — Ensure all `#anchor` links in the Table of Contents and cross-references match the new heading structure.
 
 **Files:**
-- `verifier/verifier.go` (modified — inject trust store into proof checker)
-- `verifier/elsi_integration_test.go` (new — integration tests)
-- `verifier/verifier_test.go` (modified if applicable)
+- `docs/eidas-verification.md` (new)
+- `README.md` (modified — restructured eIDAS sections, updated ToC, updated config examples)
 
 **Acceptance criteria:**
-- `go test ./... -v` passes with all tests green, including new integration tests.
-- `GetProofChecker().trustStore` is non-nil after `InitVerifier()` when eIDAS is enabled.
-- Full did:elsi JWT verification flow works end-to-end: JWT signed by certificate → x5c extraction → issuer DID binding → JWS signature verification → trust list chain validation → success.
-- did:elsi JWTs are rejected with a clear error when eIDAS is disabled.
-- No regressions in existing test suites (HTTPS issuers, standard DID methods, eIDAS SD-JWT validation, LD proofs).
-
----
-
-### Step 3: User-facing documentation for did:elsi support
-
-**Goal:** Add clear, user-focused documentation to the README explaining what did:elsi support is, how to configure it, and how to use it. This ensures operators can enable and configure did:elsi credential verification without diving into the source code.
-
-**What to do:**
-
-**`README.md`** — Add a new section under "Trust Anchor Integration" (after the existing EBSI TIR and Gaia-X Registry sections):
-
-Add a section titled **"did:elsi — eIDAS Trust List Verification"** covering:
-
-1. **What is did:elsi?**
-   - Brief explanation: `did:elsi` is a DID method based on the European eIDAS framework. It identifies organizations using their eIDAS `organizationIdentifier` (ETSI EN 319 412-1), carried in the X.509 certificate's Subject (OID 2.5.4.97). Example DID: `did:elsi:VATES-B12345678`.
-   - How it works with VCVerifier: Verifiable Credentials issued by `did:elsi` identifiers carry the issuer's X.509 certificate chain in the JWT `x5c` header. VCVerifier verifies the JWT signature using the certificate's public key, binds the DID to the certificate's organization identifier, and validates the certificate chain against the EU Trusted Lists (ETSI TS 119 612).
-
-2. **Prerequisites**
-   - The eIDAS feature must be globally enabled. did:elsi verification depends on the eIDAS trust list infrastructure — the `eidas` section in `server.yaml` must have `enabled: true`.
-   - Without eIDAS enabled, any `did:elsi` credential will be rejected with a clear error message.
-
-3. **Configuration**
-   - Show the relevant `server.yaml` configuration block:
-     ```yaml
-     eidas:
-       enabled: true
-       lotlUrl: "https://ec.europa.eu/tools/lotl/eu-lotl.xml"  # EU List of Trusted Lists
-       refreshInterval: 86400  # seconds between trust list refreshes (default: 24h)
-       countries: []  # empty = all EU countries; or e.g. ["DE", "FR", "ES"]
-     ```
-   - Explain each field in plain language:
-     - `enabled` — Activates the eIDAS trust list fetcher and enables did:elsi credential verification.
-     - `lotlUrl` — URL of the EU List of Trusted Lists (LOTL). The default points to the official EU LOTL. Override only for testing or if the EU changes the URL.
-     - `refreshInterval` — How often (in seconds) to re-fetch and refresh the trust lists. Default is 86400 (24 hours).
-     - `countries` — Optional list of ISO 3166-1 alpha-2 country codes to restrict which national trusted lists are consulted. Empty means all countries in the LOTL are used.
-
-4. **How verification works**
-   - Step-by-step description in user-friendly terms:
-     1. VCVerifier receives a Verifiable Credential (JWT format) with `iss: "did:elsi:VATES-..."`.
-     2. The `x5c` header is extracted to obtain the issuer's X.509 certificate chain.
-     3. The DID's method-specific identifier (e.g. `VATES-B12345678`) is matched against the certificate's `organizationIdentifier` (OID 2.5.4.97).
-     4. The JWT signature is verified using the certificate's public key.
-     5. The certificate chain is validated against the cached EU Trusted Lists — the issuer's certificate must chain up to a trust service provider listed in the LOTL.
-   - Note: did:elsi only supports JWT-format credentials. JSON-LD (Linked Data Proof) presentations with did:elsi signers are explicitly rejected — did:elsi uses JWS signatures, not LD proofs.
-
-5. **Interaction with other trust anchors**
-   - Clarify that did:elsi trust validation via the EU Trusted Lists is independent of the EBSI TIR and Gaia-X Registry trust anchors.
-   - If a credential type also has `trustedParticipantsLists` or `trustedIssuersLists` configured, those checks run in addition to the eIDAS certificate chain validation — all configured checks must pass.
-
-6. **Troubleshooting**
-   - Common error messages and what they mean:
-     - `ErrorEidasRequiredForElsi` — The global eIDAS feature is disabled. Enable `eidas.enabled: true` in `server.yaml`.
-     - `ErrorIssuerValidationFailed` — The DID's organization identifier doesn't match the certificate. Check the issuer's DID and certificate Subject.
-     - `ErrorElsiUntrustedCertificate` — The issuer's certificate doesn't chain to any trusted service in the EU Trusted Lists. Verify the issuer is registered with a trust service provider in the configured countries.
-
-**Files:**
-- `README.md` (modified — add did:elsi documentation section)
-
-**Acceptance criteria:**
-- README contains a user-focused section on did:elsi support under "Trust Anchor Integration".
-- The section explains what did:elsi is, how to enable it, the full `server.yaml` configuration with explanations, how verification works step-by-step, interaction with other trust anchors, and common troubleshooting scenarios.
-- Documentation is written for operators (not developers) — focuses on configuration and usage rather than implementation internals.
-- No broken links or references to non-existent configuration options.
+- `docs/eidas-verification.md` exists and covers all eight topics listed above (introduction, how it works, global config, SD-JWT validation, did:elsi, interaction with other anchors, dynamic config, troubleshooting).
+- README.md has an updated Table of Contents with eIDAS entries.
+- README.md has a new `eIDAS 2.0 Trust List Verification` umbrella section with overview, quick-start config, and link to `docs/eidas-verification.md`.
+- README.md main configuration YAML includes the `eidas:` block with all six fields.
+- README.md per-credential example includes `eidasConfig`.
+- The existing `did:elsi` section content is preserved and correctly positioned as a subsection within the broader eIDAS context.
+- All six global config fields are documented (`enabled`, `lotlUrl`, `refreshInterval`, `countries`, `maxWorkers`, `fetchTimeout`).
+- All three per-credential `eidasConfig` fields are documented (`enabled`, `allowedCountries`, `requireQualified`).
+- No broken internal links (all `#anchor` references resolve correctly).
+- All documentation is written for operators (how to configure and use), not developers (no code-level implementation details).
+- No code changes — only Markdown files are modified or created.
