@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
@@ -24,10 +23,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// oidOrgIdentifier is OID 2.5.4.97 for the organizationIdentifier
-// attribute (ETSI EN 319 412-1), used in integration test certificates.
-var oidOrgIdentifier = asn1.ObjectIdentifier{2, 5, 4, 97}
 
 // --- Test helpers for integration tests ---
 
@@ -75,7 +70,7 @@ func generateIntegrationLeafCert(t *testing.T, caCert *x509.Certificate, caKey *
 			Country:      []string{"ES"},
 			ExtraNames: []pkix.AttributeTypeAndValue{
 				{
-					Type:  oidOrgIdentifier,
+					Type:  oidOrganizationIdentifier,
 					Value: orgIdentifier,
 				},
 			},
@@ -155,10 +150,9 @@ func TestElsiIntegration_FullFlow(t *testing.T) {
 	untrustedCACert, _ := generateIntegrationCA(t)
 
 	type testCase struct {
-		name        string
-		setupFn     func(t *testing.T) (*JWTProofChecker, []byte) // returns checker + token
-		wantErr     error
-		wantPayload bool // whether a non-nil payload is expected
+		name    string
+		setupFn func(t *testing.T) (*JWTProofChecker, []byte) // returns checker + token
+		wantErr error
 	}
 
 	tests := []testCase{
@@ -176,8 +170,7 @@ func TestElsiIntegration_FullFlow(t *testing.T) {
 				})
 				return checker, token
 			},
-			wantErr:     nil,
-			wantPayload: true,
+			wantErr: nil,
 		},
 		{
 			name: "untrusted issuer: certificate does not chain to any trusted service",
@@ -194,8 +187,7 @@ func TestElsiIntegration_FullFlow(t *testing.T) {
 				})
 				return checker, token
 			},
-			wantErr:     ErrorElsiUntrustedCertificate,
-			wantPayload: false,
+			wantErr: ErrorElsiUntrustedCertificate,
 		},
 		{
 			name: "issuer DID mismatch: org identifier does not match certificate",
@@ -212,8 +204,7 @@ func TestElsiIntegration_FullFlow(t *testing.T) {
 				})
 				return checker, token
 			},
-			wantErr:     ErrorIssuerValidationFailed,
-			wantPayload: false,
+			wantErr: ErrorIssuerValidationFailed,
 		},
 		{
 			name: "eIDAS disabled: no trust store configured",
@@ -228,8 +219,7 @@ func TestElsiIntegration_FullFlow(t *testing.T) {
 				})
 				return checker, token
 			},
-			wantErr:     ErrorEidasRequiredForElsi,
-			wantPayload: false,
+			wantErr: ErrorEidasRequiredForElsi,
 		},
 	}
 
