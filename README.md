@@ -21,6 +21,15 @@ VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer 
         * [Database](#database)
         * [Refresh Token](#refresh-token)
         * [ConfigServer](#configserver)
+* [Trust Anchor Integration](#trust-anchor-integration)
+    * [EBSI TIR](#ebsi-tir)
+    * [Gaia-X Registry](#gaia-x-registry)
+    * [Mixed usage](#mixed-usage)
+    * [eIDAS 2.0 Trust List Verification](#eidas-20-trust-list-verification)
+        * [Global eIDAS Configuration](#global-eidas-configuration)
+        * [SD-JWT Credential Validation](#sd-jwt-credential-validation)
+        * [did:elsi — eIDAS Trust List Verification](#didelsi--eidas-trust-list-verification)
+    * [Credential revocation list](#credential-revocation-list)
 * [Usage](#usage)
     * [Frontend-Integration](#frontend-integration)
     * [REST-Example](#rest-example)
@@ -181,6 +190,29 @@ verifier:
     # network.
     httpsIssuerAllowPrivateNetworks: false
 
+# eIDAS 2.0 trust list verification. When enabled, VCVerifier fetches the EU
+# List of Trusted Lists (LOTL) and caches trust service providers for
+# certificate chain validation. Required for did:elsi credentials and
+# per-credential eidasConfig. See docs/eidas-verification.md for details.
+eidas:
+    # Master toggle for the entire eIDAS feature. When false (default), no trust
+    # lists are fetched, did:elsi credentials are rejected, and per-credential
+    # eidasConfig is rejected with HTTP 400.
+    enabled: false
+    # URL of the EU List of Trusted Lists (LOTL). Override only for testing or
+    # if the EU changes the URL.
+    lotlUrl: "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
+    # How often (in seconds) to re-fetch and refresh the trust lists.
+    # Clamped to [3600, 604800] (1 hour to 7 days). Default: 86400 (24 hours).
+    refreshInterval: 86400
+    # ISO 3166-1 alpha-2 country codes to restrict which national trusted lists
+    # are consulted. Empty (default) means all countries in the LOTL are used.
+    countries: []  # e.g. ["DE", "FR", "ES"]
+    # Maximum concurrent national trust list fetches during a refresh cycle.
+    maxWorkers: 5
+    # HTTP timeout (in seconds) per trust list fetch request.
+    fetchTimeout: 30
+
 # configuration of the service to retrieve configuration for
 configRepo:
     # endpoint of the configuration service, to retrieve the scope to be requested and the trust endpoints for the credentials.
@@ -234,6 +266,17 @@ configRepo:
                             #     # reject credentials of this type that do not carry a
                             #     # credentialStatus entry (default: false)
                             #     requireStatus: false
+                            # Per-credential eIDAS 2.0 trust list validation. Requires
+                            # global eidas.enabled: true. SD-JWT format only.
+                            # See docs/eidas-verification.md for details.
+                            # eidasConfig:
+                            #     # toggle eIDAS validation for this credential type
+                            #     enabled: true
+                            #     # per-credential country filter; overrides global
+                            #     # eidas.countries when non-empty
+                            #     allowedCountries: ["DE", "FR"]
+                            #     # accept only qualified trust services (default: true)
+                            #     requireQualified: true
                     # credentials and claims to be requested
                     presentationDefinition:
                         id: my-presentation
@@ -528,48 +571,88 @@ configRepo:
                   url: https://registry.lab.gaia-x.eu
 ```
 
-### did:elsi — eIDAS Trust List Verification
+### eIDAS 2.0 Trust List Verification
 
-#### What is did:elsi?
+VCVerifier supports verifying credentials against the [EU Trusted Lists](https://esignature.ec.europa.eu/efda/tl-browser/) as defined by [ETSI TS 119 612](https://www.etsi.org/deliver/etsi_ts/119600_119699/119612/02.02.01_60/ts_119612v020201p.pdf). When enabled, VCVerifier fetches the EU List of Trusted Lists (LOTL), discovers national trusted lists, and caches all trust service providers and their CA certificates in memory. Credential issuers are then validated by building a certificate chain from their X.509 certificate to a cached trust anchor — the same PKIX mechanism browsers use for TLS.
+
+Two verification paths are available:
+- **SD-JWT credential validation** — Configured per credential type via `eidasConfig`. Validates that an SD-JWT credential's issuer holds a certificate trusted by the EU Trusted Lists.
+- **`did:elsi` credential verification** — Automatically enabled when `eidas.enabled` is `true`. Credentials issued by `did:elsi` identifiers are verified against the trust store without any per-credential configuration.
+
+> :book: For the full reference — including how it works, dynamic configuration, and troubleshooting — see **[docs/eidas-verification.md](docs/eidas-verification.md)**.
+
+**Quick-start configuration:**
+
+```yaml
+# server.yaml
+eidas:
+    enabled: true
+    countries: ["DE", "FR"]  # optional country filter
+
+configRepo:
+    services:
+        -   id: myService
+            defaultOidcScope: "default"
+            oidcScopes:
+                default:
+                    credentials:
+                        -   type: EuropeanHealthCertificate
+                            eidasConfig:
+                                enabled: true
+                                requireQualified: true
+```
+
+#### Global eIDAS Configuration
+
+The global `eidas:` block in `server.yaml` controls the trust list fetcher. All fields are optional — the feature is disabled by default.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Master toggle for the entire eIDAS feature. |
+| `lotlUrl` | string | `https://ec.europa.eu/tools/lotl/eu-lotl.xml` | URL of the EU List of Trusted Lists. |
+| `refreshInterval` | int | `86400` | Seconds between background trust list refreshes. Clamped to [3600, 604800]. |
+| `countries` | string list | `[]` (all) | [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) country code filter. Empty means all countries. |
+| `maxWorkers` | int | `5` | Maximum concurrent national trust list fetches during refresh. |
+| `fetchTimeout` | int | `30` | HTTP timeout in seconds per trust list fetch request. |
+
+When `eidas.enabled` is `false` (the default), no trust lists are fetched, `did:elsi` credentials are rejected with `eidas_trust_store_required_for_did_elsi`, and per-credential `eidasConfig` is rejected with HTTP 400.
+
+#### SD-JWT Credential Validation
+
+Per-credential eIDAS validation is configured via the `eidasConfig` block inside each credential entry:
+
+```yaml
+credentials:
+    -   type: EuropeanHealthCertificate
+        eidasConfig:
+            enabled: true
+            allowedCountries: ["DE", "FR"]  # overrides global eidas.countries
+            requireQualified: true          # only accept qualified trust services
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Toggle eIDAS validation for this credential type. |
+| `allowedCountries` | string list | `[]` (falls back to global) | Per-credential country filter. Overrides `eidas.countries` when non-empty. |
+| `requireQualified` | bool pointer | `true` | When `true`, only qualified trust services (QTSPs) are accepted. When `false`, non-qualified CAs are also accepted. Omitting the field defaults to `true`. |
+
+eIDAS validation is an **additional** check — it runs alongside trusted participants/issuers lists, holder verification, and revocation checks. It requires **SD-JWT format** — JWT-VC and JSON-LD credentials are rejected with `eidas_validation_requires_sd_jwt_format` if `eidasConfig` is enabled. The global `eidas.enabled` must be `true`.
+
+#### did:elsi — eIDAS Trust List Verification
+
+**What is did:elsi?**
 
 `did:elsi` is a [DID method](https://www.w3.org/TR/did-core/) based on the European [eIDAS](https://digital-strategy.ec.europa.eu/en/policies/eidas-regulation) framework. It identifies organizations using their eIDAS `organizationIdentifier` as defined in [ETSI EN 319 412-1](https://www.etsi.org/deliver/etsi_en/319400_319499/31941201/01.04.02_20/en_31941201v010402a.pdf), carried in the X.509 certificate's Subject field (OID 2.5.4.97).
 
 Example DID: `did:elsi:VATES-B12345678`
 
-Verifiable Credentials issued by `did:elsi` identifiers carry the issuer's X.509 certificate chain in the JWT `x5c` header. VCVerifier verifies the JWT signature using the certificate's public key, binds the DID to the certificate's organization identifier, and validates the certificate chain against the [EU Trusted Lists](https://esignature.ec.europa.eu/efda/tl-browser/) ([ETSI TS 119 612](https://www.etsi.org/deliver/etsi_ts/119600_119699/119612/02.02.01_60/ts_119612v020201p.pdf)).
+Verifiable Credentials issued by `did:elsi` identifiers carry the issuer's X.509 certificate chain in the JWT `x5c` header. VCVerifier verifies the JWT signature using the certificate's public key, binds the DID to the certificate's organization identifier, and validates the certificate chain against the EU Trusted Lists.
 
-#### Prerequisites
+**Prerequisites**
 
 The eIDAS feature must be globally enabled for `did:elsi` verification to work. The `eidas` section in `server.yaml` must have `enabled: true`. Without it, any `did:elsi` credential is rejected with the error `eidas_trust_store_required_for_did_elsi`.
 
-#### Configuration
-
-Add the following section to your `server.yaml`:
-
-```yaml
-eidas:
-    # Activate the eIDAS trust list fetcher and enable did:elsi credential verification.
-    enabled: true
-    # URL of the EU List of Trusted Lists (LOTL). The default points to the
-    # official EU LOTL. Override only for testing or if the EU changes the URL.
-    lotlUrl: "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
-    # How often (in seconds) to re-fetch and refresh the trust lists.
-    # Clamped to [3600, 604800] (1 hour – 7 days). Default: 86400 (24 hours).
-    refreshInterval: 86400
-    # Optional list of ISO 3166-1 alpha-2 country codes to restrict which
-    # national trusted lists are consulted. Empty means all countries in the
-    # LOTL are used.
-    countries: []  # e.g. ["DE", "FR", "ES"]
-```
-
-| Field | Description |
-|---|---|
-| `enabled` | Activates the eIDAS trust list fetcher and enables `did:elsi` credential verification. |
-| `lotlUrl` | URL of the EU List of Trusted Lists (LOTL). The default points to the official EU LOTL. Override only for testing or if the EU changes the URL. |
-| `refreshInterval` | How often (in seconds) to re-fetch and refresh the trust lists. Clamped to 1 hour – 7 days. Default is 86400 (24 hours). |
-| `countries` | Optional list of [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) country codes to restrict which national trusted lists are consulted. Empty means all countries in the LOTL are used. |
-
-#### How verification works
+**How verification works**
 
 When VCVerifier receives a credential issued by a `did:elsi` identifier, it performs the following steps:
 
@@ -580,11 +663,11 @@ When VCVerifier receives a credential issued by a `did:elsi` identifier, it perf
 
 > :warning: **JSON-LD not supported:** `did:elsi` only supports JWT-format credentials. JSON-LD (Linked Data Proof) presentations with `did:elsi` signers are explicitly rejected — `did:elsi` uses JWS signatures, not LD proofs.
 
-#### Interaction with other trust anchors
+**Interaction with other trust anchors**
 
 The `did:elsi` trust validation via the EU Trusted Lists is independent of the [EBSI TIR](#ebsi-tir) and [Gaia-X Registry](#gaia-x-registry) trust anchors. If a credential type also has `trustedParticipantsLists` or `trustedIssuersLists` configured, those checks run **in addition** to the eIDAS certificate chain validation — all configured checks must pass.
 
-#### Troubleshooting
+**Troubleshooting**
 
 | Error | Meaning | Resolution |
 |---|---|---|
