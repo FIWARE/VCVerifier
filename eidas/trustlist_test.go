@@ -742,3 +742,95 @@ func TestIsLOTL(t *testing.T) {
 		})
 	}
 }
+
+// statusStartingTimeTL renders a minimal national trust list carrying a single
+// granted CA/QC service with the given StatusStartingTime value.
+func statusStartingTimeTL(t *testing.T, statusStartingTime string) string {
+	t.Helper()
+	_, b64Cert := generateTestCertificate(t, "Status Time CA", true)
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
+  <SchemeInformation>
+    <TSLVersionIdentifier>5</TSLVersionIdentifier>
+    <TSLSequenceNumber>1</TSLSequenceNumber>
+    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <SchemeOperatorName><Name xml:lang="en">Test</Name></SchemeOperatorName>
+    <SchemeName><Name xml:lang="en">Test</Name></SchemeName>
+    <SchemeInformationURI><URI xml:lang="en">https://example.com</URI></SchemeInformationURI>
+    <SchemeTerritory>TE</SchemeTerritory>
+    <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate><dateTime>2025-01-01T00:00:00Z</dateTime></NextUpdate>
+  </SchemeInformation>
+  <TrustServiceProviderList>
+    <TrustServiceProvider>
+      <TSPInformation>
+        <TSPName><Name xml:lang="en">Test TSP</Name></TSPName>
+      </TSPInformation>
+      <TSPServices>
+        <TSPService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceName><Name xml:lang="en">Test Service</Name></ServiceName>
+            <ServiceDigitalIdentity>
+              <DigitalId><X509Certificate>` + b64Cert + `</X509Certificate></DigitalId>
+            </ServiceDigitalIdentity>
+            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <StatusStartingTime>` + statusStartingTime + `</StatusStartingTime>
+          </ServiceInformation>
+        </TSPService>
+      </TSPServices>
+    </TrustServiceProvider>
+  </TrustServiceProviderList>
+</TrustServiceStatusList>`
+}
+
+// TestGetTrustServices_StatusStartingTime verifies that a service whose
+// StatusStartingTime cannot be parsed is rejected rather than silently
+// defaulting to the zero time, which would misplace it on the status timeline.
+func TestGetTrustServices_StatusStartingTime(t *testing.T) {
+	tests := []struct {
+		name               string
+		statusStartingTime string
+		expectError        bool
+		expectedTime       time.Time
+	}{
+		{
+			name:               "RFC 3339 with timezone",
+			statusStartingTime: "2021-01-15T00:00:00Z",
+			expectedTime:       time.Date(2021, 1, 15, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:               "ISO 8601 without timezone",
+			statusStartingTime: "2021-01-15T00:00:00",
+			expectedTime:       time.Date(2021, 1, 15, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:               "unparseable value is rejected",
+			statusStartingTime: "not-a-timestamp",
+			expectError:        true,
+		},
+		{
+			name:               "empty value is rejected",
+			statusStartingTime: "",
+			expectError:        true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tl, err := ParseTrustList([]byte(statusStartingTimeTL(t, tc.statusStartingTime)))
+			require.NoError(t, err)
+
+			services, err := tl.GetTrustServices()
+			if tc.expectError {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrorInvalidStatusStartingTime)
+				assert.Nil(t, services)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, services, 1)
+			assert.Equal(t, tc.expectedTime, services[0].StatusStartingTime)
+		})
+	}
+}

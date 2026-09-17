@@ -14,12 +14,12 @@ package eidas
 import (
 	"crypto/x509"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/fiware/VCVerifier/common"
-	"github.com/fiware/VCVerifier/logging"
 )
 
 // XML namespace for ETSI TS 119 612 trust lists (v2).
@@ -27,6 +27,13 @@ const TrustListNamespace = "https://uri.etsi.org/02231/v2#"
 
 // TSLTag identifies the trust list format version.
 const TSLTag = "https://uri.etsi.org/19612/TSLTag"
+
+// ErrorInvalidStatusStartingTime is returned when a trust service carries a
+// StatusStartingTime that cannot be parsed. The value is mandatory per
+// ETSI TS 119 612 §5.5.5 and time-based status evaluation depends on it, so
+// an unparseable value invalidates the entry instead of defaulting to the
+// zero time.
+var ErrorInvalidStatusStartingTime = errors.New("invalid_status_starting_time")
 
 // --- Service Type Identifier URIs (ETSI TS 119 612 §5.5.1) ---
 
@@ -399,10 +406,14 @@ func (tl *TrustServiceStatusList) GetTrustServices() ([]TrustedService, error) {
 				return nil, fmt.Errorf("failed to extract certificates for service %q of TSP %q: %w",
 					info.ServiceName.GetEnglish(), tspName, err)
 			}
+			// StatusStartingTime is mandatory (ETSI TS 119 612 §5.5.5) and is the
+			// basis for evaluating a service status as of a point in time. An
+			// entry we cannot place on the timeline is rejected rather than
+			// silently treated as "in effect since the zero time".
 			statusTime, err := parseDateTime(info.StatusStartingTime)
 			if err != nil {
-				logging.Log().Warnf("Failed to parse StatusStartingTime %q for service %q of TSP %q: %v",
-					info.StatusStartingTime, info.ServiceName.GetEnglish(), tspName, err)
+				return nil, fmt.Errorf("%w: service %q of TSP %q: %v",
+					ErrorInvalidStatusStartingTime, info.ServiceName.GetEnglish(), tspName, err)
 			}
 			services = append(services, TrustedService{
 				CountryCode:        territory,
