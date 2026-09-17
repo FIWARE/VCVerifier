@@ -3,6 +3,7 @@ package eidas
 import (
 	"crypto/x509"
 	"fmt"
+	"time"
 
 	"github.com/fiware/VCVerifier/logging"
 )
@@ -30,11 +31,34 @@ func VerifyCertificateChain(
 	countryCode string,
 	serviceTypes []string,
 ) error {
+	return VerifyCertificateChainAt(leafCert, intermediates, store, countryCode, serviceTypes, time.Time{})
+}
+
+// VerifyCertificateChainAt verifies that leafCert chains up to a CA that was a
+// trusted service at the given time.
+//
+// It behaves like VerifyCertificateChain, except that each candidate service's
+// status and service type are evaluated as of at, using the service history
+// from the trust list (ETSI TS 119 612 §5.5.5). This is what allows a signature
+// to be validated against the trust status that applied when it was created,
+// rather than only against the status that applies now. A zero at evaluates the
+// current status.
+//
+// Note that at selects the trust list entry; it is not passed to PKIX chain
+// building, which still validates the certificates against the current time.
+func VerifyCertificateChainAt(
+	leafCert *x509.Certificate,
+	intermediates []*x509.Certificate,
+	store *TrustStore,
+	countryCode string,
+	serviceTypes []string,
+	at time.Time,
+) error {
 	if store == nil {
 		return fmt.Errorf("trust store is nil")
 	}
 
-	trustedServices := store.GetTrustedServices(countryCode, serviceTypes, true)
+	trustedServices := store.GetTrustedServicesAt(countryCode, serviceTypes, true, at)
 	if len(trustedServices) == 0 {
 		logging.Log().Debugf("VerifyCertificateChain: no trusted services found for country %q, types %v", countryCode, serviceTypes)
 		return fmt.Errorf("no trusted services found for country %q", countryCode)

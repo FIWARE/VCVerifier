@@ -16,6 +16,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -546,6 +547,11 @@ func (tl *TrustServiceStatusList) GetTrustServices() ([]TrustedService, error) {
 				return nil, fmt.Errorf("%w: service %q of TSP %q: %v",
 					ErrorInvalidStatusStartingTime, info.ServiceName.GetEnglish(), tspName, err)
 			}
+			history, err := extractServiceHistory(svc.ServiceHistory, info.ServiceName.GetEnglish(), tspName)
+			if err != nil {
+				return nil, err
+			}
+
 			services = append(services, TrustedService{
 				CountryCode:        territory,
 				TSPName:            tspName,
@@ -554,6 +560,7 @@ func (tl *TrustServiceStatusList) GetTrustServices() ([]TrustedService, error) {
 				ServiceStatus:      info.ServiceStatus,
 				StatusStartingTime: statusTime,
 				Certificates:       certs,
+				History:            history,
 			})
 		}
 	}
@@ -577,6 +584,115 @@ type TrustedService struct {
 	StatusStartingTime time.Time
 	// Certificates are the X.509 certificates associated with this service.
 	Certificates []*x509.Certificate
+	// History holds the service's previous status entries, oldest first. It is
+	// populated from the ServiceHistory element and is what makes it possible
+	// to evaluate the service status as of a point in the past.
+	History []ServiceStatusRecord
+}
+
+// ServiceStatusRecord is one entry on a trust service's status timeline: the
+// service type and status that took effect at StatusStartingTime and applied
+// until the next entry began.
+type ServiceStatusRecord struct {
+	// ServiceType is the ETSI service type identifier URI in effect for this entry.
+	ServiceType string
+	// ServiceStatus is the ETSI service status URI in effect for this entry.
+	ServiceStatus string
+	// StatusStartingTime is the time from which this entry applies.
+	StatusStartingTime time.Time
+}
+
+// RecordAt returns the status record in effect at the given time: the most
+// recent entry — current or historical — whose StatusStartingTime is not after
+// at. The second return value is false when the service has no entry covering
+// that time, which happens when at predates the service's first known status.
+//
+// A zero at returns the current entry, matching the behaviour of the
+// ServiceType / ServiceStatus fields.
+func (ts TrustedService) RecordAt(at time.Time) (ServiceStatusRecord, bool) {
+	current := ServiceStatusRecord{
+		ServiceType:        ts.ServiceType,
+		ServiceStatus:      ts.ServiceStatus,
+		StatusStartingTime: ts.StatusStartingTime,
+	}
+	if at.IsZero() {
+		return current, true
+	}
+
+	best := ServiceStatusRecord{}
+	found := false
+	consider := func(record ServiceStatusRecord) {
+		if record.StatusStartingTime.After(at) {
+			return
+		}
+		if !found || record.StatusStartingTime.After(best.StatusStartingTime) {
+			best = record
+			found = true
+		}
+	}
+
+	for _, record := range ts.History {
+		consider(record)
+	}
+	consider(current)
+
+	return best, found
+}
+
+// IsGrantedAt reports whether the service was in granted status at the given
+// time. A time that predates the service's first known status returns false:
+// the service cannot be shown to have been trusted then.
+//
+// A zero at evaluates the current status, matching IsGranted.
+func (ts TrustedService) IsGrantedAt(at time.Time) bool {
+	record, ok := ts.RecordAt(at)
+	return ok && record.ServiceStatus == ServiceStatusGranted
+}
+
+// HasServiceTypeAt reports whether the service had one of the given service
+// types at the given time. An empty serviceTypes matches any type.
+//
+// A zero at evaluates the current service type.
+func (ts TrustedService) HasServiceTypeAt(at time.Time, serviceTypes map[string]struct{}) bool {
+	if len(serviceTypes) == 0 {
+		return true
+	}
+	record, ok := ts.RecordAt(at)
+	if !ok {
+		return false
+	}
+	_, matches := serviceTypes[record.ServiceType]
+	return matches
+}
+
+// extractServiceHistory converts the parsed ServiceHistory element into status
+// records. An entry whose StatusStartingTime cannot be parsed is rejected for
+// the same reason as in the current ServiceInformation: it cannot be placed on
+// the timeline.
+func extractServiceHistory(history *ServiceHistory, serviceName, tspName string) ([]ServiceStatusRecord, error) {
+	if history == nil || len(history.ServiceHistoryInstances) == 0 {
+		return nil, nil
+	}
+
+	records := make([]ServiceStatusRecord, 0, len(history.ServiceHistoryInstances))
+	for _, instance := range history.ServiceHistoryInstances {
+		statusTime, err := parseDateTime(instance.StatusStartingTime)
+		if err != nil {
+			return nil, fmt.Errorf("%w: history entry of service %q of TSP %q: %v",
+				ErrorInvalidStatusStartingTime, serviceName, tspName, err)
+		}
+		records = append(records, ServiceStatusRecord{
+			ServiceType:        instance.ServiceTypeIdentifier,
+			ServiceStatus:      instance.ServiceStatus,
+			StatusStartingTime: statusTime,
+		})
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].StatusStartingTime.Before(records[j].StatusStartingTime)
+	})
+
+	return records, nil
 }
 
 // IsQualified returns true if the service type URI indicates a qualified trust service.

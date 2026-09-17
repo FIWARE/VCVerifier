@@ -997,3 +997,193 @@ func TestHasNextUpdate(t *testing.T) {
 		})
 	}
 }
+
+// TestRecordAt verifies that a trust service's status and type are resolved
+// from its history as of a given point in time.
+func TestRecordAt(t *testing.T) {
+	granted2020 := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	withdrawn2024 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	service := TrustedService{
+		ServiceType:        ServiceTypeCA,
+		ServiceStatus:      ServiceStatusWithdrawn,
+		StatusStartingTime: withdrawn2024,
+		History: []ServiceStatusRecord{
+			{
+				ServiceType:        ServiceTypeCAQC,
+				ServiceStatus:      ServiceStatusGranted,
+				StatusStartingTime: granted2020,
+			},
+		},
+	}
+
+	tests := []struct {
+		name            string
+		at              time.Time
+		expectFound     bool
+		expectedStatus  string
+		expectedType    string
+		expectedGranted bool
+	}{
+		{
+			name:            "zero time evaluates the current entry",
+			at:              time.Time{},
+			expectFound:     true,
+			expectedStatus:  ServiceStatusWithdrawn,
+			expectedType:    ServiceTypeCA,
+			expectedGranted: false,
+		},
+		{
+			name:            "before the first known status",
+			at:              time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC),
+			expectFound:     false,
+			expectedGranted: false,
+		},
+		{
+			name:            "while granted",
+			at:              time.Date(2022, 6, 1, 0, 0, 0, 0, time.UTC),
+			expectFound:     true,
+			expectedStatus:  ServiceStatusGranted,
+			expectedType:    ServiceTypeCAQC,
+			expectedGranted: true,
+		},
+		{
+			name:            "exactly at the status starting time",
+			at:              granted2020,
+			expectFound:     true,
+			expectedStatus:  ServiceStatusGranted,
+			expectedType:    ServiceTypeCAQC,
+			expectedGranted: true,
+		},
+		{
+			name:            "after withdrawal",
+			at:              time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+			expectFound:     true,
+			expectedStatus:  ServiceStatusWithdrawn,
+			expectedType:    ServiceTypeCA,
+			expectedGranted: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			record, found := service.RecordAt(tc.at)
+			assert.Equal(t, tc.expectFound, found)
+			if tc.expectFound {
+				assert.Equal(t, tc.expectedStatus, record.ServiceStatus)
+				assert.Equal(t, tc.expectedType, record.ServiceType)
+			}
+			assert.Equal(t, tc.expectedGranted, service.IsGrantedAt(tc.at))
+		})
+	}
+}
+
+// TestRecordAt_NoHistory verifies that a service without history falls back to
+// its current entry, and is unknown before that entry started.
+func TestRecordAt_NoHistory(t *testing.T) {
+	service := TrustedService{
+		ServiceType:        ServiceTypeCAQC,
+		ServiceStatus:      ServiceStatusGranted,
+		StatusStartingTime: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	_, found := service.RecordAt(time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC))
+	assert.False(t, found, "service was not yet listed")
+	assert.False(t, service.IsGrantedAt(time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)))
+
+	record, found := service.RecordAt(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.True(t, found)
+	assert.Equal(t, ServiceStatusGranted, record.ServiceStatus)
+}
+
+// TestHasServiceTypeAt verifies that the service type filter is applied to the
+// entry in effect at the given time.
+func TestHasServiceTypeAt(t *testing.T) {
+	service := TrustedService{
+		ServiceType:        ServiceTypeCA,
+		ServiceStatus:      ServiceStatusGranted,
+		StatusStartingTime: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		History: []ServiceStatusRecord{
+			{
+				ServiceType:        ServiceTypeCAQC,
+				ServiceStatus:      ServiceStatusGranted,
+				StatusStartingTime: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	qualified := map[string]struct{}{ServiceTypeCAQC: {}}
+
+	assert.True(t, service.HasServiceTypeAt(time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC), qualified),
+		"service was qualified in 2022")
+	assert.False(t, service.HasServiceTypeAt(time.Time{}, qualified),
+		"service is no longer qualified today")
+	assert.True(t, service.HasServiceTypeAt(time.Time{}, nil),
+		"an empty type filter matches any type")
+}
+
+// TestGetTrustServices_ParsesServiceHistory verifies that ServiceHistory
+// entries are extracted onto the trust service and are ordered oldest first.
+func TestGetTrustServices_ParsesServiceHistory(t *testing.T) {
+	_, b64Cert := generateTestCertificate(t, "History CA", true)
+
+	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
+<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
+  <SchemeInformation>
+    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <SchemeTerritory>TE</SchemeTerritory>
+    <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate><dateTime>2099-01-01T00:00:00Z</dateTime></NextUpdate>
+  </SchemeInformation>
+  <TrustServiceProviderList>
+    <TrustServiceProvider>
+      <TSPInformation>
+        <TSPName><Name xml:lang="en">History TSP</Name></TSPName>
+      </TSPInformation>
+      <TSPServices>
+        <TSPService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA</ServiceTypeIdentifier>
+            <ServiceName><Name xml:lang="en">History Service</Name></ServiceName>
+            <ServiceDigitalIdentity>
+              <DigitalId><X509Certificate>` + b64Cert + `</X509Certificate></DigitalId>
+            </ServiceDigitalIdentity>
+            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn</ServiceStatus>
+            <StatusStartingTime>2024-01-01T00:00:00Z</StatusStartingTime>
+          </ServiceInformation>
+          <ServiceHistory>
+            <ServiceHistoryInstance>
+              <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+              <ServiceName><Name xml:lang="en">History Service</Name></ServiceName>
+              <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+              <StatusStartingTime>2022-01-01T00:00:00Z</StatusStartingTime>
+            </ServiceHistoryInstance>
+            <ServiceHistoryInstance>
+              <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+              <ServiceName><Name xml:lang="en">History Service</Name></ServiceName>
+              <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/undersupervision</ServiceStatus>
+              <StatusStartingTime>2020-01-01T00:00:00Z</StatusStartingTime>
+            </ServiceHistoryInstance>
+          </ServiceHistory>
+        </TSPService>
+      </TSPServices>
+    </TrustServiceProvider>
+  </TrustServiceProviderList>
+</TrustServiceStatusList>`
+
+	tl, err := ParseTrustList([]byte(xmlData))
+	require.NoError(t, err)
+
+	services, err := tl.GetTrustServices()
+	require.NoError(t, err)
+	require.Len(t, services, 1)
+
+	history := services[0].History
+	require.Len(t, history, 2, "both history instances should be extracted")
+	assert.Equal(t, ServiceStatusUnderSupervision, history[0].ServiceStatus, "history is ordered oldest first")
+	assert.Equal(t, ServiceStatusGranted, history[1].ServiceStatus)
+
+	assert.True(t, services[0].IsGrantedAt(time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)),
+		"service was granted in 2023")
+	assert.False(t, services[0].IsGrantedAt(time.Time{}), "service is withdrawn today")
+}

@@ -293,6 +293,31 @@ type Eidas struct {
 	// keep verifying against an overdue list, for example while a scheme
 	// operator is late publishing.
 	AllowStaleTrustLists bool `mapstructure:"allowStaleTrustLists" default:"false"`
+	// StatusEvaluation selects the point in time at which a trust service's
+	// status is evaluated. See the StatusEvaluation* constants. Defaults to
+	// StatusEvaluationCurrent when empty.
+	StatusEvaluation string `mapstructure:"statusEvaluation"`
+}
+
+const (
+	// StatusEvaluationCurrent evaluates a trust service against the status it
+	// holds now. A credential issued by a CA that has since been withdrawn is
+	// rejected. This is the default.
+	StatusEvaluationCurrent = "current"
+
+	// StatusEvaluationIssuance evaluates a trust service against the status it
+	// held when the credential was issued, taken from the trust list's service
+	// history (ETSI TS 119 612 §5.5.5). A credential stays verifiable after its
+	// issuing CA is withdrawn, which is the ETSI semantics for validating a
+	// signature as of signing time. Credentials that carry no issuance date
+	// fall back to the current status.
+	StatusEvaluationIssuance = "issuance"
+)
+
+// EvaluatesAtIssuance reports whether trust service status should be evaluated
+// as of the credential's issuance time rather than the current time.
+func (e Eidas) EvaluatesAtIssuance() bool {
+	return e.StatusEvaluation == StatusEvaluationIssuance
 }
 
 type Policies struct {

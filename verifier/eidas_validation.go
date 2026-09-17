@@ -3,6 +3,7 @@ package verifier
 import (
 	"crypto/x509"
 	"errors"
+	"time"
 
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/common"
@@ -53,6 +54,10 @@ type EidasValidationContext struct {
 	// server configuration. Used as a fallback when a per-credential config
 	// has an empty AllowedCountries list.
 	GlobalCountries []string
+	// EvaluateStatusAtIssuance selects the point in time at which a trust
+	// service's status is evaluated. When true, the status that applied when
+	// the credential was issued is used; when false, the current status is.
+	EvaluateStatusAtIssuance bool
 }
 
 // EidasValidationService validates SD-JWT credentials against the cached ETSI
@@ -145,18 +150,21 @@ func (evs *EidasValidationService) ValidateVC(verifiableCredential *common.Crede
 		countries = eidasContext.GlobalCountries
 	}
 
+	// --- Determine the point in time the trust status is evaluated at ---
+	statusEvaluationTime := eidasContext.statusEvaluationTime(verifiableCredential)
+
 	// --- Verify certificate against trust store ---
 	if len(countries) > 0 {
 		// Check each allowed country.
 		for _, country := range countries {
-			if evs.verifyCertificateAgainstTrustStore(leafCert, intermediates, country, serviceTypes) {
+			if evs.verifyCertificateAgainstTrustStore(leafCert, intermediates, country, serviceTypes, statusEvaluationTime) {
 				logging.Log().Debugf("EidasValidationService: credential trusted via country %s", country)
 				return true, nil
 			}
 		}
 	} else {
 		// No country filter — search all countries.
-		if evs.verifyCertificateAgainstTrustStore(leafCert, intermediates, "", serviceTypes) {
+		if evs.verifyCertificateAgainstTrustStore(leafCert, intermediates, "", serviceTypes, statusEvaluationTime) {
 			logging.Log().Debug("EidasValidationService: credential trusted (all countries)")
 			return true, nil
 		}
@@ -182,9 +190,31 @@ func (evs *EidasValidationService) verifyCertificateAgainstTrustStore(
 	intermediates []*x509.Certificate,
 	countryCode string,
 	serviceTypes []string,
+	statusEvaluationTime time.Time,
 ) bool {
-	err := eidas.VerifyCertificateChain(leafCert, intermediates, evs.trustStore, countryCode, serviceTypes)
+	err := eidas.VerifyCertificateChainAt(leafCert, intermediates, evs.trustStore, countryCode, serviceTypes, statusEvaluationTime)
 	return err == nil
+}
+
+// statusEvaluationTime returns the point in time at which trust service status
+// is evaluated for the given credential.
+//
+// In the default (current) mode this is the zero time, which makes the trust
+// store evaluate the current status. In issuance mode it is the credential's
+// ValidFrom / issuanceDate, so that the credential is checked against the trust
+// status that applied when it was issued (ETSI TS 119 612 §5.5.5). A credential
+// carrying no issuance date falls back to the current status: an unknown
+// issuance time must not become a free pass to a withdrawn service.
+func (ctx EidasValidationContext) statusEvaluationTime(verifiableCredential *common.Credential) time.Time {
+	if !ctx.EvaluateStatusAtIssuance {
+		return time.Time{}
+	}
+	validFrom := verifiableCredential.Contents().ValidFrom
+	if validFrom == nil {
+		logging.Log().Warn("EidasValidationService: credential carries no issuance date, evaluating trust status against the current time")
+		return time.Time{}
+	}
+	return *validFrom
 }
 
 // getEidasValidationContext builds an EidasValidationContext for the given
@@ -202,8 +232,9 @@ func (v *CredentialVerifier) getEidasValidationContext(clientId string, scope st
 		perType[credentialType] = eidasCfg
 	}
 	return EidasValidationContext{
-		PerType:         perType,
-		GlobalCountries: globalConfig.Countries,
+		PerType:                  perType,
+		GlobalCountries:          globalConfig.Countries,
+		EvaluateStatusAtIssuance: globalConfig.EvaluatesAtIssuance(),
 	}, nil
 }
 

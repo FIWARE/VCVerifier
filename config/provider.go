@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+
 	"github.com/gookit/config/v2"
 	"github.com/gookit/config/v2/yaml"
 	"github.com/mitchellh/mapstructure"
@@ -50,7 +52,25 @@ func ReadConfig(configFile string) (configuration Configuration, err error) {
 
 	applyEidasDefaults(&configuration)
 
+	if err = validateEidasConfig(&configuration); err != nil {
+		return
+	}
+
 	return configuration, nil
+}
+
+// validateEidasConfig rejects global eIDAS settings that cannot be honoured.
+// An unrecognised statusEvaluation is an error rather than a silent fallback:
+// it changes whether a credential from a withdrawn CA is accepted, so guessing
+// would hide a misconfiguration behind a trust decision.
+func validateEidasConfig(cfg *Configuration) error {
+	switch cfg.Eidas.StatusEvaluation {
+	case StatusEvaluationCurrent, StatusEvaluationIssuance:
+		return nil
+	default:
+		return fmt.Errorf("invalid eidas.statusEvaluation %q, expected %q or %q",
+			cfg.Eidas.StatusEvaluation, StatusEvaluationCurrent, StatusEvaluationIssuance)
+	}
 }
 
 // applyEidasDefaults sets programmatic defaults for the global eIDAS
@@ -63,5 +83,8 @@ func applyEidasDefaults(cfg *Configuration) {
 	}
 	if cfg.Eidas.RefreshInterval == 0 {
 		cfg.Eidas.RefreshInterval = DefaultEidasRefreshInterval
+	}
+	if cfg.Eidas.StatusEvaluation == "" {
+		cfg.Eidas.StatusEvaluation = StatusEvaluationCurrent
 	}
 }

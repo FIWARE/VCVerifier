@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"sync"
+	"time"
 
 	"github.com/fiware/VCVerifier/logging"
 )
@@ -69,6 +70,19 @@ func (ts *TrustStore) RemoveCountriesNotIn(keepCountries map[string]struct{}) {
 //
 // If onlyGranted is true, only services with status "granted" are returned.
 func (ts *TrustStore) GetTrustedServices(countryCode string, serviceTypes []string, onlyGranted bool) []TrustedService {
+	return ts.GetTrustedServicesAt(countryCode, serviceTypes, onlyGranted, time.Time{})
+}
+
+// GetTrustedServicesAt returns trust services matching the given filters,
+// evaluating each service's status and type as of the given time.
+//
+// The filters behave as described on GetTrustedServices. The at parameter
+// selects which entry of a service's status timeline the status and type
+// filters are applied to: the entry that was in effect at that time, taken
+// from the ServiceHistory (ETSI TS 119 612 §5.5.5). A service with no entry
+// covering that time is excluded — it cannot be shown to have been trusted
+// then. A zero at evaluates the current entry.
+func (ts *TrustStore) GetTrustedServicesAt(countryCode string, serviceTypes []string, onlyGranted bool, at time.Time) []TrustedService {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
@@ -81,11 +95,11 @@ func (ts *TrustStore) GetTrustedServices(countryCode string, serviceTypes []stri
 
 	if countryCode != "" {
 		// Single country lookup.
-		result = ts.filterServices(ts.services[countryCode], typeSet, onlyGranted)
+		result = ts.filterServices(ts.services[countryCode], typeSet, onlyGranted, at)
 	} else {
 		// All-country scan.
 		for _, svcList := range ts.services {
-			result = append(result, ts.filterServices(svcList, typeSet, onlyGranted)...)
+			result = append(result, ts.filterServices(svcList, typeSet, onlyGranted, at)...)
 		}
 	}
 
@@ -93,17 +107,16 @@ func (ts *TrustStore) GetTrustedServices(countryCode string, serviceTypes []stri
 }
 
 // filterServices returns the subset of services matching the given type set
-// and granted-only constraint. Must be called under at least a read lock.
-func (ts *TrustStore) filterServices(services []TrustedService, typeSet map[string]struct{}, onlyGranted bool) []TrustedService {
+// and granted-only constraint as of the given time. Must be called under at
+// least a read lock.
+func (ts *TrustStore) filterServices(services []TrustedService, typeSet map[string]struct{}, onlyGranted bool, at time.Time) []TrustedService {
 	var out []TrustedService
 	for _, svc := range services {
-		if onlyGranted && !svc.IsGranted() {
+		if onlyGranted && !svc.IsGrantedAt(at) {
 			continue
 		}
-		if len(typeSet) > 0 {
-			if _, ok := typeSet[svc.ServiceType]; !ok {
-				continue
-			}
+		if !svc.HasServiceTypeAt(at, typeSet) {
+			continue
 		}
 		out = append(out, svc)
 	}

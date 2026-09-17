@@ -68,6 +68,10 @@ eidas:
     # Default false: an overdue list is rejected, because the scheme operator
     # committed to publishing a newer one by then.
     allowStaleTrustLists: false
+
+    # When a trust service's status is evaluated: "current" (default) or
+    # "issuance". See "Status Evaluation Time" below.
+    statusEvaluation: current
 ```
 
 ### Configuration Fields
@@ -81,6 +85,7 @@ eidas:
 | `maxWorkers` | int | `5` | Maximum concurrent national trust list fetches during refresh. |
 | `fetchTimeout` | int | `30` | HTTP timeout in seconds per trust list fetch request. |
 | `allowStaleTrustLists` | bool | `false` | Accept trust lists that have passed their `NextUpdate` time. |
+| `statusEvaluation` | string | `current` | When trust service status is evaluated: `current` or `issuance`. |
 
 ### Trust List Freshness
 
@@ -104,6 +109,34 @@ A rejected **LOTL** aborts the whole refresh cycle, leaving the previously loade
 store untouched. A rejected **national list** only skips that country: its previously
 loaded services are kept (they are not pruned on a failed fetch) and the rest of the
 refresh proceeds.
+
+### Status Evaluation Time
+
+A trust service's status is not a constant: a CA can be granted, put under supervision and
+later withdrawn. ETSI TS 119 612 §5.5.5 records these transitions in the service's
+`ServiceHistory`, and expects the status to be evaluated as of the relevant point in time.
+`statusEvaluation` selects that point:
+
+| Value | Evaluated against | Effect |
+|-------|-------------------|--------|
+| `current` (default) | the status the service holds now | A credential is rejected once its issuing CA is withdrawn, regardless of when the credential was issued. |
+| `issuance` | the status in effect at the credential's `validFrom` / `issuanceDate` | A credential stays verifiable after its issuing CA is withdrawn, as long as the CA was granted when the credential was issued. This is the ETSI semantics for validating a signature as of signing time. |
+
+In `issuance` mode both the service status **and** the service type are read from the
+history entry that was in effect then, so a CA that was `CA/QC` at issuance and is only
+`CA` today still satisfies `requireQualified` for credentials from that period.
+
+Two cases fall back to the current status in `issuance` mode, each logged:
+
+- a credential that carries no issuance date, and
+- a service whose history does not reach back to the issuance time — it cannot be shown to
+  have been trusted then, so it is not treated as trusted.
+
+An unrecognised `statusEvaluation` value is rejected at startup rather than silently
+defaulting, because it decides whether a credential from a withdrawn CA is accepted.
+
+`did:elsi` verification always uses the current status: it has no per-credential
+configuration and the JWT carries no issuance date at the point the chain is checked.
 
 ### Behavior When Disabled
 
