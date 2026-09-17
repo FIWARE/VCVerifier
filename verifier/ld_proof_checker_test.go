@@ -343,21 +343,6 @@ func TestLDProofChecker_VerifyPresentation(t *testing.T) {
 			wantErr:        true,
 		},
 		{
-			name:   "did_elsi_rejected",
-			vpJSON: vpWithoutProof,
-			proof: &common.LDProof{
-				Type:               common.ProofTypeJsonWebSignature2020,
-				Created:            "2024-01-01T00:00:00Z",
-				VerificationMethod: "did:elsi:some-org#key-1",
-				ProofPurpose:       common.ProofPurposeAuthentication,
-				JWS:                proof.JWS,
-			},
-			expectedHolder: "did:elsi:some-org",
-			registry:       registry,
-			wantErr:        true,
-			wantErrIs:      ErrorDidElsiNotSupportedForLDProof,
-		},
-		{
 			name:   "empty_verification_method_rejected",
 			vpJSON: vpWithoutProof,
 			proof: &common.LDProof{
@@ -724,28 +709,6 @@ func TestExtractDIDAndFragment(t *testing.T) {
 	}
 }
 
-// TestIsDidElsi verifies the did:elsi detection helper.
-func TestIsDidElsi(t *testing.T) {
-	type testCase struct {
-		name string
-		did  string
-		want bool
-	}
-
-	tests := []testCase{
-		{name: "elsi", did: "did:elsi:some-org", want: true},
-		{name: "web", did: "did:web:example.com", want: false},
-		{name: "key", did: "did:key:z6Mk...", want: false},
-		{name: "empty", did: "", want: false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, IsDidElsi(tc.did))
-		})
-	}
-}
-
 // --- Integration: VerifyPresentation with did:key ---
 
 // TestLDProofChecker_VerifyPresentation_DidKey tests round-trip signing and
@@ -790,4 +753,57 @@ func didKeyFromP256(t *testing.T, pub *ecdsa.PublicKey) string {
 	encoded, err := multibase.Encode(multibase.Base58BTC, append(prefix[:prefixLen], compressed...))
 	require.NoError(t, err)
 	return "did:key:" + encoded
+}
+
+// TestLDProofChecker_RejectsDidElsi verifies that LD proof verification
+// rejects did:elsi signers with ErrorDidElsiNotSupportedForLDProof, because
+// did:elsi uses JWS/JAdES signatures rather than Linked Data Proofs.
+func TestLDProofChecker_RejectsDidElsi(t *testing.T) {
+	// Create a minimal setup — the proof's verificationMethod is a did:elsi DID
+	// so the checker should reject before attempting any key resolution.
+	elsiDID := "did:elsi:VATES-B12345678"
+
+	registry := did.NewRegistry()
+	docLoader, err := common.NewEmbeddedContextLoader(nil)
+	require.NoError(t, err)
+	checker := NewLDProofChecker(registry, docLoader)
+
+	tests := []struct {
+		name            string
+		expectedHolder  string
+		verifyFunc      func() error
+		proofPurpose    string
+	}{
+		{
+			name:           "VP proof with did:elsi holder is rejected",
+			expectedHolder: elsiDID,
+			proofPurpose:   common.ProofPurposeAuthentication,
+		},
+		{
+			name:           "VC proof with did:elsi issuer is rejected",
+			expectedHolder: elsiDID,
+			proofPurpose:   common.ProofPurposeAssertionMethod,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proof := &common.LDProof{
+				VerificationMethod: elsiDID + "#key-1",
+				ProofPurpose:       tc.proofPurpose,
+			}
+
+			if tc.proofPurpose == common.ProofPurposeAuthentication {
+				// VerifyPresentation path
+				_, err := checker.VerifyPresentation([]byte("{}"), proof, elsiDID)
+				assert.Error(t, err)
+				assert.ErrorIs(t, err, ErrorDidElsiNotSupportedForLDProof)
+			} else {
+				// VerifyCredential path
+				err := checker.VerifyCredential([]byte("{}"), proof, elsiDID)
+				assert.Error(t, err)
+				assert.ErrorIs(t, err, ErrorDidElsiNotSupportedForLDProof)
+			}
+		})
+	}
 }

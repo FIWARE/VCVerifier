@@ -64,20 +64,23 @@ func (kr *VdrKeyResolver) ResolvePublicKeyFromDID(kid string) (key jwk.Key, err 
 	return nil, ErrorInvalidJWT
 }
 
-// didElsiMethodPrefix is the prefix for did:elsi DIDs. JAdES is JWS-based
-// and does not apply to Linked Data Proofs.
-const didElsiMethodPrefix = "did:elsi:"
-
-// ErrorDidElsiNotSupportedForLDProof is returned when a did:elsi verification
-// method is encountered in an LD-proof context. JAdES is JWS-based and does
-// not apply to Linked Data Proofs.
-var ErrorDidElsiNotSupportedForLDProof = errors.New("did_elsi_not_supported_for_ld_proofs")
-
 // ErrorVerificationRelationshipNotAllowed is returned when a verification
 // method exists in the DID document but is not authorized for the
 // verification relationship the proof requires (e.g. a key listed only under
 // assertionMethod being used to authenticate a presentation).
 var ErrorVerificationRelationshipNotAllowed = errors.New("verification_method_not_allowed_for_relationship")
+
+// ErrorDidElsiNotSupportedForLDProof is returned when an LD proof's signer
+// uses the did:elsi method. did:elsi uses JWS/JAdES signatures, not Linked
+// Data Proofs, so LD proof verification is explicitly unsupported.
+var ErrorDidElsiNotSupportedForLDProof = errors.New("did_elsi_not_supported_for_ld_proofs")
+
+// IsDidElsi returns true if the given DID string uses the did:elsi method.
+// The did:elsi method identifies organizations using their eIDAS
+// organizationIdentifier (e.g. "did:elsi:VATES-B12345678").
+func IsDidElsi(didStr string) bool {
+	return strings.HasPrefix(didStr, DidElsiPrefix) && len(didStr) > len(DidElsiPrefix)
+}
 
 // ResolveKeyFromDID resolves a DID to a public JWK key by querying the
 // given did.Registry. The didStr is the full DID (e.g., "did:key:z6Mk..."),
@@ -153,11 +156,6 @@ func ExtractDIDAndFragment(verificationMethod string) (didStr string, kid string
 		return verificationMethod[:idx], verificationMethod
 	}
 	return verificationMethod, verificationMethod
-}
-
-// IsDidElsi returns true if the given DID string uses the did:elsi method.
-func IsDidElsi(didStr string) bool {
-	return strings.HasPrefix(didStr, didElsiMethodPrefix)
 }
 
 func (kr *VdrKeyResolver) ExtractKIDFromJWT(tokenString string) (string, error) {

@@ -65,7 +65,7 @@ type Configuration struct {
 	Logging      logging.LoggingConfig `mapstructure:"logging"`
 	ConfigRepo   ConfigRepo            `mapstructure:"configRepo"`
 	M2M          M2M                   `mapstructure:"m2m"`
-	Elsi         Elsi                  `mapstructure:"elsi"`
+	Eidas        Eidas                 `mapstructure:"eidas"`
 	Database     Database              `mapstructure:"database"`
 	ConfigServer ConfigServer          `mapstructure:"configServer"`
 }
@@ -259,17 +259,89 @@ type ClientIdentification struct {
 	Kid string `mapstructure:"kid"`
 }
 
-type Elsi struct {
-	// should the support for did:elsi be enabled
+// Eidas holds the global configuration for the eIDAS 2.0 trust list feature.
+// When Enabled is false (the default), the trust list fetcher is not started
+// (no background goroutines, no HTTP requests, no memory for the trust store),
+// and any per-credential eIDAS configuration is rejected at config validation
+// time with HTTP 400.
+type Eidas struct {
+	// Enabled controls whether the eIDAS 2.0 trust list feature is active.
+	// When false, no trust lists are fetched and per-credential eIDAS configs
+	// are rejected with an error.
 	Enabled bool `mapstructure:"enabled" default:"false"`
-	// endpoint of the validation service to be used for JAdES signatures
-	ValidationEndpoint *ValidationEndpoint `mapstructure:"validationEndpoint"`
+	// LotlURL is the URL of the EU List of Trusted Lists (LOTL).
+	// Defaults to the official EU LOTL URL when empty.
+	LotlURL string `mapstructure:"lotlUrl"`
+	// RefreshInterval is the interval in seconds between background trust list
+	// refreshes. Clamped to [3600, 604800] (1 hour – 7 days). Defaults to
+	// 86400 (24 hours) when zero.
+	RefreshInterval int `mapstructure:"refreshInterval"`
+	// Countries restricts which national trusted lists are fetched by ISO 3166-1
+	// alpha-2 country code (e.g. ["DE", "FR", "ES"]). Empty means all countries
+	// from the LOTL are allowed.
+	Countries []string `mapstructure:"countries,omitempty"`
+	// MaxWorkers is the maximum number of concurrent HTTP fetches for national
+	// trust lists. Defaults to 5 when zero.
+	MaxWorkers int `mapstructure:"maxWorkers"`
+	// FetchTimeout is the HTTP timeout in seconds for fetching a single trust
+	// list. Defaults to 30 when zero.
+	FetchTimeout int `mapstructure:"fetchTimeout"`
+	// AllowStaleTrustLists controls whether a trust list that has passed its
+	// NextUpdate time is still used. By default such a list is rejected: the
+	// scheme operator committed to publishing a newer one by then, so its
+	// service statuses can no longer be assumed current. Set this to true to
+	// keep verifying against an overdue list, for example while a scheme
+	// operator is late publishing.
+	AllowStaleTrustLists bool `mapstructure:"allowStaleTrustLists" default:"false"`
+	// StatusEvaluation selects the point in time at which a trust service's
+	// status is evaluated. See the StatusEvaluation* constants. Defaults to
+	// StatusEvaluationCurrent when empty.
+	StatusEvaluation string `mapstructure:"statusEvaluation"`
+	// RevocationCheck selects how certificate revocation (OCSP/CRL) is
+	// handled during chain validation. See the RevocationCheck* constants.
+	// Defaults to RevocationCheckSoft when empty.
+	RevocationCheck string `mapstructure:"revocationCheck"`
+	// RevocationTimeout is the HTTP timeout in seconds for a single OCSP or
+	// CRL request. Defaults to 10 when zero.
+	RevocationTimeout int `mapstructure:"revocationTimeout"`
+	// RevocationCacheExpiry is how long, in seconds, a determined revocation
+	// status is cached when the responder declares no NextUpdate of its own.
+	// Defaults to 3600 when zero.
+	RevocationCacheExpiry int `mapstructure:"revocationCacheExpiry"`
 }
 
-type ValidationEndpoint struct {
-	Host           string `mapstructure:"host"`
-	ValidationPath string `mapstructure:"validationPath" default:"/validateSignature"`
-	HealthPath     string `mapstructure:"healthPath" default:"/q/health/ready"`
+const (
+	// RevocationCheckOff disables revocation checking.
+	RevocationCheckOff = "off"
+
+	// RevocationCheckSoft rejects certificates known to be revoked but accepts
+	// those whose status could not be determined. This is the default.
+	RevocationCheckSoft = "soft"
+
+	// RevocationCheckHard additionally rejects certificates whose revocation
+	// status could not be determined.
+	RevocationCheckHard = "hard"
+)
+
+const (
+	// StatusEvaluationCurrent evaluates a trust service against the status it
+	// holds now. A credential issued by a CA that has since been withdrawn is
+	// rejected. This is the default.
+	StatusEvaluationCurrent = "current"
+
+	// StatusEvaluationIssuance evaluates a trust service against the status it
+	// held when the credential was issued, taken from the trust list's service
+	// history (ETSI TS 119 612 §5.5.5). A credential stays verifiable after its
+	// issuing CA is withdrawn, which is the ETSI semantics for validating a
+	// signature as of signing time. Credentials that carry no issuance date
+	// fall back to the current status.
+	StatusEvaluationIssuance = "issuance"
+)
+
+// EvaluatesAtIssuance reports whether trust service status should be evaluated
+// as of the credential's issuance time rather than the current time.
+func (e Eidas) EvaluatesAtIssuance() bool {
+	return e.StatusEvaluation == StatusEvaluationIssuance
 }
 
 type Policies struct {

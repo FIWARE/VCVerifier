@@ -23,6 +23,37 @@ verifier:
 ssiKit:
     auditorURL: http://my-auditor
 
+# eIDAS 2.0 trust list validation (ETSI TS 119 612).
+# When enabled, the verifier fetches the EU List of Trusted Lists (LOTL) and
+# national trusted lists in the background, then validates SD-JWT credentials
+# whose credential type has per-credential eidasConfig enabled.
+#
+# eidas:
+#   enabled: true                   # Enable the eIDAS trust list feature (default: false).
+#   lotlUrl: "https://ec.europa.eu/tools/lotl/eu-lotl.xml"  # EU LOTL URL (default: official EU LOTL).
+#   refreshInterval: 86400          # Background refresh interval in seconds (default: 86400 = 24h).
+#   countries: []                   # Restrict to specific countries (ISO 3166-1 alpha-2). Empty = all.
+#   maxWorkers: 5                   # Max concurrent national TL fetches (default: 5).
+#   fetchTimeout: 30                # HTTP timeout per TL fetch in seconds (default: 30).
+#
+# Per-credential eIDAS configuration is set in the service scopes under configRepo:
+#
+#   configRepo:
+#     services:
+#       - id: my-service
+#         defaultOidcScope: eidasScope
+#         oidcScopes:
+#           eidasScope:
+#             credentials:
+#               - type: NaturalPersonCredential
+#                 trustedParticipantsLists:
+#                   - type: ebsi
+#                     url: https://tir.example.com
+#                 eidasConfig:
+#                   enabled: true              # Enable eIDAS validation for this credential type.
+#                   allowedCountries: ["DE"]    # Optional country filter (overrides global).
+#                   requireQualified: true      # Only accept qualified trust services (default: true).
+
 # configRepo defines the service configurations with their scopes and trust endpoints.
 # Each service under configRepo.services can optionally specify allowedOrigins to control
 # which origins are permitted for CORS requests. When omitted or empty, the default
