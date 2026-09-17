@@ -15,6 +15,12 @@ const (
 	// DefaultEidasRefreshInterval is the default interval in seconds between
 	// background trust list refreshes (24 hours).
 	DefaultEidasRefreshInterval = 86400
+	// DefaultEidasRevocationTimeout is the default HTTP timeout in seconds for
+	// a single OCSP or CRL request.
+	DefaultEidasRevocationTimeout = 10
+	// DefaultEidasRevocationCacheExpiry is the default lifetime in seconds of a
+	// cached revocation status.
+	DefaultEidasRevocationCacheExpiry = 3600
 )
 
 // read the config from the config file
@@ -66,11 +72,19 @@ func ReadConfig(configFile string) (configuration Configuration, err error) {
 func validateEidasConfig(cfg *Configuration) error {
 	switch cfg.Eidas.StatusEvaluation {
 	case StatusEvaluationCurrent, StatusEvaluationIssuance:
-		return nil
 	default:
 		return fmt.Errorf("invalid eidas.statusEvaluation %q, expected %q or %q",
 			cfg.Eidas.StatusEvaluation, StatusEvaluationCurrent, StatusEvaluationIssuance)
 	}
+
+	switch cfg.Eidas.RevocationCheck {
+	case RevocationCheckOff, RevocationCheckSoft, RevocationCheckHard:
+	default:
+		return fmt.Errorf("invalid eidas.revocationCheck %q, expected %q, %q or %q",
+			cfg.Eidas.RevocationCheck, RevocationCheckOff, RevocationCheckSoft, RevocationCheckHard)
+	}
+
+	return nil
 }
 
 // applyEidasDefaults sets programmatic defaults for the global eIDAS
@@ -86,5 +100,14 @@ func applyEidasDefaults(cfg *Configuration) {
 	}
 	if cfg.Eidas.StatusEvaluation == "" {
 		cfg.Eidas.StatusEvaluation = StatusEvaluationCurrent
+	}
+	if cfg.Eidas.RevocationCheck == "" {
+		cfg.Eidas.RevocationCheck = RevocationCheckSoft
+	}
+	if cfg.Eidas.RevocationTimeout == 0 {
+		cfg.Eidas.RevocationTimeout = DefaultEidasRevocationTimeout
+	}
+	if cfg.Eidas.RevocationCacheExpiry == 0 {
+		cfg.Eidas.RevocationCacheExpiry = DefaultEidasRevocationCacheExpiry
 	}
 }

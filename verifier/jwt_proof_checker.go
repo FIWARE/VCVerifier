@@ -63,6 +63,9 @@ type JWTProofChecker struct {
 	registry      *did.Registry
 	httpsResolver HttpsIssuerResolver
 	trustStore    *eidas.TrustStore
+	// revocationChecker consults OCSP/CRL for the certificates on a did:elsi
+	// chain. A nil checker disables revocation checking.
+	revocationChecker *eidas.RevocationChecker
 }
 
 // NewJWTProofChecker creates a new JWTProofChecker that resolves signing
@@ -88,6 +91,14 @@ func (jpc *JWTProofChecker) WithHttpsResolver(resolver HttpsIssuerResolver) *JWT
 // Returns the checker to allow method chaining.
 func (jpc *JWTProofChecker) WithTrustStore(store *eidas.TrustStore) *JWTProofChecker {
 	jpc.trustStore = store
+	return jpc
+}
+
+// WithRevocationChecker sets the revocation checker used when validating the
+// certificate chain of a did:elsi JWT. When unset, no revocation checking is
+// performed. Returns the checker to allow method chaining.
+func (jpc *JWTProofChecker) WithRevocationChecker(checker *eidas.RevocationChecker) *JWTProofChecker {
+	jpc.revocationChecker = checker
 	return jpc
 }
 
@@ -359,7 +370,8 @@ func (jpc *JWTProofChecker) verifyElsiJWT(token []byte, issuerDID string, header
 	// Verify the certificate chains to a trusted CA via the eIDAS trust store.
 	// Search all countries (empty country code) since did:elsi itself does not
 	// carry per-credential country/qualified filters.
-	if err := eidas.VerifyCertificateChain(leafCert, intermediates, jpc.trustStore, "", allCertificateServiceTypes); err != nil {
+	if err := eidas.VerifyCertificateChain(leafCert, intermediates, jpc.trustStore, "", allCertificateServiceTypes,
+		eidas.WithRevocationCheck(jpc.revocationChecker)); err != nil {
 		logging.Log().Warnf("did:elsi certificate trust verification failed for %s: %v", issuerDID, err)
 		return nil, nil, ErrorElsiUntrustedCertificate
 	}

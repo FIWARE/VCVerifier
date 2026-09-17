@@ -433,12 +433,28 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		}
 		fetcher := eidas.NewTrustListFetcher(opts...)
 		fetcher.Start(context.Background())
-		eidasValidationService = EidasValidationService{trustStore: fetcher.Store()}
+
+		// Revocation status is published by the issuing CA, not by the trust
+		// list, so chain validation consults OCSP/CRL separately.
+		revocationChecker := eidas.NewRevocationChecker(
+			eidas.WithRevocationMode(config.Eidas.RevocationCheck),
+			eidas.WithRevocationCacheExpiry(time.Duration(config.Eidas.RevocationCacheExpiry)*time.Second),
+			eidas.WithRevocationHTTPClient(&http.Client{
+				Timeout: time.Duration(config.Eidas.RevocationTimeout) * time.Second,
+			}),
+		)
+		if revocationChecker.Enabled() {
+			logging.Log().Infof("eIDAS certificate revocation checking enabled in %q mode", config.Eidas.RevocationCheck)
+		} else {
+			logging.Log().Warn("eIDAS certificate revocation checking is disabled; a revoked issuer certificate stays valid until the trust list is updated")
+		}
+
+		eidasValidationService = EidasValidationService{trustStore: fetcher.Store(), revocationChecker: revocationChecker}
 		// Inject the trust store into the global JWT proof checker so did:elsi
 		// JWTs can be verified against the EU Trusted Lists.  WithTrustStore
 		// mutates the receiver in place (same pattern as WithHttpsResolver),
 		// so we don't need to reassign the global.
-		GetProofChecker().WithTrustStore(fetcher.Store())
+		GetProofChecker().WithTrustStore(fetcher.Store()).WithRevocationChecker(revocationChecker)
 		logging.Log().Info("eIDAS trust list fetcher started with background refresh")
 		logging.Log().Info("did:elsi support enabled via eIDAS trust store")
 	} else {

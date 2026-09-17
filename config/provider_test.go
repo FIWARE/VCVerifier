@@ -111,9 +111,12 @@ func Test_ReadConfig(t *testing.T) {
 				},
 				M2M: M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				Eidas: Eidas{
-					LotlURL:          DefaultLotlURL,
-					RefreshInterval:  DefaultEidasRefreshInterval,
-					StatusEvaluation: StatusEvaluationCurrent,
+					LotlURL:               DefaultLotlURL,
+					RefreshInterval:       DefaultEidasRefreshInterval,
+					StatusEvaluation:      StatusEvaluationCurrent,
+					RevocationCheck:       RevocationCheckSoft,
+					RevocationTimeout:     DefaultEidasRevocationTimeout,
+					RevocationCacheExpiry: DefaultEidasRevocationCacheExpiry,
 				},
 				Database: Database{
 					Host:    "localhost",
@@ -167,9 +170,12 @@ func Test_ReadConfig(t *testing.T) {
 				},
 				M2M:        M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				Eidas: Eidas{
-					LotlURL:          DefaultLotlURL,
-					RefreshInterval:  DefaultEidasRefreshInterval,
-					StatusEvaluation: StatusEvaluationCurrent,
+					LotlURL:               DefaultLotlURL,
+					RefreshInterval:       DefaultEidasRefreshInterval,
+					StatusEvaluation:      StatusEvaluationCurrent,
+					RevocationCheck:       RevocationCheckSoft,
+					RevocationTimeout:     DefaultEidasRevocationTimeout,
+					RevocationCacheExpiry: DefaultEidasRevocationCacheExpiry,
 				},
 				ConfigRepo: ConfigRepo{UpdateInterval: 30},
 				Database: Database{
@@ -224,9 +230,12 @@ func Test_ReadConfig(t *testing.T) {
 				},
 				M2M: M2M{AuthEnabled: false, SignatureType: "JsonWebSignature2020", KeyType: "RSAPS256"},
 				Eidas: Eidas{
-					LotlURL:          DefaultLotlURL,
-					RefreshInterval:  DefaultEidasRefreshInterval,
-					StatusEvaluation: StatusEvaluationCurrent,
+					LotlURL:               DefaultLotlURL,
+					RefreshInterval:       DefaultEidasRefreshInterval,
+					StatusEvaluation:      StatusEvaluationCurrent,
+					RevocationCheck:       RevocationCheckSoft,
+					RevocationTimeout:     DefaultEidasRevocationTimeout,
+					RevocationCacheExpiry: DefaultEidasRevocationCacheExpiry,
 				},
 				ConfigRepo: ConfigRepo{
 					UpdateInterval: 30,

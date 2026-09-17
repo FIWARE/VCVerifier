@@ -297,7 +297,31 @@ type Eidas struct {
 	// status is evaluated. See the StatusEvaluation* constants. Defaults to
 	// StatusEvaluationCurrent when empty.
 	StatusEvaluation string `mapstructure:"statusEvaluation"`
+	// RevocationCheck selects how certificate revocation (OCSP/CRL) is
+	// handled during chain validation. See the RevocationCheck* constants.
+	// Defaults to RevocationCheckSoft when empty.
+	RevocationCheck string `mapstructure:"revocationCheck"`
+	// RevocationTimeout is the HTTP timeout in seconds for a single OCSP or
+	// CRL request. Defaults to 10 when zero.
+	RevocationTimeout int `mapstructure:"revocationTimeout"`
+	// RevocationCacheExpiry is how long, in seconds, a determined revocation
+	// status is cached when the responder declares no NextUpdate of its own.
+	// Defaults to 3600 when zero.
+	RevocationCacheExpiry int `mapstructure:"revocationCacheExpiry"`
 }
+
+const (
+	// RevocationCheckOff disables revocation checking.
+	RevocationCheckOff = "off"
+
+	// RevocationCheckSoft rejects certificates known to be revoked but accepts
+	// those whose status could not be determined. This is the default.
+	RevocationCheckSoft = "soft"
+
+	// RevocationCheckHard additionally rejects certificates whose revocation
+	// status could not be determined.
+	RevocationCheckHard = "hard"
+)
 
 const (
 	// StatusEvaluationCurrent evaluates a trust service against the status it

@@ -80,6 +80,9 @@ type EidasValidationContext struct {
 // (returns true, nil).
 type EidasValidationService struct {
 	trustStore *eidas.TrustStore
+	// revocationChecker consults OCSP/CRL for the certificates on the built
+	// chain. A nil checker disables revocation checking.
+	revocationChecker *eidas.RevocationChecker
 }
 
 // ValidateVC validates a Verifiable Credential against the eIDAS trust lists.
@@ -205,7 +208,11 @@ func (evs *EidasValidationService) verifyCertificateAgainstTrustStore(
 	serviceTypes []string,
 	statusEvaluationTime time.Time,
 ) bool {
-	err := eidas.VerifyCertificateChainAt(leafCert, intermediates, evs.trustStore, countryCode, serviceTypes, statusEvaluationTime)
+	err := eidas.VerifyCertificateChainAt(leafCert, intermediates, evs.trustStore, countryCode, serviceTypes, statusEvaluationTime,
+		eidas.WithRevocationCheck(evs.revocationChecker))
+	if err != nil {
+		logging.Log().Debugf("EidasValidationService: chain verification against country %q failed: %v", countryCode, err)
+	}
 	return err == nil
 }
 

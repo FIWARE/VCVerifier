@@ -85,6 +85,16 @@ eidas:
     # When a trust service's status is evaluated: "current" (default) or
     # "issuance". See "Status Evaluation Time" below.
     statusEvaluation: current
+
+    # Certificate revocation checking: "off", "soft" (default) or "hard".
+    revocationCheck: soft
+
+    # HTTP timeout in seconds for a single OCSP or CRL request.
+    revocationTimeout: 10
+
+    # How long (seconds) a determined revocation status is cached when the
+    # responder declares no NextUpdate of its own.
+    revocationCacheExpiry: 3600
 ```
 
 ### Configuration Fields
@@ -99,6 +109,9 @@ eidas:
 | `fetchTimeout` | int | `30` | HTTP timeout in seconds per trust list fetch request. |
 | `allowStaleTrustLists` | bool | `false` | Accept trust lists that have passed their `NextUpdate` time. |
 | `statusEvaluation` | string | `current` | When trust service status is evaluated: `current` or `issuance`. |
+| `revocationCheck` | string | `soft` | Certificate revocation checking: `off`, `soft` or `hard`. |
+| `revocationTimeout` | int | `10` | HTTP timeout in seconds per OCSP or CRL request. |
+| `revocationCacheExpiry` | int | `3600` | Seconds a determined revocation status is cached absent a responder `NextUpdate`. |
 
 ### Trust List Freshness
 
@@ -122,6 +135,39 @@ A rejected **LOTL** aborts the whole refresh cycle, leaving the previously loade
 store untouched. A rejected **national list** only skips that country: its previously
 loaded services are kept (they are not pruned on a failed fetch) and the rest of the
 refresh proceeds.
+
+### Certificate Revocation
+
+Chaining to a trust-list CA establishes that a certificate was issued under a listed
+service. It does not establish that the certificate is still valid: an individual
+certificate is withdrawn through OCSP (RFC 6960) or a CRL (RFC 5280) published by its
+issuing CA, not through the trust list, which only records changes to the *service*.
+
+Every certificate on a successfully built chain — all of them except the trust anchor,
+whose standing the trust list itself expresses — is therefore checked against the
+responders it names. OCSP is tried first, using the responders in the certificate's
+Authority Information Access extension; if none answers, the CRL distribution points are
+downloaded and the certificate is looked up by serial number. A CRL is only used when it
+verifies against the certificate's issuer.
+
+| `revocationCheck` | Revoked certificate | Status could not be determined |
+|-------------------|---------------------|-------------------------------|
+| `off` | accepted | accepted |
+| `soft` (default) | **rejected** (`certificate_revoked`) | accepted, logged |
+| `hard` | **rejected** (`certificate_revoked`) | **rejected** (`revocation_status_unknown`) |
+
+"Could not be determined" covers a certificate that names no responder at all, a responder
+that cannot be reached, and a responder that does not know the certificate. `hard` gives
+the strongest guarantee but makes verification depend on the availability of every issuing
+CA's responder, so it needs those endpoints to be reachable from the verifier.
+
+Determined statuses are cached — until the responder's `NextUpdate`, or for
+`revocationCacheExpiry` when it declares none — so a busy verifier does not re-query a
+responder for every presented credential. An undetermined status is never cached, so a
+temporarily unreachable responder does not pin a certificate to "unknown".
+
+Only `http://` and `https://` distribution points are dereferenced; `ldap://` and other
+schemes named in a certificate are skipped. Response bodies are size-bounded.
 
 ### Status Evaluation Time
 
@@ -308,6 +354,8 @@ The **global** `eidas:` settings (LOTL URL, refresh interval, countries, maxWork
 | `eidas_validation_requires_sd_jwt_format` | `eidasConfig` is enabled for a credential type, but the presented credential is not in SD-JWT format. | eIDAS validation only works with SD-JWT credentials. Either disable `eidasConfig` for this credential type, or ensure the credential is presented in SD-JWT format. |
 | `eidas_no_x5c_certificates_available` | The SD-JWT credential does not carry X.509 certificates in the `x5c` header. | The issuer must include the certificate chain in the SD-JWT `x5c` header for eIDAS validation. Check the issuer's credential issuance configuration. |
 | `eidas_issuer_not_trusted_by_trust_list` | The issuer's certificate does not chain to any trusted service in the EU Trusted Lists. | Verify that the issuer is registered with a trust service provider in the configured countries. If using `allowedCountries`, ensure the issuer's country is included. |
+| `certificate_revoked` | A certificate on the issuer's chain has been revoked by its issuing CA. | The issuer must obtain a new certificate. |
+| `revocation_status_unknown` | `revocationCheck: hard` is set and the revocation status of a certificate on the chain could not be determined. | Make the issuer's OCSP/CRL endpoints reachable from the verifier, or fall back to `revocationCheck: soft`. |
 | `eidas_certificate_not_qualified` | `requireQualified` is set, but the issuer's certificate declares no QcCompliance statement in its `qcStatements` extension, or that extension cannot be parsed. | Have the issuer use a qualified certificate, or set `requireQualified: false` for this credential type if non-qualified issuers are acceptable. |
 | `trust_list_stale` | A fetched trust list has passed its `NextUpdate` time. | Normally transient — the scheme operator is late publishing. Set `eidas.allowStaleTrustLists: true` to keep using the overdue list. |
 | `trust_list_not_yet_issued` | A fetched trust list claims a `ListIssueDateTime` in the future. | Check the verifier's system clock; if it is correct, the list itself is faulty. |

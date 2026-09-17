@@ -30,8 +30,26 @@ func VerifyCertificateChain(
 	store *TrustStore,
 	countryCode string,
 	serviceTypes []string,
+	opts ...ChainVerificationOption,
 ) error {
-	return VerifyCertificateChainAt(leafCert, intermediates, store, countryCode, serviceTypes, time.Time{})
+	return VerifyCertificateChainAt(leafCert, intermediates, store, countryCode, serviceTypes, time.Time{}, opts...)
+}
+
+// ChainVerificationOption configures an individual chain verification.
+type ChainVerificationOption func(*chainVerification)
+
+// chainVerification holds the optional parts of a chain verification.
+type chainVerification struct {
+	revocationChecker *RevocationChecker
+}
+
+// WithRevocationCheck makes chain verification consult the given revocation
+// checker for every certificate in the built chain below the trust anchor.
+// Without it, no revocation checking is performed.
+func WithRevocationCheck(checker *RevocationChecker) ChainVerificationOption {
+	return func(cv *chainVerification) {
+		cv.revocationChecker = checker
+	}
 }
 
 // VerifyCertificateChainAt verifies that leafCert chains up to a CA that was a
@@ -53,9 +71,15 @@ func VerifyCertificateChainAt(
 	countryCode string,
 	serviceTypes []string,
 	at time.Time,
+	opts ...ChainVerificationOption,
 ) error {
 	if store == nil {
 		return fmt.Errorf("trust store is nil")
+	}
+
+	verification := &chainVerification{}
+	for _, opt := range opts {
+		opt(verification)
 	}
 
 	trustedServices := store.GetTrustedServicesAt(countryCode, serviceTypes, true, at)
@@ -73,6 +97,10 @@ func VerifyCertificateChainAt(
 		}
 	}
 
+	// Retains the first revocation failure, so that a revoked certificate is
+	// reported as revoked rather than as simply untrusted.
+	var revocationErr error
+
 	for _, svc := range trustedServices {
 		if len(svc.Certificates) == 0 {
 			continue
@@ -83,7 +111,7 @@ func VerifyCertificateChainAt(
 			roots.AddCert(cert)
 		}
 
-		opts := x509.VerifyOptions{
+		verifyOptions := x509.VerifyOptions{
 			Roots:         roots,
 			Intermediates: intermediatePool,
 			// We only care about chain validity, not specific key usages,
@@ -94,12 +122,53 @@ func VerifyCertificateChainAt(
 			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 		}
 
-		if _, err := leafCert.Verify(opts); err == nil {
-			logging.Log().Debugf("VerifyCertificateChain: certificate chains to trusted service %q (TSP: %s, country: %s)",
-				svc.ServiceName, svc.TSPName, svc.CountryCode)
-			return nil
+		chains, err := leafCert.Verify(verifyOptions)
+		if err != nil {
+			continue
 		}
+
+		// A chain that builds is only accepted if no certificate on it has
+		// been revoked. Another candidate service may still yield a chain
+		// that is both valid and unrevoked, so keep the first revocation
+		// error and carry on rather than failing immediately.
+		chainErr := verification.checkRevocation(chains)
+		if chainErr != nil {
+			if revocationErr == nil {
+				revocationErr = chainErr
+			}
+			continue
+		}
+
+		logging.Log().Debugf("VerifyCertificateChain: certificate chains to trusted service %q (TSP: %s, country: %s)",
+			svc.ServiceName, svc.TSPName, svc.CountryCode)
+		return nil
+	}
+
+	if revocationErr != nil {
+		return revocationErr
 	}
 
 	return fmt.Errorf("certificate does not chain to any trusted service")
+}
+
+// checkRevocation runs the configured revocation checker over the built chains.
+// A chain passes when none of its certificates below the trust anchor is
+// revoked; the first chain that passes is enough.
+func (cv *chainVerification) checkRevocation(chains [][]*x509.Certificate) error {
+	if !cv.revocationChecker.Enabled() {
+		return nil
+	}
+
+	var firstErr error
+	for _, chain := range chains {
+		err := cv.revocationChecker.CheckChain(chain)
+		if err == nil {
+			return nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	return firstErr
 }
