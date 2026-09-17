@@ -427,6 +427,10 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 				Timeout: time.Duration(config.Eidas.FetchTimeout) * time.Second,
 			}))
 		}
+		opts = append(opts, eidas.WithAllowStaleTrustLists(config.Eidas.AllowStaleTrustLists))
+		if config.Eidas.AllowStaleTrustLists {
+			logging.Log().Warn("eIDAS trust lists that have passed their NextUpdate time will be accepted (allowStaleTrustLists is set)")
+		}
 		fetcher := eidas.NewTrustListFetcher(opts...)
 		fetcher.Start(context.Background())
 		eidasValidationService = EidasValidationService{trustStore: fetcher.Store()}

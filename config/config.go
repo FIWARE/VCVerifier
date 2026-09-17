@@ -286,6 +286,13 @@ type Eidas struct {
 	// FetchTimeout is the HTTP timeout in seconds for fetching a single trust
 	// list. Defaults to 30 when zero.
 	FetchTimeout int `mapstructure:"fetchTimeout"`
+	// AllowStaleTrustLists controls whether a trust list that has passed its
+	// NextUpdate time is still used. By default such a list is rejected: the
+	// scheme operator committed to publishing a newer one by then, so its
+	// service statuses can no longer be assumed current. Set this to true to
+	// keep verifying against an overdue list, for example while a scheme
+	// operator is late publishing.
+	AllowStaleTrustLists bool `mapstructure:"allowStaleTrustLists" default:"false"`
 }
 
 type Policies struct {

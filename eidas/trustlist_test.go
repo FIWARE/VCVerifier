@@ -897,3 +897,103 @@ func TestStatusDeterminationApproach(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateFreshness verifies that a trust list is judged against its own
+// ListIssueDateTime and NextUpdate, with a tolerance for clock skew.
+func TestValidateFreshness(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name              string
+		listIssueDateTime string
+		nextUpdate        string
+		expectedError     error
+	}{
+		{
+			name:              "fresh list",
+			listIssueDateTime: "2026-05-01T00:00:00Z",
+			nextUpdate:        "2026-07-01T00:00:00Z",
+		},
+		{
+			name:              "next update passed",
+			listIssueDateTime: "2026-01-01T00:00:00Z",
+			nextUpdate:        "2026-05-01T00:00:00Z",
+			expectedError:     ErrorTrustListStale,
+		},
+		{
+			name:              "next update just passed within skew tolerance",
+			listIssueDateTime: "2026-01-01T00:00:00Z",
+			nextUpdate:        "2026-06-01T11:58:00Z",
+		},
+		{
+			name:              "no next update declared",
+			listIssueDateTime: "2026-01-01T00:00:00Z",
+			nextUpdate:        "",
+		},
+		{
+			name:              "issued in the future",
+			listIssueDateTime: "2026-08-01T00:00:00Z",
+			nextUpdate:        "2026-09-01T00:00:00Z",
+			expectedError:     ErrorTrustListNotYetIssued,
+		},
+		{
+			name:              "issued slightly ahead within skew tolerance",
+			listIssueDateTime: "2026-06-01T12:02:00Z",
+			nextUpdate:        "2026-07-01T00:00:00Z",
+		},
+		{
+			name:              "unparseable next update",
+			listIssueDateTime: "2026-01-01T00:00:00Z",
+			nextUpdate:        "soon",
+			expectedError:     ErrorInvalidTrustListTimestamp,
+		},
+		{
+			name:              "unparseable issue date",
+			listIssueDateTime: "yesterday",
+			nextUpdate:        "2026-07-01T00:00:00Z",
+			expectedError:     ErrorInvalidTrustListTimestamp,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tl := &TrustServiceStatusList{
+				SchemeInformation: SchemeInformation{
+					ListIssueDateTime: tc.listIssueDateTime,
+					NextUpdate:        NextUpdate{DateTime: tc.nextUpdate},
+				},
+			}
+
+			err := tl.ValidateFreshness(now)
+			if tc.expectedError != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tc.expectedError)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// TestHasNextUpdate verifies detection of lists that cannot be checked for
+// staleness because they declare no NextUpdate.
+func TestHasNextUpdate(t *testing.T) {
+	tests := []struct {
+		name       string
+		nextUpdate string
+		expected   bool
+	}{
+		{name: "declared", nextUpdate: "2026-07-01T00:00:00Z", expected: true},
+		{name: "empty", nextUpdate: "", expected: false},
+		{name: "whitespace only", nextUpdate: "   ", expected: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tl := &TrustServiceStatusList{
+				SchemeInformation: SchemeInformation{NextUpdate: NextUpdate{DateTime: tc.nextUpdate}},
+			}
+			assert.Equal(t, tc.expected, tl.HasNextUpdate())
+		})
+	}
+}

@@ -28,6 +28,28 @@ const TrustListNamespace = "https://uri.etsi.org/02231/v2#"
 // TSLTag identifies the trust list format version.
 const TSLTag = "https://uri.etsi.org/19612/TSLTag"
 
+// TrustListClockSkewTolerance is the allowance applied when comparing trust
+// list timestamps against the local clock, so that modest clock drift between
+// the scheme operator and this verifier does not invalidate a list.
+const TrustListClockSkewTolerance = 5 * time.Minute
+
+// ErrorTrustListStale is returned when a trust list's NextUpdate time has
+// passed: the scheme operator committed to publishing a newer list by then, so
+// the content can no longer be assumed to reflect the current service statuses.
+var ErrorTrustListStale = errors.New("trust_list_stale")
+
+// ErrorTrustListNotYetIssued is returned when a trust list's ListIssueDateTime
+// lies in the future, beyond the clock skew tolerance.
+var ErrorTrustListNotYetIssued = errors.New("trust_list_not_yet_issued")
+
+// ErrorTrustListRollback is returned when a fetched national trust list carries
+// a lower TSLSequenceNumber than the list already loaded for that country.
+var ErrorTrustListRollback = errors.New("trust_list_rollback")
+
+// ErrorInvalidTrustListTimestamp is returned when ListIssueDateTime or
+// NextUpdate carries a value that cannot be parsed.
+var ErrorInvalidTrustListTimestamp = errors.New("invalid_trust_list_timestamp")
+
 // ErrorInvalidStatusStartingTime is returned when a trust service carries a
 // StatusStartingTime that cannot be parsed. The value is mandatory per
 // ETSI TS 119 612 §5.5.5 and time-based status evaluation depends on it, so
@@ -132,6 +154,65 @@ type TrustServiceStatusList struct {
 // determined by the TSLType field in SchemeInformation.
 func (tl *TrustServiceStatusList) IsLOTL() bool {
 	return tl.SchemeInformation.TSLType == TSLTypeEUListOfTheLists
+}
+
+// ValidateFreshness checks the trust list's own timestamps against now.
+//
+// It returns an error when
+//   - ListIssueDateTime or NextUpdate is present but unparseable
+//     (ErrorInvalidTrustListTimestamp),
+//   - the list claims to have been issued in the future
+//     (ErrorTrustListNotYetIssued), or
+//   - the NextUpdate time has passed (ErrorTrustListStale).
+//
+// Both comparisons allow TrustListClockSkewTolerance. A list that declares no
+// NextUpdate at all cannot be judged for staleness and is accepted; the caller
+// is expected to surface that case to the operator.
+func (tl *TrustServiceStatusList) ValidateFreshness(now time.Time) error {
+	si := tl.SchemeInformation
+
+	if issued := strings.TrimSpace(si.ListIssueDateTime); issued != "" {
+		issueTime, err := parseDateTime(issued)
+		if err != nil {
+			return fmt.Errorf("%w: ListIssueDateTime: %v", ErrorInvalidTrustListTimestamp, err)
+		}
+		if issueTime.After(now.Add(TrustListClockSkewTolerance)) {
+			return fmt.Errorf("%w: issued at %s, current time is %s",
+				ErrorTrustListNotYetIssued, issueTime.Format(time.RFC3339), now.Format(time.RFC3339))
+		}
+	}
+
+	nextUpdate := strings.TrimSpace(si.NextUpdate.DateTime)
+	if nextUpdate == "" {
+		// ETSI TS 119 612 allows an empty NextUpdate for lists that are not
+		// published on a fixed schedule. Nothing to compare against.
+		return nil
+	}
+
+	nextUpdateTime, err := parseDateTime(nextUpdate)
+	if err != nil {
+		return fmt.Errorf("%w: NextUpdate: %v", ErrorInvalidTrustListTimestamp, err)
+	}
+	if now.After(nextUpdateTime.Add(TrustListClockSkewTolerance)) {
+		return fmt.Errorf("%w: NextUpdate was %s, current time is %s",
+			ErrorTrustListStale, nextUpdateTime.Format(time.RFC3339), now.Format(time.RFC3339))
+	}
+
+	return nil
+}
+
+// HasNextUpdate reports whether the list declares a NextUpdate time at all.
+// A list without one cannot be checked for staleness.
+func (tl *TrustServiceStatusList) HasNextUpdate() bool {
+	return strings.TrimSpace(tl.SchemeInformation.NextUpdate.DateTime) != ""
+}
+
+// SequenceNumber returns the list's TSLSequenceNumber. Within one scheme
+// territory the sequence number increases with every published list, so a
+// value lower than one already seen indicates that an older list is being
+// served in place of a newer one.
+func (tl *TrustServiceStatusList) SequenceNumber() int {
+	return tl.SchemeInformation.TSLSequenceNumber
 }
 
 // StatusDeterminationKind returns the normalised status determination approach

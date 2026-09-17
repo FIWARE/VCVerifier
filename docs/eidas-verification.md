@@ -63,6 +63,11 @@ eidas:
 
     # HTTP timeout (in seconds) for each individual trust list fetch request.
     fetchTimeout: 30
+
+    # Whether to keep using a trust list that has passed its NextUpdate time.
+    # Default false: an overdue list is rejected, because the scheme operator
+    # committed to publishing a newer one by then.
+    allowStaleTrustLists: false
 ```
 
 ### Configuration Fields
@@ -75,6 +80,30 @@ eidas:
 | `countries` | string list | `[]` (all) | ISO 3166-1 alpha-2 country code filter. Empty means all countries. |
 | `maxWorkers` | int | `5` | Maximum concurrent national trust list fetches during refresh. |
 | `fetchTimeout` | int | `30` | HTTP timeout in seconds per trust list fetch request. |
+| `allowStaleTrustLists` | bool | `false` | Accept trust lists that have passed their `NextUpdate` time. |
+
+### Trust List Freshness
+
+Every fetched trust list is checked against its own metadata before it is used:
+
+- **`NextUpdate`** — a list whose `NextUpdate` time has passed is rejected (`trust_list_stale`).
+  The scheme operator committed to publishing a newer list by that time, so an overdue list
+  can no longer be assumed to reflect the current service statuses. Set
+  `allowStaleTrustLists: true` to keep using it anyway.
+- **`ListIssueDateTime`** — a list claiming to have been issued in the future is rejected
+  (`trust_list_not_yet_issued`).
+- **`TSLSequenceNumber`** — a national list carrying a lower sequence number than the one
+  already loaded for that country is rejected (`trust_list_rollback`). Sequence numbers
+  increase with every publication, so a lower one means an older list is being served in
+  place of the loaded one, which would silently reinstate withdrawn services.
+
+Both timestamp comparisons allow five minutes of clock skew. A list that declares no
+`NextUpdate` at all cannot be judged for staleness; it is accepted and logged as such.
+
+A rejected **LOTL** aborts the whole refresh cycle, leaving the previously loaded trust
+store untouched. A rejected **national list** only skips that country: its previously
+loaded services are kept (they are not pruned on a failed fetch) and the rest of the
+refresh proceeds.
 
 ### Behavior When Disabled
 

@@ -20,6 +20,11 @@ func init() {
 
 // --- LOTL and national TL XML templates for httptest ---
 
+// The NextUpdate in the templates below is deliberately far in the future: the
+// fetcher rejects trust lists that have passed their NextUpdate time, so a
+// fixture with a near date would start failing once that date is reached.
+// Staleness itself is covered by TestFetcher_Freshness, which pins the clock.
+
 // lotlTemplate produces a minimal LOTL XML with dynamic distribution point URLs.
 // Use %s placeholders for the national TL URLs (DE, FR).
 const lotlTemplate = `<?xml version="1.0" encoding="UTF-8"?>
@@ -42,7 +47,7 @@ const lotlTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <HistoricalInformationPeriod>65535</HistoricalInformationPeriod>
     <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
     <NextUpdate>
-      <dateTime>2025-01-01T00:00:00Z</dateTime>
+      <dateTime>2099-01-01T00:00:00Z</dateTime>
     </NextUpdate>
     <PointersToOtherTSL>
       %s
@@ -82,7 +87,7 @@ const nationalTLTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <SchemeTerritory>%s</SchemeTerritory>
     <HistoricalInformationPeriod>65535</HistoricalInformationPeriod>
     <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
-    <NextUpdate><dateTime>2025-01-01T00:00:00Z</dateTime></NextUpdate>
+    <NextUpdate><dateTime>2099-01-01T00:00:00Z</dateTime></NextUpdate>
   </SchemeInformation>
   <TrustServiceProviderList>
     <TrustServiceProvider>
@@ -824,4 +829,184 @@ func TestTrustListFetcher_FetchURL_ErrorStatus(t *testing.T) {
 			assert.Contains(t, err.Error(), fmt.Sprintf("unexpected status code %d", tt.statusCode))
 		})
 	}
+}
+
+// --- Freshness and rollback protection ---
+
+// withNextUpdate returns the given trust list XML with its NextUpdate value
+// replaced, so a test can make a list stale without a second template.
+func withNextUpdate(xmlData, nextUpdate string) string {
+	return strings.Replace(xmlData,
+		"<dateTime>2099-01-01T00:00:00Z</dateTime>",
+		"<dateTime>"+nextUpdate+"</dateTime>", 1)
+}
+
+// withSequenceNumber returns the given trust list XML with its
+// TSLSequenceNumber replaced.
+func withSequenceNumber(xmlData string, sequenceNumber int) string {
+	return strings.Replace(xmlData,
+		"<TSLSequenceNumber>1</TSLSequenceNumber>",
+		fmt.Sprintf("<TSLSequenceNumber>%d</TSLSequenceNumber>", sequenceNumber), 1)
+}
+
+// TestFetcher_Freshness verifies that a trust list past its NextUpdate time is
+// rejected, and that WithAllowStaleTrustLists downgrades that to a warning.
+func TestFetcher_Freshness(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name           string
+		lotlNextUpdate string
+		allowStale     bool
+		expectError    bool
+		expectServices bool
+	}{
+		{
+			name:           "fresh LOTL is used",
+			lotlNextUpdate: "2026-07-01T00:00:00Z",
+			expectServices: true,
+		},
+		{
+			name:           "stale LOTL is rejected",
+			lotlNextUpdate: "2026-05-01T00:00:00Z",
+			expectError:    true,
+		},
+		{
+			name:           "stale LOTL is used when explicitly allowed",
+			lotlNextUpdate: "2026-05-01T00:00:00Z",
+			allowStale:     true,
+			expectServices: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			deServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = fmt.Fprint(w, makeNationalTLXML("DE", ServiceTypeCAQC, ServiceStatusGranted))
+			}))
+			defer deServer.Close()
+
+			lotlXML := withNextUpdate(
+				fmt.Sprintf(lotlTemplate, fmt.Sprintf(pointerTemplate, "DE", deServer.URL, "DE")),
+				tc.lotlNextUpdate)
+			lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = fmt.Fprint(w, lotlXML)
+			}))
+			defer lotlServer.Close()
+
+			store := NewTrustStore()
+			fetcher := NewTrustListFetcher(
+				WithLOTLURL(lotlServer.URL),
+				WithHTTPClient(lotlServer.Client()),
+				WithTrustStore(store),
+				WithClock(func() time.Time { return now }),
+				WithAllowStaleTrustLists(tc.allowStale),
+			)
+
+			err := fetcher.Refresh(context.Background())
+			if tc.expectError {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrorTrustListStale)
+			} else {
+				require.NoError(t, err)
+			}
+
+			if tc.expectServices {
+				assert.NotZero(t, store.ServiceCount(), "trust store should have been populated")
+			} else {
+				assert.Zero(t, store.ServiceCount(), "trust store should not have been populated")
+			}
+		})
+	}
+}
+
+// TestFetcher_StaleNationalTLIsSkipped verifies that a stale national trust
+// list does not replace the services already loaded for that country, while
+// the rest of the refresh still succeeds.
+func TestFetcher_StaleNationalTLIsSkipped(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	nationalXML := &atomic.Value{}
+	nationalXML.Store(makeNationalTLXML("DE", ServiceTypeCAQC, ServiceStatusGranted))
+	deServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, nationalXML.Load().(string))
+	}))
+	defer deServer.Close()
+
+	lotlXML := withNextUpdate(
+		fmt.Sprintf(lotlTemplate, fmt.Sprintf(pointerTemplate, "DE", deServer.URL, "DE")),
+		"2026-07-01T00:00:00Z")
+	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, lotlXML)
+	}))
+	defer lotlServer.Close()
+
+	store := NewTrustStore()
+	fetcher := NewTrustListFetcher(
+		WithLOTLURL(lotlServer.URL),
+		WithHTTPClient(lotlServer.Client()),
+		WithTrustStore(store),
+		WithClock(func() time.Time { return now }),
+	)
+
+	require.NoError(t, fetcher.Refresh(context.Background()))
+	loaded := store.ServiceCount()
+	require.NotZero(t, loaded)
+
+	// The national TL goes stale: its services must not be replaced, and the
+	// overall refresh still succeeds because the LOTL itself is fresh.
+	nationalXML.Store(withNextUpdate(
+		makeNationalTLXML("DE", ServiceTypeCA, ServiceStatusWithdrawn),
+		"2026-05-01T00:00:00Z"))
+
+	require.NoError(t, fetcher.Refresh(context.Background()))
+	assert.Equal(t, loaded, store.ServiceCount(), "stale national TL should not replace the loaded services")
+
+	services := store.GetTrustedServices("DE", []string{ServiceTypeCAQC}, true)
+	assert.Len(t, services, 1, "previously loaded granted service should still be present")
+}
+
+// TestFetcher_SequenceNumberRollback verifies that a national trust list
+// carrying a lower TSLSequenceNumber than the one already loaded is rejected,
+// so an older list cannot reinstate withdrawn services.
+func TestFetcher_SequenceNumberRollback(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	nationalXML := &atomic.Value{}
+	nationalXML.Store(withSequenceNumber(makeNationalTLXML("DE", ServiceTypeCAQC, ServiceStatusGranted), 7))
+	deServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, nationalXML.Load().(string))
+	}))
+	defer deServer.Close()
+
+	lotlXML := withNextUpdate(
+		fmt.Sprintf(lotlTemplate, fmt.Sprintf(pointerTemplate, "DE", deServer.URL, "DE")),
+		"2026-07-01T00:00:00Z")
+	lotlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, lotlXML)
+	}))
+	defer lotlServer.Close()
+
+	store := NewTrustStore()
+	fetcher := NewTrustListFetcher(
+		WithLOTLURL(lotlServer.URL),
+		WithHTTPClient(lotlServer.Client()),
+		WithTrustStore(store),
+		WithClock(func() time.Time { return now }),
+	)
+
+	require.NoError(t, fetcher.Refresh(context.Background()))
+	require.Len(t, store.GetTrustedServices("DE", []string{ServiceTypeCAQC}, true), 1)
+
+	// An older list (lower sequence number) must not be accepted.
+	nationalXML.Store(withSequenceNumber(makeNationalTLXML("DE", ServiceTypeCA, ServiceStatusGranted), 6))
+	require.NoError(t, fetcher.Refresh(context.Background()))
+	assert.Len(t, store.GetTrustedServices("DE", []string{ServiceTypeCAQC}, true), 1,
+		"rolled-back list should not replace the loaded services")
+
+	// A newer list is accepted.
+	nationalXML.Store(withSequenceNumber(makeNationalTLXML("DE", ServiceTypeCA, ServiceStatusGranted), 8))
+	require.NoError(t, fetcher.Refresh(context.Background()))
+	assert.Empty(t, store.GetTrustedServices("DE", []string{ServiceTypeCAQC}, true),
+		"newer list should replace the loaded services")
 }

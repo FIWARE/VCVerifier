@@ -88,6 +88,27 @@ func WithMaxWorkers(n int) FetcherOption {
 	}
 }
 
+// WithAllowStaleTrustLists controls what happens when a fetched trust list has
+// passed its NextUpdate time, carries an unparseable timestamp, or claims to be
+// issued in the future. By default such a list is rejected. Setting this to
+// true downgrades the rejection to a warning and uses the list anyway, which an
+// operator may need when a scheme operator is late publishing.
+func WithAllowStaleTrustLists(allow bool) FetcherOption {
+	return func(f *TrustListFetcher) {
+		f.allowStaleTrustLists = allow
+	}
+}
+
+// WithClock sets the time source used for trust list freshness checks.
+// Defaults to time.Now.
+func WithClock(now func() time.Time) FetcherOption {
+	return func(f *TrustListFetcher) {
+		if now != nil {
+			f.now = now
+		}
+	}
+}
+
 // WithTrustStore sets the TrustStore to populate with fetched trust services.
 func WithTrustStore(store *TrustStore) FetcherOption {
 	return func(f *TrustListFetcher) {
@@ -113,6 +134,17 @@ type TrustListFetcher struct {
 	maxWorkers       int
 	store            *TrustStore
 
+	// allowStaleTrustLists downgrades freshness failures to warnings.
+	allowStaleTrustLists bool
+	// now is the time source for freshness checks, overridable in tests.
+	now func() time.Time
+	// lastSequenceNumbers tracks the highest TSLSequenceNumber seen per
+	// country so that an older list cannot replace a newer one.
+	lastSequenceNumbers map[string]int
+	// sequenceMu guards lastSequenceNumbers, which is written from the
+	// concurrent national-TL workers.
+	sequenceMu sync.Mutex
+
 	// stopCh signals the background refresh goroutine to stop.
 	stopCh chan struct{}
 	// stopped is closed once the background goroutine has exited.
@@ -132,8 +164,10 @@ func NewTrustListFetcher(opts ...FetcherOption) *TrustListFetcher {
 		httpClient: &http.Client{
 			Timeout: DefaultFetchTimeout,
 		},
-		stopCh:  make(chan struct{}),
-		stopped: make(chan struct{}),
+		stopCh:              make(chan struct{}),
+		stopped:             make(chan struct{}),
+		now:                 time.Now,
+		lastSequenceNumbers: map[string]int{},
 	}
 	for _, opt := range opts {
 		opt(f)
@@ -234,6 +268,10 @@ func (f *TrustListFetcher) Refresh(ctx context.Context) error {
 	}
 
 	warnOnNonEUStatusDetermination(lotl, f.lotlURL)
+
+	if err := f.checkFreshness(lotl, f.lotlURL); err != nil {
+		return fmt.Errorf("LOTL from %s is not fresh: %w", f.lotlURL, err)
+	}
 
 	// Extract distribution points (national TL URLs).
 	distPoints := lotl.GetDistributionPoints()
@@ -362,6 +400,14 @@ func (f *TrustListFetcher) fetchAndParseNationalTL(ctx context.Context, dp Distr
 
 	warnOnNonEUStatusDetermination(tl, dp.TSLLocation)
 
+	if err := f.checkFreshness(tl, dp.TSLLocation); err != nil {
+		return nil, fmt.Errorf("TL for %s is not fresh: %w", dp.SchemeTerritory, err)
+	}
+
+	if err := f.checkSequenceNumber(tl, dp.SchemeTerritory); err != nil {
+		return nil, err
+	}
+
 	services, err := tl.GetTrustServices()
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract services for %s: %w", dp.SchemeTerritory, err)
@@ -453,4 +499,49 @@ func warnOnNonEUStatusDetermination(tl *TrustServiceStatusList, source string) {
 	}
 	logging.Log().Warnf("TrustListFetcher: trust list from %s declares status determination approach %q, which is not an EU approach; its service statuses are not EU-determined",
 		source, tl.SchemeInformation.StatusDeterminationApproach)
+}
+
+// checkFreshness validates a fetched trust list's own timestamps. A list that
+// declares no NextUpdate is accepted with a warning, because staleness cannot
+// be determined for it. When allowStaleTrustLists is set, a freshness failure
+// is logged and the list is used anyway.
+func (f *TrustListFetcher) checkFreshness(tl *TrustServiceStatusList, source string) error {
+	if !tl.HasNextUpdate() {
+		logging.Log().Warnf("TrustListFetcher: trust list from %s declares no NextUpdate; staleness cannot be determined", source)
+	}
+
+	err := tl.ValidateFreshness(f.now())
+	if err == nil {
+		return nil
+	}
+
+	if f.allowStaleTrustLists {
+		logging.Log().Warnf("TrustListFetcher: using trust list from %s despite failed freshness check (allowStaleTrustLists is set): %v", source, err)
+		return nil
+	}
+
+	logging.Log().Warnf("TrustListFetcher: rejecting trust list from %s: %v", source, err)
+	return err
+}
+
+// checkSequenceNumber rejects a national trust list whose TSLSequenceNumber is
+// lower than the highest one already seen for that country. Sequence numbers
+// increase with every publication, so a lower one means an older list is being
+// served in place of the one already loaded — a rollback that would silently
+// reinstate withdrawn services.
+func (f *TrustListFetcher) checkSequenceNumber(tl *TrustServiceStatusList, countryCode string) error {
+	sequence := tl.SequenceNumber()
+
+	f.sequenceMu.Lock()
+	defer f.sequenceMu.Unlock()
+
+	if previous, seen := f.lastSequenceNumbers[countryCode]; seen && sequence < previous {
+		logging.Log().Warnf("TrustListFetcher: rejecting trust list for %s with sequence number %d, lower than the %d already loaded",
+			countryCode, sequence, previous)
+		return fmt.Errorf("%w: sequence number %d is lower than the loaded %d for %s",
+			ErrorTrustListRollback, sequence, previous, countryCode)
+	}
+	f.lastSequenceNumbers[countryCode] = sequence
+
+	return nil
 }
