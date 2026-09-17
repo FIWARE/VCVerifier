@@ -12,11 +12,13 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/eidas"
+	"github.com/fiware/VCVerifier/logging"
 	"github.com/lestrrat-go/jwx/v3/cert"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
@@ -694,4 +696,145 @@ func TestVerifyJWT_DidElsi_KidElsiButIssMismatch(t *testing.T) {
 			assert.ErrorIs(t, err, ErrorNoDIDInJWT)
 		})
 	}
+}
+
+// TestVerifyElsiJWT_Guarantees pins the security properties that did:elsi
+// verification upholds now that it is built on a plain JWS signature plus a
+// PKIX chain to an eIDAS trust list, rather than on JAdES envelope validation.
+//
+// The set of guarantees is deliberately different from the JAdES one — the
+// AdES signed properties (signing time, signing certificate reference, signature
+// policy) are no longer evaluated — so these are the properties a deployment can
+// still rely on:
+//
+//  1. the payload is covered by the signature,
+//  2. the signature is made with the key of the certificate in x5c,
+//  3. that certificate is bound to the claimed did:elsi identity through its
+//     organizationIdentifier, and
+//  4. that certificate chains to a CA listed as a granted service in the trust
+//     list, and is itself valid at verification time.
+//
+// Anything not on this list is not checked; see docs/eidas-verification.md.
+func TestVerifyElsiJWT_Guarantees(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const orgIdentifier = "VATES-B12345678"
+	const issuerDID = "did:elsi:" + orgIdentifier
+
+	tests := []struct {
+		name string
+		// tamper mutates the signed token, the certificate chain presented in
+		// x5c, or the signing key, to break exactly one guarantee.
+		buildToken  func(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) []byte
+		expectError bool
+	}{
+		{
+			name: "intact token verifies",
+			buildToken: func(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) []byte {
+				leafCert, leafKey := generateTestLeafCert(t, caCert, caKey, orgIdentifier)
+				return signElsiJWT(t, leafKey, []*x509.Certificate{leafCert}, map[string]interface{}{"iss": issuerDID})
+			},
+		},
+		{
+			name: "payload tampering breaks the signature",
+			buildToken: func(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) []byte {
+				leafCert, leafKey := generateTestLeafCert(t, caCert, caKey, orgIdentifier)
+				token := signElsiJWT(t, leafKey, []*x509.Certificate{leafCert}, map[string]interface{}{"iss": issuerDID, "role": "user"})
+
+				// Replace the payload segment with one claiming a different role.
+				parts := strings.Split(string(token), ".")
+				require.Len(t, parts, 3)
+				tamperedPayload, err := json.Marshal(map[string]interface{}{"iss": issuerDID, "role": "admin"})
+				require.NoError(t, err)
+				parts[1] = base64.RawURLEncoding.EncodeToString(tamperedPayload)
+				return []byte(strings.Join(parts, "."))
+			},
+			expectError: true,
+		},
+		{
+			name: "signature by a key other than the one in x5c is rejected",
+			buildToken: func(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) []byte {
+				leafCert, _ := generateTestLeafCert(t, caCert, caKey, orgIdentifier)
+				// A second certificate for the same organisation, whose key
+				// signs the token while the first one is presented in x5c.
+				_, otherKey := generateTestLeafCert(t, caCert, caKey, orgIdentifier)
+				return signElsiJWT(t, otherKey, []*x509.Certificate{leafCert}, map[string]interface{}{"iss": issuerDID})
+			},
+			expectError: true,
+		},
+		{
+			name: "certificate for a different organisation is rejected",
+			buildToken: func(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) []byte {
+				leafCert, leafKey := generateTestLeafCert(t, caCert, caKey, "VATES-B99999999")
+				return signElsiJWT(t, leafKey, []*x509.Certificate{leafCert}, map[string]interface{}{"iss": issuerDID})
+			},
+			expectError: true,
+		},
+		{
+			name: "certificate from an unlisted CA is rejected",
+			buildToken: func(t *testing.T, _ *x509.Certificate, _ *ecdsa.PrivateKey) []byte {
+				foreignCA, foreignCAKey := generateTestCACert(t)
+				leafCert, leafKey := generateTestLeafCert(t, foreignCA, foreignCAKey, orgIdentifier)
+				return signElsiJWT(t, leafKey, []*x509.Certificate{leafCert}, map[string]interface{}{"iss": issuerDID})
+			},
+			expectError: true,
+		},
+		{
+			name: "expired signing certificate is rejected",
+			buildToken: func(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) []byte {
+				leafCert, leafKey := generateExpiredLeafCert(t, caCert, caKey, orgIdentifier)
+				return signElsiJWT(t, leafKey, []*x509.Certificate{leafCert}, map[string]interface{}{"iss": issuerDID})
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			caCert, caKey := generateTestCACert(t)
+			store := createTestTrustStore(t, caCert)
+			checker := NewJWTProofChecker(did.NewRegistry()).WithTrustStore(store)
+
+			token := tc.buildToken(t, caCert, caKey)
+
+			payload, err := checker.VerifyJWT(token)
+			if tc.expectError {
+				assert.Error(t, err)
+				assert.Nil(t, payload)
+				return
+			}
+			assert.NoError(t, err)
+			assert.NotNil(t, payload)
+		})
+	}
+}
+
+// generateExpiredLeafCert creates a leaf certificate that expired before the
+// current time, signed by the given CA.
+func generateExpiredLeafCert(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, orgIdentifier string) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject: pkix.Name{
+			Organization: []string{"Test Org"},
+			Country:      []string{"ES"},
+			ExtraNames: []pkix.AttributeTypeAndValue{
+				{Type: oidOrganizationIdentifierTest, Value: orgIdentifier},
+			},
+		},
+		NotBefore: time.Now().Add(-48 * time.Hour),
+		NotAfter:  time.Now().Add(-24 * time.Hour),
+		KeyUsage:  x509.KeyUsageDigitalSignature,
+	}
+
+	leafCertDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	require.NoError(t, err)
+
+	leafCert, err := x509.ParseCertificate(leafCertDER)
+	require.NoError(t, err)
+
+	return leafCert, leafKey
 }

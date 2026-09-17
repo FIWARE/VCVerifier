@@ -326,10 +326,50 @@ When VCVerifier receives a credential issued by a `did:elsi` identifier:
 3. **Verify the JWT signature** — The JWT signature is verified using the leaf certificate's public key.
 4. **Validate the certificate chain** — The certificate chain is validated against the cached EU Trusted Lists. The issuer's certificate must chain up to a trust service provider listed in the LOTL.
 
+### Breaking Change: Replacement of the JAdES Validator
+
+`did:elsi` verification used to run through a JAdES validator (the former `jades` package),
+which validated the AdES envelope around the signature. That validator has been removed and
+replaced by the flow described above.
+
+This is a **breaking change for any deployment that already uses `did:elsi`**: the new flow
+requires a populated eIDAS trust store, so every `did:elsi` verification fails with
+`eidas_trust_store_required_for_did_elsi` until `eidas.enabled: true` is set and the LOTL
+has been fetched. Enabling the eIDAS feature is not optional for these deployments any more.
+
+The guarantees are also not the same set as before. What is verified now:
+
+1. the payload is covered by the signature,
+2. the signature is made with the key of the certificate presented in `x5c`,
+3. that certificate is bound to the claimed `did:elsi` identity through its
+   `organizationIdentifier` (OID 2.5.4.97), and
+4. that certificate is valid and chains to a CA listed as a granted service in the EU
+   Trusted Lists — including a revocation check, subject to `revocationCheck`.
+
+These four properties are pinned by `TestVerifyElsiJWT_Guarantees`
+(`verifier/jwt_proof_checker_test.go`).
+
+What the JAdES validator checked and this flow does **not**:
+
+- the AdES **signed properties** — in particular the claimed signing time, the signing
+  certificate reference (`SigningCertificateV2`) and any signature policy identifier. The
+  signing certificate is bound through the `x5c` header instead, and the trust decision is
+  made against the present rather than against a claimed signing time (see
+  [Status Evaluation Time](#status-evaluation-time)).
+- the JAdES **envelope structure** itself. A `did:elsi` token is verified as a plain JWS.
+
+This trade-off is deliberate: the signing-time attributes in a JAdES envelope are asserted
+by the signer, so they were never usable as an independent trust input, whereas the trust
+list and the certificate chain are. Deployments that need AdES-level signature validation
+(for long-term archival or non-repudiation) should validate the original signature with a
+dedicated AdES validator; VCVerifier authenticates a presenter, it does not serve as a
+signature validation service.
+
 ### Limitations
 
 - **JWT format only.** `did:elsi` only supports JWT-format credentials. JSON-LD (Linked Data Proof) presentations with `did:elsi` signers are explicitly rejected with `did_elsi_not_supported_for_ld_proofs`.
 - **No per-credential filtering.** Unlike per-credential eIDAS validation, `did:elsi` searches all countries and all certificate service types (both qualified and non-qualified). There is no per-credential country or qualified filter for `did:elsi`.
+- **Current trust status only.** `did:elsi` chains are always evaluated against the *current* trust service status; `statusEvaluation: issuance` applies to per-credential SD-JWT validation only.
 
 ## Interaction with Other Trust Anchors
 
