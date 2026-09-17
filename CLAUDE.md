@@ -49,7 +49,7 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
   - `compliance.go` — Policy compliance checking (signatures, dates, etc.)
   - `holder.go` — Holder verification
   - `gaiax.go` — Gaia-X compliance checks
-  - `jwt_proof_checker.go` — JWT signature verification via DID-resolved keys; also handles did:elsi via JAdES and HTTPS-based issuers via `HttpsIssuerResolver`
+  - `jwt_proof_checker.go` — JWT signature verification via DID-resolved keys; also handles did:elsi via the X.509 `x5c` chain plus the eIDAS trust list (`eidas.VerifyCertificateChain`) and HTTPS-based issuers via `HttpsIssuerResolver`
   - `ld_proof_checker.go` — JSON-LD Linked Data Proof verification (`JsonWebSignature2020`): resolves `verificationMethod` (DID URL or https:// URL), binds the signing key to the credential issuer / presentation holder, enforces the proof purpose
   - `key_resolver.go` — Shared DID→key resolution, including verification-relationship enforcement (`authentication` / `assertionMethod`)
   - `https_issuer_resolver.go` — Key discovery for HTTPS-based issuer identifiers via `/.well-known/jwt-vc-issuer` (SD-JWT VC) with an OpenID4VCI + RFC 8414 fallback, plus a per-issuer JWKS cache
@@ -61,7 +61,7 @@ Key config sections: `server` (port, timeouts, template/static dirs), `logging`,
 
 - **`gaiax/`** — Gaia-X compliance client. did:web resolution, X.509 certificate chain validation, trust anchor verification.
 
-- **`jades/`** — JAdES signature validation for did:elsi credentials.
+- **`eidas/`** — ETSI TS 119 612 EU Trusted List support: XML parsing (`trustlist.go`), background LOTL/national-TL fetching (`fetcher.go`), the in-memory `TrustStore` (`trust_store.go`) and PKIX chain validation against trust-list CAs (`verify.go`). Replaces the former `jades/` package as the did:elsi trust anchor.
 
 - **`config/`** — Configuration structs and YAML parsing. Test fixtures in `config/data/`.
 
