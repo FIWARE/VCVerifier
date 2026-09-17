@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"math/big"
 	"testing"
 	"time"
@@ -63,8 +64,35 @@ func generateTestCA(t *testing.T, country string) testCA {
 	return testCA{cert: cert, certDER: certDER, key: key}
 }
 
-// generateTestLeaf creates a leaf certificate signed by the given CA.
+// oidQCStatementsExtension is id-pe-qcStatements (RFC 3739 §3.2.6).
+var oidQCStatementsExtension = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 1, 3}
+
+// oidQcComplianceStatement is id-etsi-qcs-QcCompliance (ETSI EN 319 412-5 §4.2.1).
+var oidQcComplianceStatement = asn1.ObjectIdentifier{0, 4, 0, 1862, 1, 1}
+
+// qcCompliantExtension builds a qcStatements extension declaring QcCompliance,
+// i.e. marking the certificate as a qualified certificate.
+func qcCompliantExtension(t *testing.T) pkix.Extension {
+	t.Helper()
+
+	type statement struct {
+		StatementID asn1.ObjectIdentifier
+	}
+	value, err := asn1.Marshal([]statement{{StatementID: oidQcComplianceStatement}})
+	require.NoError(t, err)
+
+	return pkix.Extension{Id: oidQCStatementsExtension, Value: value}
+}
+
+// generateTestLeaf creates a leaf certificate signed by the given CA. The
+// certificate declares QcCompliance, so it passes a requireQualified check.
 func generateTestLeaf(t *testing.T, ca testCA) testLeaf {
+	return generateTestLeafWithQCStatements(t, ca, true)
+}
+
+// generateTestLeafWithQCStatements creates a leaf certificate signed by the
+// given CA, with or without a QcCompliance statement.
+func generateTestLeafWithQCStatements(t *testing.T, ca testCA, qualified bool) testLeaf {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -78,6 +106,9 @@ func generateTestLeaf(t *testing.T, ca testCA) testLeaf {
 		NotBefore: time.Now().Add(-time.Hour),
 		NotAfter:  time.Now().Add(24 * time.Hour),
 		KeyUsage:  x509.KeyUsageDigitalSignature,
+	}
+	if qualified {
+		template.ExtraExtensions = []pkix.Extension{qcCompliantExtension(t)}
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
@@ -510,9 +541,10 @@ func TestEidasValidation_IntermediateCertificates(t *testing.T) {
 		Subject: pkix.Name{
 			CommonName: "Test Leaf",
 		},
-		NotBefore: time.Now().Add(-time.Hour),
-		NotAfter:  time.Now().Add(24 * time.Hour),
-		KeyUsage:  x509.KeyUsageDigitalSignature,
+		NotBefore:       time.Now().Add(-time.Hour),
+		NotAfter:        time.Now().Add(24 * time.Hour),
+		KeyUsage:        x509.KeyUsageDigitalSignature,
+		ExtraExtensions: []pkix.Extension{qcCompliantExtension(t)},
 	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, intermediateCert, &leafKey.PublicKey, intermediateKey)
 	require.NoError(t, err)
@@ -801,4 +833,91 @@ func TestEidasValidation_RequireQualifiedNilDefaultsToTrue(t *testing.T) {
 	result, err := service.ValidateVC(cred, ctx)
 	assert.False(t, result, "should reject non-qualified service when RequireQualified is nil (defaults to true)")
 	assert.ErrorIs(t, err, ErrorEidasUntrustedIssuer)
+}
+
+// TestEidasValidation_LeafQualifiedStatus verifies that requireQualified is
+// enforced against the leaf certificate's own QcCompliance statement, not only
+// against the issuing CA's trust-list service type. A CA listed under CA/QC may
+// also issue non-qualified certificates.
+func TestEidasValidation_LeafQualifiedStatus(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	requireQualified := true
+	allowNonQualified := false
+
+	tests := []struct {
+		name             string
+		leafQualified    bool
+		requireQualified *bool
+		expectedResult   bool
+		expectedError    error
+	}{
+		{
+			name:             "qualified leaf under a qualified CA",
+			leafQualified:    true,
+			requireQualified: &requireQualified,
+			expectedResult:   true,
+		},
+		{
+			name:             "non-qualified leaf under a qualified CA is rejected",
+			leafQualified:    false,
+			requireQualified: &requireQualified,
+			expectedResult:   false,
+			expectedError:    ErrorEidasCertificateNotQualified,
+		},
+		{
+			name:             "non-qualified leaf is accepted when qualification is not required",
+			leafQualified:    false,
+			requireQualified: &allowNonQualified,
+			expectedResult:   true,
+		},
+		{
+			name:             "requireQualified defaults to true and rejects a non-qualified leaf",
+			leafQualified:    false,
+			requireQualified: nil,
+			expectedResult:   false,
+			expectedError:    ErrorEidasCertificateNotQualified,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := generateTestCA(t, "DE")
+			leaf := generateTestLeafWithQCStatements(t, ca, tc.leafQualified)
+
+			// The CA is registered under a qualified service type in both cases,
+			// so only the leaf's own statement can make the difference.
+			qualifiedService := eidas.TrustedService{
+				CountryCode:   "DE",
+				TSPName:       "German TSP",
+				ServiceName:   "German Qualified CA",
+				ServiceType:   eidas.ServiceTypeCAQC,
+				ServiceStatus: eidas.ServiceStatusGranted,
+				Certificates:  []*x509.Certificate{ca.cert},
+			}
+
+			store := setupTrustStore(t, "DE", []eidas.TrustedService{qualifiedService})
+			service := &EidasValidationService{trustStore: store}
+
+			ctx := EidasValidationContext{
+				PerType: map[string]*configModel.EidasConfig{
+					"EidasCredential": {
+						Enabled:          true,
+						RequireQualified: tc.requireQualified,
+						AllowedCountries: []string{"DE"},
+					},
+				},
+			}
+
+			cred := makeEidasTestCredential([]string{"VerifiableCredential", "EidasCredential"}, common.FormatSDJWT, []*x509.Certificate{leaf.cert})
+
+			result, err := service.ValidateVC(cred, ctx)
+			assert.Equal(t, tc.expectedResult, result)
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

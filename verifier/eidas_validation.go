@@ -25,6 +25,11 @@ var ErrorEidasNoCertificates = errors.New("eidas_no_x5c_certificates_available")
 // not chain up to any trusted service in the eIDAS trust list.
 var ErrorEidasUntrustedIssuer = errors.New("eidas_issuer_not_trusted_by_trust_list")
 
+// ErrorEidasCertificateNotQualified is returned when requireQualified is set
+// but the issuer's certificate does not declare itself a qualified certificate
+// through a QcCompliance statement (ETSI EN 319 412-5).
+var ErrorEidasCertificateNotQualified = errors.New("eidas_certificate_not_qualified")
+
 // --- Qualified and non-qualified service type sets ---
 
 // qualifiedServiceTypes are the ETSI service type URIs for qualified trust
@@ -136,10 +141,18 @@ func (evs *EidasValidationService) ValidateVC(verifiableCredential *common.Crede
 	leafCert := x5cCerts[0]
 	intermediates := x5cCerts[1:]
 
-	// --- Determine service type filter ---
+	// --- Determine service type filter and check the leaf's own QC status ---
+	//
+	// The service type filter constrains the issuing CA; being listed under a
+	// qualified service type does not make every certificate that CA issues a
+	// qualified one. "Qualified" is a property of the certificate itself, so
+	// requireQualified additionally requires the leaf to declare it.
 	var serviceTypes []string
 	if activeConfig.IsRequireQualified() {
 		serviceTypes = qualifiedServiceTypes
+		if err := requireQualifiedCertificate(leafCert); err != nil {
+			return false, err
+		}
 	} else {
 		serviceTypes = allCertificateServiceTypes
 	}
@@ -194,6 +207,26 @@ func (evs *EidasValidationService) verifyCertificateAgainstTrustStore(
 ) bool {
 	err := eidas.VerifyCertificateChainAt(leafCert, intermediates, evs.trustStore, countryCode, serviceTypes, statusEvaluationTime)
 	return err == nil
+}
+
+// requireQualifiedCertificate checks that the given certificate declares itself
+// a qualified certificate through a QcCompliance statement (ETSI EN 319 412-5
+// §4.2.1). A certificate that carries no qcStatements extension, or one that
+// cannot be parsed, is not qualified.
+func requireQualifiedCertificate(leafCert *x509.Certificate) error {
+	statements, err := eidas.ParseQCStatements(leafCert)
+	if err != nil {
+		logging.Log().Warnf("EidasValidationService: requireQualified is set but the issuer certificate carries no usable qcStatements: %v", err)
+		return ErrorEidasCertificateNotQualified
+	}
+	if !statements.Compliant {
+		logging.Log().Warn("EidasValidationService: requireQualified is set but the issuer certificate declares no QcCompliance statement")
+		return ErrorEidasCertificateNotQualified
+	}
+
+	logging.Log().Debugf("EidasValidationService: issuer certificate is a qualified certificate (SSCD: %t, types: %v)",
+		statements.SSCD, statements.Types)
+	return nil
 }
 
 // statusEvaluationTime returns the point in time at which trust service status

@@ -34,6 +34,19 @@ The EU Trusted Lists distinguish between **qualified** and **non-qualified** tru
 
 The `requireQualified` field (default: `true`) controls which service types are accepted during certificate chain validation. When set to `true`, only certificates chaining to qualified trust services are accepted. When set to `false`, non-qualified CAs are also accepted.
 
+Under eIDAS, "qualified" is a property of the issued certificate, not only of the issuing
+CA's trust-list entry: a CA listed under `CA/QC` may also issue non-qualified certificates.
+`requireQualified: true` therefore applies two checks:
+
+1. the issuing CA must be listed under `CA/QC` or `NationalRootCA-QC` in the trust list, and
+2. the issuer's own certificate must declare a **QcCompliance** statement in its
+   `qcStatements` extension (ETSI EN 319 412-5 §4.2.1, OID `0.4.0.1862.1.1`).
+
+A certificate that carries no `qcStatements` extension, or one that cannot be parsed, fails
+the second check with `eidas_certificate_not_qualified`. The `QcType` (esign / eseal / web)
+and `QcSSCD` statements are parsed and logged, but are not enforced — restricting a
+credential type to, say, qualified seals only is not currently configurable.
+
 ## Global Configuration Reference
 
 The global eIDAS configuration lives in the `eidas:` block of `server.yaml`. All fields are optional — the feature is disabled by default.
@@ -295,6 +308,11 @@ The **global** `eidas:` settings (LOTL URL, refresh interval, countries, maxWork
 | `eidas_validation_requires_sd_jwt_format` | `eidasConfig` is enabled for a credential type, but the presented credential is not in SD-JWT format. | eIDAS validation only works with SD-JWT credentials. Either disable `eidasConfig` for this credential type, or ensure the credential is presented in SD-JWT format. |
 | `eidas_no_x5c_certificates_available` | The SD-JWT credential does not carry X.509 certificates in the `x5c` header. | The issuer must include the certificate chain in the SD-JWT `x5c` header for eIDAS validation. Check the issuer's credential issuance configuration. |
 | `eidas_issuer_not_trusted_by_trust_list` | The issuer's certificate does not chain to any trusted service in the EU Trusted Lists. | Verify that the issuer is registered with a trust service provider in the configured countries. If using `allowedCountries`, ensure the issuer's country is included. |
+| `eidas_certificate_not_qualified` | `requireQualified` is set, but the issuer's certificate declares no QcCompliance statement in its `qcStatements` extension, or that extension cannot be parsed. | Have the issuer use a qualified certificate, or set `requireQualified: false` for this credential type if non-qualified issuers are acceptable. |
+| `trust_list_stale` | A fetched trust list has passed its `NextUpdate` time. | Normally transient — the scheme operator is late publishing. Set `eidas.allowStaleTrustLists: true` to keep using the overdue list. |
+| `trust_list_not_yet_issued` | A fetched trust list claims a `ListIssueDateTime` in the future. | Check the verifier's system clock; if it is correct, the list itself is faulty. |
+| `trust_list_rollback` | A national trust list was served with a lower `TSLSequenceNumber` than the one already loaded. | An older list is being served in place of the loaded one. The previously loaded services are kept; investigate the distribution point. |
+| `invalid_status_starting_time` | A trust service entry carries an unparseable `StatusStartingTime`. | The trust list is malformed; that country's list is skipped. Report it to the scheme operator. |
 | `eidas_trust_store_required_for_did_elsi` | The global eIDAS feature is disabled, but a `did:elsi` credential was received. | Set `eidas.enabled: true` in `server.yaml` and restart the verifier. |
 | `did_elsi_issuer_validation_failed` | The DID's organization identifier does not match the certificate's Subject (OID 2.5.4.97). | Check that the issuer's DID suffix matches the `organizationIdentifier` in the X.509 certificate. |
 | `did_elsi_certificate_not_trusted` | The `did:elsi` issuer's certificate does not chain to any trusted service in the EU Trusted Lists. | Verify that the issuer is registered with a trust service provider. If using `eidas.countries`, ensure the issuer's country is included. |
