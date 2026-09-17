@@ -85,6 +85,26 @@ const (
 	ServiceStatusUnderSupervision = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/undersupervision"
 )
 
+// --- Status Determination Approaches (ETSI TS 119 612 §5.3.13) ---
+//
+// The approach is declared as a URI. Only the final path segment is
+// significant for identification: lists in the wild differ in the URI scheme
+// (http vs. https) and in intermediate path segments, so matching is done on
+// the segment rather than on the full URI.
+const (
+	// StatusDetnEUAppropriate marks a list whose service statuses are
+	// determined according to the EU rules. Declared by EU national trust lists.
+	StatusDetnEUAppropriate = "euappropriate"
+
+	// StatusDetnEUListOfTheLists marks the status determination approach of the
+	// EU List of Trusted Lists itself.
+	StatusDetnEUListOfTheLists = "eulistofthelists"
+
+	// StatusDetnCCDetermination marks a list whose service statuses are
+	// determined by the scheme operator of a third country.
+	StatusDetnCCDetermination = "ccdetermination"
+)
+
 // --- TSL Type URIs ---
 
 const (
@@ -112,6 +132,36 @@ type TrustServiceStatusList struct {
 // determined by the TSLType field in SchemeInformation.
 func (tl *TrustServiceStatusList) IsLOTL() bool {
 	return tl.SchemeInformation.TSLType == TSLTypeEUListOfTheLists
+}
+
+// StatusDeterminationKind returns the normalised status determination approach
+// declared by the list: the lower-cased final path segment of the
+// StatusDeterminationApproach URI, or an empty string when none is declared.
+// It is compared against the StatusDetn* constants.
+func (si SchemeInformation) StatusDeterminationKind() string {
+	approach := strings.TrimSpace(si.StatusDeterminationApproach)
+	if approach == "" {
+		return ""
+	}
+	approach = strings.TrimRight(approach, "/")
+	if idx := strings.LastIndex(approach, "/"); idx >= 0 {
+		approach = approach[idx+1:]
+	}
+	return strings.ToLower(approach)
+}
+
+// IsEUStatusDetermination reports whether the service statuses in this list are
+// determined according to the EU rules (ETSI TS 119 612 §5.3.13). A list using
+// a third-country approach (CCdetermination), or declaring no approach at all,
+// returns false: its "granted" statuses do not carry the EU meaning that the
+// trust decisions in this package assume.
+func (si SchemeInformation) IsEUStatusDetermination() bool {
+	switch si.StatusDeterminationKind() {
+	case StatusDetnEUAppropriate, StatusDetnEUListOfTheLists:
+		return true
+	default:
+		return false
+	}
 }
 
 // SchemeInformation contains metadata about the trust list, including the

@@ -834,3 +834,66 @@ func TestGetTrustServices_StatusStartingTime(t *testing.T) {
 		})
 	}
 }
+
+// TestStatusDeterminationApproach verifies that the declared status
+// determination approach is normalised to its final path segment and that only
+// the EU approaches are reported as EU-determined.
+func TestStatusDeterminationApproach(t *testing.T) {
+	tests := []struct {
+		name         string
+		approach     string
+		expectedKind string
+		expectedEU   bool
+	}{
+		{
+			name:         "EU appropriate",
+			approach:     "http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate",
+			expectedKind: StatusDetnEUAppropriate,
+			expectedEU:   true,
+		},
+		{
+			name:         "EU appropriate over https",
+			approach:     "https://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate",
+			expectedKind: StatusDetnEUAppropriate,
+			expectedEU:   true,
+		},
+		{
+			name:         "EU list of the lists",
+			approach:     "http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUlistofthelists",
+			expectedKind: StatusDetnEUListOfTheLists,
+			expectedEU:   true,
+		},
+		{
+			name:         "third country determination",
+			approach:     "http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/CCdetermination",
+			expectedKind: StatusDetnCCDetermination,
+			expectedEU:   false,
+		},
+		{
+			name:         "trailing slash is ignored",
+			approach:     "http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate/",
+			expectedKind: StatusDetnEUAppropriate,
+			expectedEU:   true,
+		},
+		{
+			name:         "unknown approach",
+			approach:     "http://example.com/whatever",
+			expectedKind: "whatever",
+			expectedEU:   false,
+		},
+		{
+			name:         "no approach declared",
+			approach:     "",
+			expectedKind: "",
+			expectedEU:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			si := SchemeInformation{StatusDeterminationApproach: tc.approach}
+			assert.Equal(t, tc.expectedKind, si.StatusDeterminationKind())
+			assert.Equal(t, tc.expectedEU, si.IsEUStatusDetermination())
+		})
+	}
+}

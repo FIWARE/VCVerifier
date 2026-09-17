@@ -233,6 +233,8 @@ func (f *TrustListFetcher) Refresh(ctx context.Context) error {
 		return fmt.Errorf("fetched document is not a LOTL (TSLType: %s)", lotl.SchemeInformation.TSLType)
 	}
 
+	warnOnNonEUStatusDetermination(lotl, f.lotlURL)
+
 	// Extract distribution points (national TL URLs).
 	distPoints := lotl.GetDistributionPoints()
 	if len(distPoints) == 0 {
@@ -358,6 +360,8 @@ func (f *TrustListFetcher) fetchAndParseNationalTL(ctx context.Context, dp Distr
 		return nil, fmt.Errorf("failed to parse TL for %s: %w", dp.SchemeTerritory, err)
 	}
 
+	warnOnNonEUStatusDetermination(tl, dp.TSLLocation)
+
 	services, err := tl.GetTrustServices()
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract services for %s: %w", dp.SchemeTerritory, err)
@@ -433,4 +437,20 @@ func clampDuration(d, min, max time.Duration) time.Duration {
 		return max
 	}
 	return d
+}
+
+// warnOnNonEUStatusDetermination logs a warning when a fetched trust list does
+// not declare an EU status determination approach (ETSI TS 119 612 §5.3.13).
+// The service statuses in such a list — most notably "granted" — are determined
+// by a third-country scheme operator, or by no declared rule at all, and so do
+// not carry the meaning that the trust decisions in this package assume. The
+// list is still used: rejecting it would make the verifier fail closed on
+// legitimately registered third-country lists, which is a policy decision for
+// the operator rather than a parsing concern.
+func warnOnNonEUStatusDetermination(tl *TrustServiceStatusList, source string) {
+	if tl.SchemeInformation.IsEUStatusDetermination() {
+		return
+	}
+	logging.Log().Warnf("TrustListFetcher: trust list from %s declares status determination approach %q, which is not an EU approach; its service statuses are not EU-determined",
+		source, tl.SchemeInformation.StatusDeterminationApproach)
 }
