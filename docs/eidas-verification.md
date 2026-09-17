@@ -21,6 +21,39 @@ When the global eIDAS feature is enabled, VCVerifier fetches the EU [List of Tru
 
 After the initial fetch, VCVerifier re-fetches all trust lists on a configurable interval (default: 24 hours). This ensures that newly added or revoked trust services are picked up without restarting the verifier.
 
+### ETSI Identifier URIs
+
+Service types, service statuses and list types are identified by URIs. ETSI TS 119 612
+defines them with an `http` scheme, and that is what the published EU lists use
+(`http://uri.etsi.org/TrstSvc/Svctype/CA/QC`); documents written against the specification
+text often spell them with `https`. These URIs are identifiers and are never dereferenced,
+so the scheme carries no meaning: comparison ignores it, along with a trailing slash and
+surrounding whitespace. A list published either way is understood.
+
+### Robustness Against Real Lists
+
+The published national lists are not uniformly clean, and the fetcher is built to keep
+going rather than lose a country:
+
+- **Both representations are pointed to.** Every territory publishes its list twice under
+  the same TSL type — once as `application/vnd.etsi.tsl+xml` and once as a PDF for humans.
+  Only the XML representation is followed. A pointer that declares no media type is still
+  followed, since older lists omit it.
+- **Legacy certificates are skipped, not fatal.** Several national lists carry certificates
+  that Go's `crypto/x509` rejects (RSA keys without NULL parameters, non-canonical basic
+  constraints, unsupported curves, non-conforming PrintableStrings). Such a certificate is
+  dropped from its service entry and logged; the entry keeps its remaining anchors and the
+  rest of the list is unaffected. Dropping an anchor can only narrow what is trusted.
+- **Unusable entries are skipped.** A service whose `StatusStartingTime` cannot be parsed,
+  or whose history contains an entry that cannot be placed on the timeline, is dropped
+  whole. A history entry is never dropped on its own: removing a withdrawal would make the
+  service look granted at a time it was not.
+- **A descriptive `User-Agent` is sent.** At least one national endpoint answers `403` to
+  Go's default user agent.
+
+A distribution point that cannot be fetched or parsed at all leaves that country's
+previously loaded services in place; the refresh continues with the others.
+
 ### Certificate Chain Validation
 
 When a credential is presented for verification, VCVerifier extracts the issuer's X.509 certificate (from the SD-JWT `x5c` header or the `did:elsi` JWT `x5c` header) and validates its certificate chain against the cached trust store using standard PKIX chain building — the same mechanism browsers use for TLS certificate validation.
@@ -400,7 +433,7 @@ The **global** `eidas:` settings (LOTL URL, refresh interval, countries, maxWork
 | `trust_list_stale` | A fetched trust list has passed its `NextUpdate` time. | Normally transient — the scheme operator is late publishing. Set `eidas.allowStaleTrustLists: true` to keep using the overdue list. |
 | `trust_list_not_yet_issued` | A fetched trust list claims a `ListIssueDateTime` in the future. | Check the verifier's system clock; if it is correct, the list itself is faulty. |
 | `trust_list_rollback` | A national trust list was served with a lower `TSLSequenceNumber` than the one already loaded. | An older list is being served in place of the loaded one. The previously loaded services are kept; investigate the distribution point. |
-| `invalid_status_starting_time` | A trust service entry carries an unparseable `StatusStartingTime`. | The trust list is malformed; that country's list is skipped. Report it to the scheme operator. |
+| `invalid_status_starting_time` | A trust service entry carries an unparseable `StatusStartingTime`. | That entry is skipped and the rest of the list is kept. Report it to the scheme operator. |
 | `eidas_trust_store_required_for_did_elsi` | The global eIDAS feature is disabled, but a `did:elsi` credential was received. | Set `eidas.enabled: true` in `server.yaml` and restart the verifier. |
 | `did_elsi_issuer_validation_failed` | The DID's organization identifier does not match the certificate's Subject (OID 2.5.4.97). | Check that the issuer's DID suffix matches the `organizationIdentifier` in the X.509 certificate. |
 | `did_elsi_certificate_not_trusted` | The `did:elsi` issuer's certificate does not chain to any trusted service in the EU Trusted Lists. | Verify that the issuer is registered with a trust service provider. If using `eidas.countries`, ensure the issuer's country is included. |

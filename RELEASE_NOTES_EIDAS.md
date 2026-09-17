@@ -45,6 +45,30 @@ alongside the trusted participants / trusted issuers checks. It enforces SD-JWT
 format, takes the issuer certificate from the `x5c` header, and verifies the
 chain against the trust lists with PKIX chain building.
 
+### Verified against the live EU Trusted Lists
+
+The implementation is exercised against the production LOTL
+(`https://ec.europa.eu/tools/lotl/eu-lotl.xml`, sequence number 394) and all 31 national
+XML distribution points it references.
+
+ETSI identifier URIs are compared without their scheme. The published lists use
+`http://uri.etsi.org/...`, so a comparison against the `https://` spelling — which is how
+the specification text is often transcribed — matched nothing: the LOTL was not recognised
+as a LOTL, no distribution points were found, and no service type or status ever matched.
+
+Alongside that, three properties of the real lists are handled:
+
+- Every territory publishes its list twice under the same TSL type, as XML and as a PDF.
+  Distribution points are filtered by media type so only the XML is followed.
+- Six national lists carry at least one certificate that Go's `crypto/x509` rejects. Such a
+  certificate is now dropped from its entry instead of failing the whole list; previously
+  AT, DE, FR, IT, LT and RO were lost entirely to a single legacy certificate each.
+- One national endpoint rejects Go's default user agent with `403`, so a descriptive
+  `User-Agent` is sent.
+
+Together these take a full refresh from **0 countries loaded** to **31 countries, 4733
+trust services, 963 of them granted qualified CA services**.
+
 ### Trust list freshness and rollback protection
 
 - A list that has passed its `NextUpdate` is rejected (`trust_list_stale`), as is
@@ -108,6 +132,9 @@ Per-credential-type `eidasConfig` (via the Credentials Config Service):
 
 ## Known Limitations
 
+- **Estonia, and any endpoint behind aggressive bot filtering,** may still refuse the
+  fetcher; the country is then skipped with a warning and its previously loaded services
+  are kept.
 - **XMLDSig signatures on trust lists are not verified.** Integrity relies on
   HTTPS transport. A compromised distribution point can serve a modified list.
 - **`did:elsi` uses current trust status only** and searches all countries and

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#" Id="lotl-1" TSLTag="https://uri.etsi.org/19612/TSLTag">
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#" Id="lotl-1" TSLTag="http://uri.etsi.org/19612/TSLTag">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>42</TSLSequenceNumber>
-    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists</TSLType>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists</TSLType>
     <SchemeOperatorName>
       <Name xml:lang="en">European Commission</Name>
     </SchemeOperatorName>
@@ -13,7 +13,7 @@
     <SchemeInformationURI>
       <URI xml:lang="en">https://ec.europa.eu/tools/lotl/eu-lotl.xml</URI>
     </SchemeInformationURI>
-    <StatusDeterminationApproach>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/StatusDetn/EUappropriate</StatusDeterminationApproach>
+    <StatusDeterminationApproach>http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate</StatusDeterminationApproach>
     <SchemeTerritory>EU</SchemeTerritory>
     <HistoricalInformationPeriod>65535</HistoricalInformationPeriod>
     <ListIssueDateTime>2024-06-01T00:00:00Z</ListIssueDateTime>
@@ -32,7 +32,7 @@
         <TSLLocation>https://tl.example.de/tl.xml</TSLLocation>
         <AdditionalInformation>
           <OtherInformation>
-            <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+            <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
           </OtherInformation>
           <OtherInformation>
             <SchemeTerritory>DE</SchemeTerritory>
@@ -55,7 +55,7 @@
         <TSLLocation>https://tl.example.fr/tl.xml</TSLLocation>
         <AdditionalInformation>
           <OtherInformation>
-            <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+            <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
           </OtherInformation>
           <OtherInformation>
             <SchemeTerritory>FR</SchemeTerritory>
@@ -73,7 +73,7 @@
         <TSLLocation>https://ec.europa.eu/tools/lotl/eu-lotl-pivot.xml</TSLLocation>
         <AdditionalInformation>
           <OtherInformation>
-            <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists</TSLType>
+            <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists</TSLType>
           </OtherInformation>
           <OtherInformation>
             <SchemeTerritory>EU</SchemeTerritory>

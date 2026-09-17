@@ -39,6 +39,11 @@ const (
 
 	// cacheControlMaxAge is the header directive prefix for extracting max-age values.
 	cacheControlMaxAge = "max-age="
+
+	// fetcherUserAgent identifies this client to the trust list distribution
+	// points. Some national endpoints reject Go's default user agent outright
+	// (the Estonian one answers 403), so a descriptive value is sent instead.
+	fetcherUserAgent = "VCVerifier (+https://github.com/FIWARE/VCVerifier)"
 )
 
 // FetcherOption is a functional option for configuring a TrustListFetcher.
@@ -426,6 +431,8 @@ func (f *TrustListFetcher) fetchURL(ctx context.Context, url string) ([]byte, ti
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create request for %s: %w", url, err)
 	}
+	req.Header.Set("User-Agent", fetcherUserAgent)
+	req.Header.Set("Accept", MimeTypeTSL+", application/xml;q=0.9, */*;q=0.1")
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {

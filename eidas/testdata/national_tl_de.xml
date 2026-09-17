@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#" Id="de-tl-1" TSLTag="https://uri.etsi.org/19612/TSLTag">
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#" Id="de-tl-1" TSLTag="http://uri.etsi.org/19612/TSLTag">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>100</TSLSequenceNumber>
-    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeOperatorName>
       <Name xml:lang="en">Germany Federal Network Agency</Name>
       <Name xml:lang="de">Bundesnetzagentur</Name>
@@ -14,7 +14,7 @@
     <SchemeInformationURI>
       <URI xml:lang="en">https://tl.example.de/tl.xml</URI>
     </SchemeInformationURI>
-    <StatusDeterminationApproach>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/StatusDetn/EUappropriate</StatusDeterminationApproach>
+    <StatusDeterminationApproach>http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate</StatusDeterminationApproach>
     <SchemeTerritory>DE</SchemeTerritory>
     <HistoricalInformationPeriod>65535</HistoricalInformationPeriod>
     <ListIssueDateTime>2024-06-01T00:00:00Z</ListIssueDateTime>
@@ -39,7 +39,7 @@
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
             <ServiceName>
               <Name xml:lang="en">Test Qualified CA</Name>
             </ServiceName>
@@ -51,13 +51,13 @@
                 <X509SubjectName>CN=Test CA for eIDAS Trust List,O=Test TSP GmbH,C=DE</X509SubjectName>
               </DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
             <StatusStartingTime>2021-01-15T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
         </TSPService>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/TSA/QTST</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST</ServiceTypeIdentifier>
             <ServiceName>
               <Name xml:lang="en">Test Qualified Timestamp</Name>
             </ServiceName>
@@ -66,7 +66,7 @@
                 <X509SubjectName>CN=Test TSA,O=Test TSP GmbH,C=DE</X509SubjectName>
               </DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn</ServiceStatus>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn</ServiceStatus>
             <StatusStartingTime>2023-06-01T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
         </TSPService>
@@ -87,7 +87,7 @@
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA</ServiceTypeIdentifier>
             <ServiceName>
               <Name xml:lang="en">Non-Qualified CA Service</Name>
             </ServiceName>
@@ -96,7 +96,7 @@
                 <X509SubjectName>CN=Non-Qualified CA,O=Another TSP AG,C=DE</X509SubjectName>
               </DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
             <StatusStartingTime>2022-03-01T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
         </TSPService>

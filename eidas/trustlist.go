@@ -21,13 +21,21 @@ import (
 	"time"
 
 	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/logging"
 )
 
-// XML namespace for ETSI TS 119 612 trust lists (v2).
-const TrustListNamespace = "https://uri.etsi.org/02231/v2#"
+// TrustListNamespace is the XML namespace for ETSI TS 119 612 trust lists (v2),
+// as declared by the published EU lists. Note the http scheme: these URIs are
+// identifiers, not locations, and are never dereferenced.
+const TrustListNamespace = "http://uri.etsi.org/02231/v2#"
+
+// MimeTypeTSL is the media type of a machine-readable ETSI trust list. Every
+// EU territory also publishes a human-readable PDF under the same TSLType, so
+// pointers have to be filtered by media type to find the XML representation.
+const MimeTypeTSL = "application/vnd.etsi.tsl+xml"
 
 // TSLTag identifies the trust list format version.
-const TSLTag = "https://uri.etsi.org/19612/TSLTag"
+const TSLTag = "http://uri.etsi.org/19612/TSLTag"
 
 // TrustListClockSkewTolerance is the allowance applied when comparing trust
 // list timestamps against the local clock, so that modest clock drift between
@@ -62,51 +70,80 @@ var ErrorInvalidStatusStartingTime = errors.New("invalid_status_starting_time")
 
 const (
 	// ServiceTypeCAQC identifies a Certification Authority issuing qualified certificates.
-	ServiceTypeCAQC = "https://uri.etsi.org/TrstSvc/Svctype/CA/QC"
+	ServiceTypeCAQC = "http://uri.etsi.org/TrstSvc/Svctype/CA/QC"
 
 	// ServiceTypeQTST identifies a Qualified Time Stamping Authority.
-	ServiceTypeQTST = "https://uri.etsi.org/TrstSvc/Svctype/TSA/QTST"
+	ServiceTypeQTST = "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST"
 
 	// ServiceTypeTSA identifies a (non-qualified) Time Stamping Authority.
-	ServiceTypeTSA = "https://uri.etsi.org/TrstSvc/Svctype/TSA"
+	ServiceTypeTSA = "http://uri.etsi.org/TrstSvc/Svctype/TSA"
 
 	// ServiceTypeCA identifies a (non-qualified) Certification Authority.
-	ServiceTypeCA = "https://uri.etsi.org/TrstSvc/Svctype/CA"
+	ServiceTypeCA = "http://uri.etsi.org/TrstSvc/Svctype/CA"
 
 	// ServiceTypeIdV identifies an Identity Verification service.
-	ServiceTypeIdV = "https://uri.etsi.org/TrstSvc/Svctype/IdV"
+	ServiceTypeIdV = "http://uri.etsi.org/TrstSvc/Svctype/IdV"
 
 	// ServiceTypeNationalRootCAQC identifies a national root CA for qualified certificates.
-	ServiceTypeNationalRootCAQC = "https://uri.etsi.org/TrstSvc/Svctype/NationalRootCA-QC"
+	ServiceTypeNationalRootCAQC = "http://uri.etsi.org/TrstSvc/Svctype/NationalRootCA-QC"
 
 	// ServiceTypeEDS identifies an Electronic Delivery Service.
-	ServiceTypeEDS = "https://uri.etsi.org/TrstSvc/Svctype/EDS/Q"
+	ServiceTypeEDS = "http://uri.etsi.org/TrstSvc/Svctype/EDS/Q"
 
 	// ServiceTypeREMD identifies a Qualified Electronic Registered Delivery Service.
-	ServiceTypeREMD = "https://uri.etsi.org/TrstSvc/Svctype/EDS/REM/Q"
+	ServiceTypeREMD = "http://uri.etsi.org/TrstSvc/Svctype/EDS/REM/Q"
 )
 
 // --- Service Status URIs (ETSI TS 119 612 §5.5.4) ---
 
 const (
 	// ServiceStatusGranted indicates the service has been granted (active and trusted).
-	ServiceStatusGranted = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
+	ServiceStatusGranted = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
 
 	// ServiceStatusWithdrawn indicates the service has been withdrawn.
-	ServiceStatusWithdrawn = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
+	ServiceStatusWithdrawn = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
 
 	// ServiceStatusRecognisedAtNationalLevel indicates the service is recognised at national level.
-	ServiceStatusRecognisedAtNationalLevel = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/recognisedatnationallevel"
+	ServiceStatusRecognisedAtNationalLevel = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/recognisedatnationallevel"
 
 	// ServiceStatusDeprecatedAtNationalLevel indicates the service is deprecated at national level.
-	ServiceStatusDeprecatedAtNationalLevel = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/deprecatedatnationallevel"
+	ServiceStatusDeprecatedAtNationalLevel = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/deprecatedatnationallevel"
 
 	// ServiceStatusSetByNationalLaw indicates the service status is set by national law.
-	ServiceStatusSetByNationalLaw = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/setbynationallaw"
+	ServiceStatusSetByNationalLaw = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/setbynationallaw"
 
 	// ServiceStatusUnderSupervision indicates the service is under supervision.
-	ServiceStatusUnderSupervision = "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/undersupervision"
+	ServiceStatusUnderSupervision = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/undersupervision"
 )
+
+// --- ETSI URI comparison ---
+
+// CanonicalETSIURI normalises an ETSI-defined URI for comparison.
+//
+// ETSI TS 119 612 defines these identifiers with an http scheme, and that is
+// what the published EU lists use. Documents written against the specification
+// text, and some national tooling, spell them with https instead. The scheme
+// carries no meaning here — the URI identifies a service type, status or list
+// type and is never dereferenced — so it is dropped, together with any trailing
+// slash and surrounding whitespace.
+func CanonicalETSIURI(uri string) string {
+	normalised := strings.TrimSpace(uri)
+	normalised = strings.TrimSuffix(normalised, "/")
+
+	for _, scheme := range []string{"http://", "https://"} {
+		if len(normalised) >= len(scheme) && strings.EqualFold(normalised[:len(scheme)], scheme) {
+			return normalised[len(scheme):]
+		}
+	}
+
+	return normalised
+}
+
+// equalETSIURI reports whether two ETSI-defined URIs identify the same thing,
+// ignoring the differences CanonicalETSIURI normalises away.
+func equalETSIURI(a, b string) bool {
+	return CanonicalETSIURI(a) == CanonicalETSIURI(b)
+}
 
 // --- Status Determination Approaches (ETSI TS 119 612 §5.3.13) ---
 //
@@ -132,10 +169,10 @@ const (
 
 const (
 	// TSLTypeEUGeneric identifies a generic EU trust list.
-	TSLTypeEUGeneric = "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric"
+	TSLTypeEUGeneric = "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric"
 
 	// TSLTypeEUListOfTheLists identifies the EU List of Trusted Lists (LOTL).
-	TSLTypeEUListOfTheLists = "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists"
+	TSLTypeEUListOfTheLists = "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists"
 )
 
 // --- XML Struct Definitions ---
@@ -154,7 +191,7 @@ type TrustServiceStatusList struct {
 // IsLOTL returns true if this trust list is a List of Trusted Lists (LOTL),
 // determined by the TSLType field in SchemeInformation.
 func (tl *TrustServiceStatusList) IsLOTL() bool {
-	return tl.SchemeInformation.TSLType == TSLTypeEUListOfTheLists
+	return equalETSIURI(tl.SchemeInformation.TSLType, TSLTypeEUListOfTheLists)
 }
 
 // ValidateFreshness checks the trust list's own timestamps against now.
@@ -331,6 +368,17 @@ func (p OtherTSLPointer) GetSchemeTerritory() string {
 	return ""
 }
 
+// GetMimeType extracts the representation's media type from the pointer's
+// additional information. It is empty when the pointer declares none.
+func (p OtherTSLPointer) GetMimeType() string {
+	for _, info := range p.AdditionalInformation.OtherInformation {
+		if info.MimeType != "" {
+			return info.MimeType
+		}
+	}
+	return ""
+}
+
 // GetTSLType extracts the TSL type from the pointer's additional information.
 func (p OtherTSLPointer) GetTSLType() string {
 	for _, info := range p.AdditionalInformation.OtherInformation {
@@ -352,6 +400,10 @@ type OtherInformation struct {
 	SchemeTerritory    string             `xml:"SchemeTerritory"`
 	TSLType            string             `xml:"TSLType"`
 	SchemeOperatorName InternationalNames `xml:"SchemeOperatorName"`
+	// MimeType is the representation the pointer refers to. It lives in the
+	// additionaltypes namespace in published lists; encoding/xml matches on the
+	// local name, so the namespace prefix does not have to be modelled.
+	MimeType string `xml:"MimeType"`
 }
 
 // --- Trust Service Providers ---
@@ -469,23 +521,32 @@ func ParseTrustList(xmlData []byte) (*TrustServiceStatusList, error) {
 // --- Certificate Extraction ---
 
 // ExtractServiceCertificates extracts X.509 certificates from a ServiceDigitalIdentity.
+//
+// Certificates that cannot be parsed are skipped rather than failing the whole
+// identity, and the reasons are returned alongside the usable ones. Published
+// national lists carry legacy certificates that Go's x509 parser rejects (RSA
+// keys without NULL parameters, non-canonical basic constraints, unsupported
+// curves), and one of them must not cost a country its entire trust list.
+// Skipping an anchor can only narrow what is trusted, never widen it.
 // Each DigitalId entry with a non-empty X509Certificate field is base64-decoded and
 // parsed into an *x509.Certificate using common.ParseBase64Certificate.
 // Entries without X509Certificate data are skipped.
 // Returns an error if any certificate data is malformed.
-func ExtractServiceCertificates(identity ServiceDigitalIdentity) ([]*x509.Certificate, error) {
+func ExtractServiceCertificates(identity ServiceDigitalIdentity) ([]*x509.Certificate, []error) {
 	var certs []*x509.Certificate
+	var skipped []error
 	for i, did := range identity.DigitalIds {
 		if did.X509Certificate == "" {
 			continue
 		}
 		cert, err := common.ParseBase64Certificate(did.X509Certificate)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse certificate at index %d: %w", i, err)
+			skipped = append(skipped, fmt.Errorf("certificate at index %d: %w", i, err))
+			continue
 		}
 		certs = append(certs, cert)
 	}
-	return certs, nil
+	return certs, skipped
 }
 
 // GetDistributionPoints extracts the national trust list URLs from a LOTL's
@@ -500,7 +561,16 @@ func (tl *TrustServiceStatusList) GetDistributionPoints() []DistributionPoint {
 	for _, ptr := range tl.SchemeInformation.PointersToOtherTSL.OtherTSLPointers {
 		tslType := ptr.GetTSLType()
 		// Include only national TLs (EUgeneric), not pointers to other LOTLs
-		if tslType != TSLTypeEUGeneric {
+		if !equalETSIURI(tslType, TSLTypeEUGeneric) {
+			continue
+		}
+		// Each territory publishes the same list twice: once as the machine
+		// readable XML and once as a human readable PDF, both under the
+		// EUgeneric type. Only the XML representation is usable here. A pointer
+		// that declares no media type is kept, since older lists omit it.
+		if mimeType := ptr.GetMimeType(); mimeType != "" && !strings.EqualFold(strings.TrimSpace(mimeType), MimeTypeTSL) {
+			logging.Log().Debugf("Skipping distribution point %s for %s: media type %q is not %s",
+				ptr.TSLLocation, ptr.GetSchemeTerritory(), mimeType, MimeTypeTSL)
 			continue
 		}
 		points = append(points, DistributionPoint{
@@ -523,6 +593,13 @@ type DistributionPoint struct {
 // GetTrustServices extracts all trust services from the trust list as a flat
 // list of TrustedService structs, enriched with the scheme territory from the
 // trust list metadata and the TSP name from the provider entry.
+//
+// Entries that cannot be understood — an unplaceable StatusStartingTime or an
+// unparseable history entry — are logged and skipped rather than failing the
+// whole list. An individual certificate that cannot be parsed is dropped from
+// its entry, which keeps the entry's remaining anchors usable. Published national lists reliably contain
+// a few such entries, and rejecting the list over one of them costs the country
+// all of its trust services. Dropping an entry can only narrow what is trusted.
 func (tl *TrustServiceStatusList) GetTrustServices() ([]TrustedService, error) {
 	if tl.TrustServiceProviderList == nil {
 		return nil, nil
@@ -533,29 +610,38 @@ func (tl *TrustServiceStatusList) GetTrustServices() ([]TrustedService, error) {
 		tspName := tsp.TSPInformation.TSPName.GetEnglish()
 		for _, svc := range tsp.TSPServices.TSPService {
 			info := svc.ServiceInformation
-			certs, err := ExtractServiceCertificates(info.ServiceDigitalIdentity)
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract certificates for service %q of TSP %q: %w",
-					info.ServiceName.GetEnglish(), tspName, err)
+			serviceName := info.ServiceName.GetEnglish()
+
+			certs, skippedCerts := ExtractServiceCertificates(info.ServiceDigitalIdentity)
+			for _, skipErr := range skippedCerts {
+				logging.Log().Warnf("Skipping unparseable certificate of service %q of TSP %q (%s): %v",
+					serviceName, tspName, territory, skipErr)
 			}
 			// StatusStartingTime is mandatory (ETSI TS 119 612 §5.5.5) and is the
 			// basis for evaluating a service status as of a point in time. An
-			// entry we cannot place on the timeline is rejected rather than
+			// entry we cannot place on the timeline is dropped rather than
 			// silently treated as "in effect since the zero time".
 			statusTime, err := parseDateTime(info.StatusStartingTime)
 			if err != nil {
-				return nil, fmt.Errorf("%w: service %q of TSP %q: %v",
-					ErrorInvalidStatusStartingTime, info.ServiceName.GetEnglish(), tspName, err)
+				logging.Log().Warnf("Skipping service %q of TSP %q (%s): %v: %v",
+					serviceName, tspName, territory, ErrorInvalidStatusStartingTime, err)
+				continue
 			}
-			history, err := extractServiceHistory(svc.ServiceHistory, info.ServiceName.GetEnglish(), tspName)
+
+			// A history entry that cannot be placed on the timeline is not
+			// dropped on its own: removing a withdrawal would make the service
+			// look granted at a time it was not. The whole entry goes instead.
+			history, err := extractServiceHistory(svc.ServiceHistory, serviceName, tspName)
 			if err != nil {
-				return nil, err
+				logging.Log().Warnf("Skipping service %q of TSP %q (%s): %v",
+					serviceName, tspName, territory, err)
+				continue
 			}
 
 			services = append(services, TrustedService{
 				CountryCode:        territory,
 				TSPName:            tspName,
-				ServiceName:        info.ServiceName.GetEnglish(),
+				ServiceName:        serviceName,
 				ServiceType:        info.ServiceTypeIdentifier,
 				ServiceStatus:      info.ServiceStatus,
 				StatusStartingTime: statusTime,
@@ -646,11 +732,13 @@ func (ts TrustedService) RecordAt(at time.Time) (ServiceStatusRecord, bool) {
 // A zero at evaluates the current status, matching IsGranted.
 func (ts TrustedService) IsGrantedAt(at time.Time) bool {
 	record, ok := ts.RecordAt(at)
-	return ok && record.ServiceStatus == ServiceStatusGranted
+	return ok && equalETSIURI(record.ServiceStatus, ServiceStatusGranted)
 }
 
 // HasServiceTypeAt reports whether the service had one of the given service
 // types at the given time. An empty serviceTypes matches any type.
+//
+// The keys of serviceTypes must be canonicalised with CanonicalETSIURI.
 //
 // A zero at evaluates the current service type.
 func (ts TrustedService) HasServiceTypeAt(at time.Time, serviceTypes map[string]struct{}) bool {
@@ -661,7 +749,7 @@ func (ts TrustedService) HasServiceTypeAt(at time.Time, serviceTypes map[string]
 	if !ok {
 		return false
 	}
-	_, matches := serviceTypes[record.ServiceType]
+	_, matches := serviceTypes[CanonicalETSIURI(record.ServiceType)]
 	return matches
 }
 
@@ -708,7 +796,7 @@ func (ts TrustedService) IsQualified() bool {
 		ServiceTypeREMD,
 	}
 	for _, qt := range qualifiedTypes {
-		if ts.ServiceType == qt {
+		if equalETSIURI(ts.ServiceType, qt) {
 			return true
 		}
 	}
@@ -717,7 +805,7 @@ func (ts TrustedService) IsQualified() bool {
 
 // IsGranted returns true if the service has the "granted" status.
 func (ts TrustedService) IsGranted() bool {
-	return ts.ServiceStatus == ServiceStatusGranted
+	return equalETSIURI(ts.ServiceStatus, ServiceStatusGranted)
 }
 
 // parseDateTime parses a date-time string in the format used by ETSI trust lists.

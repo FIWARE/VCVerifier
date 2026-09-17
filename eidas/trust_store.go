@@ -86,9 +86,11 @@ func (ts *TrustStore) GetTrustedServicesAt(countryCode string, serviceTypes []st
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
+	// Keyed by the canonical form, so that a filter written with one URI
+	// spelling still matches a list published with the other.
 	typeSet := make(map[string]struct{}, len(serviceTypes))
 	for _, st := range serviceTypes {
-		typeSet[st] = struct{}{}
+		typeSet[CanonicalETSIURI(st)] = struct{}{}
 	}
 
 	var result []TrustedService

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#" Id="fr-tl-1" TSLTag="https://uri.etsi.org/19612/TSLTag">
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#" Id="fr-tl-1" TSLTag="http://uri.etsi.org/19612/TSLTag">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>80</TSLSequenceNumber>
-    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeOperatorName>
       <Name xml:lang="en">French National Cybersecurity Agency</Name>
       <Name xml:lang="fr">ANSSI</Name>
@@ -14,7 +14,7 @@
     <SchemeInformationURI>
       <URI xml:lang="en">https://tl.example.fr/tl.xml</URI>
     </SchemeInformationURI>
-    <StatusDeterminationApproach>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/StatusDetn/EUappropriate</StatusDeterminationApproach>
+    <StatusDeterminationApproach>http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate</StatusDeterminationApproach>
     <SchemeTerritory>FR</SchemeTerritory>
     <HistoricalInformationPeriod>65535</HistoricalInformationPeriod>
     <ListIssueDateTime>2024-06-01T00:00:00Z</ListIssueDateTime>
@@ -39,7 +39,7 @@
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
             <ServiceName>
               <Name xml:lang="en">French Qualified CA</Name>
             </ServiceName>
@@ -48,7 +48,7 @@
                 <X509Certificate>MIIBsTCCAVegAwIBAgIBAzAKBggqhkjOPQQDAjBAMQswCQYDVQQGEwJGUjEYMBYGA1UEChMPRnJlbmNoIFRTUCBTQVJMMRcwFQYDVQQDEw5GcmVuY2ggVGVzdCBDQTAeFw0yMDAxMDEwMDAwMDBaFw0zMDEyMzEyMzU5NTlaMEAxCzAJBgNVBAYTAkZSMRgwFgYDVQQKEw9GcmVuY2ggVFNQIFNBUkwxFzAVBgNVBAMTDkZyZW5jaCBUZXN0IENBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErwndMsRnmCi7P6u65ftvPU8aD2UDPg3IXJeXVeg0QnwljIQV4A9cTQ5PYZ807foSa4HJknRgdJcCLr0l2VGTLKNCMEAwDgYDVR0PAQH/BAQDAgEGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFHpDh7HRLkCNTfFNbZoqMnJ4VkcJMAoGCCqGSM49BAMCA0gAMEUCICaxp7ZR1AQkXrTWtL6EN9MDwtanX8qzo4EKQO1q9uDdAiEAinuRPQg67ccpfnHqFXeuyjWH+nYF5s1wDma8OQo1PHE=</X509Certificate>
               </DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
             <StatusStartingTime>2022-07-01T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
         </TSPService>

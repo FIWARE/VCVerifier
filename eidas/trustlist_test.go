@@ -282,11 +282,11 @@ func TestExtractServiceCertificates(t *testing.T) {
 	_, b64Cert := generateTestCertificate(t, "Test Cert", true)
 
 	tests := []struct {
-		name       string
-		identity   ServiceDigitalIdentity
-		wantCount  int
-		wantErr    bool
-		wantErrMsg string
+		name           string
+		identity       ServiceDigitalIdentity
+		wantCount      int
+		wantSkipped    int
+		wantSkipReason string
 	}{
 		{
 			name: "single certificate",
@@ -330,8 +330,8 @@ func TestExtractServiceCertificates(t *testing.T) {
 					{X509Certificate: "not-valid-base64!!!"},
 				},
 			},
-			wantErr:    true,
-			wantErrMsg: "failed to parse certificate at index 0",
+			wantSkipped:    1,
+			wantSkipReason: "certificate at index 0",
 		},
 		{
 			name: "valid base64 but invalid DER",
@@ -340,21 +340,31 @@ func TestExtractServiceCertificates(t *testing.T) {
 					{X509Certificate: base64.StdEncoding.EncodeToString([]byte("not a certificate"))},
 				},
 			},
-			wantErr:    true,
-			wantErrMsg: "failed to parse certificate at index 0",
+			wantSkipped:    1,
+			wantSkipReason: "certificate at index 0",
+		},
+		{
+			name: "a broken certificate does not discard the usable ones",
+			identity: ServiceDigitalIdentity{
+				DigitalIds: []DigitalId{
+					{X509Certificate: base64.StdEncoding.EncodeToString([]byte("not a certificate"))},
+					{X509Certificate: b64Cert},
+				},
+			},
+			wantCount:      1,
+			wantSkipped:    1,
+			wantSkipReason: "certificate at index 0",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			certs, err := ExtractServiceCertificates(tc.identity)
-			if tc.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantErrMsg)
-				return
-			}
-			require.NoError(t, err)
+			certs, skipped := ExtractServiceCertificates(tc.identity)
 			assert.Len(t, certs, tc.wantCount)
+			require.Len(t, skipped, tc.wantSkipped)
+			if tc.wantSkipReason != "" {
+				assert.Contains(t, skipped[0].Error(), tc.wantSkipReason)
+			}
 		})
 	}
 }
@@ -369,8 +379,8 @@ func TestExtractServiceCertificates_WhitespaceInBase64(t *testing.T) {
 	require.Len(t, tl.TrustServiceProviderList.TrustServiceProviders, 1)
 	svc := tl.TrustServiceProviderList.TrustServiceProviders[0].TSPServices.TSPService[0]
 
-	certs, err := ExtractServiceCertificates(svc.ServiceInformation.ServiceDigitalIdentity)
-	require.NoError(t, err)
+	certs, skipped := ExtractServiceCertificates(svc.ServiceInformation.ServiceDigitalIdentity)
+	require.Empty(t, skipped)
 	require.Len(t, certs, 1)
 	assert.Equal(t, "Test CA for eIDAS Trust List", certs[0].Subject.CommonName)
 }
@@ -382,8 +392,8 @@ func TestExtractServiceCertificates_FromParsedTrustList(t *testing.T) {
 
 	// Extract certificates from first service of first TSP
 	svc := tl.TrustServiceProviderList.TrustServiceProviders[0].TSPServices.TSPService[0]
-	certs, err := ExtractServiceCertificates(svc.ServiceInformation.ServiceDigitalIdentity)
-	require.NoError(t, err)
+	certs, skipped := ExtractServiceCertificates(svc.ServiceInformation.ServiceDigitalIdentity)
+	require.Empty(t, skipped)
 	require.Len(t, certs, 1)
 
 	cert := certs[0]
@@ -586,21 +596,21 @@ func TestParseDateTime(t *testing.T) {
 
 func TestConstants(t *testing.T) {
 	// Verify namespace and tag constants are correct
-	assert.Equal(t, "https://uri.etsi.org/02231/v2#", TrustListNamespace)
-	assert.Equal(t, "https://uri.etsi.org/19612/TSLTag", TSLTag)
+	assert.Equal(t, "http://uri.etsi.org/02231/v2#", TrustListNamespace)
+	assert.Equal(t, "http://uri.etsi.org/19612/TSLTag", TSLTag)
 
 	// Verify service type URIs follow ETSI conventions
-	assert.Contains(t, ServiceTypeCAQC, "https://uri.etsi.org/TrstSvc/Svctype/")
-	assert.Contains(t, ServiceTypeQTST, "https://uri.etsi.org/TrstSvc/Svctype/")
-	assert.Contains(t, ServiceTypeCA, "https://uri.etsi.org/TrstSvc/Svctype/")
+	assert.Contains(t, ServiceTypeCAQC, "http://uri.etsi.org/TrstSvc/Svctype/")
+	assert.Contains(t, ServiceTypeQTST, "http://uri.etsi.org/TrstSvc/Svctype/")
+	assert.Contains(t, ServiceTypeCA, "http://uri.etsi.org/TrstSvc/Svctype/")
 
 	// Verify service status URIs follow ETSI conventions
-	assert.Contains(t, ServiceStatusGranted, "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/")
-	assert.Contains(t, ServiceStatusWithdrawn, "https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/")
+	assert.Contains(t, ServiceStatusGranted, "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/")
+	assert.Contains(t, ServiceStatusWithdrawn, "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/")
 
 	// Verify TSL type URIs
-	assert.Contains(t, TSLTypeEUGeneric, "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/")
-	assert.Contains(t, TSLTypeEUListOfTheLists, "https://uri.etsi.org/TrstSvc/TrustedList/TSLType/")
+	assert.Contains(t, TSLTypeEUGeneric, "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/")
+	assert.Contains(t, TSLTypeEUListOfTheLists, "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/")
 }
 
 func TestGetTrustServices_WithMultipleCertsPerService(t *testing.T) {
@@ -609,11 +619,11 @@ func TestGetTrustServices_WithMultipleCertsPerService(t *testing.T) {
 	cert2, b64Cert2 := generateTestCertificate(t, "Cert 2", true)
 
 	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>1</TSLSequenceNumber>
-    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeOperatorName><Name xml:lang="en">Test</Name></SchemeOperatorName>
     <SchemeName><Name xml:lang="en">Test</Name></SchemeName>
     <SchemeInformationURI><URI xml:lang="en">https://example.com</URI></SchemeInformationURI>
@@ -633,13 +643,13 @@ func TestGetTrustServices_WithMultipleCertsPerService(t *testing.T) {
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
             <ServiceName><Name xml:lang="en">Multi-Cert Service</Name></ServiceName>
             <ServiceDigitalIdentity>
               <DigitalId><X509Certificate>` + b64Cert1 + `</X509Certificate></DigitalId>
               <DigitalId><X509Certificate>` + b64Cert2 + `</X509Certificate></DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
             <StatusStartingTime>2024-01-01T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
         </TSPService>
@@ -663,11 +673,11 @@ func TestGetTrustServices_WithMultipleCertsPerService(t *testing.T) {
 
 func TestGetTrustServices_InvalidCertificate(t *testing.T) {
 	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>1</TSLSequenceNumber>
-    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeOperatorName><Name xml:lang="en">Test</Name></SchemeOperatorName>
     <SchemeName><Name xml:lang="en">Test</Name></SchemeName>
     <SchemeInformationURI><URI xml:lang="en">https://example.com</URI></SchemeInformationURI>
@@ -687,12 +697,12 @@ func TestGetTrustServices_InvalidCertificate(t *testing.T) {
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
             <ServiceName><Name xml:lang="en">Bad Cert Service</Name></ServiceName>
             <ServiceDigitalIdentity>
               <DigitalId><X509Certificate>dGhpcyBpcyBub3QgYSBjZXJ0aWZpY2F0ZQ==</X509Certificate></DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
             <StatusStartingTime>2024-01-01T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
         </TSPService>
@@ -704,10 +714,13 @@ func TestGetTrustServices_InvalidCertificate(t *testing.T) {
 	tl, err := ParseTrustList([]byte(xmlData))
 	require.NoError(t, err)
 
+	// The unparseable certificate is dropped, but it does not cost the list its
+	// other entries — published national lists reliably carry a few of these.
 	services, err := tl.GetTrustServices()
-	assert.Nil(t, services)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to extract certificates")
+	require.NoError(t, err)
+	require.Len(t, services, 1)
+	assert.Empty(t, services[0].Certificates, "the unparseable certificate is not kept")
+	assert.Equal(t, "Bad Cert Service", services[0].ServiceName)
 }
 
 func TestIsLOTL(t *testing.T) {
@@ -749,11 +762,11 @@ func statusStartingTimeTL(t *testing.T, statusStartingTime string) string {
 	t.Helper()
 	_, b64Cert := generateTestCertificate(t, "Status Time CA", true)
 	return `<?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>1</TSLSequenceNumber>
-    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeOperatorName><Name xml:lang="en">Test</Name></SchemeOperatorName>
     <SchemeName><Name xml:lang="en">Test</Name></SchemeName>
     <SchemeInformationURI><URI xml:lang="en">https://example.com</URI></SchemeInformationURI>
@@ -769,12 +782,12 @@ func statusStartingTimeTL(t *testing.T, statusStartingTime string) string {
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
             <ServiceName><Name xml:lang="en">Test Service</Name></ServiceName>
             <ServiceDigitalIdentity>
               <DigitalId><X509Certificate>` + b64Cert + `</X509Certificate></DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
             <StatusStartingTime>` + statusStartingTime + `</StatusStartingTime>
           </ServiceInformation>
         </TSPService>
@@ -785,13 +798,14 @@ func statusStartingTimeTL(t *testing.T, statusStartingTime string) string {
 }
 
 // TestGetTrustServices_StatusStartingTime verifies that a service whose
-// StatusStartingTime cannot be parsed is rejected rather than silently
-// defaulting to the zero time, which would misplace it on the status timeline.
+// StatusStartingTime cannot be parsed is dropped rather than silently defaulting
+// to the zero time, which would misplace it on the status timeline. The rest of
+// the list is kept.
 func TestGetTrustServices_StatusStartingTime(t *testing.T) {
 	tests := []struct {
 		name               string
 		statusStartingTime string
-		expectError        bool
+		expectSkipped      bool
 		expectedTime       time.Time
 	}{
 		{
@@ -805,14 +819,14 @@ func TestGetTrustServices_StatusStartingTime(t *testing.T) {
 			expectedTime:       time.Date(2021, 1, 15, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			name:               "unparseable value is rejected",
+			name:               "unparseable value drops the entry",
 			statusStartingTime: "not-a-timestamp",
-			expectError:        true,
+			expectSkipped:      true,
 		},
 		{
-			name:               "empty value is rejected",
+			name:               "empty value drops the entry",
 			statusStartingTime: "",
-			expectError:        true,
+			expectSkipped:      true,
 		},
 	}
 
@@ -822,13 +836,11 @@ func TestGetTrustServices_StatusStartingTime(t *testing.T) {
 			require.NoError(t, err)
 
 			services, err := tl.GetTrustServices()
-			if tc.expectError {
-				require.Error(t, err)
-				assert.ErrorIs(t, err, ErrorInvalidStatusStartingTime)
-				assert.Nil(t, services)
+			require.NoError(t, err)
+			if tc.expectSkipped {
+				assert.Empty(t, services, "an entry that cannot be placed on the timeline is dropped")
 				return
 			}
-			require.NoError(t, err)
 			require.Len(t, services, 1)
 			assert.Equal(t, tc.expectedTime, services[0].StatusStartingTime)
 		})
@@ -853,7 +865,7 @@ func TestStatusDeterminationApproach(t *testing.T) {
 		},
 		{
 			name:         "EU appropriate over https",
-			approach:     "https://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate",
+			approach:     "http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate",
 			expectedKind: StatusDetnEUAppropriate,
 			expectedEU:   true,
 		},
@@ -1112,7 +1124,7 @@ func TestHasServiceTypeAt(t *testing.T) {
 		},
 	}
 
-	qualified := map[string]struct{}{ServiceTypeCAQC: {}}
+	qualified := map[string]struct{}{CanonicalETSIURI(ServiceTypeCAQC): {}}
 
 	assert.True(t, service.HasServiceTypeAt(time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC), qualified),
 		"service was qualified in 2022")
@@ -1128,9 +1140,9 @@ func TestGetTrustServices_ParsesServiceHistory(t *testing.T) {
 	_, b64Cert := generateTestCertificate(t, "History CA", true)
 
 	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
   <SchemeInformation>
-    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeTerritory>TE</SchemeTerritory>
     <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
     <NextUpdate><dateTime>2099-01-01T00:00:00Z</dateTime></NextUpdate>
@@ -1143,25 +1155,25 @@ func TestGetTrustServices_ParsesServiceHistory(t *testing.T) {
       <TSPServices>
         <TSPService>
           <ServiceInformation>
-            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA</ServiceTypeIdentifier>
+            <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA</ServiceTypeIdentifier>
             <ServiceName><Name xml:lang="en">History Service</Name></ServiceName>
             <ServiceDigitalIdentity>
               <DigitalId><X509Certificate>` + b64Cert + `</X509Certificate></DigitalId>
             </ServiceDigitalIdentity>
-            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn</ServiceStatus>
+            <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn</ServiceStatus>
             <StatusStartingTime>2024-01-01T00:00:00Z</StatusStartingTime>
           </ServiceInformation>
           <ServiceHistory>
             <ServiceHistoryInstance>
-              <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+              <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
               <ServiceName><Name xml:lang="en">History Service</Name></ServiceName>
-              <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+              <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
               <StatusStartingTime>2022-01-01T00:00:00Z</StatusStartingTime>
             </ServiceHistoryInstance>
             <ServiceHistoryInstance>
-              <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+              <ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
               <ServiceName><Name xml:lang="en">History Service</Name></ServiceName>
-              <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/undersupervision</ServiceStatus>
+              <ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/undersupervision</ServiceStatus>
               <StatusStartingTime>2020-01-01T00:00:00Z</StatusStartingTime>
             </ServiceHistoryInstance>
           </ServiceHistory>
@@ -1186,4 +1198,158 @@ func TestGetTrustServices_ParsesServiceHistory(t *testing.T) {
 	assert.True(t, services[0].IsGrantedAt(time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)),
 		"service was granted in 2023")
 	assert.False(t, services[0].IsGrantedAt(time.Time{}), "service is withdrawn today")
+}
+
+// TestCanonicalETSIURI verifies that ETSI identifiers compare equal regardless
+// of the URI scheme they are spelled with. The published EU lists use http,
+// while documents written against the specification text often use https.
+func TestCanonicalETSIURI(t *testing.T) {
+	tests := []struct {
+		name     string
+		a        string
+		b        string
+		areEqual bool
+	}{
+		{
+			name:     "identical http URIs",
+			a:        "http://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+			b:        "http://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+			areEqual: true,
+		},
+		{
+			name:     "http and https spellings of the same identifier",
+			a:        "http://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+			b:        "https://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+			areEqual: true,
+		},
+		{
+			name:     "uppercase scheme",
+			a:        "HTTP://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+			b:        "https://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+			areEqual: true,
+		},
+		{
+			name:     "trailing slash and whitespace are ignored",
+			a:        "  http://uri.etsi.org/TrstSvc/Svctype/CA/QC/ ",
+			b:        "https://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+			areEqual: true,
+		},
+		{
+			name:     "different identifiers stay different",
+			a:        "http://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+			b:        "https://uri.etsi.org/TrstSvc/Svctype/CA",
+			areEqual: false,
+		},
+		{
+			name:     "the path is case sensitive",
+			a:        "http://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+			b:        "http://uri.etsi.org/trstsvc/svctype/ca/qc",
+			areEqual: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.areEqual, equalETSIURI(tc.a, tc.b))
+		})
+	}
+}
+
+// TestTrustList_HttpsSpelledURIs verifies that a trust list written with https
+// spellings of the ETSI identifiers is understood exactly like the published
+// http ones: the list type, the service type and the granted status all match.
+func TestTrustList_HttpsSpelledURIs(t *testing.T) {
+	_, b64Cert := generateTestCertificate(t, "Https Spelled CA", true)
+
+	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
+<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#">
+  <SchemeInformation>
+    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <SchemeTerritory>TE</SchemeTerritory>
+    <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate><dateTime>2099-01-01T00:00:00Z</dateTime></NextUpdate>
+  </SchemeInformation>
+  <TrustServiceProviderList>
+    <TrustServiceProvider>
+      <TSPInformation>
+        <TSPName><Name xml:lang="en">Https Spelled TSP</Name></TSPName>
+      </TSPInformation>
+      <TSPServices>
+        <TSPService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>https://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier>
+            <ServiceName><Name xml:lang="en">Https Spelled Service</Name></ServiceName>
+            <ServiceDigitalIdentity>
+              <DigitalId><X509Certificate>` + b64Cert + `</X509Certificate></DigitalId>
+            </ServiceDigitalIdentity>
+            <ServiceStatus>https://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>
+            <StatusStartingTime>2024-01-01T00:00:00Z</StatusStartingTime>
+          </ServiceInformation>
+        </TSPService>
+      </TSPServices>
+    </TrustServiceProvider>
+  </TrustServiceProviderList>
+</TrustServiceStatusList>`
+
+	tl, err := ParseTrustList([]byte(xmlData))
+	require.NoError(t, err)
+	assert.False(t, tl.IsLOTL(), "an EUgeneric list is not a LOTL")
+
+	services, err := tl.GetTrustServices()
+	require.NoError(t, err)
+	require.Len(t, services, 1)
+
+	assert.True(t, services[0].IsGranted(), "the https-spelled granted status must match")
+	assert.True(t, services[0].IsQualified(), "the https-spelled CA/QC type must match")
+
+	// The store filters on the canonical form, so an http-spelled filter finds
+	// the https-spelled entry.
+	store := NewTrustStore()
+	store.Update("TE", services)
+	assert.Len(t, store.GetTrustedServices("TE", []string{ServiceTypeCAQC}, true), 1)
+}
+
+// TestGetDistributionPoints_MediaTypeFilter verifies that only the machine
+// readable representation is followed. Every EU territory publishes its list
+// twice under the same TSLType: once as XML and once as a human readable PDF.
+func TestGetDistributionPoints_MediaTypeFilter(t *testing.T) {
+	pointer := func(location, mimeType string) string {
+		mimeElement := ""
+		if mimeType != "" {
+			mimeElement = "<OtherInformation><MimeType>" + mimeType + "</MimeType></OtherInformation>"
+		}
+		return `<OtherTSLPointer>
+          <TSLLocation>` + location + `</TSLLocation>
+          <AdditionalInformation>
+            <OtherInformation><TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType></OtherInformation>
+            <OtherInformation><SchemeTerritory>TE</SchemeTerritory></OtherInformation>
+            ` + mimeElement + `
+          </AdditionalInformation>
+        </OtherTSLPointer>`
+	}
+
+	xmlData := `<?xml version="1.0" encoding="UTF-8"?>
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
+  <SchemeInformation>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists</TSLType>
+    <SchemeTerritory>EU</SchemeTerritory>
+    <PointersToOtherTSL>` +
+		pointer("https://example.test/tl.pdf", "application/pdf") +
+		pointer("https://example.test/tl.xml", MimeTypeTSL) +
+		pointer("https://example.test/legacy.xml", "") +
+		`</PointersToOtherTSL>
+  </SchemeInformation>
+</TrustServiceStatusList>`
+
+	tl, err := ParseTrustList([]byte(xmlData))
+	require.NoError(t, err)
+	require.True(t, tl.IsLOTL())
+
+	points := tl.GetDistributionPoints()
+	require.Len(t, points, 2, "the PDF representation must be skipped")
+
+	locations := []string{points[0].TSLLocation, points[1].TSLLocation}
+	assert.Contains(t, locations, "https://example.test/tl.xml")
+	assert.Contains(t, locations, "https://example.test/legacy.xml",
+		"a pointer declaring no media type is kept")
 }

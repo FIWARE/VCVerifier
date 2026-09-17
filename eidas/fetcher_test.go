@@ -28,11 +28,11 @@ func init() {
 // lotlTemplate produces a minimal LOTL XML with dynamic distribution point URLs.
 // Use %s placeholders for the national TL URLs (DE, FR).
 const lotlTemplate = `<?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#" Id="test-lotl" TSLTag="https://uri.etsi.org/19612/TSLTag">
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#" Id="test-lotl" TSLTag="http://uri.etsi.org/19612/TSLTag">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>1</TSLSequenceNumber>
-    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists</TSLType>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists</TSLType>
     <SchemeOperatorName>
       <Name xml:lang="en">Test LOTL Operator</Name>
     </SchemeOperatorName>
@@ -42,7 +42,7 @@ const lotlTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <SchemeInformationURI>
       <URI xml:lang="en">https://example.com/lotl</URI>
     </SchemeInformationURI>
-    <StatusDeterminationApproach>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/StatusDetn/EUappropriate</StatusDeterminationApproach>
+    <StatusDeterminationApproach>http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate</StatusDeterminationApproach>
     <SchemeTerritory>EU</SchemeTerritory>
     <HistoricalInformationPeriod>65535</HistoricalInformationPeriod>
     <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
@@ -65,7 +65,7 @@ const pointerTemplate = `<OtherTSLPointer>
         <TSLLocation>%s</TSLLocation>
         <AdditionalInformation>
           <OtherInformation>
-            <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+            <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
           </OtherInformation>
           <OtherInformation>
             <SchemeTerritory>%s</SchemeTerritory>
@@ -75,15 +75,15 @@ const pointerTemplate = `<OtherTSLPointer>
 
 // nationalTLTemplate produces a minimal national TL XML with one TSP.
 const nationalTLTemplate = `<?xml version="1.0" encoding="UTF-8"?>
-<TrustServiceStatusList xmlns="https://uri.etsi.org/02231/v2#" Id="tl-%s" TSLTag="https://uri.etsi.org/19612/TSLTag">
+<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#" Id="tl-%s" TSLTag="http://uri.etsi.org/19612/TSLTag">
   <SchemeInformation>
     <TSLVersionIdentifier>5</TSLVersionIdentifier>
     <TSLSequenceNumber>1</TSLSequenceNumber>
-    <TSLType>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
+    <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>
     <SchemeOperatorName><Name xml:lang="en">%s Operator</Name></SchemeOperatorName>
     <SchemeName><Name xml:lang="en">%s Trusted List</Name></SchemeName>
     <SchemeInformationURI><URI xml:lang="en">https://example.com/tl/%s</URI></SchemeInformationURI>
-    <StatusDeterminationApproach>https://uri.etsi.org/TrstSvc/TrustedList/TSLType/StatusDetn/EUappropriate</StatusDeterminationApproach>
+    <StatusDeterminationApproach>http://uri.etsi.org/TrstSvc/TrustedList/StatusDetn/EUappropriate</StatusDeterminationApproach>
     <SchemeTerritory>%s</SchemeTerritory>
     <HistoricalInformationPeriod>65535</HistoricalInformationPeriod>
     <ListIssueDateTime>2024-01-01T00:00:00Z</ListIssueDateTime>
