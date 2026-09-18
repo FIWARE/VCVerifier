@@ -376,3 +376,26 @@ func TestReadConfigHttpsIssuer(t *testing.T) {
 	assert.Equal(t, "ebsi-v5", cred.TrustedIssuersLists[1].Type)
 	assert.Equal(t, "https://til-v5.ebsi.fiware.dev", cred.TrustedIssuersLists[1].Url)
 }
+
+// TestReadConfigVCDataModelVersions verifies that the vcDataModelVersions
+// field is correctly parsed from a YAML config file.
+func TestReadConfigVCDataModelVersions(t *testing.T) {
+	config.Reset()
+	gotConfig, err := ReadConfig("data/config_test_vc_versions.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for VC versions config")
+
+	assert.Equal(t, []string{"1.1", "2.0"}, gotConfig.Verifier.VCDataModelVersions,
+		"VCDataModelVersions should be parsed from the config file")
+}
+
+// TestReadConfigVCDataModelVersionsDefault verifies that an empty
+// vcDataModelVersions field results in a nil/empty slice (the default is
+// applied at verifyConfig time, not at config parsing time).
+func TestReadConfigVCDataModelVersionsDefault(t *testing.T) {
+	config.Reset()
+	gotConfig, err := ReadConfig("data/config_test.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for default config")
+
+	assert.Empty(t, gotConfig.Verifier.VCDataModelVersions,
+		"VCDataModelVersions should be empty when not set in config")
+}

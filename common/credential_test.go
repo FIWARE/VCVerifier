@@ -442,6 +442,75 @@ func TestPresentation_MarshalJSON_NoProofs(t *testing.T) {
 	}
 }
 
+func TestDetectVCDataModelVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		contexts []string
+		want     []string
+	}{
+		{
+			name:     "V1-only context",
+			contexts: []string{ContextCredentialsV1, "https://example.com/custom/v1"},
+			want:     []string{VCDataModelVersion11},
+		},
+		{
+			name:     "V2-only context",
+			contexts: []string{ContextCredentialsV2, "https://example.com/custom/v1"},
+			want:     []string{VCDataModelVersion20},
+		},
+		{
+			name:     "Both V1 and V2 contexts present",
+			contexts: []string{ContextCredentialsV2, ContextCredentialsV1},
+			want:     []string{VCDataModelVersion11, VCDataModelVersion20},
+		},
+		{
+			name:     "No recognized context",
+			contexts: []string{"https://example.com/unknown", "https://other.example.com/v3"},
+			want:     []string{},
+		},
+		{
+			name:     "Empty context slice",
+			contexts: []string{},
+			want:     []string{},
+		},
+		{
+			name:     "Nil context slice",
+			contexts: nil,
+			want:     []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DetectVCDataModelVersion(tc.contexts)
+			if len(got) == 0 && len(tc.want) == 0 {
+				// Both empty — pass.
+				return
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("DetectVCDataModelVersion(%v) = %v, want %v", tc.contexts, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("DetectVCDataModelVersion(%v)[%d] = %q, want %q", tc.contexts, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestVCDataModelVersionAll(t *testing.T) {
+	if len(VCDataModelVersionAll) != 2 {
+		t.Fatalf("Expected VCDataModelVersionAll to have 2 entries, got %d", len(VCDataModelVersionAll))
+	}
+	if VCDataModelVersionAll[0] != VCDataModelVersion11 {
+		t.Errorf("Expected VCDataModelVersionAll[0] = %q, got %q", VCDataModelVersion11, VCDataModelVersionAll[0])
+	}
+	if VCDataModelVersionAll[1] != VCDataModelVersion20 {
+		t.Errorf("Expected VCDataModelVersionAll[1] = %q, got %q", VCDataModelVersion20, VCDataModelVersionAll[1])
+	}
+}
+
 func TestConstants(t *testing.T) {
 	if ContextCredentialsV1 != "https://www.w3.org/2018/credentials/v1" {
 		t.Error("ContextCredentialsV1 mismatch")

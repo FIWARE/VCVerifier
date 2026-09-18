@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+// VC Data Model version identifiers.
+const (
+	// VCDataModelVersion11 identifies the W3C VC Data Model v1.1.
+	VCDataModelVersion11 = "1.1"
+
+	// VCDataModelVersion20 identifies the W3C VC Data Model v2.0.
+	VCDataModelVersion20 = "2.0"
+)
+
+// VCDataModelVersionAll contains all recognized VC Data Model versions.
+// It is used as the default when no explicit version filter is configured.
+var VCDataModelVersionAll = []string{VCDataModelVersion11, VCDataModelVersion20}
+
 // W3C Verifiable Credentials Data Model constants
 // See https://www.w3.org/TR/vc-data-model-2.0/
 const (
@@ -364,6 +377,35 @@ func WithCredentials(credentials ...*Credential) PresentationOpt {
 	return func(p *Presentation) {
 		p.AddCredentials(credentials...)
 	}
+}
+
+// contextToVersion maps context URIs to their VC Data Model version identifier.
+var contextToVersion = map[string]string{
+	ContextCredentialsV1: VCDataModelVersion11,
+	ContextCredentialsV2: VCDataModelVersion20,
+}
+
+// DetectVCDataModelVersion inspects a credential's or presentation's @context
+// array and returns a slice of detected VC Data Model version identifiers
+// ("1.1", "2.0", or both). Returns an empty slice when no recognized context
+// URL is found or when the input is empty. The returned order follows the
+// constant declaration order (1.1 before 2.0), not the order of contexts.
+func DetectVCDataModelVersion(contexts []string) []string {
+	found := make(map[string]bool, len(contextToVersion))
+	for _, ctx := range contexts {
+		if ver, ok := contextToVersion[ctx]; ok {
+			found[ver] = true
+		}
+	}
+
+	// Return in a stable order matching VCDataModelVersionAll.
+	var result []string
+	for _, ver := range VCDataModelVersionAll {
+		if found[ver] {
+			result = append(result, ver)
+		}
+	}
+	return result
 }
 
 // typedIDsToJSON converts a slice of TypedID to JSON-compatible format.
