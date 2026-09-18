@@ -2,7 +2,7 @@
 
 ## Overview
 
-The VCVerifier currently supports only the W3C VC Data Model 1.1 (`https://www.w3.org/2018/credentials/v1`). This plan adds support for VC Data Model 2.0 (`https://www.w3.org/ns/credentials/v2`) so the verifier can accept credentials in either format. A new configuration option (`vcDataModelVersions`) will allow operators to restrict which version(s) are accepted. The work is scoped to version detection, context vendoring, configuration, and validation — Data Integrity Proof suites beyond `JsonWebSignature2020` remain out of scope (documented known gap).
+The VCVerifier currently supports only the W3C VC Data Model 1.1 (`https://www.w3.org/2018/credentials/v1`). This plan adds support for VC Data Model 2.0 (`https://www.w3.org/ns/credentials/v2`) so the verifier can accept **incoming** credentials in either format. A new configuration option (`vcDataModelVersions`) will allow operators to restrict which version(s) are accepted. The work is scoped to version detection, context vendoring, configuration, validation of incoming credentials, and status list type handling — Data Integrity Proof suites beyond `JsonWebSignature2020` remain out of scope (documented known gap). M2M token provider changes are explicitly out of scope: VC 2.0 support is only for incoming credential verification, not for credentials/presentations the verifier itself produces.
 
 ## Steps
 
@@ -26,15 +26,15 @@ The VCVerifier currently supports only the W3C VC Data Model 1.1 (`https://www.w
 **What:** Introduce a utility to detect which VC Data Model version a credential or presentation uses (based on its `@context` array), a new config field to control which versions the verifier accepts, and startup validation for that field.
 
 **Files affected:**
-- `common/credential.go` — Add a `DetectVCDataModelVersion(contexts []string) string` function that returns `"1.1"`, `"2.0"`, or `"unknown"` based on whether `ContextCredentialsV1` or `ContextCredentialsV2` appears in the context array. Add constants `VCDataModelVersion11 = "1.1"` and `VCDataModelVersion20 = "2.0"`. Add a `VCDataModelVersionAll` slice containing both.
-- `common/credential_test.go` — Add table-driven tests for `DetectVCDataModelVersion` covering: V1-only context, V2-only context, both contexts present (should return V2 as it is the more specific), no recognized context, empty context slice.
+- `common/credential.go` — Add a `DetectVCDataModelVersion(contexts []string) []string` function that returns a slice of detected versions (`"1.1"`, `"2.0"`, or both) based on which context URLs (`ContextCredentialsV1`, `ContextCredentialsV2`) appear in the context array. Returns an empty slice when no recognized context is found. Add constants `VCDataModelVersion11 = "1.1"` and `VCDataModelVersion20 = "2.0"`. Add a `VCDataModelVersionAll` slice containing both.
+- `common/credential_test.go` — Add table-driven tests for `DetectVCDataModelVersion` covering: V1-only context (returns `["1.1"]`), V2-only context (returns `["2.0"]`), both contexts present (returns `["1.1", "2.0"]`), no recognized context (returns `[]`), empty context slice (returns `[]`).
 - `config/config.go` — Add `VCDataModelVersions []string` field to the `Verifier` struct with `mapstructure:"vcDataModelVersions"` tag and a default of `["1.1", "2.0"]` (accept both).
 - `verifier/verifier.go` (`verifyConfig`) — Validate that `VCDataModelVersions` contains only recognized values (`"1.1"`, `"2.0"`). Return a new `ErrorUnsupportedVCDataModelVersion` error if not. If the slice is empty after config loading, default to both versions.
 - `verifier/verifier_test.go` — Extend `TestVerifyConfig` table to cover valid and invalid `vcDataModelVersions` values.
 - `config/data/config_test.yaml` (and/or a new `config/data/config_test_vc_versions.yaml`) — Add test fixture YAML with the new field.
 
 **Acceptance criteria:**
-- `DetectVCDataModelVersion` correctly identifies V1, V2, both, and unknown.
+- `DetectVCDataModelVersion` correctly identifies V1, V2, both, and unknown (returns appropriate slice for each case).
 - Config parsing reads `vcDataModelVersions` from YAML.
 - `verifyConfig` rejects invalid version strings.
 - Default (empty/unset) means both versions are accepted.
@@ -45,7 +45,7 @@ The VCVerifier currently supports only the W3C VC Data Model 1.1 (`https://www.w
 **What:** Wire the version-detection logic into the credential validation pipeline so credentials whose VC Data Model version is not in the configured `vcDataModelVersions` list are rejected. This applies across all grant types and credential formats (JWT-VC, JSON-LD VP, SD-JWT).
 
 **Files affected:**
-- `verifier/jwt_verifier.go` — Add a `vcDataModelVersions []string` field to `CredentialValidator`. In `ValidateVC`, after date validation and before mode-specific validation, call `DetectVCDataModelVersion` on the credential's `Context` field and reject with a new `ErrorVCDataModelVersionNotAccepted` error if the detected version is not in the configured list. If the version is `"unknown"` (no recognized context URL), reject unless the validation mode is `"none"`.
+- `verifier/jwt_verifier.go` — Add a `vcDataModelVersions []string` field to `CredentialValidator`. In `ValidateVC`, place the version check **first** (before date validation and mode-specific validation) as a cheap, config-driven gate that fails fast. Call `DetectVCDataModelVersion` on the credential's `Context` field and reject with a new `ErrorVCDataModelVersionNotAccepted` error if none of the detected versions are in the configured list. If no recognized context URL is found (empty detected versions), always reject — the `vcDataModelVersions` check is orthogonal to `validationMode` and applies regardless of the validation mode setting.
 - `verifier/verifier.go` — Pass `config.Verifier.VCDataModelVersions` to the `CredentialValidator` constructor (line ~352).
 - `verifier/jwt_verifier_test.go` — Add tests for:
   - V1 credential accepted when config allows `["1.1"]`.
@@ -53,7 +53,7 @@ The VCVerifier currently supports only the W3C VC Data Model 1.1 (`https://www.w
   - V1 credential rejected when config allows only `["2.0"]`.
   - V2 credential rejected when config allows only `["1.1"]`.
   - Both accepted when config allows `["1.1", "2.0"]`.
-  - Unknown context handling per validation mode.
+  - Unknown context (no recognized context URL) always rejected regardless of validation mode.
 
 **Acceptance criteria:**
 - Credentials with V1 context pass when `"1.1"` is in `vcDataModelVersions`.
@@ -62,25 +62,26 @@ The VCVerifier currently supports only the W3C VC Data Model 1.1 (`https://www.w
 - Existing tests continue to pass (they use V1 credentials with the default config allowing both).
 - Tests pass: `go test ./verifier/... -v`.
 
-### Step 4: Update Presentation marshaling and M2M token provider for VC 2.0 context support
+### Step 4: Handle VC 2.0 status list types (`BitstringStatusListEntry`)
 
-**What:** Update `Presentation.MarshalJSON` so it no longer hardcodes the V1 context as its fallback — instead, it should use whatever context is set on the presentation. Update the M2M token provider's VP construction to set the context explicitly so it works correctly regardless of the verifier's own credential version.
+**What:** The W3C VC Data Model 2.0 introduces `BitstringStatusListEntry` as the successor to V1's `StatusList2021Entry` for credential revocation/suspension status. Update the status list handling to recognize and process `BitstringStatusListEntry` in addition to the existing `StatusList2021Entry` type, so incoming V2 credentials with status information can be verified.
 
 **Files affected:**
-- `common/credential.go` (`MarshalJSON`) — Keep the fallback to `ContextCredentialsV1` when `Context` is empty (backward compatibility), but add a `WithContext(ctx ...string) PresentationOpt` option so callers can explicitly set a V2 context when constructing a presentation.
-- `common/credential_test.go` — Test `MarshalJSON` with: empty context (defaults to V1), explicit V1 context, explicit V2 context, mixed contexts.
-- `tir/tokenProvider.go` (`signVerifiablePresentation`) — No change needed if the credential being wrapped already carries a V2 context, because `MarshalJSON` will use the presentation's `Context` if set. Document this behavior with a code comment. If the M2M flow needs to produce V2 presentations in the future, `WithContext` is available.
-- `common/credential_test.go` — Test `NewPresentation` with `WithContext(ContextCredentialsV2)` produces a presentation that marshals with the V2 context URL.
+- `verifier/credential_status_client.go` — Add support for `BitstringStatusListEntry` type alongside the existing `StatusList2021Entry`. Both types share the same fundamental structure (statusListIndex, statusListCredential, statusPurpose) but with updated field names per the V2 spec. Add a constant for the new type name.
+- `verifier/credential_status_client_test.go` — Add tests verifying that `BitstringStatusListEntry` is recognized and processed correctly, including: valid V2 status entry, mixed V1/V2 status entries in a credential, and rejection of unknown status entry types.
+- `common/credential.go` — Add a `CredentialStatusTypeBitstringStatusList` constant if not already present.
 
 **Acceptance criteria:**
-- `WithContext` option works and is used in `MarshalJSON`.
-- Default behavior (empty context) still produces V1 context for backward compatibility.
-- M2M token provider still produces valid signed presentations.
-- Tests pass: `go test ./common/... ./tir/... -v`.
+- `BitstringStatusListEntry` credentials are processed correctly for revocation/suspension checks.
+- Existing `StatusList2021Entry` behavior is unchanged.
+- Unknown status entry types are still rejected.
+- Tests pass: `go test ./verifier/... -v`.
+
+**Note:** M2M token provider changes are explicitly out of scope. VC 2.0 support applies only to incoming credential verification. The M2M flow (`tir/tokenProvider.go`) continues to produce V1 presentations — the presentation's `Context` defaults to V1 and the credential's context does not propagate automatically to the wrapping presentation. If V2 M2M presentations are needed in the future, a `WithContext` option could be added to `NewPresentation`, but that is not part of this plan.
 
 ### Step 5: End-to-end integration tests, documentation, and config example updates
 
-**What:** Add integration-level tests that exercise the full credential verification flow with VC 2.0 credentials, update documentation and example config to reflect the new option.
+**What:** Add integration-level tests that exercise the full credential verification flow with VC 2.0 credentials, update documentation, example config, and OpenAPI spec to reflect the new option.
 
 **Files affected:**
 - `verifier/verifier_test.go` — Add integration-style tests that:
@@ -89,10 +90,12 @@ The VCVerifier currently supports only the W3C VC Data Model 1.1 (`https://www.w
   - Submit a VC 2.0 credential and confirm it is rejected with `vcDataModelVersions: ["1.1"]`.
   - Submit both V1 and V2 credentials with `vcDataModelVersions: ["1.1", "2.0"]` and confirm both pass.
 - `server.yaml` — Add a commented-out example of the `vcDataModelVersions` field under `verifier:` with documentation explaining the accepted values and default behavior.
+- `api/api.yaml` — Update the OpenAPI spec examples that currently hardcode V1 context URLs (lines ~489, ~518) to document V2 as an alternative format. Add example payloads showing V2 context where appropriate.
 - `CLAUDE.md` — Update the "Configuration" and "Known Gaps" sections to document the new `vcDataModelVersions` config option and the VC 2.0 support.
 
 **Acceptance criteria:**
 - All new integration tests pass with both V1 and V2 credentials.
 - `server.yaml` example is accurate and well-documented.
+- OpenAPI spec examples reflect both V1 and V2 credential formats.
 - `CLAUDE.md` accurately reflects the new capability.
 - Full test suite passes: `go test ./... -v`.
