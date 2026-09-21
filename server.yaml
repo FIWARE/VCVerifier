@@ -12,10 +12,13 @@ verifier:
     # context https://www.w3.org/2018/credentials/v1) and "2.0" (VC Data Model v2.0,
     # context https://www.w3.org/ns/credentials/v2).
     # When omitted or empty, both versions are accepted (default: ["1.1", "2.0"]).
-    # To restrict to a single version, specify only that version:
+    # Example — accept both versions explicitly:
     #   vcDataModelVersions:
     #     - "1.1"
     #     - "2.0"
+    # To restrict to a single version, specify only that version:
+    #   vcDataModelVersions:
+    #     - "1.1"
     policies:
         default:
             SignaturePolicy: {}
