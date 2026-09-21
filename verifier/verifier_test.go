@@ -48,22 +48,99 @@ func TestVerifyConfig(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
-		testName            string
-		configToTest        configModel.Verifier
-		expectedError       error
-		expectedRequestMode string
+		testName                    string
+		configToTest                configModel.Verifier
+		expectedError               error
+		expectedRequestMode         string
+		expectedVCDataModelVersions []string
+	}
+
+	// validBase returns a minimal valid Verifier config for reuse across test
+	// cases that focus on a single field. Callers override the field under test.
+	validBase := func() configModel.Verifier {
+		return configModel.Verifier{
+			Did:            "did:key:verifier",
+			TirAddress:     "http:tir.de",
+			ValidationMode: "none",
+			KeyAlgorithm:   "RS256",
+			SupportedModes: []string{"urlEncoded"},
+			RequestMode:    "urlEncoded",
+		}
 	}
 
 	tests := []test{
-		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}, nil, "urlEncoded"},
-		{"If no TIR is configured, the verification should fail.", configModel.Verifier{Did: "did:key:verifier", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoTIR, ""},
-		{"If no DID is configured, the verification should fail.", configModel.Verifier{TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, ""},
-		{"If no DID and TIR is configured, the verification should fail.", configModel.Verifier{ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, ""},
-		{"If no validation mode is configured, verfication should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", KeyAlgorithm: "RS256"}, ErrorUnsupportedValidationMode, ""},
-		{"If RequestMode is left empty and byReference is supported, it defaults to byReference and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"byReference"}}, nil, "byReference"},
-		{"If RequestMode is left empty and byReference is not supported, it falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}, nil, "urlEncoded"},
-		{"If RequestMode is left empty and byReference is not supported but not the first entry either, it still falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded", "byValue"}}, nil, "urlEncoded"},
-		{"If RequestMode is set to a value outside SupportedModes, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "byValue"}, ErrorRequestModeNotSupported, "byValue"},
+		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}, nil, "urlEncoded", nil},
+		{"If no TIR is configured, the verification should fail.", configModel.Verifier{Did: "did:key:verifier", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoTIR, "", nil},
+		{"If no DID is configured, the verification should fail.", configModel.Verifier{TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, "", nil},
+		{"If no DID and TIR is configured, the verification should fail.", configModel.Verifier{ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, "", nil},
+		{"If no validation mode is configured, verfication should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", KeyAlgorithm: "RS256"}, ErrorUnsupportedValidationMode, "", nil},
+		{"If RequestMode is left empty and byReference is supported, it defaults to byReference and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"byReference"}}, nil, "byReference", nil},
+		{"If RequestMode is left empty and byReference is not supported, it falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}, nil, "urlEncoded", nil},
+		{"If RequestMode is left empty and byReference is not supported but not the first entry either, it still falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded", "byValue"}}, nil, "urlEncoded", nil},
+		{"If RequestMode is set to a value outside SupportedModes, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "byValue"}, ErrorRequestModeNotSupported, "byValue", nil},
+		// vcDataModelVersions validation tests
+		{
+			testName: "Empty vcDataModelVersions defaults to all versions.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = nil
+				return c
+			}(),
+			expectedError:               nil,
+			expectedRequestMode:         "urlEncoded",
+			expectedVCDataModelVersions: []string{"1.1", "2.0"},
+		},
+		{
+			testName: "Explicit vcDataModelVersions with only V1.1 is accepted.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{common.VCDataModelVersion11}
+				return c
+			}(),
+			expectedError:               nil,
+			expectedRequestMode:         "urlEncoded",
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion11},
+		},
+		{
+			testName: "Explicit vcDataModelVersions with only V2.0 is accepted.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{common.VCDataModelVersion20}
+				return c
+			}(),
+			expectedError:               nil,
+			expectedRequestMode:         "urlEncoded",
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion20},
+		},
+		{
+			testName: "Explicit vcDataModelVersions with both versions is accepted.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{common.VCDataModelVersion11, common.VCDataModelVersion20}
+				return c
+			}(),
+			expectedError:               nil,
+			expectedRequestMode:         "urlEncoded",
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+		},
+		{
+			testName: "Invalid vcDataModelVersions value is rejected.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{"3.0"}
+				return c
+			}(),
+			expectedError: ErrorUnsupportedVCDataModelVersion,
+		},
+		{
+			testName: "Mixed valid and invalid vcDataModelVersions is rejected.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{common.VCDataModelVersion11, "99.99"}
+				return c
+			}(),
+			expectedError: ErrorUnsupportedVCDataModelVersion,
+		},
 	}
 
 	for _, tc := range tests {
@@ -76,6 +153,17 @@ func TestVerifyConfig(t *testing.T) {
 			}
 			if tc.expectedRequestMode != "" && tc.configToTest.RequestMode != tc.expectedRequestMode {
 				t.Errorf("%s - Expected resolved RequestMode %v but was %v.", tc.testName, tc.expectedRequestMode, tc.configToTest.RequestMode)
+			}
+			if tc.expectedVCDataModelVersions != nil {
+				if len(tc.configToTest.VCDataModelVersions) != len(tc.expectedVCDataModelVersions) {
+					t.Errorf("%s - Expected VCDataModelVersions %v but was %v.", tc.testName, tc.expectedVCDataModelVersions, tc.configToTest.VCDataModelVersions)
+				} else {
+					for i, v := range tc.expectedVCDataModelVersions {
+						if tc.configToTest.VCDataModelVersions[i] != v {
+							t.Errorf("%s - Expected VCDataModelVersions[%d] = %q but was %q.", tc.testName, i, v, tc.configToTest.VCDataModelVersions[i])
+						}
+					}
+				}
 			}
 		})
 

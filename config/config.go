@@ -242,6 +242,11 @@ type Verifier struct {
 	// Enable it only for a deployment whose issuers live in the verifier's own
 	// network.
 	HttpsIssuerAllowPrivateNetworks bool `mapstructure:"httpsIssuerAllowPrivateNetworks" default:"false"`
+	// VCDataModelVersions lists which W3C VC Data Model versions the verifier
+	// accepts for incoming credentials. Recognized values are "1.1" (VC Data
+	// Model v1.1) and "2.0" (VC Data Model v2.0). When empty or unset, both
+	// versions are accepted (the default).
+	VCDataModelVersions []string `mapstructure:"vcDataModelVersions"`
 	// RefreshToken groups all refresh token configuration.
 	RefreshToken RefreshToken `mapstructure:"refreshToken"`
 }

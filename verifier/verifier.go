@@ -97,6 +97,7 @@ var ErrorRefreshTokenDisabled = errors.New("refresh_token_not_enabled")
 var ErrorRefreshTokenExpired = errors.New("refresh_token_expired")
 var ErrorRefreshTokenNotFound = errors.New("refresh_token_not_found")
 var ErrorRefreshTokenInvalidSignature = errors.New("refresh_token_invalid_signature")
+var ErrorUnsupportedVCDataModelVersion = errors.New("unsupported_vc_data_model_version")
 
 // refreshTokenByteLength is the number of random bytes used to generate
 // an opaque refresh token. 32 bytes → 43-character base64url string.
@@ -1797,6 +1798,17 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	}
 	if !slices.Contains(verifierConfig.SupportedModes, verifierConfig.RequestMode) { //nolint:govet
 		return ErrorRequestModeNotSupported
+	}
+
+	// Default to accepting all recognized VC Data Model versions when the
+	// config field is empty (either unset in YAML or zero-valued in tests).
+	if len(verifierConfig.VCDataModelVersions) == 0 {
+		verifierConfig.VCDataModelVersions = common.VCDataModelVersionAll()
+	}
+	for _, v := range verifierConfig.VCDataModelVersions {
+		if !slices.Contains(common.VCDataModelVersionAll(), v) { //nolint:govet
+			return ErrorUnsupportedVCDataModelVersion
+		}
 	}
 
 	return nil
