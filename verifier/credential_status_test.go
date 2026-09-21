@@ -201,6 +201,52 @@ func bitstringStatusEntry(url, purpose string, index uint64) common.JSONObject {
 	}
 }
 
+// statusList2021Entry returns a raw credentialStatus JSON object for a
+// StatusList2021Entry (V1) referencing the supplied URL, purpose and index.
+// Mirrors bitstringStatusEntry but uses the legacy StatusList2021 type name.
+func statusList2021Entry(url, purpose string, index uint64) common.JSONObject {
+	return common.JSONObject{
+		common.StatusListEntryKeyType:                 common.TypeStatusList2021Entry,
+		common.StatusListEntryKeyStatusPurpose:        purpose,
+		common.StatusListEntryKeyStatusListCredential: url,
+		common.StatusListEntryKeyStatusListIndex:      fmt.Sprintf("%d", index),
+	}
+}
+
+// unknownStatusEntry returns a raw credentialStatus JSON object with an
+// unrecognised type, used to verify that the validation service skips
+// unknown entry types gracefully.
+func unknownStatusEntry(url, purpose string, index uint64) common.JSONObject {
+	return common.JSONObject{
+		common.StatusListEntryKeyType:                 "FutureStatusListEntry",
+		common.StatusListEntryKeyStatusPurpose:        purpose,
+		common.StatusListEntryKeyStatusListCredential: url,
+		common.StatusListEntryKeyStatusListIndex:      fmt.Sprintf("%d", index),
+	}
+}
+
+// newStatusList2021Credential builds a status-list credential using the
+// legacy StatusList2021Credential type, for backward compatibility tests.
+func newStatusList2021Credential(t *testing.T, encodedList, purpose string) *common.Credential {
+	t.Helper()
+	raw := common.JSONObject{
+		common.JSONLDKeyID:   statusValidationTestURL,
+		common.JSONLDKeyType: []string{common.TypeVerifiableCredential, common.TypeStatusList2021Credential},
+		common.VCKeyCredentialSubject: common.JSONObject{
+			common.StatusListKeyEncodedList:   encodedList,
+			common.StatusListKeyStatusPurpose: purpose,
+		},
+	}
+	cred, err := common.CreateCredential(common.CredentialContents{
+		Types: []string{common.TypeVerifiableCredential, common.TypeStatusList2021Credential},
+	}, common.CustomFields{})
+	if err != nil {
+		t.Fatalf("CreateCredential failed: %v", err)
+	}
+	cred.SetRawJSON(raw)
+	return cred
+}
+
 // TestCredentialStatusValidationService_ValidateVC walks every observable
 // branch of ValidateVC. Each row builds an input credential, a per-type
 // config map and an optional set of fixtures served by the mock client,
@@ -229,6 +275,10 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 		configModel.StatusPurposeRevocation,
 		[]string{common.TypeVerifiableCredential},
 	)
+
+	// StatusList2021Credential (V1) fixtures for backward compatibility tests.
+	statusList2021RevokedList := newStatusList2021Credential(t, encodeTestBitstring(t, statusValidationRevokedByte), configModel.StatusPurposeRevocation)
+	statusList2021ClearList := newStatusList2021Credential(t, encodeTestBitstring(t, statusValidationClearByte), configModel.StatusPurposeRevocation)
 
 	// Two-entry fixture credentials for the suspension + revocation case.
 	// The suspension list's URL differs from the revocation list's URL so
@@ -337,6 +387,72 @@ func TestCredentialStatusValidationService_ValidateVC(t *testing.T) {
 			expectedResult: false,
 			expectedError:  ErrorCredentialRevoked,
 		},
+		// --- StatusList2021Entry (V1) backward compatibility ---
+		{
+			testName:       "StatusList2021Entry: revoked bit set -> ErrorCredentialRevoked",
+			credential:     newCredentialWithStatus(t, statusValidationTestType, statusList2021Entry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex)),
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+			fixtures:       map[string]*common.Credential{statusValidationTestURL: statusList2021RevokedList},
+			expectedResult: false,
+			expectedError:  ErrorCredentialRevoked,
+		},
+		{
+			testName:       "StatusList2021Entry: clear bit -> valid",
+			credential:     newCredentialWithStatus(t, statusValidationTestType, statusList2021Entry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex)),
+			perType:        map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+			fixtures:       map[string]*common.Credential{statusValidationTestURL: statusList2021ClearList},
+			expectedResult: true,
+			expectedError:  nil,
+		},
+		// --- Mixed V1/V2 status entries ---
+		{
+			testName: "Mixed V1/V2: StatusList2021Entry (clear) + BitstringStatusListEntry (revoked) -> ErrorCredentialRevoked",
+			credential: newCredentialWithStatus(t, statusValidationTestType, []interface{}{
+				statusList2021Entry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex),
+				bitstringStatusEntry(statusValidationTestURLAlt, configModel.StatusPurposeRevocation, statusValidationTestIndex),
+			}),
+			perType: map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+			fixtures: map[string]*common.Credential{
+				statusValidationTestURL:    statusList2021ClearList,
+				statusValidationTestURLAlt: altRevokedList,
+			},
+			expectedResult: false,
+			expectedError:  ErrorCredentialRevoked,
+		},
+		{
+			testName: "Mixed V1/V2: BitstringStatusListEntry (clear) + StatusList2021Entry (clear) -> valid",
+			credential: newCredentialWithStatus(t, statusValidationTestType, []interface{}{
+				bitstringStatusEntry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex),
+				statusList2021Entry(statusValidationTestURLAlt, configModel.StatusPurposeRevocation, statusValidationTestIndex),
+			}),
+			perType: map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+			fixtures: map[string]*common.Credential{
+				statusValidationTestURL:    clearList,
+				statusValidationTestURLAlt: statusList2021ClearList,
+			},
+			expectedResult: true,
+			expectedError:  nil,
+		},
+		// --- Unknown status entry types ---
+		{
+			testName:        "Unknown entry type is skipped -> valid (no fetch)",
+			credential:      newCredentialWithStatus(t, statusValidationTestType, unknownStatusEntry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex)),
+			perType:         map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+			expectedResult:  true,
+			expectedError:   nil,
+			expectedNoFetch: true,
+		},
+		{
+			testName: "Unknown entry type skipped, known entry still checked -> ErrorCredentialRevoked",
+			credential: newCredentialWithStatus(t, statusValidationTestType, []interface{}{
+				unknownStatusEntry(statusValidationTestURL, configModel.StatusPurposeRevocation, statusValidationTestIndex),
+				bitstringStatusEntry(statusValidationTestURLAlt, configModel.StatusPurposeRevocation, statusValidationTestIndex),
+			}),
+			perType:  map[string]configModel.CredentialStatus{statusValidationTestType: {Enabled: boolPtr(true)}},
+			fixtures: map[string]*common.Credential{statusValidationTestURLAlt: altRevokedList},
+			expectedResult: false,
+			expectedError:  ErrorCredentialRevoked,
+		},
 	}
 
 	for _, tc := range tests {
@@ -385,6 +501,94 @@ func TestCredentialStatusValidationService_ContextMismatch(t *testing.T) {
 	}
 	if len(mock.calls) != 0 {
 		t.Errorf("expected no fetches on context mismatch, got %d", len(mock.calls))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Status entry type recognition tests
+// ---------------------------------------------------------------------------
+
+// TestIsRecognisedStatusEntryType verifies that both V1 (StatusList2021Entry)
+// and V2 (BitstringStatusListEntry) entry types are recognised, while unknown
+// types are rejected. This is the dispatch gate in ValidateVC that decides
+// which entries trigger a fetch.
+func TestIsRecognisedStatusEntryType(t *testing.T) {
+	tests := []struct {
+		name      string
+		entryType string
+		want      bool
+	}{
+		{name: "BitstringStatusListEntry is recognised", entryType: common.TypeBitstringStatusListEntry, want: true},
+		{name: "StatusList2021Entry is recognised", entryType: common.TypeStatusList2021Entry, want: true},
+		{name: "empty type is not recognised", entryType: "", want: false},
+		{name: "FutureStatusListEntry is not recognised", entryType: "FutureStatusListEntry", want: false},
+		{name: "arbitrary string is not recognised", entryType: "SomeOtherType", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isRecognisedStatusEntryType(tc.entryType)
+			if got != tc.want {
+				t.Errorf("isRecognisedStatusEntryType(%q) = %v, want %v", tc.entryType, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsStatusListCredentialType verifies that both V1 (StatusList2021Credential)
+// and V2 (BitstringStatusListCredential) credential types are accepted by
+// extractStatusListFields, which validates that the fetched status-list
+// credential declares a supported type.
+func TestIsStatusListCredentialType(t *testing.T) {
+	tests := []struct {
+		name  string
+		types []string
+		want  bool
+	}{
+		{
+			name:  "BitstringStatusListCredential alone",
+			types: []string{common.TypeBitstringStatusListCredential},
+			want:  true,
+		},
+		{
+			name:  "StatusList2021Credential alone",
+			types: []string{common.TypeStatusList2021Credential},
+			want:  true,
+		},
+		{
+			name:  "BitstringStatusListCredential with VerifiableCredential",
+			types: []string{common.TypeVerifiableCredential, common.TypeBitstringStatusListCredential},
+			want:  true,
+		},
+		{
+			name:  "StatusList2021Credential with VerifiableCredential",
+			types: []string{common.TypeVerifiableCredential, common.TypeStatusList2021Credential},
+			want:  true,
+		},
+		{
+			name:  "only VerifiableCredential is not a status list type",
+			types: []string{common.TypeVerifiableCredential},
+			want:  false,
+		},
+		{
+			name:  "empty types",
+			types: []string{},
+			want:  false,
+		},
+		{
+			name:  "unrelated type",
+			types: []string{"SomeOtherCredential"},
+			want:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isStatusListCredentialType(tc.types)
+			if got != tc.want {
+				t.Errorf("isStatusListCredentialType(%v) = %v, want %v", tc.types, got, tc.want)
+			}
+		})
 	}
 }
 
