@@ -33,6 +33,10 @@ var (
 	ErrorCredentialExpired               = errors.New("credential_expired")
 	ErrorCredentialNotYetValid           = errors.New("credential_not_yet_valid")
 	ErrorCredentialInvalidValidityPeriod = errors.New("credential_invalid_validity_period")
+	// ErrorVCDataModelVersionNotAccepted is returned when a credential's VC Data
+	// Model version (detected from its @context) is not in the configured
+	// vcDataModelVersions allowlist.
+	ErrorVCDataModelVersionNotAccepted = errors.New("vc_data_model_version_not_accepted")
 )
 
 var SupportedModes = []string{ValidationModeNone, ValidationModeCombined, ValidationModeJsonLd, ValidationModeBaseContext}
@@ -59,6 +63,10 @@ func WarnDeprecatedMode(mode string) {
 type CredentialValidator struct {
 	validationMode string
 	clock          common.Clock
+	// vcDataModelVersions is the allowlist of accepted VC Data Model versions
+	// (e.g. "1.1", "2.0"). Credentials whose @context does not match any
+	// version in this list are rejected before any other validation.
+	vcDataModelVersions []string
 }
 
 // now returns the current time, falling back to time.Now() when no clock is injected.
@@ -108,6 +116,9 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 }
 
 // ValidateVC validates credential content. Signature verification is handled separately by JWTProofChecker.
+//
+// The VC Data Model version check runs first: if vcDataModelVersions is configured
+// (non-empty), the credential's @context must match at least one allowed version.
 // Temporal validity (validFrom/validUntil) is always enforced regardless of mode.
 //
 // Available modes:
@@ -119,6 +130,16 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 //   - "baseContext": validates that the credential uses only W3C base-context types
 //     (VerifiableCredential, VerifiablePresentation) and has an issuer.
 func (cv CredentialValidator) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error) {
+	// Version gate: reject credentials whose VC Data Model version is not allowed.
+	if len(cv.vcDataModelVersions) > 0 {
+		detectedVersions := common.DetectVCDataModelVersion(verifiableCredential.Contents().Context)
+		if !hasOverlap(detectedVersions, cv.vcDataModelVersions) {
+			logging.Log().Warnf("Credential validation failed: detected VC Data Model version(s) %v not in allowed list %v",
+				detectedVersions, cv.vcDataModelVersions)
+			return false, ErrorVCDataModelVersionNotAccepted
+		}
+	}
+
 	if ok, err := validateCredentialDates(verifiableCredential.Contents(), cv.now()); !ok {
 		return false, err
 	}
@@ -171,6 +192,20 @@ func validateBaseContext(cred *common.Credential) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// hasOverlap reports whether slices a and b share at least one common element.
+func hasOverlap(a, b []string) bool {
+	set := make(map[string]bool, len(b))
+	for _, v := range b {
+		set[v] = true
+	}
+	for _, v := range a {
+		if set[v] {
+			return true
+		}
+	}
+	return false
 }
 
 // validateCredentialDates checks validFrom and validUntil against now, both bounds inclusive:
