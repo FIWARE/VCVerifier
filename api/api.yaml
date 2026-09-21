@@ -477,10 +477,18 @@ components:
         - presentation_submission
         - vp_token
     VerifiablePresentation:
-      description: Presentation, containing on or more credentials
+      description: >-
+        Presentation, containing one or more credentials. Supports both
+        W3C VC Data Model v1.1 (context https://www.w3.org/2018/credentials/v1)
+        and v2.0 (context https://www.w3.org/ns/credentials/v2). The accepted
+        versions are controlled by the verifier.vcDataModelVersions config option.
       type: object
       properties:
         '@context':
+          description: >-
+            JSON-LD context URIs. Use https://www.w3.org/2018/credentials/v1
+            for VC Data Model v1.1 or https://www.w3.org/ns/credentials/v2
+            for VC Data Model v2.0.
           type: array
           items:
             type: string
@@ -504,12 +512,20 @@ components:
         proof:
           $ref: '#/components/schemas/Proof'
     VerifiableCredential:
-      description: Credential in the format ldp_vc
+      description: >-
+        Credential in the format ldp_vc. Supports both W3C VC Data Model v1.1
+        (context https://www.w3.org/2018/credentials/v1) and v2.0
+        (context https://www.w3.org/ns/credentials/v2).
       type: object
       properties:
         types:
           $ref: '#/components/schemas/CredentialsType'
         '@context':
+          description: >-
+            JSON-LD context URIs. For v1.1 credentials use
+            https://www.w3.org/2018/credentials/v1; for v2.0 credentials
+            use https://www.w3.org/ns/credentials/v2. Additional contexts
+            (e.g. proof suites) may follow.
           type: array
           items:
             type: string
