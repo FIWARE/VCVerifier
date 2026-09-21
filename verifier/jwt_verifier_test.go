@@ -470,3 +470,230 @@ func TestWarnDeprecatedMode(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// VC Data Model version filtering tests
+// ---------------------------------------------------------------------------
+
+// makeCredentialWithContext creates a credential with the given @context array and a valid issuer/type.
+func makeCredentialWithContext(contexts []string) *common.Credential {
+	c, _ := common.CreateCredential(common.CredentialContents{
+		Context: contexts,
+		Issuer:  &common.Issuer{ID: "did:web:example.com"},
+		Types:   []string{"VerifiableCredential"},
+		Subject: []common.Subject{{CustomFields: map[string]interface{}{"name": "test"}}},
+	}, common.CustomFields{})
+	return c
+}
+
+func TestValidateVC_VCDataModelVersionFiltering(t *testing.T) {
+	tests := []struct {
+		name                string
+		contexts            []string
+		vcDataModelVersions []string
+		validationMode      string
+		wantErr             error
+	}{
+		{
+			name:                "V1 credential accepted when config allows 1.1",
+			contexts:            []string{common.ContextCredentialsV1},
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			validationMode:      ValidationModeNone,
+			wantErr:             nil,
+		},
+		{
+			name:                "V2 credential accepted when config allows 2.0",
+			contexts:            []string{common.ContextCredentialsV2},
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             nil,
+		},
+		{
+			name:                "V1 credential rejected when config allows only 2.0",
+			contexts:            []string{common.ContextCredentialsV1},
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "V2 credential rejected when config allows only 1.1",
+			contexts:            []string{common.ContextCredentialsV2},
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "V1 credential accepted when config allows both",
+			contexts:            []string{common.ContextCredentialsV1},
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             nil,
+		},
+		{
+			name:                "V2 credential accepted when config allows both",
+			contexts:            []string{common.ContextCredentialsV2},
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             nil,
+		},
+		{
+			name:                "credential with both V1 and V2 contexts accepted when config allows 1.1",
+			contexts:            []string{common.ContextCredentialsV1, common.ContextCredentialsV2},
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			validationMode:      ValidationModeNone,
+			wantErr:             nil,
+		},
+		{
+			name:                "credential with both V1 and V2 contexts accepted when config allows 2.0",
+			contexts:            []string{common.ContextCredentialsV1, common.ContextCredentialsV2},
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             nil,
+		},
+		{
+			name:                "unknown context rejected when config allows 1.1 — mode none",
+			contexts:            []string{"https://example.com/unknown/v1"},
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "unknown context rejected when config allows both — mode none",
+			contexts:            []string{"https://example.com/unknown/v1"},
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "empty context rejected when config allows both — mode none",
+			contexts:            []string{},
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "unknown context rejected when config allows both — mode combined",
+			contexts:            []string{"https://example.com/unknown/v1"},
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			validationMode:      ValidationModeCombined,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "unknown context rejected when config allows both — mode baseContext",
+			contexts:            []string{"https://example.com/unknown/v1"},
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			validationMode:      ValidationModeBaseContext,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "V1 credential accepted in combined mode with config allows 1.1",
+			contexts:            []string{common.ContextCredentialsV1},
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			validationMode:      ValidationModeCombined,
+			wantErr:             nil,
+		},
+		{
+			name:                "V2 credential accepted in baseContext mode with config allows 2.0",
+			contexts:            []string{common.ContextCredentialsV2},
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeBaseContext,
+			wantErr:             nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cred := makeCredentialWithContext(tc.contexts)
+			validator := CredentialValidator{
+				validationMode:      tc.validationMode,
+				vcDataModelVersions: tc.vcDataModelVersions,
+			}
+			result, err := validator.ValidateVC(cred, nil)
+
+			if tc.wantErr != nil {
+				if err == nil {
+					t.Fatalf("expected error %v, got nil", tc.wantErr)
+				}
+				if !isErr(err, tc.wantErr) {
+					t.Fatalf("expected error %v, got %v", tc.wantErr, err)
+				}
+				if result {
+					t.Fatal("expected result=false when error is returned")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				if !result {
+					t.Fatal("expected result=true")
+				}
+			}
+		})
+	}
+}
+
+func TestValidateVC_EmptyVersionConfig_SkipsVersionCheck(t *testing.T) {
+	// When vcDataModelVersions is empty (nil), the version gate is skipped
+	// and any context passes through to mode-specific validation.
+	cred := makeCredentialWithContext([]string{"https://example.com/unknown/v1"})
+	validator := CredentialValidator{
+		validationMode:      ValidationModeNone,
+		vcDataModelVersions: nil,
+	}
+	result, err := validator.ValidateVC(cred, nil)
+	if err != nil {
+		t.Fatalf("expected no error when vcDataModelVersions is nil, got %v", err)
+	}
+	if !result {
+		t.Fatal("expected result=true when vcDataModelVersions is nil")
+	}
+}
+
+func TestValidateVC_VersionCheckBeforeDateCheck(t *testing.T) {
+	// The version check should run before the date check. An expired credential
+	// with a disallowed version should get the version error, not the expiry error.
+	past := baseTime.Add(-24 * time.Hour)
+	c, _ := common.CreateCredential(common.CredentialContents{
+		Context:    []string{common.ContextCredentialsV2},
+		Issuer:     &common.Issuer{ID: "did:web:example.com"},
+		Types:      []string{"VerifiableCredential"},
+		Subject:    []common.Subject{{CustomFields: map[string]interface{}{"name": "test"}}},
+		ValidUntil: tp(past),
+	}, common.CustomFields{})
+
+	validator := CredentialValidator{
+		validationMode:      ValidationModeNone,
+		clock:               fixedClock{t: baseTime},
+		vcDataModelVersions: []string{common.VCDataModelVersion11}, // only V1 allowed
+	}
+	_, err := validator.ValidateVC(c, nil)
+	if !isErr(err, ErrorVCDataModelVersionNotAccepted) {
+		t.Fatalf("expected ErrorVCDataModelVersionNotAccepted (version check before date check), got %v", err)
+	}
+}
+
+func TestHasOverlap(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []string
+		b    []string
+		want bool
+	}{
+		{"both empty", nil, nil, false},
+		{"a empty", nil, []string{"1.1"}, false},
+		{"b empty", []string{"1.1"}, nil, false},
+		{"no overlap", []string{"1.1"}, []string{"2.0"}, false},
+		{"exact match", []string{"1.1"}, []string{"1.1"}, true},
+		{"overlap with extras", []string{"1.1", "2.0"}, []string{"2.0", "3.0"}, true},
+		{"multiple overlaps", []string{"1.1", "2.0"}, []string{"1.1", "2.0"}, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hasOverlap(tc.a, tc.b)
+			if got != tc.want {
+				t.Errorf("hasOverlap(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
