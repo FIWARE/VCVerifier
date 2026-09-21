@@ -3428,3 +3428,233 @@ func TestVerifyVPSignatureIfRequired_ConfigError(t *testing.T) {
 	)
 	assert.ErrorIs(t, err, ErrorVerficationContextSetup)
 }
+
+// getVCV1WithValidDates builds a V1 credential with a validity window that
+// spans the mockClock epoch (time.Unix(0, 0)), so date checks pass.
+func getVCV1WithValidDates(id string) *common.Credential {
+	validFrom, _ := time.Parse(time.RFC3339, "1969-01-01T00:00:00Z")
+	validUntil, _ := time.Parse(time.RFC3339, "2099-12-31T23:59:59Z")
+	vc, _ := common.CreateCredential(
+		common.CredentialContents{
+			Context: []string{
+				common.ContextCredentialsV1,
+				"https://happypets.fiware.io/2022/credentials/employee/v1",
+			},
+			ID: "https://happypets.fiware.io/credential/25159389-8dd17b796ac0",
+			Types: []string{
+				"VerifiableCredential",
+				"CustomerCredential",
+			},
+			Issuer:     &common.Issuer{ID: "did:key:verifier"},
+			ValidFrom:  &validFrom,
+			ValidUntil: &validUntil,
+			Subject: []common.Subject{
+				{
+					ID: id,
+					CustomFields: map[string]interface{}{
+						"type":   "gx:NaturalParticipent",
+						"target": "did:ebsi:packetdelivery",
+					},
+				},
+			},
+		},
+		common.CustomFields{},
+	)
+	return vc
+}
+
+// getVCV2 builds a V2 credential (VC Data Model 2.0) with a validity window
+// that spans the mockClock epoch (time.Unix(0, 0)), so date checks pass.
+func getVCV2(id string) *common.Credential {
+	validFrom, _ := time.Parse(time.RFC3339, "1969-01-01T00:00:00Z")
+	validUntil, _ := time.Parse(time.RFC3339, "2099-12-31T23:59:59Z")
+	vc, _ := common.CreateCredential(
+		common.CredentialContents{
+			Context: []string{
+				common.ContextCredentialsV2,
+				"https://happypets.fiware.io/2022/credentials/employee/v1",
+			},
+			ID: "https://happypets.fiware.io/credential/25159389-v2-8dd17b796ac0",
+			Types: []string{
+				"VerifiableCredential",
+				"CustomerCredential",
+			},
+			Issuer:     &common.Issuer{ID: "did:key:verifier"},
+			ValidFrom:  &validFrom,
+			ValidUntil: &validUntil,
+			Subject: []common.Subject{
+				{
+					ID: id,
+					CustomFields: map[string]interface{}{
+						"type":   "gx:NaturalParticipent",
+						"target": "did:ebsi:packetdelivery",
+					},
+				},
+			},
+		},
+		common.CustomFields{},
+	)
+	return vc
+}
+
+// getVPV1ValidDates builds a presentation wrapping V1 credentials with valid dates.
+func getVPV1ValidDates(ids []string) common.Presentation {
+	credentials := []*common.Credential{}
+	for _, id := range ids {
+		credentials = append(credentials, getVCV1WithValidDates(id))
+	}
+	vp, _ := common.NewPresentation(common.WithCredentials(credentials...))
+	return *vp
+}
+
+// getVPV2 builds a presentation wrapping V2 credentials.
+func getVPV2(ids []string) common.Presentation {
+	credentials := []*common.Credential{}
+	for _, id := range ids {
+		credentials = append(credentials, getVCV2(id))
+	}
+	vp, _ := common.NewPresentation(common.WithCredentials(credentials...))
+	return *vp
+}
+
+// getVPMixed builds a presentation with one V1 and one V2 credential,
+// both with valid date ranges.
+func getVPMixed(v1ID, v2ID string) common.Presentation {
+	credentials := []*common.Credential{getVCV1WithValidDates(v1ID), getVCV2(v2ID)}
+	vp, _ := common.NewPresentation(common.WithCredentials(credentials...))
+	return *vp
+}
+
+// TestAuthenticationResponse_VCDataModelVersionFiltering exercises the full
+// AuthenticationResponse pipeline with a real CredentialValidator (not a mock)
+// to verify that the vcDataModelVersions configuration correctly accepts or
+// rejects credentials based on their VC Data Model version.
+func TestAuthenticationResponse_VCDataModelVersionFiltering(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type versionTest struct {
+		testName            string
+		vcDataModelVersions []string
+		presentation        common.Presentation
+		expectedError       error
+	}
+
+	tests := []versionTest{
+		{
+			testName:            "V2 credential accepted when config allows 2.0",
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			presentation:        getVPV2([]string{"vc-v2"}),
+			expectedError:       nil,
+		},
+		{
+			testName:            "V1 credential rejected when config allows only 2.0",
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			presentation:        getVPV1ValidDates([]string{"vc-v1"}),
+			expectedError:       ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			testName:            "V2 credential rejected when config allows only 1.1",
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			presentation:        getVPV2([]string{"vc-v2"}),
+			expectedError:       ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			testName:            "V1 credential accepted when config allows 1.1",
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			presentation:        getVPV1ValidDates([]string{"vc-v1"}),
+			expectedError:       nil,
+		},
+		{
+			testName:            "V1 credential accepted when config allows both versions",
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			presentation:        getVPV1ValidDates([]string{"vc-v1"}),
+			expectedError:       nil,
+		},
+		{
+			testName:            "V2 credential accepted when config allows both versions",
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			presentation:        getVPV2([]string{"vc-v2"}),
+			expectedError:       nil,
+		},
+		{
+			testName:            "Mixed V1+V2 credentials both accepted when config allows both versions",
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			presentation:        getVPMixed("vc-v1", "vc-v2"),
+			expectedError:       nil,
+		},
+		{
+			testName:            "Mixed V1+V2 credentials rejected when config allows only V1 (V2 credential fails)",
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			presentation:        getVPMixed("vc-v1", "vc-v2"),
+			expectedError:       ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			testName:            "Mixed V1+V2 credentials rejected when config allows only V2 (V1 credential fails)",
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			presentation:        getVPMixed("vc-v1", "vc-v2"),
+			expectedError:       ErrorVCDataModelVersionNotAccepted,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			trueOption := true
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+			sessionCache.sessions["login-state"] = loginSession{
+				version:       SAME_DEVICE,
+				callback:      "https://myhost.org/callback",
+				sessionId:     "my-session",
+				clientId:      "clientId",
+				requestObject: "requestObjectJwt",
+			}
+
+			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			testKey, _ := jwk.Import(ecdsaKey)
+			_ = jwk.AssignKeyID(testKey)
+			nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
+			credentialsConfig := mockCredentialConfig{
+				mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {
+					"": {
+						Credentials: []configModel.Credential{{
+							Type:         "VerifiableCredential",
+							JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption},
+						}},
+					},
+				}},
+			}
+
+			// Use a real CredentialValidator (not a mock) so the version
+			// filtering in ValidateVC is exercised end-to-end.
+			realValidator := CredentialValidator{
+				validationMode:      ValidationModeNone,
+				clock:               mockClock{},
+				vcDataModelVersions: tc.vcDataModelVersions,
+			}
+
+			verifier := CredentialVerifier{
+				did:                  "did:key:verifier",
+				signingKey:           testKey,
+				tokenCache:           &tokenCache,
+				sessionCache:         &sessionCache,
+				nonceGenerator:       &nonceGenerator,
+				validationServices:   []ValidationService{&realValidator},
+				clock:                mockClock{},
+				credentialsConfig:    credentialsConfig,
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			response, err := verifier.AuthenticationResponse("login-state", &tc.presentation)
+
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError, "expected error %v but got %v", tc.expectedError, err)
+				return
+			}
+			assert.NoError(t, err, "expected no error but got %v", err)
+			assert.Equal(t, SAME_DEVICE, response.FlowVersion, "flow version should be SAME_DEVICE")
+			assert.Equal(t, "authCode", response.Code, "authorization code should match")
+			_, found := tokenCache.tokens[response.Code]
+			assert.True(t, found, "token should be cached")
+		})
+	}
+}
