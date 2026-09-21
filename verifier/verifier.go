@@ -1803,10 +1803,10 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	// Default to accepting all recognized VC Data Model versions when the
 	// config field is empty (either unset in YAML or zero-valued in tests).
 	if len(verifierConfig.VCDataModelVersions) == 0 {
-		verifierConfig.VCDataModelVersions = common.VCDataModelVersionAll
+		verifierConfig.VCDataModelVersions = common.VCDataModelVersionAll()
 	}
 	for _, v := range verifierConfig.VCDataModelVersions {
-		if !slices.Contains(common.VCDataModelVersionAll, v) { //nolint:govet
+		if !slices.Contains(common.VCDataModelVersionAll(), v) { //nolint:govet
 			return ErrorUnsupportedVCDataModelVersion
 		}
 	}

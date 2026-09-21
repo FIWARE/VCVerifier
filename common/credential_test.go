@@ -500,14 +500,22 @@ func TestDetectVCDataModelVersion(t *testing.T) {
 }
 
 func TestVCDataModelVersionAll(t *testing.T) {
-	if len(VCDataModelVersionAll) != 2 {
-		t.Fatalf("Expected VCDataModelVersionAll to have 2 entries, got %d", len(VCDataModelVersionAll))
+	all := VCDataModelVersionAll()
+	if len(all) != 2 {
+		t.Fatalf("Expected VCDataModelVersionAll() to have 2 entries, got %d", len(all))
 	}
-	if VCDataModelVersionAll[0] != VCDataModelVersion11 {
-		t.Errorf("Expected VCDataModelVersionAll[0] = %q, got %q", VCDataModelVersion11, VCDataModelVersionAll[0])
+	if all[0] != VCDataModelVersion11 {
+		t.Errorf("Expected VCDataModelVersionAll()[0] = %q, got %q", VCDataModelVersion11, all[0])
 	}
-	if VCDataModelVersionAll[1] != VCDataModelVersion20 {
-		t.Errorf("Expected VCDataModelVersionAll[1] = %q, got %q", VCDataModelVersion20, VCDataModelVersionAll[1])
+	if all[1] != VCDataModelVersion20 {
+		t.Errorf("Expected VCDataModelVersionAll()[1] = %q, got %q", VCDataModelVersion20, all[1])
+	}
+
+	// Verify that mutation of the returned slice does not affect subsequent calls.
+	all[0] = "mutated"
+	fresh := VCDataModelVersionAll()
+	if fresh[0] != VCDataModelVersion11 {
+		t.Errorf("VCDataModelVersionAll() was mutated: got %q, want %q", fresh[0], VCDataModelVersion11)
 	}
 }
 

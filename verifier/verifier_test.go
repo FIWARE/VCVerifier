@@ -88,7 +88,7 @@ func TestVerifyConfig(t *testing.T) {
 			}(),
 			expectedError:               nil,
 			expectedRequestMode:         "urlEncoded",
-			expectedVCDataModelVersions: common.VCDataModelVersionAll,
+			expectedVCDataModelVersions: []string{"1.1", "2.0"},
 		},
 		{
 			testName: "Explicit vcDataModelVersions with only V1.1 is accepted.",

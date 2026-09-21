@@ -14,9 +14,16 @@ const (
 	VCDataModelVersion20 = "2.0"
 )
 
-// VCDataModelVersionAll contains all recognized VC Data Model versions.
-// It is used as the default when no explicit version filter is configured.
-var VCDataModelVersionAll = []string{VCDataModelVersion11, VCDataModelVersion20}
+// vcDataModelVersionAll is the internal list of all recognized VC Data Model versions.
+// Access it only via VCDataModelVersionAll() to avoid accidental mutation.
+var vcDataModelVersionAll = []string{VCDataModelVersion11, VCDataModelVersion20}
+
+// VCDataModelVersionAll returns a fresh copy of all recognized VC Data Model
+// versions. A new slice is returned on every call so callers cannot mutate
+// the package-level source of truth.
+func VCDataModelVersionAll() []string {
+	return append([]string{}, vcDataModelVersionAll...)
+}
 
 // W3C Verifiable Credentials Data Model constants
 // See https://www.w3.org/TR/vc-data-model-2.0/
@@ -398,9 +405,9 @@ func DetectVCDataModelVersion(contexts []string) []string {
 		}
 	}
 
-	// Return in a stable order matching VCDataModelVersionAll.
+	// Return in a stable order matching VCDataModelVersionAll().
 	var result []string
-	for _, ver := range VCDataModelVersionAll {
+	for _, ver := range VCDataModelVersionAll() {
 		if found[ver] {
 			result = append(result, ver)
 		}
