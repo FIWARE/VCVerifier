@@ -119,6 +119,9 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 //
 // The VC Data Model version check runs first: if vcDataModelVersions is configured
 // (non-empty), the credential's @context must match at least one allowed version.
+// Credentials that declare no @context at all are not W3C Data Model credentials
+// (SD-JWT VCs identify their type via `vct`) and are therefore not subject to the
+// version gate — see isVersionedDataModelCredential.
 // Temporal validity (validFrom/validUntil) is always enforced regardless of mode.
 //
 // Available modes:
@@ -131,7 +134,9 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 //     (VerifiableCredential, VerifiablePresentation) and has an issuer.
 func (cv CredentialValidator) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error) {
 	// Version gate: reject credentials whose VC Data Model version is not allowed.
-	if len(cv.vcDataModelVersions) > 0 {
+	// Only credentials that declare a @context participate in the W3C data model
+	// versioning; SD-JWT VCs carry none and are validated through their `vct` type.
+	if len(cv.vcDataModelVersions) > 0 && isVersionedDataModelCredential(verifiableCredential) {
 		detectedVersions := common.DetectVCDataModelVersion(verifiableCredential.Contents().Context)
 		if !hasOverlap(detectedVersions, cv.vcDataModelVersions) {
 			logging.Log().Warnf("Credential validation failed: detected VC Data Model version(s) %v not in allowed list %v",
@@ -206,6 +211,19 @@ func hasOverlap(a, b []string) bool {
 		}
 	}
 	return false
+}
+
+// isVersionedDataModelCredential reports whether the credential takes part in the
+// W3C VC Data Model versioning, i.e. whether it declares a @context at all.
+//
+// Only JSON-LD based credentials (`ldp_vc`, `jwt_vc_json`) carry a @context and
+// therefore a data model version. An SD-JWT VC (`dc+sd-jwt` / `vc+sd-jwt`) is an
+// IETF credential whose type is given by the `vct` claim; it has no @context and
+// no data model version, so the vcDataModelVersions allowlist does not apply to
+// it. A credential declaring an unknown @context still participates and is
+// rejected by the version gate.
+func isVersionedDataModelCredential(credential *common.Credential) bool {
+	return len(credential.Contents().Context) > 0
 }
 
 // validateCredentialDates checks validFrom and validUntil against now, both bounds inclusive:

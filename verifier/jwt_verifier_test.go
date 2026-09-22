@@ -565,11 +565,20 @@ func TestValidateVC_VCDataModelVersionFiltering(t *testing.T) {
 			wantErr:             ErrorVCDataModelVersionNotAccepted,
 		},
 		{
-			name:                "empty context rejected when config allows both — mode none",
+			// A credential without any @context is not a W3C Data Model credential
+			// (e.g. an SD-JWT VC), so the version gate does not apply to it.
+			name:                "context-less credential accepted when config allows both — mode none",
 			contexts:            []string{},
 			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
 			validationMode:      ValidationModeNone,
-			wantErr:             ErrorVCDataModelVersionNotAccepted,
+			wantErr:             nil,
+		},
+		{
+			name:                "context-less credential accepted when config allows only 2.0 — mode none",
+			contexts:            nil,
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             nil,
 		},
 		{
 			name:                "unknown context rejected when config allows both — mode combined",
@@ -646,6 +655,37 @@ func TestValidateVC_EmptyVersionConfig_SkipsVersionCheck(t *testing.T) {
 	}
 	if !result {
 		t.Fatal("expected result=true when vcDataModelVersions is nil")
+	}
+}
+
+// TestValidateVC_SdJwtCredentialSkipsVersionCheck ensures that a credential built
+// from SD-JWT claims — which carries no @context, only a `vct` type — passes the
+// version gate even when the allowlist is fully populated (the default).
+func TestValidateVC_SdJwtCredentialSkipsVersionCheck(t *testing.T) {
+	parser := ConfigurableSdJwtParser{}
+	cred, err := parser.ClaimsToCredential(map[string]interface{}{
+		common.JWTClaimIss: "did:key:zDnaefBaD8o4NH1CdozDSkRujXpL5hYs4CPsN12oycxBq8jLf",
+		common.JWTClaimVct: "CustomerCredential",
+		"familyName":       "Doe",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error building the SD-JWT credential: %v", err)
+	}
+
+	for _, mode := range []string{ValidationModeNone, ValidationModeCombined, ValidationModeJsonLd} {
+		t.Run(mode, func(t *testing.T) {
+			validator := CredentialValidator{
+				validationMode:      mode,
+				vcDataModelVersions: common.VCDataModelVersionAll(),
+			}
+			result, err := validator.ValidateVC(cred, nil)
+			if err != nil {
+				t.Fatalf("expected no error for an SD-JWT credential, got %v", err)
+			}
+			if !result {
+				t.Fatal("expected an SD-JWT credential to be accepted")
+			}
+		})
 	}
 }
 

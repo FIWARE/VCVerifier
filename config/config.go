@@ -245,7 +245,9 @@ type Verifier struct {
 	// VCDataModelVersions lists which W3C VC Data Model versions the verifier
 	// accepts for incoming credentials. Recognized values are "1.1" (VC Data
 	// Model v1.1) and "2.0" (VC Data Model v2.0). When empty or unset, both
-	// versions are accepted (the default).
+	// versions are accepted (the default). The allowlist only applies to
+	// credentials that declare a @context; SD-JWT VCs have none and are not
+	// filtered by it.
 	VCDataModelVersions []string `mapstructure:"vcDataModelVersions"`
 	// RefreshToken groups all refresh token configuration.
 	RefreshToken RefreshToken `mapstructure:"refreshToken"`

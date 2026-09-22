@@ -19,6 +19,9 @@ verifier:
     # To restrict to a single version, specify only that version:
     #   vcDataModelVersions:
     #     - "1.1"
+    # The option only applies to JSON-LD based credentials (ldp_vc, jwt_vc_json),
+    # which declare a @context. SD-JWT VCs (dc+sd-jwt, vc+sd-jwt) carry no @context
+    # and no data model version, so they are never filtered by this option.
     policies:
         default:
             SignaturePolicy: {}
