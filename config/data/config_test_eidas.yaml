@@ -1,0 +1,10 @@
+server:
+  port: 3000
+
+eidas:
+  enabled: true
+  lotlUrl: "https://custom-lotl.example.com/lotl.xml"
+  refreshInterval: 43200
+  countries:
+    - "DE"
+    - "FR"

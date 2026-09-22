@@ -151,3 +151,107 @@ func TestServiceBackedCredentialsConfig_GetCredentialStatusConfig_DefaultsAreOn(
 	assert.Empty(t, got.AcceptedPurposes, "zero-value CredentialStatus must have no accepted purposes")
 	assert.False(t, got.RequireStatus, "zero-value CredentialStatus must not require a status entry")
 }
+
+// TestServiceBackedCredentialsConfig_GetEidasConfig exercises the table-driven
+// behaviour of `GetEidasConfig` for known/unknown services, scopes and credential
+// types and for credentials that do / do not declare an `eidasConfig` block.
+func TestServiceBackedCredentialsConfig_GetEidasConfig(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	enabledEidas := &config.EidasConfig{
+		Enabled:          true,
+		AllowedCountries: []string{"DE", "FR"},
+	}
+
+	type testCase struct {
+		name           string
+		service        config.ConfiguredService
+		queryService   string
+		queryScope     string
+		queryType      string
+		expectedConfig *config.EidasConfig
+	}
+
+	tests := []testCase{
+		{
+			name: "known credential type with explicit eidasConfig returns the configured block",
+			service: newServiceWithCredentials(config.Credential{
+				Type:        testStatusCredentialType,
+				EidasConfig: enabledEidas,
+			}),
+			queryService:   testStatusServiceID,
+			queryScope:     testStatusScope,
+			queryType:      testStatusCredentialType,
+			expectedConfig: enabledEidas,
+		},
+		{
+			name: "known credential type without eidasConfig returns nil",
+			service: newServiceWithCredentials(config.Credential{
+				Type: testStatusCredentialType,
+			}),
+			queryService:   testStatusServiceID,
+			queryScope:     testStatusScope,
+			queryType:      testStatusCredentialType,
+			expectedConfig: nil,
+		},
+		{
+			name: "unknown credential type returns nil with no error",
+			service: newServiceWithCredentials(config.Credential{
+				Type:        testStatusCredentialType,
+				EidasConfig: enabledEidas,
+			}),
+			queryService:   testStatusServiceID,
+			queryScope:     testStatusScope,
+			queryType:      testStatusUnknownCredType,
+			expectedConfig: nil,
+		},
+		{
+			name: "unknown scope returns nil with no error",
+			service: newServiceWithCredentials(config.Credential{
+				Type:        testStatusCredentialType,
+				EidasConfig: enabledEidas,
+			}),
+			queryService:   testStatusServiceID,
+			queryScope:     "other-scope",
+			queryType:      testStatusCredentialType,
+			expectedConfig: nil,
+		},
+		{
+			name: "unknown service returns nil with no error",
+			service: newServiceWithCredentials(config.Credential{
+				Type:        testStatusCredentialType,
+				EidasConfig: enabledEidas,
+			}),
+			queryService:   testStatusUnknownService,
+			queryScope:     testStatusScope,
+			queryType:      testStatusCredentialType,
+			expectedConfig: nil,
+		},
+		{
+			name: "eidasConfig with requireQualified explicitly false",
+			service: newServiceWithCredentials(config.Credential{
+				Type: testStatusCredentialType,
+				EidasConfig: &config.EidasConfig{
+					Enabled:          true,
+					RequireQualified: boolPtr(false),
+				},
+			}),
+			queryService:   testStatusServiceID,
+			queryScope:     testStatusScope,
+			queryType:      testStatusCredentialType,
+			expectedConfig: &config.EidasConfig{Enabled: true, RequireQualified: boolPtr(false)},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			seedServiceCache(t, tc.service)
+
+			cc := ServiceBackedCredentialsConfig{}
+			got, err := cc.GetEidasConfig(tc.queryService, tc.queryScope, tc.queryType)
+
+			assert.NoError(t, err, "GetEidasConfig must never return an error for missing entries")
+			assert.Equal(t, tc.expectedConfig, got)
+		})
+	}
+}
