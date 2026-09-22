@@ -1,7 +1,7 @@
 package verifier
 
 import (
-	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,7 +12,6 @@ import (
 	"github.com/fiware/VCVerifier/common"
 	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/did"
-	"github.com/fiware/VCVerifier/jades"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/hellofresh/health-go/v5"
 	"github.com/lestrrat-go/jwx/v3/jwk"
@@ -27,8 +26,6 @@ const ldDocLoaderCacheTTL = 1 * time.Hour
 // the JSON-LD document loader cache.
 const ldDocLoaderCacheCleanup = 10 * time.Minute
 
-var ErrorNoValidationEndpoint = errors.New("no_validation_endpoint_configured")
-var ErrorNoValidationHost = errors.New("no_validation_host_configured")
 var ErrorInvalidSdJwt = errors.New("credential_is_not_sd_jwt")
 var ErrorPresentationNoCredentials = errors.New("presentation_not_contains_credentials")
 var ErrorInvalidProof = errors.New("invalid_vp_proof")
@@ -156,37 +153,12 @@ func GetPresentationParser() PresentationParser {
 	return presentationParser
 }
 
-// init the presentation parser depending on the config, either with or without did:elsi support
+// InitPresentationParser initialises the presentation parser from the
+// given configuration. It sets up the DID registry, HTTPS issuer resolver,
+// JWT proof checker and LD proof checker used for all subsequent VP/VC
+// verification.
 func InitPresentationParser(config *configModel.Configuration, healthCheck *health.Health) error {
-	elsiConfig := &config.Elsi
-	err := validateConfig(elsiConfig)
-	if err != nil {
-		logging.Log().Warnf("No valid elsi configuration provided. Error: %v", err)
-		return err
-	}
-
 	registry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
-
-	var jAdESValidator jades.JAdESValidator
-	if elsiConfig.Enabled {
-		externalValidator := &jades.ExternalJAdESValidator{
-			HttpClient:        &http.Client{},
-			ValidationAddress: buildAddress(elsiConfig.ValidationEndpoint.Host, elsiConfig.ValidationEndpoint.ValidationPath),
-			HealthAddress:     buildAddress(elsiConfig.ValidationEndpoint.Host, elsiConfig.ValidationEndpoint.HealthPath),
-		}
-		jAdESValidator = externalValidator
-
-		if err := healthCheck.Register(health.Config{
-			Name:      "JAdES-Validator",
-			Timeout:   time.Second * 5,
-			SkipOnErr: false,
-			Check: func(ctx context.Context) error {
-				return externalValidator.IsReady()
-			},
-		}); err != nil {
-			logging.Log().Errorf("Failed to register JAdES-Validator health check: %v", err)
-		}
-	}
 
 	// Create the HTTPS issuer resolver for metadata-based key discovery.
 	// Uses a dedicated cache with the same cleanup pattern as other verifier caches.
@@ -196,7 +168,7 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 		WithAllowPrivateAddresses(config.Verifier.HttpsIssuerAllowPrivateNetworks)
 	globalHttpsIssuerResolver = httpsResolver
 
-	checker := NewJWTProofChecker(registry, jAdESValidator).WithHttpsResolver(httpsResolver)
+	checker := NewJWTProofChecker(registry).WithHttpsResolver(httpsResolver)
 	globalProofChecker = checker
 
 	// Set up the document loader for JSON-LD context resolution and create
@@ -224,24 +196,6 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 
 	return nil
 }
-
-func validateConfig(elsiConfig *configModel.Elsi) error {
-	if !elsiConfig.Enabled {
-		return nil
-	}
-	if elsiConfig.ValidationEndpoint == nil {
-		return ErrorNoValidationEndpoint
-	}
-	if elsiConfig.ValidationEndpoint.Host == "" {
-		return ErrorNoValidationHost
-	}
-	return nil
-}
-
-func buildAddress(host, path string) string {
-	return strings.TrimSuffix(host, "/") + "/" + strings.TrimPrefix(path, "/")
-}
-
 // ParsePresentation parses a VP from either JWT or JSON-LD format and
 // verifies it. JWT VPs are verified via the configured JWTProofChecker,
 // JSON-LD VPs via the configured LDProofChecker. Both paths are fail-closed:
@@ -329,7 +283,8 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 	return pres, nil
 }
 
-// parseJWTCredential parses and verifies a JWT-encoded VC.
+// parseJWTCredential parses and verifies a JWT-encoded VC and sets the
+// credential format to FormatJWTVC.
 func (cpp *ConfigurablePresentationParser) parseJWTCredential(tokenBytes []byte) (*common.Credential, error) {
 	var payload []byte
 	var err error
@@ -347,7 +302,12 @@ func (cpp *ConfigurablePresentationParser) parseJWTCredential(tokenBytes []byte)
 		return nil, err
 	}
 
-	return jwtClaimsToCredential(claims)
+	cred, err := jwtClaimsToCredential(claims)
+	if err != nil {
+		return nil, err
+	}
+	cred.SetFormat(common.FormatJWTVC)
+	return cred, nil
 }
 
 // jwtClaimsToCredential maps JWT VC claims to a common.Credential.
@@ -886,6 +846,7 @@ func parseJSONLDCredential(vcMap map[string]interface{}) (*common.Credential, er
 		cred.SetProofs(proofs)
 	}
 
+	cred.SetFormat(common.FormatLDPVC)
 	return cred, nil
 }
 
@@ -927,7 +888,12 @@ func (sjp *ConfigurableSdJwtParser) ClaimsToCredential(claims map[string]interfa
 		contents.ValidUntil = &t
 	}
 
-	return common.CreateCredential(contents, common.CustomFields{})
+	cred, err := common.CreateCredential(contents, common.CustomFields{})
+	if err != nil {
+		return nil, err
+	}
+	cred.SetFormat(common.FormatSDJWT)
+	return cred, nil
 }
 
 func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentation *common.Presentation, err error) {
@@ -992,6 +958,13 @@ func (sjp *ConfigurableSdJwtParser) ParseWithSdJwt(tokenBytes []byte) (presentat
 			logging.Log().Warnf("Failed to create credential from SD-JWT claims: %v", err)
 			return nil, err
 		}
+		// Extract and parse x5c certificates from the SD-JWT header so
+		// downstream validators (e.g. eIDAS) can use the already-parsed
+		// certificates directly. Not every SD-JWT carries an x5c header,
+		// so extraction failures are silently ignored here.
+		if x5cCerts := parseX5CCertificates([]byte(vcString)); len(x5cCerts) > 0 {
+			credential.SetX5CCertificates(x5cCerts)
+		}
 		presentation.AddCredentials(credential)
 	}
 
@@ -1044,4 +1017,27 @@ func verifyCnfBinding(cred *common.Credential, holderKey jwk.Key) error {
 	}
 
 	return nil
+}
+
+// parseX5CCertificates extracts and parses the x5c certificate chain from an
+// SD-JWT token's header. Returns the parsed certificates (leaf first, then
+// intermediates), or nil if the token has no x5c header or parsing fails.
+// This function is intentionally lenient: it returns nil instead of an error
+// because not every SD-JWT carries an x5c header.
+func parseX5CCertificates(token []byte) []*x509.Certificate {
+	x5cStrings, err := extractX5CFromToken(token)
+	if err != nil || len(x5cStrings) == 0 {
+		return nil
+	}
+
+	certs := make([]*x509.Certificate, 0, len(x5cStrings))
+	for _, certB64 := range x5cStrings {
+		cert, err := parseCertificate(certB64)
+		if err != nil {
+			logging.Log().Debugf("parseX5CCertificates: skipping unparseable certificate: %v", err)
+			return nil
+		}
+		certs = append(certs, cert)
+	}
+	return certs
 }

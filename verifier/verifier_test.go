@@ -345,6 +345,19 @@ func (mcc mockCredentialConfig) GetCredentialStatusConfig(serviceIdentifier stri
 	return credentialStatus, err
 }
 
+func (mcc mockCredentialConfig) GetEidasConfig(serviceIdentifier string, scope string, credentialType string) (eidasConfig *configModel.EidasConfig, err error) {
+	if mcc.mockError != nil {
+		return nil, mcc.mockError
+	}
+
+	for _, credential := range mcc.mockScopes[serviceIdentifier][scope].Credentials {
+		if credential.Type == credentialType {
+			return credential.EidasConfig, err
+		}
+	}
+	return nil, err
+}
+
 func (msc *mockSessionCache) Add(k string, x interface{}, d time.Duration) error {
 	if msc.errorToThrow != nil {
 		return msc.errorToThrow

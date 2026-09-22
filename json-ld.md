@@ -18,7 +18,7 @@ All signature verification goes through a single component, `verifier.JWTProofCh
 |---|---|---|
 | JWT VP containing JWT VCs (`jwt_vc_json`) | yes — VP signature + every embedded VC signature | `parseJWTPresentation` (`verifier/presentation_parser.go:152`) |
 | SD-JWT VCs (`vc+sd-jwt`, `dc+sd-jwt`) | yes | `ConfigurableSdJwtParser.ParseWithSdJwt` |
-| `did:elsi` credentials | yes — JAdES / X.509 chain via `jades` | `JWTProofChecker.verifyElsiJWT` (`verifier/jwt_proof_checker.go:154`) |
+| `did:elsi` credentials | yes — JWS signature over the `x5c` leaf + X.509 chain to an eIDAS trust-list CA | `JWTProofChecker.verifyElsiJWT` (`verifier/jwt_proof_checker.go`) |
 | Holder binding (`cnf`, RFC 7800) | yes, when a VP JWT key was resolved | `verifyCnfBinding` (`verifier/presentation_parser.go:547`) |
 | **JSON-LD VP with LD proof** | **no** | `parseJSONLDPresentation` (`verifier/presentation_parser.go:334`) |
 | **JSON-LD VC with LD proof (`ldp_vc`)** | **no** | `parseJSONLDCredential` (`verifier/presentation_parser.go:403`) |
@@ -201,9 +201,9 @@ Constraints worth writing down in the implementation:
   (`:68`) does.
 * Enforce it in the JSON-LD paths listed under C5, so those paths fail closed once a
   checker is available.
-* Decide explicitly what happens for `did:elsi` in the JSON-LD case — the JAdES validator
-  is JWS-based and does not apply to LD proofs. Most likely: reject `did:elsi` + `ldp_vc`
-  as an unsupported combination.
+* `did:elsi` in the JSON-LD case is settled: it is rejected. did:elsi is JWS/X.509-based
+  and does not apply to LD proofs, so the key resolver fails closed with
+  `ErrorDidElsiNotSupportedForLDProof` (`verifier/key_resolver.go`).
 
 ### W4 — Restore JSON-LD content validation (optional, ties into C1)
 

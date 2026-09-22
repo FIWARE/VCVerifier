@@ -267,6 +267,9 @@ type CredentialDB struct {
 	// revocation check is performed for credentials of this type, preserving
 	// prior behaviour for configurations that do not opt in.
 	CredentialStatus config.CredentialStatus `json:"credentialStatus,omitempty" mapstructure:"credentialStatus,omitempty"`
+	// EidasConfig holds the per-credential eIDAS 2.0 trust list validation
+	// configuration. When nil, eIDAS validation is not performed.
+	EidasConfig *config.EidasConfig `json:"eidasConfig,omitempty" mapstructure:"eidasConfig,omitempty"`
 }
 
 // VO converts a CredentialDB into its config.Credential value object, mapping
@@ -305,6 +308,7 @@ func (cred CredentialDB) VO() config.Credential {
 		RequireCompliance:        cred.RequireCompliance,
 		JwtInclusion:             cred.JwtInclusion,
 		CredentialStatus:         cred.CredentialStatus,
+		EidasConfig:              cred.EidasConfig,
 	}
 }
 
@@ -342,6 +346,7 @@ func (c CredentialDB) FromVO(cv config.Credential) CredentialDB {
 		RequireCompliance:   cv.RequireCompliance,
 		JwtInclusion:        cv.JwtInclusion,
 		CredentialStatus:    cv.CredentialStatus,
+		EidasConfig:         cv.EidasConfig,
 	}
 }
 

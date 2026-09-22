@@ -486,6 +486,49 @@ func TestTrustedIssuersListsDecodeHook(t *testing.T) {
 	})
 }
 
+// TestEidasConfig_IsRequireQualified verifies the defaulting logic for the
+// RequireQualified pointer field on EidasConfig.
+func TestEidasConfig_IsRequireQualified(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	tests := []struct {
+		name     string
+		config   EidasConfig
+		expected bool
+	}{
+		{
+			name:     "nil pointer defaults to true (require qualified)",
+			config:   EidasConfig{Enabled: true, RequireQualified: nil},
+			expected: true,
+		},
+		{
+			name:     "explicit true returns true",
+			config:   EidasConfig{Enabled: true, RequireQualified: &trueVal},
+			expected: true,
+		},
+		{
+			name:     "explicit false returns false",
+			config:   EidasConfig{Enabled: true, RequireQualified: &falseVal},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, tc.config.IsRequireQualified())
+		})
+	}
+
+	// Verify nil receiver safety — GetEidasConfig legitimately returns nil,
+	// so callers must be able to chain .IsRequireQualified() without a panic.
+	t.Run("nil receiver defaults to true", func(t *testing.T) {
+		var nilConfig *EidasConfig
+		assert.True(t, nilConfig.IsRequireQualified(),
+			"nil *EidasConfig should default to requiring qualified trust services")
+	})
+}
+
 func Test_DCQL_MarshalJSON_OmitsUnsetOptionalArrays(t *testing.T) {
 	dcql := DCQL{Credentials: []CredentialQuery{{Id: "my-cred"}}}
 

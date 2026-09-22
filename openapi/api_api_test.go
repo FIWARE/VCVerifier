@@ -653,7 +653,7 @@ func TestIsSdJWT_MapsValidityDates(t *testing.T) {
 
 func newTestProofChecker() *verifier.JWTProofChecker {
 	registry := did.NewRegistry(did.WithVDR(did.NewWebVDR()), did.WithVDR(did.NewKeyVDR()), did.WithVDR(did.NewJWKVDR()))
-	return verifier.NewJWTProofChecker(registry, nil)
+	return verifier.NewJWTProofChecker(registry)
 }
 
 // ecKeyToDidKey encodes a P-256 public key as a did:key identifier.

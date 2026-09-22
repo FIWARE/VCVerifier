@@ -74,7 +74,7 @@ The test harness starts lightweight `httptest.Server` instances before launching
 
 - **TIR (Trusted Issuers Registry)** — mock server at a random port, handles `GET /v4/issuers/<did>` returning `TrustedIssuer` JSON or 404. Also handles `GET /v4/issuers` for IsTrustedParticipant calls (returns 200 if DID is trusted, 404 otherwise).
 - **did:web resolution** — mock server serving `GET /.well-known/did.json` for the did:web issuer test case. The `did:web` DID is derived from the mock server's `localhost:<port>` address.
-- (Gaia-X and JAdES mocks are not needed for the defined test flows — they can be added later.)
+- (Gaia-X and eIDAS trust-list mocks are not needed for the defined test flows — they can be added later.)
 
 #### Config generation with DCQL
 
