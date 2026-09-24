@@ -32,6 +32,27 @@ contexts. SD-JWT VCs are unaffected — they are exempt from the check.
 The rejection is logged with the credential id and the `@context` that was seen, so an affected
 credential can be identified from the logs.
 
+## 🔒 Security Fix — signing key is now bound to the claimed issuer
+
+A JWT credential's signing key is resolved from the `kid` header, while the issuer it
+asserts is read from the `iss` claim. Nothing required the two to agree, so a credential
+signed with a self-generated key (`kid: did:jwk:<own key>#0`) while claiming an unrelated
+issuer (`iss: did:web:trusted.issuer.example.com`) verified successfully and was parsed
+with the **claimed** issuer. Since the trusted-issuer and trusted-participant lookups key
+off the credential's issuer, such a credential could be attributed to any issuer a
+deployment trusts.
+
+`JWTProofChecker.VerifyJWTAndReturnKey` now rejects a token whose `kid` names a DID
+different from its `iss` claim, with `issuer_key_mismatch`. This affects every JWT path:
+`jwt_vc` credentials, JWT presentations and SD-JWT VCs. A `kid` that is not a DID (a bare
+key id or a relative fragment) asserts no identity and is not compared, so those tokens
+are unaffected. The JSON-LD path already bound the proof key to the credential issuer.
+
+Legitimate credentials whose `kid` and `iss` name the same DID, or whose `kid` is a bare
+key id, continue to verify unchanged. A deployment that was (knowingly or not) accepting
+credentials signed by a key belonging to a DID other than the issuer will see them
+rejected.
+
 ## New Features
 
 ### VC Data Model 2.0 context

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/eidas"
 	"github.com/fiware/VCVerifier/logging"
@@ -655,30 +656,39 @@ func TestVerifyJWT_DidElsi_DispatchesToElsiPath(t *testing.T) {
 
 func TestVerifyJWT_DidElsi_KidElsiButIssMismatch(t *testing.T) {
 	// When the kid header carries a did:elsi DID but the iss claim does not
-	// start with "did:elsi:", the guard rejects the token with ErrorNoDIDInJWT.
-	// This prevents a malformed JWT where kid: "did:elsi:A#k" and iss: "did:web:B"
-	// from entering the elsi path with a non-elsi issuer.
+	// start with "did:elsi:", the token is rejected. This prevents a malformed
+	// JWT where kid: "did:elsi:A#k" and iss: "did:web:B" from entering the elsi
+	// path with a non-elsi issuer.
+	//
+	// A kid naming a different DID than iss is caught by the general kid/iss
+	// binding check before the elsi dispatch is reached, so it surfaces as
+	// ErrorIssuerKeyMismatch. What the elsi guard itself still catches is a
+	// did:elsi kid with no iss claim to be authoritative.
 	privKey, _ := generateTestECKeyPair(t, "")
 
 	tests := []struct {
-		name string
-		kid  string
-		iss  string
+		name    string
+		kid     string
+		iss     string
+		wantErr error
 	}{
 		{
-			name: "kid is did:elsi but iss is did:web",
-			kid:  "did:elsi:VATES-B12345678#key-1",
-			iss:  "did:web:example.com",
+			name:    "kid is did:elsi but iss is did:web",
+			kid:     "did:elsi:VATES-B12345678#key-1",
+			iss:     "did:web:example.com",
+			wantErr: ErrorIssuerKeyMismatch,
 		},
 		{
-			name: "kid is did:elsi but iss is HTTPS URL",
-			kid:  "did:elsi:VATES-B12345678#key-1",
-			iss:  "https://issuer.example.com",
+			name:    "kid is did:elsi but iss is HTTPS URL",
+			kid:     "did:elsi:VATES-B12345678#key-1",
+			iss:     "https://issuer.example.com",
+			wantErr: ErrorIssuerKeyMismatch,
 		},
 		{
-			name: "kid is did:elsi but iss is empty",
-			kid:  "did:elsi:VATES-B12345678#key-1",
-			iss:  "",
+			name:    "kid is did:elsi but iss is empty",
+			kid:     "did:elsi:VATES-B12345678#key-1",
+			iss:     "",
+			wantErr: ErrorNoDIDInJWT,
 		},
 	}
 
@@ -693,7 +703,7 @@ func TestVerifyJWT_DidElsi_KidElsiButIssMismatch(t *testing.T) {
 			checker := NewJWTProofChecker(registry).WithTrustStore(store)
 
 			_, _, err := checker.VerifyJWTAndReturnKey(token)
-			assert.ErrorIs(t, err, ErrorNoDIDInJWT)
+			assert.ErrorIs(t, err, tc.wantErr)
 		})
 	}
 }
@@ -837,4 +847,98 @@ func generateExpiredLeafCert(t *testing.T, caCert *x509.Certificate, caKey *ecds
 	require.NoError(t, err)
 
 	return leafCert, leafKey
+}
+
+// TestVerifyJWT_KidIssBinding pins the binding between the key a JWT is signed
+// with and the identity it claims.
+//
+// The signing key is resolved from the `kid` header, while the issuer of a
+// credential (and the holder of a presentation) is read from the `iss` claim.
+// Without a check that the two name the same DID, a self-generated key would
+// authenticate a document attributed to an arbitrary issuer: nothing downstream
+// re-checks who actually signed it, and the trust registry lookups key off the
+// credential's issuer.
+func TestVerifyJWT_KidIssBinding(t *testing.T) {
+	signerKey, signerDID := generateTestKeyAndDIDJWK(t)
+
+	tests := []struct {
+		name    string
+		kid     string
+		iss     string
+		wantErr error
+	}{
+		{
+			// The forgery: signed with a key the attacker generated, attributed
+			// to an issuer they do not control.
+			name:    "kid DID differs from iss DID",
+			kid:     signerDID + "#0",
+			iss:     "did:web:trusted.issuer.example.com",
+			wantErr: ErrorIssuerKeyMismatch,
+		},
+		{
+			name:    "kid DID differs from an HTTPS iss",
+			kid:     signerDID + "#0",
+			iss:     "https://trusted.issuer.example.com",
+			wantErr: ErrorIssuerKeyMismatch,
+		},
+		{
+			// A kid that is not a DID asserts no identity of its own, so iss
+			// decides on its own and the two are not compared. "0" is the
+			// verification method id the did:jwk document declares.
+			name:    "bare key id is not compared to iss",
+			kid:     "0",
+			iss:     signerDID,
+			wantErr: nil,
+		},
+		{
+			name:    "matching kid and iss",
+			kid:     signerDID + "#0",
+			iss:     signerDID,
+			wantErr: nil,
+		},
+		{
+			// Only the kid names an identity; it is used as the issuer.
+			name:    "kid DID with no iss claim",
+			kid:     signerDID + "#0",
+			iss:     "",
+			wantErr: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]interface{}{}
+			if tc.iss != "" {
+				payload[common.JWTClaimIss] = tc.iss
+			}
+			token := signTestJWT(t, signerKey, tc.kid, payload)
+
+			checker := NewJWTProofChecker(did.NewRegistry(did.WithVDR(did.NewJWKVDR())))
+			_, _, err := checker.VerifyJWTAndReturnKey(token)
+
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// generateTestKeyAndDIDJWK creates an EC key pair and the did:jwk DID of its
+// public key, which the JWK VDR resolves without any network access.
+func generateTestKeyAndDIDJWK(t *testing.T) (privateKey jwk.Key, didJWK string) {
+	t.Helper()
+	raw, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	privateKey, err = jwk.Import(raw)
+	require.NoError(t, err)
+
+	publicJWK, err := jwk.Import(&raw.PublicKey)
+	require.NoError(t, err)
+	publicJSON, err := json.Marshal(publicJWK)
+	require.NoError(t, err)
+
+	return privateKey, "did:jwk:" + base64.RawURLEncoding.EncodeToString(publicJSON)
 }

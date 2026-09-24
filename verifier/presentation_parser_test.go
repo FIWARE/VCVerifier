@@ -1834,3 +1834,35 @@ func TestValidateVC_StringContextIsGated(t *testing.T) {
 	assert.False(t, result, "a v1.1 credential must not pass a 2.0-only allowlist")
 	assert.ErrorIs(t, err, ErrorVCDataModelVersionNotAccepted)
 }
+
+// TestParseJWTCredential_RejectsIssuerSubstitution is the end-to-end regression
+// test for credential forgery via a kid/iss mismatch.
+//
+// The credential is signed with a key the presenter generated themselves and
+// names an unrelated issuer in the iss claim. Before the kid/iss binding check,
+// the signature verified against the presenter's own DID while the resulting
+// credential carried the claimed issuer — which is what the trusted-issuer
+// registry lookups key off, so a credential could be attributed to any trusted
+// issuer.
+func TestParseJWTCredential_RejectsIssuerSubstitution(t *testing.T) {
+	signerKey, signerDID := generateTestKeyAndDIDJWK(t)
+
+	payload := map[string]interface{}{
+		common.JWTClaimIss: "did:web:trusted.issuer.example.com",
+		common.JWTClaimVC: map[string]interface{}{
+			common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV1},
+			common.JSONLDKeyType:    []interface{}{"VerifiableCredential"},
+			"credentialSubject":     map[string]interface{}{"id": "did:web:subject.example.com"},
+		},
+	}
+	token := signTestJWT(t, signerKey, signerDID+"#0", payload)
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker: NewJWTProofChecker(did.NewRegistry(did.WithVDR(did.NewJWKVDR()))),
+	}
+	cred, err := parser.parseJWTCredential(token)
+
+	assert.ErrorIs(t, err, ErrorIssuerKeyMismatch,
+		"a credential signed by a key unrelated to its claimed issuer must be rejected")
+	assert.Nil(t, cred)
+}
