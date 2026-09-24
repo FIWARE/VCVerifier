@@ -445,27 +445,38 @@ var contextToVersion = map[string]string{
 	ContextCredentialsV2: VCDataModelVersion20,
 }
 
-// DetectVCDataModelVersion inspects a credential's or presentation's @context
-// array and returns a slice of detected VC Data Model version identifiers
-// ("1.1", "2.0", or both). Returns an empty slice when no recognized context
-// URL is found or when the input is empty. The returned order follows the
-// constant declaration order (1.1 before 2.0), not the order of contexts.
+// DetectVCDataModelVersion returns the VC Data Model version a credential or
+// presentation declares, derived from the FIRST entry of its @context.
+//
+// Both data models pin their base context to that position: VC Data Model 2.0 §4.3
+// requires the first item to be https://www.w3.org/ns/credentials/v2, and VC Data
+// Model 1.1 §4.1 requires the same for https://www.w3.org/2018/credentials/v1. A
+// base context appearing anywhere else does not determine the version, so it is not
+// matched - otherwise an arbitrary document could claim a version by appending the
+// base context after its own.
+//
+// The result is returned as a slice, holding at most one version, so that callers can
+// treat "no version declared" and "version declared" uniformly. It is empty when:
+//   - the @context is empty, or
+//   - the first entry is not a recognized base context, or
+//   - a base context of a DIFFERENT version follows the first: a document declaring
+//     both base contexts is valid under neither data model and must not satisfy either
+//     allowlist. A repetition of the same base context is redundant but unambiguous,
+//     and stays accepted.
 func DetectVCDataModelVersion(contexts []string) []string {
-	found := make(map[string]bool, len(contextToVersion))
-	for _, ctx := range contexts {
-		if ver, ok := contextToVersion[ctx]; ok {
-			found[ver] = true
+	if len(contexts) == 0 {
+		return nil
+	}
+	version, isBaseContext := contextToVersion[contexts[0]]
+	if !isBaseContext {
+		return nil
+	}
+	for _, ctx := range contexts[1:] {
+		if otherVersion, isBaseContext := contextToVersion[ctx]; isBaseContext && otherVersion != version {
+			return nil
 		}
 	}
-
-	// Return in a stable order matching VCDataModelVersionAll().
-	var result []string
-	for _, ver := range VCDataModelVersionAll() {
-		if found[ver] {
-			result = append(result, ver)
-		}
-	}
-	return result
+	return []string{version}
 }
 
 // typedIDsToJSON converts a slice of TypedID to JSON-compatible format.

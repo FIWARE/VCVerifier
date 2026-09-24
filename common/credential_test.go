@@ -459,9 +459,45 @@ func TestDetectVCDataModelVersion(t *testing.T) {
 			want:     []string{VCDataModelVersion20},
 		},
 		{
-			name:     "Both V1 and V2 contexts present",
+			name:     "V2 base context with proof suite context",
+			contexts: []string{ContextCredentialsV2, "https://w3id.org/security/suites/jws-2020/v1"},
+			want:     []string{VCDataModelVersion20},
+		},
+		{
+			// Both data models require their base context to be the FIRST entry,
+			// so one appearing later does not declare a version.
+			name:     "V2 base context not in first position",
+			contexts: []string{"https://example.com/custom/v1", ContextCredentialsV2},
+			want:     []string{},
+		},
+		{
+			name:     "V1 base context not in first position",
+			contexts: []string{"https://example.com/custom/v1", ContextCredentialsV1},
+			want:     []string{},
+		},
+		{
+			// A document declaring both base contexts is valid under neither data
+			// model and must not satisfy either allowlist.
+			name:     "Both V1 and V2 contexts present, V2 first",
 			contexts: []string{ContextCredentialsV2, ContextCredentialsV1},
-			want:     []string{VCDataModelVersion11, VCDataModelVersion20},
+			want:     []string{},
+		},
+		{
+			name:     "Both V1 and V2 contexts present, V1 first",
+			contexts: []string{ContextCredentialsV1, ContextCredentialsV2},
+			want:     []string{},
+		},
+		{
+			name:     "Both base contexts with an unrelated context between them",
+			contexts: []string{ContextCredentialsV2, "https://example.com/custom/v1", ContextCredentialsV1},
+			want:     []string{},
+		},
+		{
+			// A repetition of the same base context is redundant but unambiguous:
+			// only a conflicting second base context invalidates the document.
+			name:     "Repeated V2 base context still declares 2.0",
+			contexts: []string{ContextCredentialsV2, ContextCredentialsV2},
+			want:     []string{VCDataModelVersion20},
 		},
 		{
 			name:     "No recognized context",

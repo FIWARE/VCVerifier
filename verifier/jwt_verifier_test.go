@@ -547,15 +547,40 @@ func TestValidateVC_VCDataModelVersionFiltering(t *testing.T) {
 			wantErr:             nil,
 		},
 		{
-			name:                "credential with both V1 and V2 contexts accepted when config allows 1.1",
+			// A document carrying both base contexts is valid under neither data model,
+			// so it must not satisfy either allowlist.
+			name:                "credential with both V1 and V2 contexts rejected when config allows 1.1",
 			contexts:            []string{common.ContextCredentialsV1, common.ContextCredentialsV2},
 			vcDataModelVersions: []string{common.VCDataModelVersion11},
 			validationMode:      ValidationModeNone,
-			wantErr:             nil,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
 		},
 		{
-			name:                "credential with both V1 and V2 contexts accepted when config allows 2.0",
+			name:                "credential with both V1 and V2 contexts rejected when config allows 2.0",
 			contexts:            []string{common.ContextCredentialsV1, common.ContextCredentialsV2},
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "credential with both V1 and V2 contexts rejected when config allows both",
+			contexts:            []string{common.ContextCredentialsV1, common.ContextCredentialsV2},
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			// The base context must lead; a v2 context appended after a custom one
+			// does not make the credential a v2 credential.
+			name:                "V2 base context in second position rejected when config allows 2.0",
+			contexts:            []string{"https://example.com/custom/v1", common.ContextCredentialsV2},
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "V2 base context followed by a suite context accepted when config allows 2.0",
+			contexts:            []string{common.ContextCredentialsV2, "https://w3id.org/security/suites/jws-2020/v1"},
 			vcDataModelVersions: []string{common.VCDataModelVersion20},
 			validationMode:      ValidationModeNone,
 			wantErr:             nil,
