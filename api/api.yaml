@@ -478,17 +478,20 @@ components:
         - vp_token
     VerifiablePresentation:
       description: >-
-        Presentation, containing one or more credentials. Supports both
-        W3C VC Data Model v1.1 (context https://www.w3.org/2018/credentials/v1)
-        and v2.0 (context https://www.w3.org/ns/credentials/v2). The accepted
-        versions are controlled by the verifier.vcDataModelVersions config option.
+        Presentation, containing one or more credentials. Accepts the W3C VC Data
+        Model v1.1 (context https://www.w3.org/2018/credentials/v1) and v2.0
+        (context https://www.w3.org/ns/credentials/v2) data models. The accepted
+        versions are controlled by the verifier.vcDataModelVersions config option,
+        which applies to the contained credentials, not to this envelope.
+        VC-JOSE-COSE presentations (typ vp+jwt, no vp claim) are not supported —
+        see docs/vc-data-model-versions.md.
       type: object
       properties:
         '@context':
           description: >-
-            JSON-LD context URIs. Use https://www.w3.org/2018/credentials/v1
-            for VC Data Model v1.1 or https://www.w3.org/ns/credentials/v2
-            for VC Data Model v2.0.
+            JSON-LD context URIs. The first entry is the base context:
+            https://www.w3.org/2018/credentials/v1 for VC Data Model v1.1 or
+            https://www.w3.org/ns/credentials/v2 for VC Data Model v2.0.
           type: array
           items:
             type: string
@@ -513,19 +516,23 @@ components:
           $ref: '#/components/schemas/Proof'
     VerifiableCredential:
       description: >-
-        Credential in the format ldp_vc. Supports both W3C VC Data Model v1.1
+        Credential in the format ldp_vc. Accepts the W3C VC Data Model v1.1
         (context https://www.w3.org/2018/credentials/v1) and v2.0
-        (context https://www.w3.org/ns/credentials/v2).
+        (context https://www.w3.org/ns/credentials/v2) data models; the version is
+        taken from the first @context entry. Of the securing mechanisms, only the
+        JsonWebSignature2020 Linked Data Proof is verified: DataIntegrityProof
+        cryptosuites, VC-JOSE-COSE (vc+jwt) and enveloped credentials are not
+        supported — see docs/vc-data-model-versions.md.
       type: object
       properties:
         types:
           $ref: '#/components/schemas/CredentialsType'
         '@context':
           description: >-
-            JSON-LD context URIs. For v1.1 credentials use
-            https://www.w3.org/2018/credentials/v1; for v2.0 credentials
-            use https://www.w3.org/ns/credentials/v2. Additional contexts
-            (e.g. proof suites) may follow.
+            JSON-LD context URIs. The FIRST entry determines the data model version
+            and must be https://www.w3.org/2018/credentials/v1 for v1.1 or
+            https://www.w3.org/ns/credentials/v2 for v2.0. Additional contexts
+            (e.g. proof suites) may follow. Declaring both base contexts is invalid.
           type: array
           items:
             type: string

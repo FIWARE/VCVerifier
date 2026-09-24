@@ -1,6 +1,6 @@
 # VCVerifier for SIOP-2/OIDC4VP
 
-VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html#name-cross-device-self-issued-op)/[OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#request_scope) compliant authentication flows. It exchanges [VerfiableCredentials](https://www.w3.org/TR/vc-data-model/) for [JWT](https://www.rfc-editor.org/rfc/rfc7519), that can be used for authorization and authentication in down-stream components.
+VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer [SIOP-2](https://openid.net/specs/openid-connect-self-issued-v2-1_0.html#name-cross-device-self-issued-op)/[OIDC4VP](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#request_scope) compliant authentication flows. It exchanges VerifiableCredentials — [VC Data Model v1.1](https://www.w3.org/TR/vc-data-model/) and [v2.0](https://www.w3.org/TR/vc-data-model-2.0/), see [docs/vc-data-model-versions.md](docs/vc-data-model-versions.md) for the supported scope — for [JWT](https://www.rfc-editor.org/rfc/rfc7519), that can be used for authorization and authentication in down-stream components.
 
 [![FIWARE Security](https://nexus.lab.fiware.org/repository/raw/public/badges/chapters/security.svg)](https://www.fiware.org/developers/catalogue/)
 [![License badge](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -189,6 +189,26 @@ verifier:
     # by default — enable it only when the issuers live in the verifier's own
     # network.
     httpsIssuerAllowPrivateNetworks: false
+    # W3C VC Data Model versions accepted for incoming credentials. Allowed
+    # values are "1.1" (context https://www.w3.org/2018/credentials/v1) and
+    # "2.0" (context https://www.w3.org/ns/credentials/v2). Defaults to both
+    # when unset — an empty list means "all recognized versions", not "accept
+    # anything"; the check cannot be disabled.
+    #
+    # Quote the values: an unquoted YAML list ([1.1, 2.0]) is read as floats,
+    # so "2.0" arrives as "2". Those spellings are normalized, but quoting
+    # avoids the question.
+    #
+    # The version is taken from the FIRST entry of the credential's @context,
+    # as both data models require, so every ldp_vc/jwt_vc credential must lead
+    # with a recognized base context — one that does not is rejected. SD-JWT
+    # VCs are exempt: they carry no @context and are typed via `vct`.
+    #
+    # Applies to incoming credentials only; the presentation envelope's own
+    # @context is not gated. See docs/vc-data-model-versions.md.
+    vcDataModelVersions:
+      - "1.1"
+      - "2.0"
 
 # eIDAS 2.0 trust list verification. When enabled, VCVerifier fetches the EU
 # List of Trusted Lists (LOTL) and caches trust service providers for
