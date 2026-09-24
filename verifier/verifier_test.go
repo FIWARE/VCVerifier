@@ -48,22 +48,130 @@ func TestVerifyConfig(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	type test struct {
-		testName            string
-		configToTest        configModel.Verifier
-		expectedError       error
-		expectedRequestMode string
+		testName                    string
+		configToTest                configModel.Verifier
+		expectedError               error
+		expectedRequestMode         string
+		expectedVCDataModelVersions []string
+	}
+
+	// validBase returns a minimal valid Verifier config for reuse across test
+	// cases that focus on a single field. Callers override the field under test.
+	validBase := func() configModel.Verifier {
+		return configModel.Verifier{
+			Did:            "did:key:verifier",
+			TirAddress:     "http:tir.de",
+			ValidationMode: "none",
+			KeyAlgorithm:   "RS256",
+			SupportedModes: []string{"urlEncoded"},
+			RequestMode:    "urlEncoded",
+		}
 	}
 
 	tests := []test{
-		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}, nil, "urlEncoded"},
-		{"If no TIR is configured, the verification should fail.", configModel.Verifier{Did: "did:key:verifier", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoTIR, ""},
-		{"If no DID is configured, the verification should fail.", configModel.Verifier{TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, ""},
-		{"If no DID and TIR is configured, the verification should fail.", configModel.Verifier{ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, ""},
-		{"If no validation mode is configured, verfication should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", KeyAlgorithm: "RS256"}, ErrorUnsupportedValidationMode, ""},
-		{"If RequestMode is left empty and byReference is supported, it defaults to byReference and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"byReference"}}, nil, "byReference"},
-		{"If RequestMode is left empty and byReference is not supported, it falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}, nil, "urlEncoded"},
-		{"If RequestMode is left empty and byReference is not supported but not the first entry either, it still falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded", "byValue"}}, nil, "urlEncoded"},
-		{"If RequestMode is set to a value outside SupportedModes, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "byValue"}, ErrorRequestModeNotSupported, "byValue"},
+		{"If all mandatory parameters are present, verfication should succeed.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}, nil, "urlEncoded", nil},
+		{"If no TIR is configured, the verification should fail.", configModel.Verifier{Did: "did:key:verifier", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoTIR, "", nil},
+		{"If no DID is configured, the verification should fail.", configModel.Verifier{TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, "", nil},
+		{"If no DID and TIR is configured, the verification should fail.", configModel.Verifier{ValidationMode: "none", KeyAlgorithm: "RS256"}, ErrorNoDID, "", nil},
+		{"If no validation mode is configured, verfication should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", KeyAlgorithm: "RS256"}, ErrorUnsupportedValidationMode, "", nil},
+		{"If RequestMode is left empty and byReference is supported, it defaults to byReference and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"byReference"}}, nil, "byReference", nil},
+		{"If RequestMode is left empty and byReference is not supported, it falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}, nil, "urlEncoded", nil},
+		{"If RequestMode is left empty and byReference is not supported but not the first entry either, it still falls back to the first supported mode and succeeds.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded", "byValue"}}, nil, "urlEncoded", nil},
+		{"If RequestMode is set to a value outside SupportedModes, verification should fail.", configModel.Verifier{Did: "did:key:verifier", TirAddress: "http:tir.de", ValidationMode: "none", KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}, RequestMode: "byValue"}, ErrorRequestModeNotSupported, "byValue", nil},
+		// vcDataModelVersions validation tests
+		{
+			testName: "Empty vcDataModelVersions defaults to all versions.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = nil
+				return c
+			}(),
+			expectedError:               nil,
+			expectedRequestMode:         "urlEncoded",
+			expectedVCDataModelVersions: []string{"1.1", "2.0"},
+		},
+		{
+			testName: "Explicit vcDataModelVersions with only V1.1 is accepted.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{common.VCDataModelVersion11}
+				return c
+			}(),
+			expectedError:               nil,
+			expectedRequestMode:         "urlEncoded",
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion11},
+		},
+		{
+			testName: "Explicit vcDataModelVersions with only V2.0 is accepted.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{common.VCDataModelVersion20}
+				return c
+			}(),
+			expectedError:               nil,
+			expectedRequestMode:         "urlEncoded",
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion20},
+		},
+		{
+			testName: "Explicit vcDataModelVersions with both versions is accepted.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{common.VCDataModelVersion11, common.VCDataModelVersion20}
+				return c
+			}(),
+			expectedError:               nil,
+			expectedRequestMode:         "urlEncoded",
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+		},
+		{
+			testName: "Invalid vcDataModelVersions value is rejected.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{"3.0"}
+				return c
+			}(),
+			expectedError: ErrorUnsupportedVCDataModelVersion,
+		},
+		{
+			testName: "Mixed valid and invalid vcDataModelVersions is rejected.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{common.VCDataModelVersion11, "99.99"}
+				return c
+			}(),
+			expectedError: ErrorUnsupportedVCDataModelVersion,
+		},
+		{
+			// YAML reads an unquoted `vcDataModelVersions: [1.1, 2.0]` as floats, which
+			// stringify to ["1.1", "2"]. Both spellings are normalized rather than
+			// rejected, since the configuration looks correct to whoever wrote it.
+			testName: "Numeric YAML spellings are normalized.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{"1.1", "2"}
+				return c
+			}(),
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+		},
+		{
+			testName: "Bare major versions are normalized.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{"2", "1"}
+				return c
+			}(),
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion20, common.VCDataModelVersion11},
+		},
+		{
+			// "2.1" is close enough to a valid version that the error has to name it.
+			testName: "Unsupported minor version is rejected and named.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{"2.1"}
+				return c
+			}(),
+			expectedError: ErrorUnsupportedVCDataModelVersion,
+		},
 	}
 
 	for _, tc := range tests {
@@ -71,11 +179,35 @@ func TestVerifyConfig(t *testing.T) {
 			logging.Log().Info("TestVerifyConfig +++++++++++++++++ Running test: ", tc.testName)
 
 			verificationResult := verifyConfig(&tc.configToTest)
-			if verificationResult != tc.expectedError {
+			if !errors.Is(verificationResult, tc.expectedError) {
 				t.Errorf("%s - Expected %v but was %v.", tc.testName, tc.expectedError, verificationResult)
+			}
+			// An unsupported version must be named in the error: with a list of
+			// versions configured, an operator cannot otherwise tell which entry
+			// was rejected.
+			if errors.Is(verificationResult, ErrorUnsupportedVCDataModelVersion) {
+				for _, v := range tc.configToTest.VCDataModelVersions {
+					if _, ok := common.NormalizeVCDataModelVersion(v); ok {
+						continue
+					}
+					if !strings.Contains(verificationResult.Error(), v) {
+						t.Errorf("%s - Expected the error to name the rejected version %q but was %q.", tc.testName, v, verificationResult.Error())
+					}
+				}
 			}
 			if tc.expectedRequestMode != "" && tc.configToTest.RequestMode != tc.expectedRequestMode {
 				t.Errorf("%s - Expected resolved RequestMode %v but was %v.", tc.testName, tc.expectedRequestMode, tc.configToTest.RequestMode)
+			}
+			if tc.expectedVCDataModelVersions != nil {
+				if len(tc.configToTest.VCDataModelVersions) != len(tc.expectedVCDataModelVersions) {
+					t.Errorf("%s - Expected VCDataModelVersions %v but was %v.", tc.testName, tc.expectedVCDataModelVersions, tc.configToTest.VCDataModelVersions)
+				} else {
+					for i, v := range tc.expectedVCDataModelVersions {
+						if tc.configToTest.VCDataModelVersions[i] != v {
+							t.Errorf("%s - Expected VCDataModelVersions[%d] = %q but was %q.", tc.testName, i, v, tc.configToTest.VCDataModelVersions[i])
+						}
+					}
+				}
 			}
 		})
 
@@ -3352,4 +3484,234 @@ func TestVerifyVPSignatureIfRequired_ConfigError(t *testing.T) {
 		pres,
 	)
 	assert.ErrorIs(t, err, ErrorVerficationContextSetup)
+}
+
+// getVCV1WithValidDates builds a V1 credential with a validity window that
+// spans the mockClock epoch (time.Unix(0, 0)), so date checks pass.
+func getVCV1WithValidDates(id string) *common.Credential {
+	validFrom, _ := time.Parse(time.RFC3339, "1969-01-01T00:00:00Z")
+	validUntil, _ := time.Parse(time.RFC3339, "2099-12-31T23:59:59Z")
+	vc, _ := common.CreateCredential(
+		common.CredentialContents{
+			Context: []string{
+				common.ContextCredentialsV1,
+				"https://happypets.fiware.io/2022/credentials/employee/v1",
+			},
+			ID: "https://happypets.fiware.io/credential/25159389-8dd17b796ac0",
+			Types: []string{
+				"VerifiableCredential",
+				"CustomerCredential",
+			},
+			Issuer:     &common.Issuer{ID: "did:key:verifier"},
+			ValidFrom:  &validFrom,
+			ValidUntil: &validUntil,
+			Subject: []common.Subject{
+				{
+					ID: id,
+					CustomFields: map[string]interface{}{
+						"type":   "gx:NaturalParticipent",
+						"target": "did:ebsi:packetdelivery",
+					},
+				},
+			},
+		},
+		common.CustomFields{},
+	)
+	return vc
+}
+
+// getVCV2 builds a V2 credential (VC Data Model 2.0) with a validity window
+// that spans the mockClock epoch (time.Unix(0, 0)), so date checks pass.
+func getVCV2(id string) *common.Credential {
+	validFrom, _ := time.Parse(time.RFC3339, "1969-01-01T00:00:00Z")
+	validUntil, _ := time.Parse(time.RFC3339, "2099-12-31T23:59:59Z")
+	vc, _ := common.CreateCredential(
+		common.CredentialContents{
+			Context: []string{
+				common.ContextCredentialsV2,
+				"https://happypets.fiware.io/2022/credentials/employee/v1",
+			},
+			ID: "https://happypets.fiware.io/credential/25159389-v2-8dd17b796ac0",
+			Types: []string{
+				"VerifiableCredential",
+				"CustomerCredential",
+			},
+			Issuer:     &common.Issuer{ID: "did:key:verifier"},
+			ValidFrom:  &validFrom,
+			ValidUntil: &validUntil,
+			Subject: []common.Subject{
+				{
+					ID: id,
+					CustomFields: map[string]interface{}{
+						"type":   "gx:NaturalParticipent",
+						"target": "did:ebsi:packetdelivery",
+					},
+				},
+			},
+		},
+		common.CustomFields{},
+	)
+	return vc
+}
+
+// getVPV1ValidDates builds a presentation wrapping V1 credentials with valid dates.
+func getVPV1ValidDates(ids []string) common.Presentation {
+	credentials := []*common.Credential{}
+	for _, id := range ids {
+		credentials = append(credentials, getVCV1WithValidDates(id))
+	}
+	vp, _ := common.NewPresentation(common.WithCredentials(credentials...))
+	return *vp
+}
+
+// getVPV2 builds a presentation wrapping V2 credentials.
+func getVPV2(ids []string) common.Presentation {
+	credentials := []*common.Credential{}
+	for _, id := range ids {
+		credentials = append(credentials, getVCV2(id))
+	}
+	vp, _ := common.NewPresentation(common.WithCredentials(credentials...))
+	return *vp
+}
+
+// getVPMixed builds a presentation with one V1 and one V2 credential,
+// both with valid date ranges.
+func getVPMixed(v1ID, v2ID string) common.Presentation {
+	credentials := []*common.Credential{getVCV1WithValidDates(v1ID), getVCV2(v2ID)}
+	vp, _ := common.NewPresentation(common.WithCredentials(credentials...))
+	return *vp
+}
+
+// TestAuthenticationResponse_VCDataModelVersionFiltering exercises the full
+// AuthenticationResponse pipeline with a real CredentialValidator (not a mock)
+// to verify that the vcDataModelVersions configuration correctly accepts or
+// rejects credentials based on their VC Data Model version.
+func TestAuthenticationResponse_VCDataModelVersionFiltering(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type versionTest struct {
+		testName            string
+		vcDataModelVersions []string
+		presentation        common.Presentation
+		expectedError       error
+	}
+
+	tests := []versionTest{
+		{
+			testName:            "V2 credential accepted when config allows 2.0",
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			presentation:        getVPV2([]string{"vc-v2"}),
+			expectedError:       nil,
+		},
+		{
+			testName:            "V1 credential rejected when config allows only 2.0",
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			presentation:        getVPV1ValidDates([]string{"vc-v1"}),
+			expectedError:       ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			testName:            "V2 credential rejected when config allows only 1.1",
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			presentation:        getVPV2([]string{"vc-v2"}),
+			expectedError:       ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			testName:            "V1 credential accepted when config allows 1.1",
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			presentation:        getVPV1ValidDates([]string{"vc-v1"}),
+			expectedError:       nil,
+		},
+		{
+			testName:            "V1 credential accepted when config allows both versions",
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			presentation:        getVPV1ValidDates([]string{"vc-v1"}),
+			expectedError:       nil,
+		},
+		{
+			testName:            "V2 credential accepted when config allows both versions",
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			presentation:        getVPV2([]string{"vc-v2"}),
+			expectedError:       nil,
+		},
+		{
+			testName:            "Mixed V1+V2 credentials both accepted when config allows both versions",
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			presentation:        getVPMixed("vc-v1", "vc-v2"),
+			expectedError:       nil,
+		},
+		{
+			testName:            "Mixed V1+V2 credentials rejected when config allows only V1 (V2 credential fails)",
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			presentation:        getVPMixed("vc-v1", "vc-v2"),
+			expectedError:       ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			testName:            "Mixed V1+V2 credentials rejected when config allows only V2 (V1 credential fails)",
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			presentation:        getVPMixed("vc-v1", "vc-v2"),
+			expectedError:       ErrorVCDataModelVersionNotAccepted,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			trueOption := true
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+			sessionCache.sessions["login-state"] = loginSession{
+				version:       SAME_DEVICE,
+				callback:      "https://myhost.org/callback",
+				sessionId:     "my-session",
+				clientId:      "clientId",
+				requestObject: "requestObjectJwt",
+			}
+
+			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			testKey, _ := jwk.Import(ecdsaKey)
+			_ = jwk.AssignKeyID(testKey)
+			nonceGenerator := mockNonceGenerator{staticValues: []string{"authCode"}}
+			credentialsConfig := mockCredentialConfig{
+				mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {
+					"": {
+						Credentials: []configModel.Credential{{
+							Type:         "VerifiableCredential",
+							JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption},
+						}},
+					},
+				}},
+			}
+
+			// Use a real CredentialValidator (not a mock) so the version
+			// filtering in ValidateVC is exercised end-to-end.
+			realValidator := CredentialValidator{
+				validationMode:      ValidationModeNone,
+				clock:               mockClock{},
+				vcDataModelVersions: tc.vcDataModelVersions,
+			}
+
+			verifier := CredentialVerifier{
+				did:                  "did:key:verifier",
+				signingKey:           testKey,
+				tokenCache:           &tokenCache,
+				sessionCache:         &sessionCache,
+				nonceGenerator:       &nonceGenerator,
+				validationServices:   []ValidationService{&realValidator},
+				clock:                mockClock{},
+				credentialsConfig:    credentialsConfig,
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			response, err := verifier.AuthenticationResponse("login-state", &tc.presentation)
+
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError, "expected error %v but got %v", tc.expectedError, err)
+				return
+			}
+			assert.NoError(t, err, "expected no error but got %v", err)
+			assert.Equal(t, SAME_DEVICE, response.FlowVersion, "flow version should be SAME_DEVICE")
+			assert.Equal(t, "authCode", response.Code, "authorization code should match")
+			_, found := tokenCache.tokens[response.Code]
+			assert.True(t, found, "token should be cached")
+		})
+	}
 }

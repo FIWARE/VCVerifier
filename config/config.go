@@ -242,6 +242,22 @@ type Verifier struct {
 	// Enable it only for a deployment whose issuers live in the verifier's own
 	// network.
 	HttpsIssuerAllowPrivateNetworks bool `mapstructure:"httpsIssuerAllowPrivateNetworks" default:"false"`
+	// VCDataModelVersions lists which W3C VC Data Model versions the verifier
+	// accepts for incoming credentials. Recognized values are "1.1" (VC Data
+	// Model v1.1) and "2.0" (VC Data Model v2.0); the bare "1" and "2" that YAML
+	// produces for an unquoted list are normalized to those. When empty or unset,
+	// both versions are accepted (the default) - an empty list means "all
+	// recognized versions", not "accept anything".
+	//
+	// The version is taken from the FIRST entry of the credential's @context, so
+	// every JSON-LD credential (ldp_vc, jwt_vc) MUST lead with a recognized base
+	// context; one that does not is rejected. SD-JWT VCs are the only exemption:
+	// they are IETF credentials typed via `vct`, carry no @context and no data
+	// model version.
+	//
+	// The allowlist applies to incoming credentials only. The enclosing
+	// presentation's own @context is not checked.
+	VCDataModelVersions []string `mapstructure:"vcDataModelVersions"`
 	// RefreshToken groups all refresh token configuration.
 	RefreshToken RefreshToken `mapstructure:"refreshToken"`
 }

@@ -7,6 +7,30 @@ logging:
 verifier:
     tirAddress: https://tir.de
     did: did:key:myverifier
+    # vcDataModelVersions controls which W3C VC Data Model versions the verifier
+    # accepts for incoming credentials. Allowed values are "1.1" (VC Data Model v1.1,
+    # context https://www.w3.org/2018/credentials/v1) and "2.0" (VC Data Model v2.0,
+    # context https://www.w3.org/ns/credentials/v2).
+    # When omitted or empty, both versions are accepted (default: ["1.1", "2.0"]).
+    # An empty list means "all recognized versions" - the check cannot be disabled.
+    # Example - accept both versions explicitly:
+    #   vcDataModelVersions:
+    #     - "1.1"
+    #     - "2.0"
+    # To restrict to a single version, specify only that version:
+    #   vcDataModelVersions:
+    #     - "1.1"
+    # Quote the values. An unquoted list ([1.1, 2.0]) is read by YAML as floats, so
+    # "2.0" arrives as "2". Those spellings are normalized, but quoting avoids the
+    # question entirely.
+    # The version is taken from the FIRST entry of the credential's @context, as both
+    # data models require. Every JSON-LD credential (ldp_vc, jwt_vc) must therefore
+    # lead with a recognized base context; one that does not is rejected. SD-JWT VCs
+    # (dc+sd-jwt, vc+sd-jwt) carry no @context and no data model version, and are the
+    # only format exempt from this option.
+    # The option applies to incoming credentials only - the presentation envelope's
+    # own @context is not checked.
+    # See docs/vc-data-model-versions.md for the supported scope of VC 2.0.
     policies:
         default:
             SignaturePolicy: {}
