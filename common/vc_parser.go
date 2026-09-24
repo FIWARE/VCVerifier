@@ -42,13 +42,13 @@ func ParseCredentialJSON(data []byte) (*Credential, error) {
 	contents := CredentialContents{}
 
 	if ctx, ok := raw[JSONLDKeyContext]; ok {
-		contents.Context = toStringSlice(ctx)
+		contents.Context = ToStringSlice(ctx)
 	}
 	if id, ok := raw[JSONLDKeyID].(string); ok {
 		contents.ID = id
 	}
 	if t, ok := raw[JSONLDKeyType]; ok {
-		contents.Types = toStringSlice(t)
+		contents.Types = ToStringSlice(t)
 	}
 
 	// issuer can be a string or an object with "id" field
@@ -123,7 +123,12 @@ func parseOneSubject(m map[string]interface{}) Subject {
 	return s
 }
 
-func toStringSlice(v interface{}) []string {
+// ToStringSlice normalizes a JSON-decoded value that may hold either a single
+// string or an array of strings into a []string. JSON-LD allows both spellings
+// for keys such as `@context` and `type`, so every parser reading those keys must
+// accept a plain string as well as an array. Values that are neither yield nil,
+// and non-string array entries are skipped.
+func ToStringSlice(v interface{}) []string {
 	switch val := v.(type) {
 	case []interface{}:
 		result := make([]string, 0, len(val))

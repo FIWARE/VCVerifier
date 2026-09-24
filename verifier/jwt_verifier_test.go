@@ -477,19 +477,29 @@ func TestWarnDeprecatedMode(t *testing.T) {
 
 // makeCredentialWithContext creates a credential with the given @context array and a valid issuer/type.
 func makeCredentialWithContext(contexts []string) *common.Credential {
+	return makeCredentialWithContextAndFormat(contexts, common.FormatLDPVC)
+}
+
+// makeCredentialWithContextAndFormat creates a credential with the given @context array,
+// a valid issuer/type and the given credential format. The format decides whether the
+// version gate applies at all, so it has to be settable per test case.
+func makeCredentialWithContextAndFormat(contexts []string, format string) *common.Credential {
 	c, _ := common.CreateCredential(common.CredentialContents{
 		Context: contexts,
 		Issuer:  &common.Issuer{ID: "did:web:example.com"},
 		Types:   []string{"VerifiableCredential"},
 		Subject: []common.Subject{{CustomFields: map[string]interface{}{"name": "test"}}},
 	}, common.CustomFields{})
+	c.SetFormat(format)
 	return c
 }
 
 func TestValidateVC_VCDataModelVersionFiltering(t *testing.T) {
 	tests := []struct {
-		name                string
-		contexts            []string
+		name     string
+		contexts []string
+		// format defaults to ldp_vc when empty; only SD-JWT is exempt from the gate.
+		format              string
 		vcDataModelVersions []string
 		validationMode      string
 		wantErr             error
@@ -565,17 +575,40 @@ func TestValidateVC_VCDataModelVersionFiltering(t *testing.T) {
 			wantErr:             ErrorVCDataModelVersionNotAccepted,
 		},
 		{
-			// A credential without any @context is not a W3C Data Model credential
-			// (e.g. an SD-JWT VC), so the version gate does not apply to it.
-			name:                "context-less credential accepted when config allows both — mode none",
+			// A JSON-LD credential MUST declare a recognized base context. Missing one,
+			// it declares no data model version and the gate rejects it - the gate must
+			// not be bypassable by omitting or mangling the @context.
+			name:                "context-less ldp_vc rejected when config allows both — mode none",
 			contexts:            []string{},
+			format:              common.FormatLDPVC,
 			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "context-less jwt_vc rejected when config allows only 2.0 — mode none",
+			contexts:            nil,
+			format:              common.FormatJWTVC,
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			// SD-JWT VCs are IETF credentials typed via `vct`; they carry no @context
+			// and are the only format exempt from the version gate.
+			name:                "context-less SD-JWT accepted when config allows only 2.0 — mode none",
+			contexts:            nil,
+			format:              common.FormatSDJWT,
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
 			validationMode:      ValidationModeNone,
 			wantErr:             nil,
 		},
 		{
-			name:                "context-less credential accepted when config allows only 2.0 — mode none",
-			contexts:            nil,
+			// Even an SD-JWT that somehow carries a v1.1 context stays exempt: the
+			// exemption is keyed on the format, not on the absence of a context.
+			name:                "SD-JWT with V1 context accepted when config allows only 2.0 — mode none",
+			contexts:            []string{common.ContextCredentialsV1},
+			format:              common.FormatSDJWT,
 			vcDataModelVersions: []string{common.VCDataModelVersion20},
 			validationMode:      ValidationModeNone,
 			wantErr:             nil,
@@ -612,7 +645,11 @@ func TestValidateVC_VCDataModelVersionFiltering(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cred := makeCredentialWithContext(tc.contexts)
+			format := tc.format
+			if format == "" {
+				format = common.FormatLDPVC
+			}
+			cred := makeCredentialWithContextAndFormat(tc.contexts, format)
 			validator := CredentialValidator{
 				validationMode:      tc.validationMode,
 				vcDataModelVersions: tc.vcDataModelVersions,

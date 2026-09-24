@@ -1731,3 +1731,106 @@ func TestVerifyLDVPProofBinding_HolderKeyPropagation(t *testing.T) {
 	err = VerifyLDVPProofBinding(result, challenge, "wrong-domain")
 	assert.ErrorIs(t, err, ErrorProofDomainMismatch)
 }
+
+// TestCredentialParsers_ContextAndTypeSpellings verifies that both credential parsers
+// accept every JSON-LD spelling of `@context` and `type`. JSON-LD allows a single string
+// where an array is also valid, and a dropped `@context` would leave the credential
+// without a detectable VC Data Model version.
+func TestCredentialParsers_ContextAndTypeSpellings(t *testing.T) {
+	tests := []struct {
+		name        string
+		context     interface{}
+		types       interface{}
+		wantContext []string
+		wantTypes   []string
+	}{
+		{
+			name:        "array context and array type",
+			context:     []interface{}{common.ContextCredentialsV2, "https://w3id.org/security/suites/jws-2020/v1"},
+			types:       []interface{}{"VerifiableCredential", "TestCredential"},
+			wantContext: []string{common.ContextCredentialsV2, "https://w3id.org/security/suites/jws-2020/v1"},
+			wantTypes:   []string{"VerifiableCredential", "TestCredential"},
+		},
+		{
+			name:        "string context and string type",
+			context:     common.ContextCredentialsV1,
+			types:       "VerifiableCredential",
+			wantContext: []string{common.ContextCredentialsV1},
+			wantTypes:   []string{"VerifiableCredential"},
+		},
+		{
+			name:        "string context with array type",
+			context:     common.ContextCredentialsV2,
+			types:       []interface{}{"VerifiableCredential"},
+			wantContext: []string{common.ContextCredentialsV2},
+			wantTypes:   []string{"VerifiableCredential"},
+		},
+		{
+			name:        "non-string entries are skipped",
+			context:     []interface{}{common.ContextCredentialsV2, 42},
+			types:       []interface{}{"VerifiableCredential", nil},
+			wantContext: []string{common.ContextCredentialsV2},
+			wantTypes:   []string{"VerifiableCredential"},
+		},
+		{
+			name:        "absent context and type yield nothing",
+			context:     nil,
+			types:       nil,
+			wantContext: nil,
+			wantTypes:   nil,
+		},
+	}
+
+	for _, tc := range tests {
+		vcBody := func() map[string]interface{} {
+			body := map[string]interface{}{
+				"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com"},
+			}
+			if tc.context != nil {
+				body[common.JSONLDKeyContext] = tc.context
+			}
+			if tc.types != nil {
+				body[common.JSONLDKeyType] = tc.types
+			}
+			return body
+		}
+
+		t.Run("jwt_vc/"+tc.name, func(t *testing.T) {
+			cred, err := jwtClaimsToCredential(map[string]interface{}{
+				common.JWTClaimIss: "did:web:issuer.example.com",
+				common.JWTClaimVC:  vcBody(),
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantContext, cred.Contents().Context)
+			assert.Equal(t, tc.wantTypes, cred.Contents().Types)
+		})
+
+		t.Run("ldp_vc/"+tc.name, func(t *testing.T) {
+			cred, err := parseJSONLDCredential(vcBody())
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantContext, cred.Contents().Context)
+			assert.Equal(t, tc.wantTypes, cred.Contents().Types)
+		})
+	}
+}
+
+// TestValidateVC_StringContextIsGated is the regression test for the version gate being
+// bypassable via a string-valued `@context`: such a context used to be dropped by the
+// parsers, leaving the credential without a version and exempting it from the gate.
+func TestValidateVC_StringContextIsGated(t *testing.T) {
+	cred, err := parseJSONLDCredential(map[string]interface{}{
+		common.JSONLDKeyContext: common.ContextCredentialsV1,
+		common.JSONLDKeyType:    "VerifiableCredential",
+		common.VCKeyIssuer:      "did:web:issuer.example.com",
+	})
+	require.NoError(t, err)
+
+	validator := CredentialValidator{
+		validationMode:      ValidationModeNone,
+		vcDataModelVersions: []string{common.VCDataModelVersion20},
+	}
+	result, err := validator.ValidateVC(cred, nil)
+
+	assert.False(t, result, "a v1.1 credential must not pass a 2.0-only allowlist")
+	assert.ErrorIs(t, err, ErrorVCDataModelVersionNotAccepted)
+}
