@@ -34,6 +34,12 @@ var oidOrganizationIdentifier = asn1.ObjectIdentifier{2, 5, 4, 97}
 
 var ErrorNoSignatures = errors.New("no_signatures_in_jwt")
 var ErrorNoDIDInJWT = errors.New("no_did_found_in_jwt")
+
+// ErrorIssuerKeyMismatch is returned when the `kid` header names a DID other than
+// the one in the `iss` claim. The key is resolved from the kid while the asserted
+// identity is read from iss, so the two have to agree - otherwise the signature
+// would authenticate a document attributed to someone else.
+var ErrorIssuerKeyMismatch = errors.New("issuer_key_mismatch")
 var ErrorNoCertInHeader = errors.New("no_certificate_found_in_jwt_header")
 var ErrorCertHeaderEmpty = errors.New("cert_header_is_empty")
 var ErrorPemDecodeFailed = errors.New("failed_to_decode_pem_from_header")
@@ -125,8 +131,23 @@ func (jpc *JWTProofChecker) VerifyJWTAndReturnKey(token []byte) ([]byte, jwk.Key
 	kid, _ := headers.KeyID()
 	issFromPayload := extractIssFromPayload(msg.Payload())
 
+	// The signing key is resolved from the kid, while the identity the document
+	// asserts - the credential issuer, or the presentation holder - is read from the
+	// iss claim. If both name a DID, they must be the same DID: otherwise a key the
+	// signer generated themselves would authenticate a document attributed to
+	// somebody else, since nothing downstream re-checks who actually signed it.
+	//
+	// A kid that is not a DID (a bare key id, a relative fragment) carries no
+	// identity of its own, so it is not compared; the iss claim alone then decides.
+	kidDID := extractDIDFromKid(kid)
+	if kidDID != "" && issFromPayload != "" && kidDID != issFromPayload {
+		logging.Log().Warnf("JWT rejected: the kid names DID %q but the iss claim names %q - the signing key is not the claimed issuer's",
+			kidDID, issFromPayload)
+		return nil, nil, ErrorIssuerKeyMismatch
+	}
+
 	// Determine issuer DID: prefer kid (contains the key reference), fall back to iss.
-	issuerDID := extractDIDFromKid(kid)
+	issuerDID := kidDID
 	if issuerDID == "" {
 		issuerDID = issFromPayload
 	}
@@ -137,8 +158,9 @@ func (jpc *JWTProofChecker) VerifyJWTAndReturnKey(token []byte) ([]byte, jwk.Key
 	// Handle did:elsi issuers via X.509 certificate chain + eIDAS trust list.
 	// For did:elsi, the iss claim from the payload is authoritative (not kid),
 	// since the certificate carries the key, not a DID document.
-	// Guard: when dispatch was triggered by kid, ensure iss is also did:elsi
-	// to prevent a mismatch where kid=did:elsi:A but iss=did:elsi:B or non-elsi.
+	// Guard: when dispatch was triggered by kid, ensure iss is also did:elsi.
+	// The general kid/iss check above already rejects a differing iss, so what
+	// remains here is a did:elsi kid with no iss claim at all to be authoritative.
 	if IsDidElsi(issuerDID) {
 		if !IsDidElsi(issFromPayload) {
 			logging.Log().Warnf("did:elsi dispatch triggered by kid (%s) but iss claim (%s) is not a did:elsi DID", issuerDID, issFromPayload)

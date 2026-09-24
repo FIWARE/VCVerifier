@@ -328,20 +328,8 @@ func jwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, e
 
 	vcClaim, _ := claims[common.JWTClaimVC].(map[string]interface{})
 	if vcClaim != nil {
-		if types, ok := vcClaim[common.JSONLDKeyType].([]interface{}); ok {
-			for _, t := range types {
-				if s, ok := t.(string); ok {
-					contents.Types = append(contents.Types, s)
-				}
-			}
-		}
-		if ctxs, ok := vcClaim[common.JSONLDKeyContext].([]interface{}); ok {
-			for _, c := range ctxs {
-				if s, ok := c.(string); ok {
-					contents.Context = append(contents.Context, s)
-				}
-			}
-		}
+		contents.Types = common.ToStringSlice(vcClaim[common.JSONLDKeyType])
+		contents.Context = common.ToStringSlice(vcClaim[common.JSONLDKeyContext])
 		if subject, ok := vcClaim[common.VCKeyCredentialSubject].(map[string]interface{}); ok {
 			s := common.Subject{CustomFields: common.CustomFields{}}
 			if id, ok := subject[common.JSONLDKeyID].(string); ok {
@@ -783,20 +771,8 @@ func parseJSONLDCredential(vcMap map[string]interface{}) (*common.Credential, er
 	if id, ok := vcMap[common.JSONLDKeyID].(string); ok {
 		contents.ID = id
 	}
-	if types, ok := vcMap[common.JSONLDKeyType].([]interface{}); ok {
-		for _, t := range types {
-			if s, ok := t.(string); ok {
-				contents.Types = append(contents.Types, s)
-			}
-		}
-	}
-	if ctxs, ok := vcMap[common.JSONLDKeyContext].([]interface{}); ok {
-		for _, c := range ctxs {
-			if s, ok := c.(string); ok {
-				contents.Context = append(contents.Context, s)
-			}
-		}
-	}
+	contents.Types = common.ToStringSlice(vcMap[common.JSONLDKeyType])
+	contents.Context = common.ToStringSlice(vcMap[common.JSONLDKeyContext])
 
 	switch issuer := vcMap[common.VCKeyIssuer].(type) {
 	case string:

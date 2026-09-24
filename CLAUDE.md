@@ -147,7 +147,19 @@ Credential issuers may be identified by an HTTPS URL instead of a DID — see `d
 - **An HTTPS issuer inside the verifier's own network** is unresolvable until `verifier.httpsIssuerAllowPrivateNetworks` is set — the address guard refuses non-routable targets for every issuer, not per issuer.
 - **`validationMode: combined` and `jsonLd`** do not perform real JSON-LD validation — they only check that issuer and type fields are present. They are deprecated but still accepted.
 - **Verification relationships are only enforced when the DID document declares them.** A `did:web` document that lists `verificationMethod` but neither `authentication` nor `assertionMethod` falls back to the flat method list with a warning.
-- **Data Integrity suites other than `JsonWebSignature2020`** (`proofValue`-based cryptosuites) are parsed but not verified.
+- **Data Integrity suites other than `JsonWebSignature2020`** (`proofValue`-based cryptosuites) are parsed but not verified. VC 2.0 issuers are more likely to use these than `JsonWebSignature2020`.
+- **VC-JOSE-COSE is not supported.** VCDM 2.0 secures JWTs with `typ: vc+jwt` / `vp+jwt`, where the payload *is* the credential/presentation. `jwtClaimsToCredential` reads `claims["vc"]` and both JWT VP parsers require the `vp` claim, so a `vc+jwt` credential parses empty and a `vp+jwt` presentation is rejected with `ErrorPresentationNoCredentials`.
+- **`EnvelopedVerifiableCredential`** (VCDM 2.0 §4.13, `data:application/vc+jwt,…` inside a VP) is not recognized.
+
+## VC Data Model Versions
+
+Credentials on both the v1.1 and v2.0 data models are accepted — see `docs/vc-data-model-versions.md`. In short:
+
+- The version comes from the **first** `@context` entry (`common.DetectVCDataModelVersion`), as both data models require. A base context elsewhere in the array does not declare a version, and a document carrying both base contexts declares none.
+- `verifier.vcDataModelVersions` is an allowlist over `"1.1"` / `"2.0"`, defaulting to both. An empty list means *all recognized versions*, not *gate disabled* — the check cannot be switched off. `common.NormalizeVCDataModelVersion` absorbs the `"1"` / `"2"` that YAML produces for an unquoted list.
+- The gate is strict and keyed on the credential **format**: only SD-JWT VCs are exempt. An `ldp_vc`/`jwt_vc` with an absent or unrecognized base context is rejected, so it cannot be bypassed by omitting or mangling the `@context`. Both parsers run `@context` and `type` through `common.ToStringSlice`, so a string-valued spelling is not silently dropped.
+- The gate covers incoming credentials only; the presentation envelope's own `@context` is not checked (and `Presentation.Context` is never populated).
+- VC 2.0 status list types (`BitstringStatusListEntry` / `BitstringStatusListCredential`) are handled alongside `StatusList2021Entry`.
 
 ## Key Dependencies
 

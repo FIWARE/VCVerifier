@@ -37,6 +37,7 @@ func TestEmbeddedContextLoader(t *testing.T) {
 		wantEmbedded bool
 	}{
 		{name: "credentials_v1_embedded", url: ContextCredentialsV1, wantEmbedded: true},
+		{name: "credentials_v2_embedded", url: ContextCredentialsV2, wantEmbedded: true},
 		{name: "jws_2020_suite_embedded", url: ContextSecuritySuiteJWS2020, wantEmbedded: true},
 		{name: "unknown_context_delegated", url: "https://example.com/custom/v1"},
 	}

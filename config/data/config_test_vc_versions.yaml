@@ -1,0 +1,17 @@
+server:
+  port: 3000
+logging:
+  level: "DEBUG"
+  jsonLogging: true
+  logRequests: true
+
+verifier:
+  did: "did:key:somekey"
+  tirAddress: "https://test.dev/trusted_issuer/v3/issuers/"
+  sessionExpiry: 30
+  vcDataModelVersions:
+    - "1.1"
+    - "2.0"
+
+m2m:
+  authEnabled: false

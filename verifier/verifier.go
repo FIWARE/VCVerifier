@@ -98,6 +98,7 @@ var ErrorRefreshTokenDisabled = errors.New("refresh_token_not_enabled")
 var ErrorRefreshTokenExpired = errors.New("refresh_token_expired")
 var ErrorRefreshTokenNotFound = errors.New("refresh_token_not_found")
 var ErrorRefreshTokenInvalidSignature = errors.New("refresh_token_invalid_signature")
+var ErrorUnsupportedVCDataModelVersion = errors.New("unsupported_vc_data_model_version")
 
 // refreshTokenByteLength is the number of random bytes used to generate
 // an opaque refresh token. 32 bytes → 43-character base64url string.
@@ -353,7 +354,11 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 
 	clock := common.RealClock{}
 
-	credentialsVerifier := CredentialValidator{validationMode: config.Verifier.ValidationMode, clock: clock}
+	credentialsVerifier := CredentialValidator{
+		validationMode:      config.Verifier.ValidationMode,
+		clock:               clock,
+		vcDataModelVersions: config.Verifier.VCDataModelVersions,
+	}
 	WarnDeprecatedMode(config.Verifier.ValidationMode)
 
 	externalGaiaXValidator := InitGaiaXRegistryValidationService(verifierConfig)
@@ -1901,6 +1906,22 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	}
 	if !slices.Contains(verifierConfig.SupportedModes, verifierConfig.RequestMode) { //nolint:govet
 		return ErrorRequestModeNotSupported
+	}
+
+	// Default to accepting all recognized VC Data Model versions when the
+	// config field is empty (either unset in YAML or zero-valued in tests).
+	if len(verifierConfig.VCDataModelVersions) == 0 {
+		verifierConfig.VCDataModelVersions = common.VCDataModelVersionAll()
+	}
+	// Normalize in place, so the configured versions can be compared against the
+	// versions detected on a credential without repeating the aliasing per request.
+	for i, v := range verifierConfig.VCDataModelVersions { //nolint:govet
+		canonical, ok := common.NormalizeVCDataModelVersion(v)
+		if !ok {
+			return fmt.Errorf("%w: %q (supported: %v)", ErrorUnsupportedVCDataModelVersion,
+				v, common.VCDataModelVersionAll())
+		}
+		verifierConfig.VCDataModelVersions[i] = canonical
 	}
 
 	return nil

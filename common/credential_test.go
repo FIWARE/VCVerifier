@@ -442,6 +442,119 @@ func TestPresentation_MarshalJSON_NoProofs(t *testing.T) {
 	}
 }
 
+func TestDetectVCDataModelVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		contexts []string
+		want     []string
+	}{
+		{
+			name:     "V1-only context",
+			contexts: []string{ContextCredentialsV1, "https://example.com/custom/v1"},
+			want:     []string{VCDataModelVersion11},
+		},
+		{
+			name:     "V2-only context",
+			contexts: []string{ContextCredentialsV2, "https://example.com/custom/v1"},
+			want:     []string{VCDataModelVersion20},
+		},
+		{
+			name:     "V2 base context with proof suite context",
+			contexts: []string{ContextCredentialsV2, "https://w3id.org/security/suites/jws-2020/v1"},
+			want:     []string{VCDataModelVersion20},
+		},
+		{
+			// Both data models require their base context to be the FIRST entry,
+			// so one appearing later does not declare a version.
+			name:     "V2 base context not in first position",
+			contexts: []string{"https://example.com/custom/v1", ContextCredentialsV2},
+			want:     []string{},
+		},
+		{
+			name:     "V1 base context not in first position",
+			contexts: []string{"https://example.com/custom/v1", ContextCredentialsV1},
+			want:     []string{},
+		},
+		{
+			// A document declaring both base contexts is valid under neither data
+			// model and must not satisfy either allowlist.
+			name:     "Both V1 and V2 contexts present, V2 first",
+			contexts: []string{ContextCredentialsV2, ContextCredentialsV1},
+			want:     []string{},
+		},
+		{
+			name:     "Both V1 and V2 contexts present, V1 first",
+			contexts: []string{ContextCredentialsV1, ContextCredentialsV2},
+			want:     []string{},
+		},
+		{
+			name:     "Both base contexts with an unrelated context between them",
+			contexts: []string{ContextCredentialsV2, "https://example.com/custom/v1", ContextCredentialsV1},
+			want:     []string{},
+		},
+		{
+			// A repetition of the same base context is redundant but unambiguous:
+			// only a conflicting second base context invalidates the document.
+			name:     "Repeated V2 base context still declares 2.0",
+			contexts: []string{ContextCredentialsV2, ContextCredentialsV2},
+			want:     []string{VCDataModelVersion20},
+		},
+		{
+			name:     "No recognized context",
+			contexts: []string{"https://example.com/unknown", "https://other.example.com/v3"},
+			want:     []string{},
+		},
+		{
+			name:     "Empty context slice",
+			contexts: []string{},
+			want:     []string{},
+		},
+		{
+			name:     "Nil context slice",
+			contexts: nil,
+			want:     []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DetectVCDataModelVersion(tc.contexts)
+			if len(got) == 0 && len(tc.want) == 0 {
+				// Both empty — pass.
+				return
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("DetectVCDataModelVersion(%v) = %v, want %v", tc.contexts, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("DetectVCDataModelVersion(%v)[%d] = %q, want %q", tc.contexts, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestVCDataModelVersionAll(t *testing.T) {
+	all := VCDataModelVersionAll()
+	if len(all) != 2 {
+		t.Fatalf("Expected VCDataModelVersionAll() to have 2 entries, got %d", len(all))
+	}
+	if all[0] != VCDataModelVersion11 {
+		t.Errorf("Expected VCDataModelVersionAll()[0] = %q, got %q", VCDataModelVersion11, all[0])
+	}
+	if all[1] != VCDataModelVersion20 {
+		t.Errorf("Expected VCDataModelVersionAll()[1] = %q, got %q", VCDataModelVersion20, all[1])
+	}
+
+	// Verify that mutation of the returned slice does not affect subsequent calls.
+	all[0] = "mutated"
+	fresh := VCDataModelVersionAll()
+	if fresh[0] != VCDataModelVersion11 {
+		t.Errorf("VCDataModelVersionAll() was mutated: got %q, want %q", fresh[0], VCDataModelVersion11)
+	}
+}
+
 func TestConstants(t *testing.T) {
 	if ContextCredentialsV1 != "https://www.w3.org/2018/credentials/v1" {
 		t.Error("ContextCredentialsV1 mismatch")
@@ -500,5 +613,38 @@ func TestCredentialFormatConstants(t *testing.T) {
 	}
 	if FormatSDJWT != "sd-jwt" {
 		t.Errorf("FormatSDJWT mismatch: got %q", FormatSDJWT)
+	}
+}
+
+// TestNormalizeVCDataModelVersion covers every accepted spelling of a version
+// identifier, including the bare "1"/"2" that YAML produces for an unquoted
+// version list, plus values that must stay rejected.
+func TestNormalizeVCDataModelVersion(t *testing.T) {
+	tests := []struct {
+		name          string
+		version       string
+		wantCanonical string
+		wantOk        bool
+	}{
+		{name: "canonical 1.1", version: "1.1", wantCanonical: VCDataModelVersion11, wantOk: true},
+		{name: "canonical 2.0", version: "2.0", wantCanonical: VCDataModelVersion20, wantOk: true},
+		{name: "YAML-stringified 1", version: "1", wantCanonical: VCDataModelVersion11, wantOk: true},
+		{name: "YAML-stringified 2", version: "2", wantCanonical: VCDataModelVersion20, wantOk: true},
+		{name: "unsupported minor version", version: "2.1", wantOk: false},
+		{name: "unsupported major version", version: "3.0", wantOk: false},
+		{name: "trailing zero is not accepted", version: "2.00", wantOk: false},
+		{name: "empty version", version: "", wantOk: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			canonical, ok := NormalizeVCDataModelVersion(tc.version)
+			if ok != tc.wantOk {
+				t.Fatalf("NormalizeVCDataModelVersion(%q) ok = %v, want %v", tc.version, ok, tc.wantOk)
+			}
+			if ok && canonical != tc.wantCanonical {
+				t.Errorf("NormalizeVCDataModelVersion(%q) = %q, want %q", tc.version, canonical, tc.wantCanonical)
+			}
+		})
 	}
 }

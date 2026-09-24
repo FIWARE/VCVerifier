@@ -21,6 +21,7 @@ var embeddedContexts embed.FS
 // Paths of the vendored context files inside the embedded file system.
 const (
 	contextFileW3CVCV1 = "contexts/credentials-v1.jsonld"
+	contextFileW3CVCV2 = "contexts/credentials-v2.jsonld"
 	contextFileJWS2020 = "contexts/jws-2020-v1.jsonld"
 )
 
@@ -30,6 +31,7 @@ const (
 // it is not — these are public JSON-LD context URLs and file names.
 var embeddedContextFiles = map[string]string{
 	ContextCredentialsV1:        contextFileW3CVCV1,
+	ContextCredentialsV2:        contextFileW3CVCV2,
 	ContextSecuritySuiteJWS2020: contextFileJWS2020,
 }
 
@@ -42,9 +44,9 @@ type EmbeddedContextLoader struct {
 }
 
 // NewEmbeddedContextLoader creates an EmbeddedContextLoader serving the
-// vendored W3C credentials/v1 and JsonWebSignature2020 contexts. Any other
-// URL is passed to fallback. Passing a nil fallback makes the loader reject
-// every URL it does not have a vendored copy of.
+// vendored W3C credentials/v1, credentials/v2 and JsonWebSignature2020
+// contexts. Any other URL is passed to fallback. Passing a nil fallback
+// makes the loader reject every URL it does not have a vendored copy of.
 func NewEmbeddedContextLoader(fallback ld.DocumentLoader) (*EmbeddedContextLoader, error) {
 	documents := make(map[string]*ld.RemoteDocument, len(embeddedContextFiles))
 	for contextURL, fileName := range embeddedContextFiles {

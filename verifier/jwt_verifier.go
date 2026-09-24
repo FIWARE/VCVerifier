@@ -33,6 +33,10 @@ var (
 	ErrorCredentialExpired               = errors.New("credential_expired")
 	ErrorCredentialNotYetValid           = errors.New("credential_not_yet_valid")
 	ErrorCredentialInvalidValidityPeriod = errors.New("credential_invalid_validity_period")
+	// ErrorVCDataModelVersionNotAccepted is returned when a credential's VC Data
+	// Model version (detected from its @context) is not in the configured
+	// vcDataModelVersions allowlist.
+	ErrorVCDataModelVersionNotAccepted = errors.New("vc_data_model_version_not_accepted")
 )
 
 var SupportedModes = []string{ValidationModeNone, ValidationModeCombined, ValidationModeJsonLd, ValidationModeBaseContext}
@@ -59,6 +63,10 @@ func WarnDeprecatedMode(mode string) {
 type CredentialValidator struct {
 	validationMode string
 	clock          common.Clock
+	// vcDataModelVersions is the allowlist of accepted VC Data Model versions
+	// (e.g. "1.1", "2.0"). Credentials whose @context does not match any
+	// version in this list are rejected before any other validation.
+	vcDataModelVersions []string
 }
 
 // now returns the current time, falling back to time.Now() when no clock is injected.
@@ -108,6 +116,14 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 }
 
 // ValidateVC validates credential content. Signature verification is handled separately by JWTProofChecker.
+//
+// The VC Data Model version check runs first: if vcDataModelVersions is configured
+// (non-empty), the credential's @context must declare one of the allowed versions.
+// The gate is strict — a W3C credential with an absent, unrecognized or misplaced base
+// context declares no version and is rejected. Only SD-JWT VCs are exempt, because they
+// are IETF credentials identifying their type via `vct` — see isVersionedDataModelCredential.
+// The gate covers incoming credentials only; the enclosing presentation's own @context is
+// not checked.
 // Temporal validity (validFrom/validUntil) is always enforced regardless of mode.
 //
 // Available modes:
@@ -119,6 +135,22 @@ func getKeyFromMethod(verificationMethod string) (keyId, absolutePath, fullAbsol
 //   - "baseContext": validates that the credential uses only W3C base-context types
 //     (VerifiableCredential, VerifiablePresentation) and has an issuer.
 func (cv CredentialValidator) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (result bool, err error) {
+	// Version gate: reject credentials whose VC Data Model version is not allowed.
+	// Every W3C credential participates; only SD-JWT VCs are exempt, since they are
+	// IETF credentials typed via `vct` and carry no @context at all.
+	if len(cv.vcDataModelVersions) > 0 && isVersionedDataModelCredential(verifiableCredential) {
+		contents := verifiableCredential.Contents()
+		detectedVersions := common.DetectVCDataModelVersion(contents.Context)
+		if !hasOverlap(detectedVersions, cv.vcDataModelVersions) {
+			// The @context is logged alongside the detected versions: a credential with an
+			// absent or unrecognized base context detects as no version at all, so the
+			// version list on its own would not say why the credential was rejected.
+			logging.Log().Warnf("Credential validation failed: credential %q declares VC Data Model version(s) %v (from @context %v), which is not in the allowed list %v",
+				contents.ID, detectedVersions, contents.Context, cv.vcDataModelVersions)
+			return false, ErrorVCDataModelVersionNotAccepted
+		}
+	}
+
 	if ok, err := validateCredentialDates(verifiableCredential.Contents(), cv.now()); !ok {
 		return false, err
 	}
@@ -171,6 +203,36 @@ func validateBaseContext(cred *common.Credential) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// hasOverlap reports whether slices a and b share at least one common element.
+func hasOverlap(a, b []string) bool {
+	set := make(map[string]bool, len(b))
+	for _, v := range b {
+		set[v] = true
+	}
+	for _, v := range a {
+		if set[v] {
+			return true
+		}
+	}
+	return false
+}
+
+// isVersionedDataModelCredential reports whether the credential takes part in the
+// W3C VC Data Model versioning.
+//
+// The decision is made on the credential format, not on the presence of a @context.
+// JSON-LD based credentials (`ldp_vc`, `jwt_vc`) MUST declare a recognized base
+// context, so one that does not is rejected by the version gate rather than exempted
+// from it: keying the exemption on an empty @context would let every credential whose
+// context could not be parsed bypass the gate.
+//
+// An SD-JWT VC (`dc+sd-jwt` / `vc+sd-jwt`) is the only exemption. It is an IETF
+// credential whose type is given by the `vct` claim; it has no @context and no data
+// model version, so the vcDataModelVersions allowlist cannot apply to it.
+func isVersionedDataModelCredential(credential *common.Credential) bool {
+	return credential.Format() != common.FormatSDJWT
 }
 
 // validateCredentialDates checks validFrom and validUntil against now, both bounds inclusive:

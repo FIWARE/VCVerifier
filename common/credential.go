@@ -6,6 +6,51 @@ import (
 	"time"
 )
 
+// VC Data Model version identifiers.
+const (
+	// VCDataModelVersion11 identifies the W3C VC Data Model v1.1.
+	VCDataModelVersion11 = "1.1"
+
+	// VCDataModelVersion20 identifies the W3C VC Data Model v2.0.
+	VCDataModelVersion20 = "2.0"
+)
+
+// vcDataModelVersionAll is the internal list of all recognized VC Data Model versions.
+// Access it only via VCDataModelVersionAll() to avoid accidental mutation.
+var vcDataModelVersionAll = []string{VCDataModelVersion11, VCDataModelVersion20}
+
+// VCDataModelVersionAll returns a fresh copy of all recognized VC Data Model
+// versions. A new slice is returned on every call so callers cannot mutate
+// the package-level source of truth.
+func VCDataModelVersionAll() []string {
+	return append([]string{}, vcDataModelVersionAll...)
+}
+
+// vcDataModelVersionAliases maps every accepted spelling of a VC Data Model version
+// onto its canonical identifier.
+//
+// The bare "1" and "2" exist because of YAML: an unquoted list such as
+// `vcDataModelVersions: [1.1, 2.0]` is read as floats, and stringifying those yields
+// ["1.1", "2"] - "2.0" loses its fractional part while "1.1" survives by accident of
+// its decimal representation. Rejecting the result would fail startup for a
+// configuration that looks correct, so the numeric spellings are accepted and
+// normalized instead.
+var vcDataModelVersionAliases = map[string]string{
+	"1":                  VCDataModelVersion11,
+	VCDataModelVersion11: VCDataModelVersion11,
+	"2":                  VCDataModelVersion20,
+	VCDataModelVersion20: VCDataModelVersion20,
+}
+
+// NormalizeVCDataModelVersion maps an accepted spelling of a VC Data Model version
+// onto its canonical identifier, reporting whether the version is recognized at all.
+// Besides the canonical "1.1" and "2.0", it accepts the "1" and "2" that YAML produces
+// for an unquoted version list.
+func NormalizeVCDataModelVersion(version string) (canonical string, ok bool) {
+	canonical, ok = vcDataModelVersionAliases[version]
+	return canonical, ok
+}
+
 // W3C Verifiable Credentials Data Model constants
 // See https://www.w3.org/TR/vc-data-model-2.0/
 const (
@@ -417,6 +462,46 @@ func WithCredentials(credentials ...*Credential) PresentationOpt {
 	return func(p *Presentation) {
 		p.AddCredentials(credentials...)
 	}
+}
+
+// contextToVersion maps context URIs to their VC Data Model version identifier.
+var contextToVersion = map[string]string{
+	ContextCredentialsV1: VCDataModelVersion11,
+	ContextCredentialsV2: VCDataModelVersion20,
+}
+
+// DetectVCDataModelVersion returns the VC Data Model version a credential or
+// presentation declares, derived from the FIRST entry of its @context.
+//
+// Both data models pin their base context to that position: VC Data Model 2.0 §4.3
+// requires the first item to be https://www.w3.org/ns/credentials/v2, and VC Data
+// Model 1.1 §4.1 requires the same for https://www.w3.org/2018/credentials/v1. A
+// base context appearing anywhere else does not determine the version, so it is not
+// matched - otherwise an arbitrary document could claim a version by appending the
+// base context after its own.
+//
+// The result is returned as a slice, holding at most one version, so that callers can
+// treat "no version declared" and "version declared" uniformly. It is empty when:
+//   - the @context is empty, or
+//   - the first entry is not a recognized base context, or
+//   - a base context of a DIFFERENT version follows the first: a document declaring
+//     both base contexts is valid under neither data model and must not satisfy either
+//     allowlist. A repetition of the same base context is redundant but unambiguous,
+//     and stays accepted.
+func DetectVCDataModelVersion(contexts []string) []string {
+	if len(contexts) == 0 {
+		return nil
+	}
+	version, isBaseContext := contextToVersion[contexts[0]]
+	if !isBaseContext {
+		return nil
+	}
+	for _, ctx := range contexts[1:] {
+		if otherVersion, isBaseContext := contextToVersion[ctx]; isBaseContext && otherVersion != version {
+			return nil
+		}
+	}
+	return []string{version}
 }
 
 // typedIDsToJSON converts a slice of TypedID to JSON-compatible format.
