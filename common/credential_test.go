@@ -615,3 +615,36 @@ func TestCredentialFormatConstants(t *testing.T) {
 		t.Errorf("FormatSDJWT mismatch: got %q", FormatSDJWT)
 	}
 }
+
+// TestNormalizeVCDataModelVersion covers every accepted spelling of a version
+// identifier, including the bare "1"/"2" that YAML produces for an unquoted
+// version list, plus values that must stay rejected.
+func TestNormalizeVCDataModelVersion(t *testing.T) {
+	tests := []struct {
+		name          string
+		version       string
+		wantCanonical string
+		wantOk        bool
+	}{
+		{name: "canonical 1.1", version: "1.1", wantCanonical: VCDataModelVersion11, wantOk: true},
+		{name: "canonical 2.0", version: "2.0", wantCanonical: VCDataModelVersion20, wantOk: true},
+		{name: "YAML-stringified 1", version: "1", wantCanonical: VCDataModelVersion11, wantOk: true},
+		{name: "YAML-stringified 2", version: "2", wantCanonical: VCDataModelVersion20, wantOk: true},
+		{name: "unsupported minor version", version: "2.1", wantOk: false},
+		{name: "unsupported major version", version: "3.0", wantOk: false},
+		{name: "trailing zero is not accepted", version: "2.00", wantOk: false},
+		{name: "empty version", version: "", wantOk: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			canonical, ok := NormalizeVCDataModelVersion(tc.version)
+			if ok != tc.wantOk {
+				t.Fatalf("NormalizeVCDataModelVersion(%q) ok = %v, want %v", tc.version, ok, tc.wantOk)
+			}
+			if ok && canonical != tc.wantCanonical {
+				t.Errorf("NormalizeVCDataModelVersion(%q) = %q, want %q", tc.version, canonical, tc.wantCanonical)
+			}
+		})
+	}
+}

@@ -1913,10 +1913,15 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	if len(verifierConfig.VCDataModelVersions) == 0 {
 		verifierConfig.VCDataModelVersions = common.VCDataModelVersionAll()
 	}
-	for _, v := range verifierConfig.VCDataModelVersions {
-		if !slices.Contains(common.VCDataModelVersionAll(), v) { //nolint:govet
-			return ErrorUnsupportedVCDataModelVersion
+	// Normalize in place, so the configured versions can be compared against the
+	// versions detected on a credential without repeating the aliasing per request.
+	for i, v := range verifierConfig.VCDataModelVersions { //nolint:govet
+		canonical, ok := common.NormalizeVCDataModelVersion(v)
+		if !ok {
+			return fmt.Errorf("%w: %q (supported: %v)", ErrorUnsupportedVCDataModelVersion,
+				v, common.VCDataModelVersionAll())
 		}
+		verifierConfig.VCDataModelVersions[i] = canonical
 	}
 
 	return nil

@@ -458,3 +458,17 @@ func TestReadConfig_EidasExplicitValues(t *testing.T) {
 	assert.Equal(t, []string{"DE", "FR"}, gotConfig.Eidas.Countries,
 		"Countries must match the configured value")
 }
+
+// TestReadConfigVCDataModelVersionsUnquoted pins the YAML decoding behaviour that
+// makes version normalization necessary: an unquoted list is read as floats, so
+// "2.0" arrives as "2" while "1.1" survives by accident of its decimal
+// representation. The verifier normalizes both spellings rather than failing
+// startup on a config that looks correct — see common.NormalizeVCDataModelVersion.
+func TestReadConfigVCDataModelVersionsUnquoted(t *testing.T) {
+	config.Reset()
+	gotConfig, err := ReadConfig("data/config_test_vc_versions_unquoted.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for an unquoted version list")
+
+	assert.Equal(t, []string{"1.1", "2"}, gotConfig.Verifier.VCDataModelVersions,
+		"an unquoted YAML version list is decoded as floats, dropping the fractional zero")
+}

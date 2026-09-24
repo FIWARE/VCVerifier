@@ -26,6 +26,31 @@ func VCDataModelVersionAll() []string {
 	return append([]string{}, vcDataModelVersionAll...)
 }
 
+// vcDataModelVersionAliases maps every accepted spelling of a VC Data Model version
+// onto its canonical identifier.
+//
+// The bare "1" and "2" exist because of YAML: an unquoted list such as
+// `vcDataModelVersions: [1.1, 2.0]` is read as floats, and stringifying those yields
+// ["1.1", "2"] - "2.0" loses its fractional part while "1.1" survives by accident of
+// its decimal representation. Rejecting the result would fail startup for a
+// configuration that looks correct, so the numeric spellings are accepted and
+// normalized instead.
+var vcDataModelVersionAliases = map[string]string{
+	"1":                  VCDataModelVersion11,
+	VCDataModelVersion11: VCDataModelVersion11,
+	"2":                  VCDataModelVersion20,
+	VCDataModelVersion20: VCDataModelVersion20,
+}
+
+// NormalizeVCDataModelVersion maps an accepted spelling of a VC Data Model version
+// onto its canonical identifier, reporting whether the version is recognized at all.
+// Besides the canonical "1.1" and "2.0", it accepts the "1" and "2" that YAML produces
+// for an unquoted version list.
+func NormalizeVCDataModelVersion(version string) (canonical string, ok bool) {
+	canonical, ok = vcDataModelVersionAliases[version]
+	return canonical, ok
+}
+
 // W3C Verifiable Credentials Data Model constants
 // See https://www.w3.org/TR/vc-data-model-2.0/
 const (

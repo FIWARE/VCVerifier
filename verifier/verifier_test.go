@@ -141,6 +141,37 @@ func TestVerifyConfig(t *testing.T) {
 			}(),
 			expectedError: ErrorUnsupportedVCDataModelVersion,
 		},
+		{
+			// YAML reads an unquoted `vcDataModelVersions: [1.1, 2.0]` as floats, which
+			// stringify to ["1.1", "2"]. Both spellings are normalized rather than
+			// rejected, since the configuration looks correct to whoever wrote it.
+			testName: "Numeric YAML spellings are normalized.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{"1.1", "2"}
+				return c
+			}(),
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+		},
+		{
+			testName: "Bare major versions are normalized.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{"2", "1"}
+				return c
+			}(),
+			expectedVCDataModelVersions: []string{common.VCDataModelVersion20, common.VCDataModelVersion11},
+		},
+		{
+			// "2.1" is close enough to a valid version that the error has to name it.
+			testName: "Unsupported minor version is rejected and named.",
+			configToTest: func() configModel.Verifier {
+				c := validBase()
+				c.VCDataModelVersions = []string{"2.1"}
+				return c
+			}(),
+			expectedError: ErrorUnsupportedVCDataModelVersion,
+		},
 	}
 
 	for _, tc := range tests {
@@ -148,8 +179,21 @@ func TestVerifyConfig(t *testing.T) {
 			logging.Log().Info("TestVerifyConfig +++++++++++++++++ Running test: ", tc.testName)
 
 			verificationResult := verifyConfig(&tc.configToTest)
-			if verificationResult != tc.expectedError {
+			if !errors.Is(verificationResult, tc.expectedError) {
 				t.Errorf("%s - Expected %v but was %v.", tc.testName, tc.expectedError, verificationResult)
+			}
+			// An unsupported version must be named in the error: with a list of
+			// versions configured, an operator cannot otherwise tell which entry
+			// was rejected.
+			if errors.Is(verificationResult, ErrorUnsupportedVCDataModelVersion) {
+				for _, v := range tc.configToTest.VCDataModelVersions {
+					if _, ok := common.NormalizeVCDataModelVersion(v); ok {
+						continue
+					}
+					if !strings.Contains(verificationResult.Error(), v) {
+						t.Errorf("%s - Expected the error to name the rejected version %q but was %q.", tc.testName, v, verificationResult.Error())
+					}
+				}
 			}
 			if tc.expectedRequestMode != "" && tc.configToTest.RequestMode != tc.expectedRequestMode {
 				t.Errorf("%s - Expected resolved RequestMode %v but was %v.", tc.testName, tc.expectedRequestMode, tc.configToTest.RequestMode)
