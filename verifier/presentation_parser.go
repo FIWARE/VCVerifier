@@ -112,6 +112,13 @@ var ErrorUnexpectedCredentialEntryType = errors.New("unexpected_credential_entry
 // to: the signature would establish only that somebody signed the credential.
 var ErrorVCJWTNoIssuer = errors.New("vc_jwt_credential_has_no_issuer")
 
+// ErrorUnexpectedJWTType is returned when a token's JOSE typ header names a
+// format that does not belong in the position it was found in - a vp+jwt used
+// as a credential, a vc+jwt used as a presentation, or any type this verifier
+// does not implement. Dispatch on typ is exhaustive: an unrecognized value is
+// a rejection, never a fallthrough to the classic parser.
+var ErrorUnexpectedJWTType = errors.New("unexpected_jwt_typ_header")
+
 // ErrorVPJWTNoHolder is returned when a vp+jwt presentation names no presenter
 // at all - neither a `holder` property nor an `iss` claim. Presentation.Holder
 // becomes the subject of the issued token and drives holder validation, so a
@@ -257,14 +264,18 @@ func (cpp *ConfigurablePresentationParser) ParsePresentation(tokenBytes []byte) 
 func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byte) (*common.Presentation, error) {
 	// Dispatch on the JOSE typ header: vp+jwt presentations carry the
 	// presentation directly in the payload (no wrapping "vp" claim),
-	// while classic JWT VPs use a nested "vp" object.
-	if isVPJoseJWT(jwtMediaType(tokenBytes)) {
+	// while classic JWT VPs use a nested "vp" object. Anything else is
+	// rejected rather than guessed at.
+	isVPJose, err := assertPresentationJWTType(tokenBytes)
+	if err != nil {
+		return nil, err
+	}
+	if isVPJose {
 		return cpp.parseVPJosePresentation(tokenBytes)
 	}
 
 	var payload []byte
 	var holderKey jwk.Key
-	var err error
 	if cpp.ProofChecker != nil {
 		payload, holderKey, err = cpp.ProofChecker.VerifyJWTAndReturnKey(tokenBytes)
 	} else {
@@ -510,13 +521,28 @@ func (cpp *ConfigurablePresentationParser) parseEnvelopedCredential(vcMap map[st
 		return nil, ErrorEnvelopedCredentialMissingID
 	}
 
-	if !strings.HasPrefix(id, common.DataURISchemeVCJWT) {
+	// RFC 2397 makes the "data" scheme and the media type case-insensitive, so
+	// the prefix is matched that way. The rest of the URI is the JWS and keeps
+	// its case. Anything after the media type other than a comma - a parameter,
+	// a ";base64" variant, a different media type - is not a vc+jwt envelope.
+	if len(id) < len(common.DataURISchemeVCJWT) ||
+		!strings.EqualFold(id[:len(common.DataURISchemeVCJWT)], common.DataURISchemeVCJWT) {
 		return nil, ErrorEnvelopedCredentialInvalidDataURI
 	}
 
 	// Extract the compact JWS from the data: URI.
 	jws := id[len(common.DataURISchemeVCJWT):]
 	if jws == "" {
+		return nil, ErrorEnvelopedCredentialInvalidDataURI
+	}
+
+	// The envelope declares application/vc+jwt, so the token inside has to be
+	// one. Without this check the envelope's media type says nothing about what
+	// it carries: parseJWTCredential re-dispatches on the inner typ, and a
+	// legacy JWT-VC would be accepted under a vc+jwt label.
+	if !isVCJoseJWT(jwtMediaType([]byte(jws))) {
+		logging.Log().Warnf("Enveloped credential declares %s but the token inside is not a vc+jwt",
+			common.DataURISchemeVCJWT)
 		return nil, ErrorEnvelopedCredentialInvalidDataURI
 	}
 
@@ -545,13 +571,16 @@ func (cpp *ConfigurablePresentationParser) parseEnvelopedCredential(vcMap map[st
 func (cpp *ConfigurablePresentationParser) parseJWTCredential(tokenBytes []byte) (*common.Credential, error) {
 	// Dispatch on the JOSE typ header: vc+jwt credentials carry the payload
 	// directly (no wrapping "vc" claim), while classic JWT-VCs use a nested
-	// "vc" object.
-	if isVCJoseJWT(jwtMediaType(tokenBytes)) {
+	// "vc" object. Anything else is rejected rather than guessed at.
+	isVCJose, err := assertCredentialJWTType(tokenBytes)
+	if err != nil {
+		return nil, err
+	}
+	if isVCJose {
 		return cpp.parseVCJoseCredential(tokenBytes)
 	}
 
 	var payload []byte
-	var err error
 	if cpp.ProofChecker != nil {
 		payload, err = cpp.ProofChecker.VerifyJWT(tokenBytes)
 	} else {
@@ -1319,12 +1348,34 @@ func extractJWTPayload(token []byte) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(parts[1])
 }
 
+// JOSE header parameter names read directly from the protected header of a
+// compact serialization, before any signature check has run.
+const (
+	joseHeaderTyp = "typ"
+	joseHeaderCty = "cty"
+)
+
 // jwtMediaType reads the JOSE typ header from a compact JWT serialization and
 // returns its value. It base64url-decodes the first dot-delimited segment,
 // unmarshals it as JSON, and returns the "typ" field. When the token has no
 // typ header, is malformed, or does not contain valid JSON in the header
 // segment, an empty string is returned without error.
 func jwtMediaType(token []byte) string {
+	return jwtHeaderString(token, joseHeaderTyp)
+}
+
+// jwtContentType reads the JOSE cty header from a compact JWT serialization.
+// It returns an empty string when the header is absent or unreadable, on the
+// same terms as jwtMediaType.
+func jwtContentType(token []byte) string {
+	return jwtHeaderString(token, joseHeaderCty)
+}
+
+// jwtHeaderString base64url-decodes the first dot-delimited segment of a
+// compact JWT, unmarshals it as JSON, and returns the named string header.
+// A malformed token, a header segment that is not JSON, or a missing or
+// non-string member all yield an empty string without error.
+func jwtHeaderString(token []byte, name string) string {
 	parts := strings.SplitN(string(token), ".", 3)
 	if len(parts) < 2 {
 		return ""
@@ -1337,29 +1388,118 @@ func jwtMediaType(token []byte) string {
 	if err := json.Unmarshal(headerBytes, &header); err != nil {
 		return ""
 	}
-	typ, _ := header["typ"].(string)
-	return typ
+	value, _ := header[name].(string)
+	return value
+}
+
+// normalizeJOSEType canonicalizes a JOSE typ or cty header value so that two
+// spellings of one media type compare equal.
+//
+// RFC 7515 §4.1.9 lets a producer omit the "application/" prefix and requires a
+// recipient to treat "vc+jwt" and "application/vc+jwt" as the same type; media
+// types are case-insensitive besides. Comparing raw strings therefore misses
+// legitimate spellings — and because dispatch falls through on an unrecognized
+// typ, a missed spelling is not a rejection but a silent reinterpretation of
+// the token as some other format.
+func normalizeJOSEType(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	return strings.TrimPrefix(lowered, common.MediaTypeApplicationPrefix)
 }
 
 // isVCJoseJWT reports whether the given JWT typ header value identifies a
-// VC-JOSE-COSE credential (typ: vc+jwt). The comparison is case-insensitive
-// per RFC 7515 §4.1.9 (JOSE media type values are case-insensitive).
+// VC-JOSE-COSE credential (typ: vc+jwt), in any spelling RFC 7515 §4.1.9
+// permits.
 func isVCJoseJWT(typ string) bool {
-	return strings.EqualFold(typ, common.JWTTypVCJWT)
+	return normalizeJOSEType(typ) == common.JWTTypVCJWT
 }
 
 // isVPJoseJWT reports whether the given JWT typ header value identifies a
-// VC-JOSE-COSE presentation (typ: vp+jwt). The comparison is case-insensitive
-// per RFC 7515 §4.1.9 (JOSE media type values are case-insensitive).
+// VC-JOSE-COSE presentation (typ: vp+jwt), in any spelling RFC 7515 §4.1.9
+// permits.
 func isVPJoseJWT(typ string) bool {
-	return strings.EqualFold(typ, common.JWTTypVPJWT)
+	return normalizeJOSEType(typ) == common.JWTTypVPJWT
+}
+
+// isClassicJWTType reports whether a typ header value identifies the classic
+// JWT shape, where the credential or presentation sits in a "vc" or "vp" claim.
+// That shape is declared either by omitting typ or by the generic "JWT".
+func isClassicJWTType(typ string) bool {
+	normalized := normalizeJOSEType(typ)
+	return normalized == "" || normalized == common.JWTTypJWT
+}
+
+// assertCredentialJWTType checks that a token in a credential position declares
+// a type that belongs there, and says which parser it selects.
+//
+// Dispatch is exhaustive on purpose. While an unrecognized typ fell through to
+// the classic parser, a vp+jwt handed in where a credential was expected parsed
+// as a legacy JWT-VC with no "vc" claim — no error, and an all-but-empty
+// credential carrying an issuer. The same fallthrough silently downgraded any
+// spelling of vc+jwt that the comparison missed.
+func assertCredentialJWTType(token []byte) (isVCJose bool, err error) {
+	typ := jwtMediaType(token)
+	switch {
+	case isVCJoseJWT(typ):
+		if err := assertContentType(token, common.JWTCtyVC); err != nil {
+			return false, err
+		}
+		return true, nil
+	case isClassicJWTType(typ):
+		return false, nil
+	default:
+		logging.Log().Warnf("JWT rejected: typ %q is not valid in a credential position", typ)
+		return false, fmt.Errorf("%w: %q in a credential position", ErrorUnexpectedJWTType, typ)
+	}
+}
+
+// assertPresentationJWTType is the presentation-position counterpart of
+// assertCredentialJWTType: it accepts vp+jwt and the classic JWT VP, and
+// rejects everything else — a vc+jwt included, which previously surfaced as the
+// misleading "presentation contains no credentials".
+func assertPresentationJWTType(token []byte) (isVPJose bool, err error) {
+	typ := jwtMediaType(token)
+	switch {
+	case isVPJoseJWT(typ):
+		if err := assertContentType(token, common.JWTCtyVP); err != nil {
+			return false, err
+		}
+		return true, nil
+	case isClassicJWTType(typ):
+		return false, nil
+	default:
+		logging.Log().Warnf("JWT rejected: typ %q is not valid in a presentation position", typ)
+		return false, fmt.Errorf("%w: %q in a presentation position", ErrorUnexpectedJWTType, typ)
+	}
+}
+
+// assertContentType checks the optional cty header of a VC-JOSE-COSE token.
+// VC-JOSE-COSE §3.1.3 says cty SHOULD be "vc" for a credential and "vp" for a
+// presentation; a cty that contradicts the typ describes a token whose own
+// headers disagree about what it contains, which is rejected rather than
+// resolved in favour of one of them.
+func assertContentType(token []byte, expected string) error {
+	cty := jwtContentType(token)
+	if cty == "" {
+		return nil
+	}
+	if normalizeJOSEType(cty) != expected {
+		logging.Log().Warnf("JWT rejected: cty %q contradicts the declared typ", cty)
+		return fmt.Errorf("%w: cty %q, expected %q", ErrorUnexpectedJWTType, cty, expected)
+	}
+	return nil
 }
 
 // parseUnsignedJWTCredential extracts claims from a JWT VC without signature
 // verification. It inspects the JOSE typ header to distinguish vc+jwt
 // (VC-JOSE-COSE) tokens — whose payload IS the credential — from classic
-// jwt_vc tokens that wrap the credential inside a "vc" claim.
+// jwt_vc tokens that wrap the credential inside a "vc" claim, and rejects any
+// other type rather than falling back to one of them.
 func parseUnsignedJWTCredential(tokenString string) (*common.Credential, error) {
+	isVCJose, err := assertCredentialJWTType([]byte(tokenString))
+	if err != nil {
+		return nil, err
+	}
+
 	parts := strings.SplitN(tokenString, ".", 3)
 	if len(parts) < 2 {
 		return nil, ErrorInvalidJWTFormat
@@ -1373,11 +1513,7 @@ func parseUnsignedJWTCredential(tokenString string) (*common.Credential, error) 
 		return nil, err
 	}
 
-	// Detect vc+jwt (VC-JOSE-COSE) via the typ header. In a vc+jwt token
-	// the payload IS the credential, so we dispatch to vcJwtClaimsToCredential.
-	// Classic jwt_vc tokens (typ absent or "JWT") wrap the credential in a "vc" claim.
-	typ := jwtMediaType([]byte(tokenString))
-	if isVCJoseJWT(typ) {
+	if isVCJose {
 		return vcJwtClaimsToCredential(claims)
 	}
 	return jwtClaimsToCredential(claims)

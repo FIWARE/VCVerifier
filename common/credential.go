@@ -208,7 +208,27 @@ const (
 
 	// JWTTypVPJWT is the JWT typ header value for VC-JOSE-COSE presentations.
 	JWTTypVPJWT = "vp+jwt"
+
+	// JWTTypJWT is the generic typ header value of a classic JWT. Together with
+	// an absent typ it identifies the JWT-VC 1.1 / JWT-VP shapes, where the
+	// credential or presentation sits in a "vc" or "vp" claim.
+	JWTTypJWT = "jwt"
 )
+
+// JWT cty header values for VC-JOSE-COSE content types (VC-JOSE-COSE §3.1.3,
+// which says cty SHOULD be "vc" for a credential and "vp" for a presentation).
+const (
+	// JWTCtyVC is the cty header value of a secured verifiable credential.
+	JWTCtyVC = "vc"
+
+	// JWTCtyVP is the cty header value of a secured verifiable presentation.
+	JWTCtyVP = "vp"
+)
+
+// MediaTypeApplicationPrefix is the prefix RFC 7515 §4.1.9 allows producers to
+// omit from a typ or cty header value: a recipient must treat "vc+jwt" and
+// "application/vc+jwt" as the same media type.
+const MediaTypeApplicationPrefix = "application/"
 
 // TypeEnvelopedVerifiableCredential is the JSON-LD type for credentials
 // embedded inside a VP via a data: URI (VCDM 2.0 §4.13).
@@ -216,6 +236,9 @@ const TypeEnvelopedVerifiableCredential = "EnvelopedVerifiableCredential"
 
 // DataURISchemeVCJWT is the data: URI prefix for vc+jwt credentials
 // embedded as EnvelopedVerifiableCredential (VCDM 2.0 §4.13).
+//
+// RFC 2397 makes the "data" scheme and the media type case-insensitive, so
+// callers compare against this prefix case-insensitively rather than literally.
 const DataURISchemeVCJWT = "data:application/vc+jwt,"
 
 // Credential represents a Verifiable Credential.

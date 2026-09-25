@@ -3853,3 +3853,274 @@ func TestParseVPJosePresentation_HolderBinding(t *testing.T) {
 func (cpp *ConfigurablePresentationParser) parsePresentationForTest(token []byte) (*common.Presentation, error) {
 	return cpp.parseJWTPresentation(token)
 }
+
+// --- Exhaustive JOSE typ dispatch ---
+
+// TestNormalizeJOSEType covers the spellings RFC 7515 §4.1.9 makes equivalent.
+func TestNormalizeJOSEType(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "plain", value: "vc+jwt", want: "vc+jwt"},
+		{name: "with the application prefix", value: "application/vc+jwt", want: "vc+jwt"},
+		{name: "upper case", value: "VC+JWT", want: "vc+jwt"},
+		{name: "upper case with prefix", value: "Application/VC+JWT", want: "vc+jwt"},
+		{name: "surrounding whitespace", value: "  vp+jwt  ", want: "vp+jwt"},
+		{name: "empty", value: "", want: ""},
+		{name: "unrelated type is left alone", value: "at+jwt", want: "at+jwt"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, normalizeJOSEType(tc.value))
+		})
+	}
+}
+
+// TestJWTTypeDispatchIsExhaustive checks that a token is parsed as the format
+// its typ header declares, in every spelling of it, and rejected when the type
+// does not belong in the position it was found in.
+//
+// The failure this prevents is not a missed rejection but a silent
+// reinterpretation: dispatch used to fall through to the classic parser, so a
+// vp+jwt in a credential position parsed as a legacy JWT-VC with no "vc" claim
+// — no error and an all-but-empty credential — and any spelling of vc+jwt that
+// the comparison missed was quietly downgraded to the legacy format.
+func TestJWTTypeDispatchIsExhaustive(t *testing.T) {
+	signerKey, signerDID := generateTestKeyAndDIDJWK(t)
+
+	credentialPayload := map[string]interface{}{
+		common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV2},
+		common.JSONLDKeyType:    []interface{}{"VerifiableCredential"},
+		common.VCKeyIssuer:      signerDID,
+		"credentialSubject":     map[string]interface{}{"id": "did:web:subject.example.com"},
+	}
+	classicPayload := map[string]interface{}{
+		common.JWTClaimIss: signerDID,
+		common.JWTClaimVC: map[string]interface{}{
+			common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV1},
+			common.JSONLDKeyType:    []interface{}{"VerifiableCredential"},
+			"credentialSubject":     map[string]interface{}{"id": "did:web:subject.example.com"},
+		},
+	}
+	presentationPayload := map[string]interface{}{
+		common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV2},
+		common.JSONLDKeyType:    []interface{}{"VerifiablePresentation"},
+		common.VPKeyHolder:      signerDID,
+	}
+	classicVPPayload := map[string]interface{}{
+		common.JWTClaimIss: signerDID,
+		common.JWTClaimVP: map[string]interface{}{
+			common.JSONLDKeyType: []interface{}{"VerifiablePresentation"},
+		},
+	}
+
+	t.Run("credential position", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			typ        string
+			payload    map[string]interface{}
+			wantFormat string
+			wantErr    error
+		}{
+			{name: "vc+jwt", typ: "vc+jwt", payload: credentialPayload, wantFormat: common.FormatVCJWT},
+			{name: "application/vc+jwt", typ: "application/vc+jwt", payload: credentialPayload, wantFormat: common.FormatVCJWT},
+			{name: "VC+JWT", typ: "VC+JWT", payload: credentialPayload, wantFormat: common.FormatVCJWT},
+			{name: "Application/VC+JWT", typ: "Application/VC+JWT", payload: credentialPayload, wantFormat: common.FormatVCJWT},
+			{name: "no typ is the classic format", typ: "", payload: classicPayload, wantFormat: common.FormatJWTVC},
+			{name: "JWT is the classic format", typ: "JWT", payload: classicPayload, wantFormat: common.FormatJWTVC},
+			{name: "a presentation is not a credential", typ: "vp+jwt", payload: presentationPayload, wantErr: ErrorUnexpectedJWTType},
+			{name: "an unknown type is rejected", typ: "at+jwt", payload: classicPayload, wantErr: ErrorUnexpectedJWTType},
+			{name: "an SD-JWT type is rejected", typ: "sd-jwt", payload: classicPayload, wantErr: ErrorUnexpectedJWTType},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				token := signVCJoseJWT(t, signerKey, tc.typ, signerDID+"#0", tc.payload)
+				cred, err := vcJoseTestParser().parseJWTCredential(token)
+
+				if tc.wantErr != nil {
+					assert.ErrorIs(t, err, tc.wantErr)
+					assert.Nil(t, cred)
+					return
+				}
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantFormat, cred.Format())
+			})
+		}
+	})
+
+	t.Run("presentation position", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			typ     string
+			payload map[string]interface{}
+			wantErr error
+		}{
+			{name: "vp+jwt", typ: "vp+jwt", payload: presentationPayload},
+			{name: "application/vp+jwt", typ: "application/vp+jwt", payload: presentationPayload},
+			{name: "VP+JWT", typ: "VP+JWT", payload: presentationPayload},
+			{name: "no typ is the classic format", typ: "", payload: classicVPPayload},
+			{name: "JWT is the classic format", typ: "JWT", payload: classicVPPayload},
+			{name: "a credential is not a presentation", typ: "vc+jwt", payload: credentialPayload, wantErr: ErrorUnexpectedJWTType},
+			{name: "an unknown type is rejected", typ: "at+jwt", payload: classicVPPayload, wantErr: ErrorUnexpectedJWTType},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				token := signVCJoseJWT(t, signerKey, tc.typ, signerDID+"#0", tc.payload)
+				pres, err := vcJoseTestParser().parsePresentationForTest(token)
+
+				if tc.wantErr != nil {
+					assert.ErrorIs(t, err, tc.wantErr)
+					assert.Nil(t, pres)
+					return
+				}
+				require.NoError(t, err)
+				assert.Equal(t, signerDID, pres.Holder)
+			})
+		}
+	})
+}
+
+// TestJWTContentTypeMustAgreeWithType checks the optional cty header: a token
+// whose own headers disagree about what it contains is rejected rather than
+// resolved in favour of one of them.
+func TestJWTContentTypeMustAgreeWithType(t *testing.T) {
+	signerKey, signerDID := generateTestKeyAndDIDJWK(t)
+
+	tests := []struct {
+		name    string
+		cty     string
+		wantErr error
+	}{
+		{name: "cty absent", cty: ""},
+		{name: "cty vc", cty: "vc"},
+		{name: "cty application/vc", cty: "application/vc"},
+		{name: "cty VC", cty: "VC"},
+		{name: "cty vp on a credential", cty: "vp", wantErr: ErrorUnexpectedJWTType},
+		{name: "cty of an unrelated type", cty: "json", wantErr: ErrorUnexpectedJWTType},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]interface{}{
+				common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV2},
+				common.JSONLDKeyType:    []interface{}{"VerifiableCredential"},
+				common.VCKeyIssuer:      signerDID,
+			}
+			token := signVCJoseJWTWithCty(t, signerKey, common.JWTTypVCJWT, tc.cty, signerDID+"#0", payload)
+			cred, err := vcJoseTestParser().parseJWTCredential(token)
+
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, cred)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, common.FormatVCJWT, cred.Format())
+		})
+	}
+}
+
+// signVCJoseJWTWithCty signs a compact JWT carrying both a typ and a cty header.
+func signVCJoseJWTWithCty(t *testing.T, privKey ljwk.Key, typ, cty, kid string, payload map[string]interface{}) []byte {
+	t.Helper()
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	headers := jws.NewHeaders()
+	require.NoError(t, headers.Set("typ", typ))
+	if cty != "" {
+		require.NoError(t, headers.Set("cty", cty))
+	}
+	require.NoError(t, headers.Set(jws.KeyIDKey, kid))
+
+	signed, err := jws.Sign(payloadBytes, jws.WithKey(jwa.ES256(), privKey, jws.WithProtectedHeaders(headers)))
+	require.NoError(t, err)
+	return signed
+}
+
+// TestParseEnvelopedCredential_MediaTypeBinding checks that the envelope's
+// declared media type constrains what is inside it and that the data: URI is
+// matched on RFC 2397's terms.
+func TestParseEnvelopedCredential_MediaTypeBinding(t *testing.T) {
+	signerKey, signerDID := generateTestKeyAndDIDJWK(t)
+
+	vcJose := string(signVCJoseJWT(t, signerKey, common.JWTTypVCJWT, signerDID+"#0", map[string]interface{}{
+		common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV2},
+		common.JSONLDKeyType:    []interface{}{"VerifiableCredential"},
+		common.VCKeyIssuer:      signerDID,
+	}))
+	classic := string(signVCJoseJWT(t, signerKey, "", signerDID+"#0", map[string]interface{}{
+		common.JWTClaimIss: signerDID,
+		common.JWTClaimVC: map[string]interface{}{
+			common.JSONLDKeyType: []interface{}{"VerifiableCredential"},
+		},
+	}))
+
+	tests := []struct {
+		name    string
+		id      string
+		wantErr error
+	}{
+		{
+			name: "a vc+jwt under the vc+jwt media type",
+			id:   "data:application/vc+jwt," + vcJose,
+		},
+		{
+			// RFC 2397 makes the scheme and media type case-insensitive.
+			name: "the media type spelled in mixed case",
+			id:   "Data:Application/VC+JWT," + vcJose,
+		},
+		{
+			// The envelope says vc+jwt; parseJWTCredential re-dispatches on the
+			// inner typ, so without this check the label meant nothing.
+			name:    "a legacy JWT-VC under the vc+jwt media type",
+			id:      "data:application/vc+jwt," + classic,
+			wantErr: ErrorEnvelopedCredentialInvalidDataURI,
+		},
+		{
+			name:    "a base64 data URI variant",
+			id:      "data:application/vc+jwt;base64," + vcJose,
+			wantErr: ErrorEnvelopedCredentialInvalidDataURI,
+		},
+		{
+			name:    "an unexpected media type",
+			id:      "data:application/json," + vcJose,
+			wantErr: ErrorEnvelopedCredentialInvalidDataURI,
+		},
+		{
+			name:    "an empty payload after the media type",
+			id:      "data:application/vc+jwt,",
+			wantErr: ErrorEnvelopedCredentialInvalidDataURI,
+		},
+		{
+			name:    "not a data URI at all",
+			id:      "https://example.com/credentials/1",
+			wantErr: ErrorEnvelopedCredentialInvalidDataURI,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			envelope := map[string]interface{}{
+				common.JSONLDKeyContext: common.ContextCredentialsV2,
+				common.JSONLDKeyType:    common.TypeEnvelopedVerifiableCredential,
+				"id":                    tc.id,
+			}
+
+			cred, err := vcJoseTestParser().parseEnvelopedCredential(envelope, nil)
+
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, cred)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, common.FormatVCJWT, cred.Format())
+		})
+	}
+}
