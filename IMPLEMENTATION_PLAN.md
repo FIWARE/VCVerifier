@@ -4,6 +4,347 @@
 
 VCVerifier currently only handles JWT VCs/VPs using the VCDM 1.1 wrapper-claim pattern (a nested `vc` or `vp` JSON object inside the JWT payload). The W3C VC-JOSE-COSE specification (https://www.w3.org/TR/vc-jose-cose/) defines a new securing mechanism where the JWT payload **is** the credential or presentation directly (`typ: vc+jwt` / `vp+jwt`), and introduces `EnvelopedVerifiableCredential` as an embedding format inside VPs. This plan adds support for all three features while keeping the existing JWT-VC 1.1 path unchanged.
 
+## Supported Credential and Presentation Formats
+
+This section documents all credential and presentation formats supported by VCVerifier — both the existing ones and the new VC-JOSE-COSE formats this plan adds. Examples use the VC Data Model 1.1 context (`https://www.w3.org/2018/credentials/v1`) for existing formats and the VC Data Model 2.0 context (`https://www.w3.org/ns/credentials/v2`) for the new JOSE formats.
+
+### Credential Formats
+
+#### 1. JWT VC (`jwt_vc`) — existing
+
+A JWT-encoded Verifiable Credential where the JWT payload wraps the credential inside a `vc` claim. The issuer, dates, and subject are duplicated at the JWT top level using standard JWT claims (`iss`, `nbf`, `exp`, `sub`).
+
+**JOSE header:**
+```json
+{
+  "alg": "ES256",
+  "typ": "JWT",
+  "kid": "did:web:issuer.example.com#key-1"
+}
+```
+
+**JWT payload:**
+```json
+{
+  "iss": "did:web:issuer.example.com",
+  "sub": "did:web:subject.example.com",
+  "nbf": 1700000000,
+  "exp": 1800000000,
+  "iat": 1700000000,
+  "jti": "urn:uuid:11111111-2222-3333-4444-555555555555",
+  "vc": {
+    "@context": ["https://www.w3.org/2018/credentials/v1"],
+    "type": ["VerifiableCredential"],
+    "credentialSubject": {
+      "id": "did:web:subject.example.com",
+      "name": "Alice"
+    }
+  }
+}
+```
+
+**Key characteristics:**
+- Format constant: `common.FormatJWTVC` (`"jwt_vc"`)
+- The `vc` claim holds the JSON-LD credential structure without `issuer`, `issuanceDate`, or `expirationDate` — those are represented by `iss`, `nbf`, and `exp` at the JWT level.
+- Parsed by `jwtClaimsToCredential` in `verifier/presentation_parser.go`.
+
+#### 2. JSON-LD VC (`ldp_vc`) — existing
+
+A JSON-LD Verifiable Credential secured with a Linked Data Proof (`JsonWebSignature2020`). The credential is a JSON-LD document with a `proof` object containing a detached JWS signature.
+
+```json
+{
+  "@context": [
+    "https://www.w3.org/2018/credentials/v1",
+    "https://w3id.org/security/suites/jws-2020/v1"
+  ],
+  "type": ["VerifiableCredential"],
+  "id": "urn:uuid:11111111-2222-3333-4444-555555555555",
+  "issuer": "did:web:issuer.example.com",
+  "issuanceDate": "2024-01-01T00:00:00Z",
+  "credentialSubject": {
+    "id": "did:web:subject.example.com",
+    "name": "Alice"
+  },
+  "proof": {
+    "type": "JsonWebSignature2020",
+    "created": "2024-01-01T00:00:00Z",
+    "verificationMethod": "did:web:issuer.example.com#key-1",
+    "proofPurpose": "assertionMethod",
+    "jws": "eyJhbGciOiJFUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..signature"
+  }
+}
+```
+
+**Key characteristics:**
+- Format constant: `common.FormatLDPVC` (`"ldp_vc"`)
+- Uses URDNA2015 canonicalization for signature verification.
+- The `proof.jws` is a detached JWS with `b64=false` (payload not base64-encoded).
+- VC Data Model 1.1 uses `issuanceDate`/`expirationDate`; VC Data Model 2.0 uses `validFrom`/`validUntil`.
+- Parsed by `parseAndVerifyJSONLDCredential` in `verifier/presentation_parser.go`.
+- Proof verified by `ld_proof_checker.go`.
+
+#### 3. SD-JWT VC (`sd-jwt`) — existing
+
+An SD-JWT Verifiable Credential with selective disclosure. The JWT payload is the credential itself (no `vc` wrapper); selectively disclosable claims are replaced by hashes and appended as disclosures.
+
+**JOSE header:**
+```json
+{
+  "alg": "ES256",
+  "kid": "did:web:issuer.example.com#key-1"
+}
+```
+
+**JWT payload:**
+```json
+{
+  "iss": "did:web:issuer.example.com",
+  "vct": "VerifiableCredential",
+  "iat": 1700000000,
+  "name": "Alice",
+  "_sd_alg": "sha-256",
+  "_sd": ["hash-of-disclosed-claim"],
+  "cnf": {
+    "jwk": { "kty": "EC", "crv": "P-256", "x": "...", "y": "..." }
+  }
+}
+```
+
+**Wire format:**
+```
+<header>.<payload>.<signature>~<disclosure1>~<disclosure2>~
+```
+
+Each disclosure is a base64url-encoded JSON array `[salt, claim-name, claim-value]`. The trailing `~` separators delimit the disclosures.
+
+**Key characteristics:**
+- Format constant: `common.FormatSDJWT` (`"sd-jwt"`)
+- Exempt from the VC Data Model version gate (no `@context`).
+- Holder binding via `cnf` claim (confirmation method) rather than `holder`/`credentialSubject.id`.
+- Parsed by `ConfigurableSdJwtParser.ParseWithSdJwt` in `verifier/presentation_parser.go`.
+
+#### 4. `vc+jwt` — new (VC-JOSE-COSE)
+
+A JWT-encoded Verifiable Credential per the W3C VC-JOSE-COSE specification. The JWT payload **is** the credential — there is no wrapping `vc` claim. Identified by the JOSE `typ` header value `vc+jwt`.
+
+**JOSE header:**
+```json
+{
+  "alg": "ES256",
+  "typ": "vc+jwt",
+  "kid": "did:web:issuer.example.com#key-1"
+}
+```
+
+**JWT payload:**
+```json
+{
+  "@context": ["https://www.w3.org/ns/credentials/v2"],
+  "type": ["VerifiableCredential"],
+  "issuer": "did:web:issuer.example.com",
+  "validFrom": "2024-01-01T00:00:00Z",
+  "credentialSubject": {
+    "id": "did:web:subject.example.com",
+    "name": "Alice"
+  }
+}
+```
+
+**Key characteristics:**
+- Format constant: `common.FormatVCJWT` (`"vc+jwt"`)
+- The JWT payload IS the JSON-LD credential. No `vc` claim, no `iss`/`nbf`/`exp` duplication — the JSON-LD fields are authoritative.
+- VC-JOSE-COSE §3.3.1: `iss` maps to `issuer`, `sub` maps to `credentialSubject[0].id`, `jti` maps to `id`, `nbf`/`iat` maps to `validFrom`, `exp` maps to `validUntil`. Both JWT-level and payload-level spellings are accepted.
+- Subject to the VC Data Model version gate (carries `@context`).
+- Parsed by `vcJwtClaimsToCredential` in `verifier/presentation_parser.go`.
+
+#### 5. `EnvelopedVerifiableCredential` — new (VCDM 2.0)
+
+A secured credential embedded inside a VP via a `data:` URI (VCDM 2.0 §4.13). The credential appears as a JSON-LD object in the VP's `verifiableCredential` array with type `EnvelopedVerifiableCredential` and an `id` that is a `data:application/vc+jwt,<compact-JWS>` URI.
+
+```json
+{
+  "@context": "https://www.w3.org/ns/credentials/v2",
+  "type": "EnvelopedVerifiableCredential",
+  "id": "data:application/vc+jwt,eyJhbGciOiJFUzI1NiIsInR5cCI6InZjK2p3dCJ9.eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCJdLCJpc3N1ZXIiOiJkaWQ6d2ViOmlzc3Vlci5leGFtcGxlLmNvbSIsInZhbGlkRnJvbSI6IjIwMjQtMDEtMDFUMDA6MDA6MDBaIiwiY3JlZGVudGlhbFN1YmplY3QiOnsiaWQiOiJkaWQ6d2ViOnN1YmplY3QuZXhhbXBsZS5jb20ifX0.signature"
+}
+```
+
+**Key characteristics:**
+- Not a separate format — the embedded JWT is parsed as a `vc+jwt` credential.
+- The `data:` URI must not have parameters (no `data:application/vc+jwt;base64,...`).
+- The `@context` on the envelope is for JSON-LD typing only — parsing uses the JWT inside the `id`.
+- Can appear inside any VP type: JWT VP, JSON-LD VP, or `vp+jwt` VP.
+- Parsed by `parseEnvelopedCredential` in `verifier/presentation_parser.go`.
+
+### Presentation Formats
+
+#### 1. JWT VP — existing
+
+A JWT-encoded Verifiable Presentation where the JWT payload wraps the presentation inside a `vp` claim.
+
+**JOSE header:**
+```json
+{
+  "alg": "ES256",
+  "typ": "JWT",
+  "kid": "did:web:holder.example.com#key-1"
+}
+```
+
+**JWT payload:**
+```json
+{
+  "iss": "did:web:holder.example.com",
+  "vp": {
+    "@context": ["https://www.w3.org/2018/credentials/v1"],
+    "type": ["VerifiablePresentation"],
+    "holder": "did:web:holder.example.com",
+    "verifiableCredential": [
+      "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkaWQ6d2ViOmlzc3Vlci5leGFtcGxlLmNvbSIsInZjIjp7fX0.signature"
+    ]
+  }
+}
+```
+
+**Key characteristics:**
+- The `vp` claim holds the JSON-LD presentation structure.
+- `verifiableCredential` entries can be JWT VC strings, SD-JWT strings, or JSON-LD VC objects.
+- `iss` at the JWT level maps to the holder.
+- Parsed by `parseJWTPresentation` in `verifier/presentation_parser.go`.
+
+#### 2. JSON-LD VP (`ldp_vp`) — existing
+
+A JSON-LD Verifiable Presentation secured with a Linked Data Proof (`JsonWebSignature2020`).
+
+```json
+{
+  "@context": [
+    "https://www.w3.org/2018/credentials/v1",
+    "https://w3id.org/security/suites/jws-2020/v1"
+  ],
+  "type": ["VerifiablePresentation"],
+  "holder": "did:web:holder.example.com",
+  "verifiableCredential": [
+    {
+      "@context": [
+        "https://www.w3.org/2018/credentials/v1",
+        "https://w3id.org/security/suites/jws-2020/v1"
+      ],
+      "type": ["VerifiableCredential"],
+      "issuer": "did:web:issuer.example.com",
+      "issuanceDate": "2024-01-01T00:00:00Z",
+      "credentialSubject": {
+        "id": "did:web:subject.example.com",
+        "name": "Alice"
+      },
+      "proof": {
+        "type": "JsonWebSignature2020",
+        "created": "2024-01-01T00:00:00Z",
+        "verificationMethod": "did:web:issuer.example.com#key-1",
+        "proofPurpose": "assertionMethod",
+        "jws": "eyJhbGciOiJFUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..vc-signature"
+      }
+    }
+  ],
+  "proof": {
+    "type": "JsonWebSignature2020",
+    "created": "2024-01-01T00:00:00Z",
+    "verificationMethod": "did:web:holder.example.com#key-1",
+    "proofPurpose": "authentication",
+    "challenge": "server-issued-nonce",
+    "domain": "https://verifier.example.com",
+    "jws": "eyJhbGciOiJFUzI1NiIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..vp-signature"
+  }
+}
+```
+
+**Key characteristics:**
+- The VP proof uses `proofPurpose: "authentication"` and may carry `challenge` and `domain`.
+- The credential proofs use `proofPurpose: "assertionMethod"`.
+- Holder binding: `credentialSubject.id` must match `holder`.
+- Parsed by `parseJSONLDPresentation` in `verifier/presentation_parser.go`.
+- Proofs verified by `ld_proof_checker.go`.
+
+#### 3. SD-JWT VP — existing
+
+An SD-JWT Verifiable Presentation. The VP is a JWT with a `vp` claim containing SD-JWT credential strings. Holder binding uses a Key Binding JWT (KB-JWT) instead of a `holder` field.
+
+**JOSE header:**
+```json
+{
+  "alg": "ES256",
+  "kid": "did:web:holder.example.com#key-1"
+}
+```
+
+**JWT payload:**
+```json
+{
+  "iss": "did:web:holder.example.com",
+  "vp": {
+    "@context": ["https://www.w3.org/2018/credentials/v1"],
+    "type": ["VerifiablePresentation"],
+    "verifiableCredential": [
+      "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJkaWQ6d2ViOmlzc3Vlci5leGFtcGxlLmNvbSIsInZjdCI6IlZlcmlmaWFibGVDcmVkZW50aWFsIiwiX3NkX2FsZyI6InNoYS0yNTYifQ.signature~WyJzYWx0IiwibmFtZSIsIkFsaWNlIl0~"
+    ]
+  }
+}
+```
+
+**Key characteristics:**
+- VP structure is the same as a JWT VP (`vp` claim wrapper).
+- Each `verifiableCredential` entry is an SD-JWT compact string (with `~`-delimited disclosures).
+- Holder binding via KB-JWT appended after the final `~` separator.
+- Parsed by `ConfigurableSdJwtParser.ParseWithSdJwt`.
+
+#### 4. `vp+jwt` — new (VC-JOSE-COSE)
+
+A JWT-encoded Verifiable Presentation per the W3C VC-JOSE-COSE specification. The JWT payload **is** the presentation — there is no wrapping `vp` claim. Identified by the JOSE `typ` header value `vp+jwt`.
+
+**JOSE header:**
+```json
+{
+  "alg": "ES256",
+  "typ": "vp+jwt",
+  "kid": "did:web:holder.example.com#key-1"
+}
+```
+
+**JWT payload:**
+```json
+{
+  "@context": ["https://www.w3.org/ns/credentials/v2"],
+  "type": ["VerifiablePresentation"],
+  "holder": "did:web:holder.example.com",
+  "verifiableCredential": [
+    {
+      "@context": "https://www.w3.org/ns/credentials/v2",
+      "type": "EnvelopedVerifiableCredential",
+      "id": "data:application/vc+jwt,eyJhbGciOiJFUzI1NiIsInR5cCI6InZjK2p3dCJ9.eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXX0.signature"
+    }
+  ]
+}
+```
+
+**Key characteristics:**
+- Format constant: `common.FormatVPJWT` (`"vp+jwt"`)
+- The JWT payload IS the JSON-LD presentation. No `vp` claim, no `iss` duplication — `holder` is read directly from the payload.
+- `verifiableCredential` entries can be JWT VC strings (`jwt_vc` or `vc+jwt`), `EnvelopedVerifiableCredential` objects, or JSON-LD VC objects.
+- VC-JOSE-COSE §3.3.2: `iss` maps to `holder`, `jti` maps to `id`.
+- Parsed by `parseVPJWTPresentation` in `verifier/presentation_parser.go`.
+
+### Format Dispatch Summary
+
+| Token shape | `typ` header | Format | Parser |
+|---|---|---|---|
+| Compact JWT (no `~`) | absent / `JWT` | `jwt_vc` / JWT VP | `parseJWTCredential` / `parseJWTPresentation` |
+| Compact JWT | `vc+jwt` | `vc+jwt` | `parseJWTCredential` → `vcJwtClaimsToCredential` |
+| Compact JWT | `vp+jwt` | `vp+jwt` | `parseJWTPresentation` → `parseVPJWTPresentation` |
+| Compact JWT with `~` disclosures | — | `sd-jwt` | `ParseWithSdJwt` |
+| JSON object (`{...}`) | — | `ldp_vc` / `ldp_vp` | `parseJSONLDPresentation` / `parseAndVerifyJSONLDCredential` |
+| JSON object with `type: EnvelopedVerifiableCredential` | — | embedded `vc+jwt` | `parseEnvelopedCredential` |
+
 ## Steps
 
 ### Step 1: Add VC-JOSE-COSE constants and `typ` header detection
@@ -68,6 +409,7 @@ The `jwtMediaType()` helper in `presentation_parser.go` should base64-decode the
 - `@context` → `Context` (read directly from the payload, not from a `vc` wrapper)
 - `type` → `Types` (read directly from the payload)
 - `issuer` → fallback for `Issuer.ID` if `iss` is absent; handle both string and `{"id": "..."}` forms
+- `sub` → `credentialSubject[0].id` (VC-JOSE-COSE §3.3.1: `sub` MUST be set when the credential has a single `credentialSubject` with an `id` property; if both `sub` and `credentialSubject[0].id` are present, `sub` takes precedence)
 - `credentialSubject` → `Subject` (same extraction as current `jwtClaimsToCredential` for the vc-claim sub-object)
 - `credentialStatus` → `Status` (same extraction)
 - `nbf`/`iat` → `ValidFrom`, `exp` → `ValidUntil` (same priority as existing)
@@ -113,7 +455,7 @@ In `parseJWTPresentation`:
 - If `typ != "vp+jwt"` (or absent), fall through to the existing path that reads the `vp` claim.
 
 In `tokenToPresentation` (openapi/api_api.go):
-- The SD-JWT parser's `ParseWithSdJwt` tries to read a `vp` claim and fails when it's absent. A `vp+jwt` token would currently fail there, fall through, and reach `ParsePresentation`. Verify that this fallthrough works correctly by adding a test for a `vp+jwt` token going through `tokenToPresentation`. If the SD-JWT parser returns an error other than `ErrorPresentationNoCredentials` for a `vp+jwt` token (e.g., `ErrorInvalidProof`), short-circuit the fallthrough by checking the JWT `typ` before trying the SD-JWT path.
+- The SD-JWT parser's `ParseWithSdJwt` tries to read a `vp` claim and fails when it's absent. A `vp+jwt` token has no `vp` claim, so `ParseWithSdJwt` returns `ErrorPresentationNoCredentials`, which causes the existing fallthrough to `ParsePresentation` — this already works correctly without any code change. Add a test to confirm this behavior for a `vp+jwt` token going through `tokenToPresentation`.
 
 **Acceptance criteria:**
 - A `vp+jwt` token with top-level `verifiableCredential`, `holder`, `@context`, `type` is parsed into a correct `Presentation`.
@@ -188,14 +530,15 @@ Apply the same pattern in `parseJSONLDPresentation` and `parseVPJWTPresentation`
 
 **Files affected:**
 - `verifier/jwt_verifier.go` — Update `isVersionedDataModelCredential` to include `FormatVCJWT` as a versioned credential format (it carries `@context`, unlike SD-JWT).
-- `verifier/credential_status_client.go` — Update `parseStatusListCredentialBody` / `parseUnsignedJWTCredential` to handle `vc+jwt` status list credentials (where the JWT payload has top-level `@context`, `type`, `credentialSubject` instead of a `vc` wrapper).
+- `verifier/presentation_parser.go` — The `parseUnsignedJWTCredential` function body lives here (called from `credential_status_client.go`). Update it to detect the `typ` header and dispatch to `vcJwtClaimsToCredential` for `vc+jwt` tokens.
+- `verifier/credential_status_client.go` — Contains the call site for `parseUnsignedJWTCredential` (line 326). No code change needed here, but tests should verify the end-to-end flow.
 - `verifier/jwt_verifier_test.go` — Tests for the version gate with `vc+jwt` credentials.
 - `verifier/credential_status_client_test.go` — Tests for `vc+jwt` status list credential parsing.
 
 **Details:**
 
 **Version gate:**
-`isVersionedDataModelCredential` currently exempts only `FormatSDJWT`. A `vc+jwt` credential carries `@context` and participates in the W3C data model versioning, so it should go through the version gate. No code change needed if `FormatVCJWT != FormatSDJWT` (already true). Verify with a test.
+`isVersionedDataModelCredential` currently exempts only `FormatSDJWT` — every other format is subject to the version gate (`credential.Format() != common.FormatSDJWT`). Since `FormatVCJWT` (`"vc+jwt"`) is not `FormatSDJWT` (`"sd-jwt"`), a `vc+jwt` credential is already subject to the version gate with no code change required. This is correct because `vc+jwt` carries `@context` and participates in the W3C data model versioning. This sub-step only requires adding a test to confirm the existing version gate handles `FormatVCJWT` correctly.
 
 **Status-list parsing:**
 `parseUnsignedJWTCredential` (called at line 326 of `credential_status_client.go`) calls `jwtClaimsToCredential`, which reads the `vc` claim. A VC-JOSE-COSE status-list credential (`typ: vc+jwt`) would have top-level claims. Update `parseUnsignedJWTCredential` to detect the `typ` header and dispatch to `vcJwtClaimsToCredential` (from Step 2) when `typ == "vc+jwt"`, otherwise fall through to the existing `jwtClaimsToCredential`.
