@@ -32,6 +32,40 @@ func ParseCredentialDates(raw JSONObject) (validFrom, validUntil *time.Time) {
 	return validFrom, validUntil
 }
 
+// ParseCredentialStatus extracts the first credentialStatus entry of a raw
+// credential as a *TypedID.
+//
+// VCDM 2.0 allows credentialStatus to be either a single object or an array of
+// them; the full value stays reachable through the credential's raw JSON for
+// callers that need every entry.
+//
+// This is the one place the mapping lives. It used to be duplicated per parser
+// and simply missing from ParseCredentialJSON, whose standardKeys set listed
+// credentialStatus - so the field was neither copied into contents.Status nor
+// kept as a custom field. Nothing errored; revocation checking just silently
+// had nothing to check.
+func ParseCredentialStatus(raw interface{}) *TypedID {
+	switch v := raw.(type) {
+	case map[string]interface{}:
+		return typedIDFromMap(v)
+	case []interface{}:
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				return typedIDFromMap(m)
+			}
+		}
+	}
+	return nil
+}
+
+// typedIDFromMap reads the id and type members of a JSON object, treating a
+// missing or non-string member as empty.
+func typedIDFromMap(m map[string]interface{}) *TypedID {
+	id, _ := m[JSONLDKeyID].(string)
+	typ, _ := m[JSONLDKeyType].(string)
+	return &TypedID{ID: id, Type: typ}
+}
+
 // ParseCredentialJSON parses a Verifiable Credential from its JSON representation.
 func ParseCredentialJSON(data []byte) (*Credential, error) {
 	var raw JSONObject
@@ -68,6 +102,8 @@ func ParseCredentialJSON(data []byte) (*Credential, error) {
 	if cs, ok := raw[VCKeyCredentialSubject]; ok {
 		contents.Subject = parseSubjects(cs)
 	}
+
+	contents.Status = ParseCredentialStatus(raw[VCKeyCredentialStatus])
 
 	// Collect non-standard fields as custom fields
 	standardKeys := map[string]bool{

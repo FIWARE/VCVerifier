@@ -96,8 +96,17 @@ In a `vc+jwt` credential, the JWT payload **is** the credential (no `vc` claim w
 object with `"type": "EnvelopedVerifiableCredential"` whose `id` is a
 `data:application/vc+jwt,<compact-JWS>` URI is extracted and parsed as a `vc+jwt` credential.
 
-`vc+jwt` credentials participate in the VC Data Model version gate (they carry `@context`), so
-`verifier.vcDataModelVersions` applies to them the same way it applies to `jwt_vc` and `ldp_vc`.
+Neither format names its signer in the envelope: a `vc+jwt` is verified against a key
+belonging to the `issuer` property it carries, and a `vp+jwt` against a key belonging to its
+`holder`. Holder binding uses RFC 7800 `cnf` (VC-JOSE-COSE §4.1.3); VCDM 2.0's
+`confirmationMethod` is a reserved property with no defined semantics and is not implemented.
+
+A `vc+jwt` must carry the VCDM 2.0 base context — VC-JOSE-COSE §3.1.1 secures a 2.0 document,
+so a v1.1 payload is not a well-formed `vc+jwt` whatever `verifier.vcDataModelVersions` allows.
+Beyond that requirement, `vc+jwt` credentials participate in the version gate (they carry
+`@context`) the same way `jwt_vc` and `ldp_vc` credentials do.
+
+See [VC-JOSE-COSE support](vc-jose-cose.md) for the claim rules and the verification paths.
 
 ### Not supported
 

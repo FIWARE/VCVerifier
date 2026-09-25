@@ -82,7 +82,8 @@ var ErrorHolderSubjectMismatch = errors.New("credential_subject_does_not_match_h
 
 // ErrorIssClaimIssuerMismatch is returned when a vc+jwt credential carries
 // both an `iss` JWT claim and an `issuer` payload field that disagree.
-// VC-JOSE-COSE §3.3.1 requires them to be equal when both are present.
+// VC-JOSE-COSE §3.1.3 makes `iss` a redundant copy of `issuer`, so the two
+// must agree when both are present.
 var ErrorIssClaimIssuerMismatch = errors.New("vc_jwt_iss_claim_does_not_match_issuer_field")
 
 // ErrorEnvelopedCredentialMissingID is returned when an
@@ -96,9 +97,10 @@ var ErrorEnvelopedCredentialMissingID = errors.New("enveloped_credential_missing
 var ErrorEnvelopedCredentialInvalidDataURI = errors.New("enveloped_credential_invalid_data_uri")
 
 // ErrorIssClaimHolderMismatch is returned when a vp+jwt presentation carries
-// both an `iss` JWT claim and a `holder` payload field that disagree.
-// VC-JOSE-COSE §3.3.2 requires iss to represent the holder property when
-// both are present.
+// both an `iss` JWT claim and a `holder` payload field that disagree. The
+// presenter is the `holder` property; VC-JOSE-COSE registers `iss` for key
+// discovery (§4.1.2) and defines no iss → holder mapping, so an `iss` naming
+// somebody else describes a token that contradicts itself.
 var ErrorIssClaimHolderMismatch = errors.New("vp_jwt_iss_claim_does_not_match_holder_field")
 
 // ErrorUnexpectedCredentialEntryType is returned when a verifiableCredential
@@ -275,6 +277,7 @@ func InitPresentationParser(config *configModel.Configuration, healthCheck *heal
 
 	return nil
 }
+
 // ParsePresentation parses a VP from either JWT or JSON-LD format and
 // verifies it. JWT VPs are verified via the configured JWTProofChecker,
 // JSON-LD VPs via the configured LDProofChecker. Both paths are fail-closed:
@@ -386,20 +389,6 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 	return pres, nil
 }
 
-// parseVPJWTPresentation parses a vp+jwt presentation (VC-JOSE-COSE §3.3.2).
-// In a vp+jwt token the JWT payload IS the presentation: @context, type,
-// holder, and verifiableCredential are top-level claims — there is no
-// wrapping "vp" object.
-//
-// The presenter is named by the payload's "holder" property; "jti" maps to ID
-// and "@context", "type" and "verifiableCredential" are read directly.
-//
-// Each entry in verifiableCredential is handled as follows:
-//   - string: a JWT VC (either vc+jwt or classic jwt_vc — parseJWTCredential
-//     dispatches transparently)
-//   - map with type "EnvelopedVerifiableCredential": the data: URI in "id"
-//     is extracted and parsed as a vc+jwt credential
-//   - map (other): a JSON-LD VC that carries its own Linked Data Proof
 // parseVPJosePresentation parses and verifies a vp+jwt presentation
 // (VC-JOSE-COSE).
 //
@@ -438,6 +427,20 @@ func (cpp *ConfigurablePresentationParser) parseVPJosePresentation(tokenBytes []
 	return cpp.parseVPJWTPresentation(claims, holderKey)
 }
 
+// parseVPJWTPresentation parses a vp+jwt presentation (VC-JOSE-COSE §3.1.2).
+// In a vp+jwt token the JWT payload IS the presentation: @context, type,
+// holder, and verifiableCredential are top-level claims — there is no
+// wrapping "vp" object.
+//
+// The presenter is named by the payload's "holder" property; "jti" maps to ID
+// and "@context", "type" and "verifiableCredential" are read directly.
+//
+// Each entry in verifiableCredential is handled as follows:
+//   - string: a JWT VC (either vc+jwt or classic jwt_vc — parseJWTCredential
+//     dispatches transparently)
+//   - map with type "EnvelopedVerifiableCredential": the data: URI in "id"
+//     is extracted and parsed as a vc+jwt credential
+//   - map (other): a JSON-LD VC that carries its own Linked Data Proof
 func (cpp *ConfigurablePresentationParser) parseVPJWTPresentation(claims map[string]interface{}, holderKey jwk.Key) (*common.Presentation, error) {
 	pres, _ := common.NewPresentation()
 	if holderKey != nil {
@@ -838,12 +841,7 @@ func jwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, e
 		}
 
 		// Extract credentialStatus for revocation checking (W3C VC Data Model 2.0 §7.1).
-		if status, ok := vcClaim[common.VCKeyCredentialStatus].(map[string]interface{}); ok {
-			contents.Status = &common.TypedID{
-				ID:   stringFromMap(status, common.JSONLDKeyID),
-				Type: stringFromMap(status, common.JSONLDKeyType),
-			}
-		}
+		contents.Status = common.ParseCredentialStatus(vcClaim[common.VCKeyCredentialStatus])
 	}
 
 	if nbf, ok := claims[common.JWTClaimNbf].(float64); ok {
@@ -893,15 +891,17 @@ func jwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, e
 // the top-level claims include @context, type, issuer, credentialSubject,
 // validFrom, validUntil, etc. There is no wrapping "vc" claim.
 //
-// Claim mapping follows VC-JOSE-COSE §3.3.1:
-//   - iss  → Issuer.ID  (takes precedence over the payload "issuer" field)
-//   - jti  → ID
-//   - sub  → credentialSubject[0].id  (takes precedence over embedded id)
-//   - nbf/iat → ValidFrom, exp → ValidUntil  (JWT numeric dates)
-//   - Payload-level validFrom/validUntil (RFC 3339 strings) are used as fallback
-//   - @context, type, credentialSubject, credentialStatus are read directly
-//     from the top-level payload
-//   - cnf  → preserved in custom fields for holder binding
+// @context, type, issuer, credentialSubject, credentialStatus and the validity
+// dates are read directly from the top-level payload, and `cnf` is preserved in
+// the custom fields for holder binding.
+//
+// The registered claims VC-JOSE-COSE §3.1.3 names are redundant copies of
+// document properties, not inputs that overrule them:
+//   - iss  reconciled with `issuer`
+//   - sub  reconciled with credentialSubject[0].id, single subject only
+//   - jti  reconciled with `id`
+//   - nbf  may only delay `validFrom`; exp may only bring `validUntil` forward
+//   - iat  is the signature's issuance time and says nothing about validity
 func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, error) {
 	if err := assertNoReservedVCJoseClaims(claims); err != nil {
 		return nil, err
@@ -969,7 +969,7 @@ func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential,
 	// VCDM 2.0 allows credentialStatus to be a single object or an array.
 	// Extract the first entry for contents.Status; the full value is still
 	// available via ToRawJSON() for callers that need every entry.
-	contents.Status = extractFirstCredentialStatus(claims[common.VCKeyCredentialStatus])
+	contents.Status = common.ParseCredentialStatus(claims[common.VCKeyCredentialStatus])
 
 	// --- Validity window ---
 	// VC-JOSE-COSE §3.1.3 is explicit that iat and exp "represent the issuance
@@ -1047,14 +1047,6 @@ func parseOneSubjectFromClaims(m map[string]interface{}) common.Subject {
 	return s
 }
 
-// stringFromMap safely extracts a string value from a map.
-func stringFromMap(m map[string]interface{}, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
 // extractPayloadIssuerID returns the issuer identity string from the payload's
 // "issuer" field (which may be a plain string or an {"id": ...} object).
 // Returns "" when the field is absent or has an unrecognised shape.
@@ -1072,32 +1064,6 @@ func extractPayloadIssuerID(claims map[string]interface{}) string {
 		}
 	}
 	return ""
-}
-
-// extractFirstCredentialStatus extracts the first credentialStatus entry as a
-// *common.TypedID. The input may be a single map or an array of maps (VCDM 2.0
-// allows both). Returns nil when no valid entry is found.
-func extractFirstCredentialStatus(raw interface{}) *common.TypedID {
-	if raw == nil {
-		return nil
-	}
-	switch v := raw.(type) {
-	case map[string]interface{}:
-		return &common.TypedID{
-			ID:   stringFromMap(v, common.JSONLDKeyID),
-			Type: stringFromMap(v, common.JSONLDKeyType),
-		}
-	case []interface{}:
-		for _, item := range v {
-			if m, ok := item.(map[string]interface{}); ok {
-				return &common.TypedID{
-					ID:   stringFromMap(m, common.JSONLDKeyID),
-					Type: stringFromMap(m, common.JSONLDKeyType),
-				}
-			}
-		}
-	}
-	return nil
 }
 
 // parseJSONLDPresentation parses a JSON-LD Verifiable Presentation and
@@ -1661,12 +1627,7 @@ func parseJSONLDCredential(vcMap map[string]interface{}) (*common.Credential, er
 	}
 
 	// Extract credentialStatus for revocation checking.
-	if status, ok := vcMap[common.VCKeyCredentialStatus].(map[string]interface{}); ok {
-		contents.Status = &common.TypedID{
-			ID:   stringFromMap(status, common.JSONLDKeyID),
-			Type: stringFromMap(status, common.JSONLDKeyType),
-		}
-	}
+	contents.Status = common.ParseCredentialStatus(vcMap[common.VCKeyCredentialStatus])
 
 	cred, err := common.CreateCredential(contents, common.CustomFields{})
 	if err != nil {

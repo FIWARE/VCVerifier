@@ -148,8 +148,22 @@ Credential issuers may be identified by an HTTPS URL instead of a DID — see `d
 - **`validationMode: combined` and `jsonLd`** do not perform real JSON-LD validation — they only check that issuer and type fields are present. They are deprecated but still accepted.
 - **Verification relationships are only enforced when the DID document declares them.** A `did:web` document that lists `verificationMethod` but neither `authentication` nor `assertionMethod` falls back to the flat method list with a warning.
 - **Data Integrity suites other than `JsonWebSignature2020`** (`proofValue`-based cryptosuites) are parsed but not verified. VC 2.0 issuers are more likely to use these than `JsonWebSignature2020`.
-- **VC-JOSE-COSE is not supported.** VCDM 2.0 secures JWTs with `typ: vc+jwt` / `vp+jwt`, where the payload *is* the credential/presentation. `jwtClaimsToCredential` reads `claims["vc"]` and both JWT VP parsers require the `vp` claim, so a `vc+jwt` credential parses empty and a `vp+jwt` presentation is rejected with `ErrorPresentationNoCredentials`.
-- **`EnvelopedVerifiableCredential`** (VCDM 2.0 §4.13, `data:application/vc+jwt,…` inside a VP) is not recognized.
+- **VCDM 2.0's `confirmationMethod` is not implemented.** Holder binding on every JWT path, `vp+jwt` included, uses RFC 7800 `cnf`, which VC-JOSE-COSE §4.1.3 registers for exactly that. `confirmationMethod` is a *reserved* property in VCDM 2.0 with no defined semantics, so there is nothing to implement against yet; the choice is recorded in `docs/vc-jose-cose.md`.
+- **A `vp+jwt` may carry bare JWT strings in `verifiableCredential`.** VCDM 2.0 §4.13 expects credentials in a 2.0 presentation to be `EnvelopedVerifiableCredential` objects. Accepting bare strings is a deliberate leniency, and it is what lets a v1.1 `jwt_vc` ride inside a 2.0 presentation.
+- **COSE (`vc+cose`) is not supported.** Only the JOSE half of VC-JOSE-COSE is implemented.
+
+## VC-JOSE-COSE
+
+`vc+jwt` credentials, `vp+jwt` presentations and `EnvelopedVerifiableCredential` are supported — see `docs/vc-jose-cose.md`. In short:
+
+- Neither format names its signer in the envelope, so neither can use `VerifyJWTAndReturnKey`, which derives the identity from `kid`/`iss`. `JWTProofChecker.VerifyJWTForIssuer(token, issuer)` takes the identity the caller read from the secured document instead: a `vc+jwt`'s `issuer` property, a `vp+jwt`'s `holder`. `VerifyJWTAndReturnKey` is a thin wrapper over the same code.
+- Parsing is therefore two-pass (`parseVCJoseCredential`, `parseVPJosePresentation`): decode the payload unverified and read **nothing** from it but the identity, verify against a key belonging to that identity, then re-read the document from the payload verification returned. Lying in the first pass does not help a forger — it means resolving the claimed issuer's key, which will not verify their signature.
+- A `vc+jwt` routinely carries no `kid`. `ResolveCandidateKeysFromDID` then treats every verification method the DID document declares as a candidate, mirroring what the HTTPS resolver does for a JWKS.
+- Registered claims are **redundant copies**, never overrides (`reconcileRedundantClaim`). `iss`/`issuer`, `sub`/`credentialSubject.id` and `jti`/`id` must agree where both are present. `iat` is not mapped at all — §3.1.3 says `iat` and `exp` time the *signature*, not the credential — and `nbf`/`exp` may only narrow the payload's validity window.
+- Dispatch on `typ` is **exhaustive** (`normalizeJOSEType`, `assertCredentialJWTType`, `assertPresentationJWTType`): an unrecognized type is rejected with `ErrorUnexpectedJWTType`, never reinterpreted as the legacy format. RFC 7515 §4.1.9 makes `vc+jwt` and `application/vc+jwt` the same type, in any case. A `cty` contradicting the `typ` is rejected too.
+- An `EnvelopedVerifiableCredential`'s declared media type binds its contents: the token inside `data:application/vc+jwt,` must itself be a `vc+jwt`, since `parseJWTCredential` re-dispatches on the inner `typ`. The prefix is matched case-insensitively (RFC 2397); parameters and the `;base64` variant are rejected.
+- `vc`/`vp` claims are rejected outright (§1.1.2.1), and a `vc+jwt` must carry the VCDM 2.0 base context regardless of `verifier.vcDataModelVersions` — that setting says which data models are acceptable, not what a `vc+jwt` is.
+- `vc+jwt` status lists go through `VerifyStatusListJWTForIssuer` and have **no** fallback. The `x5c` fallback on `VerifyStatusListJWT` takes a key from the token's own certificate without validating a chain; it stays only for the IETF Token Status List path, which deliberately accepts issuerless lists.
 
 ## VC Data Model Versions
 
