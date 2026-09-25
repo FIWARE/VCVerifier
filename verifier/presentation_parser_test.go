@@ -3525,9 +3525,9 @@ func TestParsePresentation_DispatchesEnvelopedInClassicJWTVP(t *testing.T) {
 	assert.Equal(t, issuerDID, pres.Credentials()[0].Contents().Issuer.ID)
 }
 
-// --- Parameterized test for enveloped credentials across all VP types ---
+// --- Parameterized test for enveloped credentials across JWT-based VP types ---
 
-func TestEnvelopedCredential_InAllVPTypes(t *testing.T) {
+func TestEnvelopedCredential_InJWTVPTypes(t *testing.T) {
 	issuerDID := "did:web:issuer.example.com"
 	subjectDID := "did:web:subject.example.com"
 	holderDID := "did:web:holder.example.com"
