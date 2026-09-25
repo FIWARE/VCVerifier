@@ -272,11 +272,6 @@ func (jpc *JWTProofChecker) verifyHttpsIssuerJWT(token []byte, issuerURL string,
 	return payload, key, nil
 }
 
-// resolveKey delegates to the shared ResolveKeyFromDID function.
-func (jpc *JWTProofChecker) resolveKey(didStr, kid string) (jwk.Key, error) {
-	return ResolveKeyFromDID(jpc.registry, didStr, kid)
-}
-
 // resolveKeys delegates to the shared ResolveCandidateKeysFromDID function, which
 // narrows to a single verification method when a kid is present and offers all of
 // them when it is not.
