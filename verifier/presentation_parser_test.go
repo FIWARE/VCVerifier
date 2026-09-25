@@ -1997,3 +1997,400 @@ func TestIsVPJoseJWT(t *testing.T) {
 		})
 	}
 }
+
+// --- Tests for vcJwtClaimsToCredential ---
+
+// buildFakeVCJoseJWT constructs a fake compact JWT with a custom typ header
+// and the given payload. It is NOT cryptographically signed — it uses a
+// dummy signature, which is sufficient for unit tests that parse claims
+// without verifying the JWS.
+func buildFakeVCJoseJWT(t *testing.T, typ string, payload map[string]interface{}) []byte {
+	t.Helper()
+	header := map[string]interface{}{
+		"alg": "ES256",
+	}
+	if typ != "" {
+		header["typ"] = typ
+	}
+	headerJSON, err := json.Marshal(header)
+	require.NoError(t, err)
+	payloadJSON, err := json.Marshal(payload)
+	require.NoError(t, err)
+	h := base64.RawURLEncoding.EncodeToString(headerJSON)
+	p := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	return []byte(h + "." + p + ".fakesig")
+}
+
+func TestVcJwtClaimsToCredential_FullClaims(t *testing.T) {
+	nbf := float64(1700000000)
+	exp := float64(1700100000)
+	claims := map[string]interface{}{
+		"iss": "did:web:issuer.example.com",
+		"sub": "did:web:subject.example.com",
+		"jti": "urn:uuid:test-vc-jwt-id",
+		"nbf": nbf,
+		"exp": exp,
+		"@context": []interface{}{
+			"https://www.w3.org/ns/credentials/v2",
+		},
+		"type": []interface{}{"VerifiableCredential"},
+		"issuer": "did:web:issuer.example.com",
+		"credentialSubject": map[string]interface{}{
+			"id":   "did:web:subject.example.com",
+			"name": "Alice",
+		},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+
+	contents := cred.Contents()
+	assert.Equal(t, "did:web:issuer.example.com", contents.Issuer.ID)
+	assert.Equal(t, "urn:uuid:test-vc-jwt-id", contents.ID)
+	assert.Equal(t, []string{"https://www.w3.org/ns/credentials/v2"}, contents.Context)
+	assert.Equal(t, []string{"VerifiableCredential"}, contents.Types)
+
+	require.Len(t, contents.Subject, 1)
+	// sub takes precedence over credentialSubject[0].id
+	assert.Equal(t, "did:web:subject.example.com", contents.Subject[0].ID)
+	assert.Equal(t, "Alice", contents.Subject[0].CustomFields["name"])
+
+	require.NotNil(t, contents.ValidFrom)
+	assert.Equal(t, time.Unix(int64(nbf), 0), *contents.ValidFrom)
+	require.NotNil(t, contents.ValidUntil)
+	assert.Equal(t, time.Unix(int64(exp), 0), *contents.ValidUntil)
+
+	// rawJSON should be the full claims map, not a sub-object
+	raw := cred.ToRawJSON()
+	assert.NotNil(t, raw)
+	assert.Equal(t, "did:web:issuer.example.com", raw["iss"])
+	assert.NotNil(t, raw["@context"])
+}
+
+func TestVcJwtClaimsToCredential_IssuerAsObject(t *testing.T) {
+	claims := map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer": map[string]interface{}{
+			"id":   "did:web:issuer-object.example.com",
+			"name": "Issuer Corp",
+		},
+		"credentialSubject": map[string]interface{}{
+			"id": "did:web:subject.example.com",
+		},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+	// No iss claim, should fall back to issuer object's id
+	assert.Equal(t, "did:web:issuer-object.example.com", cred.Contents().Issuer.ID)
+}
+
+func TestVcJwtClaimsToCredential_IssClaimTakesPrecedenceOverIssuerField(t *testing.T) {
+	claims := map[string]interface{}{
+		"iss":      "did:web:iss-claim-issuer.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer":   "did:web:payload-issuer.example.com",
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+	assert.Equal(t, "did:web:iss-claim-issuer.example.com", cred.Contents().Issuer.ID)
+}
+
+func TestVcJwtClaimsToCredential_SubTakesPrecedenceOverSubjectID(t *testing.T) {
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"sub":      "did:web:sub-claim-subject.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"credentialSubject": map[string]interface{}{
+			"id":   "did:web:payload-subject.example.com",
+			"name": "Bob",
+		},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+
+	require.Len(t, cred.Contents().Subject, 1)
+	assert.Equal(t, "did:web:sub-claim-subject.example.com", cred.Contents().Subject[0].ID)
+	// Custom fields should still be preserved
+	assert.Equal(t, "Bob", cred.Contents().Subject[0].CustomFields["name"])
+}
+
+func TestVcJwtClaimsToCredential_SubWithoutCredentialSubject(t *testing.T) {
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"sub":      "did:web:subject-only.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+
+	require.Len(t, cred.Contents().Subject, 1)
+	assert.Equal(t, "did:web:subject-only.example.com", cred.Contents().Subject[0].ID)
+}
+
+func TestVcJwtClaimsToCredential_NoIssuer(t *testing.T) {
+	claims := map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+	assert.Nil(t, cred.Contents().Issuer)
+}
+
+func TestVcJwtClaimsToCredential_CredentialStatus(t *testing.T) {
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"credentialStatus": map[string]interface{}{
+			"id":   "https://example.com/status/1#42",
+			"type": "BitstringStatusListEntry",
+		},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+	require.NotNil(t, cred.Contents().Status)
+	assert.Equal(t, "https://example.com/status/1#42", cred.Contents().Status.ID)
+	assert.Equal(t, "BitstringStatusListEntry", cred.Contents().Status.Type)
+}
+
+func TestVcJwtClaimsToCredential_DateFallbackToPayloadStrings(t *testing.T) {
+	// No JWT numeric claims — should fall back to VCDM 2.0 validFrom/validUntil
+	claims := map[string]interface{}{
+		"iss":       "did:web:issuer.example.com",
+		"@context":  []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":      []interface{}{"VerifiableCredential"},
+		"validFrom": "2024-01-01T00:00:00Z",
+		"validUntil": "2025-01-01T00:00:00Z",
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+
+	expectedFrom, _ := time.Parse(time.RFC3339, "2024-01-01T00:00:00Z")
+	expectedUntil, _ := time.Parse(time.RFC3339, "2025-01-01T00:00:00Z")
+	require.NotNil(t, cred.Contents().ValidFrom)
+	assert.Equal(t, expectedFrom, *cred.Contents().ValidFrom)
+	require.NotNil(t, cred.Contents().ValidUntil)
+	assert.Equal(t, expectedUntil, *cred.Contents().ValidUntil)
+}
+
+func TestVcJwtClaimsToCredential_NumericDatesOverridePayloadStrings(t *testing.T) {
+	// Both JWT numeric claims and VCDM 2.0 string dates present —
+	// numeric claims should take precedence.
+	nbf := float64(1700000000)
+	exp := float64(1700100000)
+	claims := map[string]interface{}{
+		"iss":        "did:web:issuer.example.com",
+		"nbf":        nbf,
+		"exp":        exp,
+		"@context":   []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":       []interface{}{"VerifiableCredential"},
+		"validFrom":  "2024-01-01T00:00:00Z",
+		"validUntil": "2025-01-01T00:00:00Z",
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+
+	require.NotNil(t, cred.Contents().ValidFrom)
+	assert.Equal(t, time.Unix(int64(nbf), 0), *cred.Contents().ValidFrom)
+	require.NotNil(t, cred.Contents().ValidUntil)
+	assert.Equal(t, time.Unix(int64(exp), 0), *cred.Contents().ValidUntil)
+}
+
+func TestVcJwtClaimsToCredential_IatFallback(t *testing.T) {
+	// iat used when nbf is absent
+	iat := float64(1700000000)
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"iat":      iat,
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+
+	require.NotNil(t, cred.Contents().ValidFrom)
+	assert.Equal(t, time.Unix(int64(iat), 0), *cred.Contents().ValidFrom)
+}
+
+func TestVcJwtClaimsToCredential_CnfPreserved(t *testing.T) {
+	cnf := map[string]interface{}{
+		"jwk": map[string]interface{}{
+			"kty": "EC",
+			"crv": "P-256",
+			"x":   "base64x",
+			"y":   "base64y",
+		},
+	}
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"cnf":      cnf,
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+
+	cf := cred.CustomFields()
+	assert.NotNil(t, cf["cnf"])
+}
+
+func TestVcJwtClaimsToCredential_MultipleSubjects(t *testing.T) {
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"credentialSubject": []interface{}{
+			map[string]interface{}{"id": "did:web:alice.example.com", "name": "Alice"},
+			map[string]interface{}{"id": "did:web:bob.example.com", "name": "Bob"},
+		},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+
+	require.Len(t, cred.Contents().Subject, 2)
+	assert.Equal(t, "did:web:alice.example.com", cred.Contents().Subject[0].ID)
+	assert.Equal(t, "did:web:bob.example.com", cred.Contents().Subject[1].ID)
+}
+
+func TestVcJwtClaimsToCredential_IDFromPayload(t *testing.T) {
+	// When jti is absent, fall back to payload-level "id"
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"id":       "urn:uuid:payload-level-id",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+	assert.Equal(t, "urn:uuid:payload-level-id", cred.Contents().ID)
+}
+
+func TestVcJwtClaimsToCredential_JtiTakesPrecedenceOverID(t *testing.T) {
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"jti":      "urn:uuid:jti-id",
+		"id":       "urn:uuid:payload-id",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+	assert.Equal(t, "urn:uuid:jti-id", cred.Contents().ID)
+}
+
+func TestVcJwtClaimsToCredential_IssuerStringFallback(t *testing.T) {
+	// No iss claim — fall back to payload "issuer" as a string
+	claims := map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer":   "did:web:string-issuer.example.com",
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+	assert.Equal(t, "did:web:string-issuer.example.com", cred.Contents().Issuer.ID)
+}
+
+// --- Tests for parseJWTCredential typ dispatch ---
+
+func TestParseJWTCredential_VCJoseJWTDispatch(t *testing.T) {
+	payload := map[string]interface{}{
+		"iss": "did:web:issuer.example.com",
+		"@context": []interface{}{
+			"https://www.w3.org/ns/credentials/v2",
+		},
+		"type": []interface{}{"VerifiableCredential"},
+		"credentialSubject": map[string]interface{}{
+			"id":   "did:web:subject.example.com",
+			"name": "Alice",
+		},
+	}
+
+	token := buildFakeVCJoseJWT(t, "vc+jwt", payload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	cred, err := parser.parseJWTCredential(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, common.FormatVCJWT, cred.Format())
+	assert.Equal(t, "did:web:issuer.example.com", cred.Contents().Issuer.ID)
+	assert.Equal(t, []string{"https://www.w3.org/ns/credentials/v2"}, cred.Contents().Context)
+	assert.Equal(t, []string{"VerifiableCredential"}, cred.Contents().Types)
+	require.Len(t, cred.Contents().Subject, 1)
+	assert.Equal(t, "did:web:subject.example.com", cred.Contents().Subject[0].ID)
+}
+
+func TestParseJWTCredential_ClassicJWTVCStillWorks(t *testing.T) {
+	// Classic JWT-VC with typ: JWT (not vc+jwt) — should go through the
+	// old jwtClaimsToCredential path.
+	payload := map[string]interface{}{
+		"iss": "did:web:classic-issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context":          []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":              []interface{}{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com"},
+		},
+	}
+
+	// buildFakeJWT uses typ: "JWT"
+	token := []byte(buildFakeJWT(payload))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	cred, err := parser.parseJWTCredential(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, common.FormatJWTVC, cred.Format())
+	assert.Equal(t, "did:web:classic-issuer.example.com", cred.Contents().Issuer.ID)
+}
+
+func TestParseJWTCredential_NoTypHeaderUsesClassicPath(t *testing.T) {
+	// JWT without any typ header — should be treated as classic JWT-VC.
+	payload := map[string]interface{}{
+		"iss": "did:web:no-typ-issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context":          []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":              []interface{}{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com"},
+		},
+	}
+
+	token := buildFakeVCJoseJWT(t, "", payload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	cred, err := parser.parseJWTCredential(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, common.FormatJWTVC, cred.Format())
+	assert.Equal(t, "did:web:no-typ-issuer.example.com", cred.Contents().Issuer.ID)
+}
+
+func TestParseJWTCredential_VCJoseJWT_CaseInsensitive(t *testing.T) {
+	// vc+jwt typ header should be case-insensitive
+	payload := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+	}
+
+	token := buildFakeVCJoseJWT(t, "VC+JWT", payload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	cred, err := parser.parseJWTCredential(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, common.FormatVCJWT, cred.Format())
+}
