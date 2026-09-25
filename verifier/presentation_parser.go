@@ -770,15 +770,17 @@ func jwtMediaType(token []byte) string {
 }
 
 // isVCJoseJWT reports whether the given JWT typ header value identifies a
-// VC-JOSE-COSE credential (typ: vc+jwt).
+// VC-JOSE-COSE credential (typ: vc+jwt). The comparison is case-insensitive
+// per RFC 7515 §4.1.9 (JOSE media type values are case-insensitive).
 func isVCJoseJWT(typ string) bool {
-	return typ == common.JWTTypVCJWT
+	return strings.EqualFold(typ, common.JWTTypVCJWT)
 }
 
 // isVPJoseJWT reports whether the given JWT typ header value identifies a
-// VC-JOSE-COSE presentation (typ: vp+jwt).
+// VC-JOSE-COSE presentation (typ: vp+jwt). The comparison is case-insensitive
+// per RFC 7515 §4.1.9 (JOSE media type values are case-insensitive).
 func isVPJoseJWT(typ string) bool {
-	return typ == common.JWTTypVPJWT
+	return strings.EqualFold(typ, common.JWTTypVPJWT)
 }
 
 // parseUnsignedJWTCredential extracts claims from a JWT VC without signature verification.

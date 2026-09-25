@@ -1962,7 +1962,9 @@ func TestIsVCJoseJWT(t *testing.T) {
 		typ  string
 		want bool
 	}{
-		{"vc+jwt", "vc+jwt", true},
+		{"vc+jwt lowercase", "vc+jwt", true},
+		{"vc+jwt uppercase", "VC+JWT", true},
+		{"vc+jwt mixed case", "Vc+Jwt", true},
 		{"vp+jwt is not vc+jwt", "vp+jwt", false},
 		{"JWT is not vc+jwt", "JWT", false},
 		{"empty is not vc+jwt", "", false},
@@ -1981,7 +1983,9 @@ func TestIsVPJoseJWT(t *testing.T) {
 		typ  string
 		want bool
 	}{
-		{"vp+jwt", "vp+jwt", true},
+		{"vp+jwt lowercase", "vp+jwt", true},
+		{"vp+jwt uppercase", "VP+JWT", true},
+		{"vp+jwt mixed case", "Vp+Jwt", true},
 		{"vc+jwt is not vp+jwt", "vc+jwt", false},
 		{"JWT is not vp+jwt", "JWT", false},
 		{"empty is not vp+jwt", "", false},

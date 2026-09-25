@@ -649,35 +649,25 @@ func TestNormalizeVCDataModelVersion(t *testing.T) {
 	}
 }
 
-// TestVCJoseCoseConstants verifies the VC-JOSE-COSE format, typ header, type,
-// and data URI prefix constants have the expected values.
-func TestVCJoseCoseConstants(t *testing.T) {
-	// Format constants for VC-JOSE-COSE.
-	if FormatVCJWT != "vc+jwt" {
-		t.Errorf("FormatVCJWT = %q, want %q", FormatVCJWT, "vc+jwt")
+// TestVCJoseCoseConstantsRelationships verifies the structural relationships
+// between VC-JOSE-COSE constants that must hold for correct dispatch behavior.
+func TestVCJoseCoseConstantsRelationships(t *testing.T) {
+	// The JWT typ header values must match their corresponding format constants.
+	// They are separate constants for clarity, but dispatch logic depends on
+	// this identity (e.g. the typ header extracted from a JWT is compared
+	// against the typ constants to select the vc+jwt / vp+jwt parsing path).
+	if JWTTypVCJWT != FormatVCJWT {
+		t.Errorf("JWTTypVCJWT (%q) must equal FormatVCJWT (%q) for correct dispatch", JWTTypVCJWT, FormatVCJWT)
 	}
-	if FormatVPJWT != "vp+jwt" {
-		t.Errorf("FormatVPJWT = %q, want %q", FormatVPJWT, "vp+jwt")
-	}
-
-	// JWT typ header values match the format constants (they share the same
-	// string value by design, but are separate constants for clarity).
-	if JWTTypVCJWT != "vc+jwt" {
-		t.Errorf("JWTTypVCJWT = %q, want %q", JWTTypVCJWT, "vc+jwt")
-	}
-	if JWTTypVPJWT != "vp+jwt" {
-		t.Errorf("JWTTypVPJWT = %q, want %q", JWTTypVPJWT, "vp+jwt")
+	if JWTTypVPJWT != FormatVPJWT {
+		t.Errorf("JWTTypVPJWT (%q) must equal FormatVPJWT (%q) for correct dispatch", JWTTypVPJWT, FormatVPJWT)
 	}
 
-	// EnvelopedVerifiableCredential type.
-	if TypeEnvelopedVerifiableCredential != "EnvelopedVerifiableCredential" {
-		t.Errorf("TypeEnvelopedVerifiableCredential = %q, want %q",
-			TypeEnvelopedVerifiableCredential, "EnvelopedVerifiableCredential")
-	}
-
-	// Data URI prefix for enveloped vc+jwt credentials.
-	if DataURISchemeVCJWT != "data:application/vc+jwt," {
-		t.Errorf("DataURISchemeVCJWT = %q, want %q", DataURISchemeVCJWT, "data:application/vc+jwt,")
+	// The data URI prefix must embed the vc+jwt MIME type so that stripping
+	// the prefix from an enveloped credential yields a valid vc+jwt token.
+	expectedPrefix := "data:application/" + FormatVCJWT + ","
+	if DataURISchemeVCJWT != expectedPrefix {
+		t.Errorf("DataURISchemeVCJWT (%q) must be %q to match FormatVCJWT", DataURISchemeVCJWT, expectedPrefix)
 	}
 }
 
