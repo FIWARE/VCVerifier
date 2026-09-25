@@ -2086,7 +2086,23 @@ func TestVcJwtClaimsToCredential_IssuerAsObject(t *testing.T) {
 	assert.Equal(t, "did:web:issuer-object.example.com", cred.Contents().Issuer.ID)
 }
 
-func TestVcJwtClaimsToCredential_IssClaimTakesPrecedenceOverIssuerField(t *testing.T) {
+func TestVcJwtClaimsToCredential_IssClaimMatchesIssuerField(t *testing.T) {
+	// When iss and issuer agree, the credential is accepted with iss as the issuer.
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer":   "did:web:issuer.example.com",
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+	assert.Equal(t, "did:web:issuer.example.com", cred.Contents().Issuer.ID)
+}
+
+func TestVcJwtClaimsToCredential_IssClaimMismatchIssuerFieldRejectsCredential(t *testing.T) {
+	// VC-JOSE-COSE §3.3.1: iss and issuer MUST be equal when both present.
+	// A mismatch is a malformed credential.
 	claims := map[string]interface{}{
 		"iss":      "did:web:iss-claim-issuer.example.com",
 		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
@@ -2094,9 +2110,26 @@ func TestVcJwtClaimsToCredential_IssClaimTakesPrecedenceOverIssuerField(t *testi
 		"issuer":   "did:web:payload-issuer.example.com",
 	}
 
-	cred, err := vcJwtClaimsToCredential(claims)
-	require.NoError(t, err)
-	assert.Equal(t, "did:web:iss-claim-issuer.example.com", cred.Contents().Issuer.ID)
+	_, err := vcJwtClaimsToCredential(claims)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorIssClaimIssuerMismatch)
+}
+
+func TestVcJwtClaimsToCredential_IssClaimMismatchIssuerObjectRejectsCredential(t *testing.T) {
+	// Same as above, but issuer is an object with an id field.
+	claims := map[string]interface{}{
+		"iss":      "did:web:iss-claim-issuer.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer": map[string]interface{}{
+			"id":   "did:web:object-issuer.example.com",
+			"name": "Acme Corp",
+		},
+	}
+
+	_, err := vcJwtClaimsToCredential(claims)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorIssClaimIssuerMismatch)
 }
 
 func TestVcJwtClaimsToCredential_SubTakesPrecedenceOverSubjectID(t *testing.T) {
@@ -2154,6 +2187,32 @@ func TestVcJwtClaimsToCredential_CredentialStatus(t *testing.T) {
 		"credentialStatus": map[string]interface{}{
 			"id":   "https://example.com/status/1#42",
 			"type": "BitstringStatusListEntry",
+		},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+	require.NotNil(t, cred.Contents().Status)
+	assert.Equal(t, "https://example.com/status/1#42", cred.Contents().Status.ID)
+	assert.Equal(t, "BitstringStatusListEntry", cred.Contents().Status.Type)
+}
+
+func TestVcJwtClaimsToCredential_CredentialStatusAsArray(t *testing.T) {
+	// VCDM 2.0 allows credentialStatus to be an array of objects.
+	// The first entry should be extracted for contents.Status.
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"credentialStatus": []interface{}{
+			map[string]interface{}{
+				"id":   "https://example.com/status/1#42",
+				"type": "BitstringStatusListEntry",
+			},
+			map[string]interface{}{
+				"id":   "https://example.com/status/2#99",
+				"type": "BitstringStatusListEntry",
+			},
 		},
 	}
 
@@ -2264,6 +2323,30 @@ func TestVcJwtClaimsToCredential_MultipleSubjects(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, cred.Contents().Subject, 2)
+	assert.Equal(t, "did:web:alice.example.com", cred.Contents().Subject[0].ID)
+	assert.Equal(t, "did:web:bob.example.com", cred.Contents().Subject[1].ID)
+}
+
+func TestVcJwtClaimsToCredential_SubIgnoredWithMultipleSubjects(t *testing.T) {
+	// VC-JOSE-COSE §3.3.1: sub MUST only be set when the credential has a
+	// single credentialSubject with an id. When there are multiple subjects,
+	// sub is ignored and the original subject IDs are preserved.
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"sub":      "did:web:should-be-ignored.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"credentialSubject": []interface{}{
+			map[string]interface{}{"id": "did:web:alice.example.com", "name": "Alice"},
+			map[string]interface{}{"id": "did:web:bob.example.com", "name": "Bob"},
+		},
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	require.NoError(t, err)
+
+	require.Len(t, cred.Contents().Subject, 2)
+	// sub should NOT override either subject's ID
 	assert.Equal(t, "did:web:alice.example.com", cred.Contents().Subject[0].ID)
 	assert.Equal(t, "did:web:bob.example.com", cred.Contents().Subject[1].ID)
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -77,6 +78,11 @@ var ErrorProofNotFresh = errors.New("vp_proof_not_fresh")
 // this check a credential issued to somebody else could be replayed inside an
 // attacker-signed presentation.
 var ErrorHolderSubjectMismatch = errors.New("credential_subject_does_not_match_holder")
+
+// ErrorIssClaimIssuerMismatch is returned when a vc+jwt credential carries
+// both an `iss` JWT claim and an `issuer` payload field that disagree.
+// VC-JOSE-COSE §3.3.1 requires them to be equal when both are present.
+var ErrorIssClaimIssuerMismatch = errors.New("vc_jwt_iss_claim_does_not_match_issuer_field")
 
 // allow singleton access to the parser
 var presentationParser PresentationParser
@@ -427,8 +433,15 @@ func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential,
 	contents := common.CredentialContents{}
 
 	// --- Issuer: iss takes precedence, then payload "issuer" (string or object) ---
+	// VC-JOSE-COSE §3.3.1 requires that when both iss and issuer are present
+	// they MUST be equal; a mismatch makes the credential malformed.
 	if iss, ok := claims[common.JWTClaimIss].(string); ok {
 		contents.Issuer = &common.Issuer{ID: iss}
+
+		// Verify consistency with the payload issuer field, if present.
+		if payloadIssuerID := extractPayloadIssuerID(claims); payloadIssuerID != "" && payloadIssuerID != iss {
+			return nil, fmt.Errorf("%w: iss=%q, issuer=%q", ErrorIssClaimIssuerMismatch, iss, payloadIssuerID)
+		}
 	} else if issuer, ok := claims[common.VCKeyIssuer]; ok {
 		switch v := issuer.(type) {
 		case string:
@@ -456,11 +469,12 @@ func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential,
 		contents.Subject = parseSubjectsFromClaims(cs)
 	}
 
-	// VC-JOSE-COSE §3.3.1: sub MUST be set when the credential has a single
-	// credentialSubject with an id property. When both are present, sub takes
-	// precedence.
-	if sub, ok := claims[common.JWTClaimSub].(string); ok {
-		if len(contents.Subject) > 0 {
+	// VC-JOSE-COSE §3.3.1: sub MUST only be set when the credential has a
+	// single credentialSubject with an id property. When both are present,
+	// sub takes precedence. We only apply sub when there is at most one
+	// subject — a well-formed multi-subject vc+jwt will not carry sub.
+	if sub, ok := claims[common.JWTClaimSub].(string); ok && len(contents.Subject) <= 1 {
+		if len(contents.Subject) == 1 {
 			contents.Subject[0].ID = sub
 		} else {
 			contents.Subject = []common.Subject{{ID: sub, CustomFields: common.CustomFields{}}}
@@ -468,12 +482,10 @@ func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential,
 	}
 
 	// --- Credential status ---
-	if status, ok := claims[common.VCKeyCredentialStatus].(map[string]interface{}); ok {
-		contents.Status = &common.TypedID{
-			ID:   stringFromMap(status, common.JSONLDKeyID),
-			Type: stringFromMap(status, common.JSONLDKeyType),
-		}
-	}
+	// VCDM 2.0 allows credentialStatus to be a single object or an array.
+	// Extract the first entry for contents.Status; the full value is still
+	// available via ToRawJSON() for callers that need every entry.
+	contents.Status = extractFirstCredentialStatus(claims[common.VCKeyCredentialStatus])
 
 	// --- Validity dates: JWT numeric claims take precedence ---
 	if nbf, ok := claims[common.JWTClaimNbf].(float64); ok {
@@ -562,6 +574,51 @@ func stringFromMap(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+// extractPayloadIssuerID returns the issuer identity string from the payload's
+// "issuer" field (which may be a plain string or an {"id": ...} object).
+// Returns "" when the field is absent or has an unrecognised shape.
+func extractPayloadIssuerID(claims map[string]interface{}) string {
+	issuer, ok := claims[common.VCKeyIssuer]
+	if !ok {
+		return ""
+	}
+	switch v := issuer.(type) {
+	case string:
+		return v
+	case map[string]interface{}:
+		if id, ok := v[common.JSONLDKeyID].(string); ok {
+			return id
+		}
+	}
+	return ""
+}
+
+// extractFirstCredentialStatus extracts the first credentialStatus entry as a
+// *common.TypedID. The input may be a single map or an array of maps (VCDM 2.0
+// allows both). Returns nil when no valid entry is found.
+func extractFirstCredentialStatus(raw interface{}) *common.TypedID {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case map[string]interface{}:
+		return &common.TypedID{
+			ID:   stringFromMap(v, common.JSONLDKeyID),
+			Type: stringFromMap(v, common.JSONLDKeyType),
+		}
+	case []interface{}:
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				return &common.TypedID{
+					ID:   stringFromMap(m, common.JSONLDKeyID),
+					Type: stringFromMap(m, common.JSONLDKeyType),
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // parseJSONLDPresentation parses a JSON-LD Verifiable Presentation and
