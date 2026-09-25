@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -77,6 +78,11 @@ var ErrorProofNotFresh = errors.New("vp_proof_not_fresh")
 // this check a credential issued to somebody else could be replayed inside an
 // attacker-signed presentation.
 var ErrorHolderSubjectMismatch = errors.New("credential_subject_does_not_match_holder")
+
+// ErrorIssClaimIssuerMismatch is returned when a vc+jwt credential carries
+// both an `iss` JWT claim and an `issuer` payload field that disagree.
+// VC-JOSE-COSE §3.3.1 requires them to be equal when both are present.
+var ErrorIssClaimIssuerMismatch = errors.New("vc_jwt_iss_claim_does_not_match_issuer_field")
 
 // allow singleton access to the parser
 var presentationParser PresentationParser
@@ -284,7 +290,9 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 }
 
 // parseJWTCredential parses and verifies a JWT-encoded VC and sets the
-// credential format to FormatJWTVC.
+// credential format. When the JOSE typ header is "vc+jwt" (VC-JOSE-COSE),
+// the payload is parsed as a vc+jwt credential (format FormatVCJWT);
+// otherwise the classic JWT-VC 1.1 path is used (format FormatJWTVC).
 func (cpp *ConfigurablePresentationParser) parseJWTCredential(tokenBytes []byte) (*common.Credential, error) {
 	var payload []byte
 	var err error
@@ -300,6 +308,19 @@ func (cpp *ConfigurablePresentationParser) parseJWTCredential(tokenBytes []byte)
 	var claims map[string]interface{}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return nil, err
+	}
+
+	// Dispatch on the JOSE typ header: vc+jwt credentials carry the payload
+	// directly (no wrapping "vc" claim), while classic JWT-VCs use a nested
+	// "vc" object.
+	typ := jwtMediaType(tokenBytes)
+	if isVCJoseJWT(typ) {
+		cred, err := vcJwtClaimsToCredential(claims)
+		if err != nil {
+			return nil, err
+		}
+		cred.SetFormat(common.FormatVCJWT)
+		return cred, nil
 	}
 
 	cred, err := jwtClaimsToCredential(claims)
@@ -394,12 +415,210 @@ func jwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, e
 	return cred, nil
 }
 
+// vcJwtClaimsToCredential maps VC-JOSE-COSE (vc+jwt) JWT claims to a
+// common.Credential. In a vc+jwt token the JWT payload IS the credential —
+// the top-level claims include @context, type, issuer, credentialSubject,
+// validFrom, validUntil, etc. There is no wrapping "vc" claim.
+//
+// Claim mapping follows VC-JOSE-COSE §3.3.1:
+//   - iss  → Issuer.ID  (takes precedence over the payload "issuer" field)
+//   - jti  → ID
+//   - sub  → credentialSubject[0].id  (takes precedence over embedded id)
+//   - nbf/iat → ValidFrom, exp → ValidUntil  (JWT numeric dates)
+//   - Payload-level validFrom/validUntil (RFC 3339 strings) are used as fallback
+//   - @context, type, credentialSubject, credentialStatus are read directly
+//     from the top-level payload
+//   - cnf  → preserved in custom fields for holder binding
+func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, error) {
+	contents := common.CredentialContents{}
+
+	// --- Issuer: iss takes precedence, then payload "issuer" (string or object) ---
+	// VC-JOSE-COSE §3.3.1 requires that when both iss and issuer are present
+	// they MUST be equal; a mismatch makes the credential malformed.
+	if iss, ok := claims[common.JWTClaimIss].(string); ok {
+		contents.Issuer = &common.Issuer{ID: iss}
+
+		// Verify consistency with the payload issuer field, if present.
+		if payloadIssuerID := extractPayloadIssuerID(claims); payloadIssuerID != "" && payloadIssuerID != iss {
+			return nil, fmt.Errorf("%w: iss=%q, issuer=%q", ErrorIssClaimIssuerMismatch, iss, payloadIssuerID)
+		}
+	} else if issuer, ok := claims[common.VCKeyIssuer]; ok {
+		switch v := issuer.(type) {
+		case string:
+			contents.Issuer = &common.Issuer{ID: v}
+		case map[string]interface{}:
+			if id, ok := v[common.JSONLDKeyID].(string); ok {
+				contents.Issuer = &common.Issuer{ID: id}
+			}
+		}
+	}
+
+	// --- Credential ID: jti claim ---
+	if jti, ok := claims[common.JWTClaimJti].(string); ok {
+		contents.ID = jti
+	} else if id, ok := claims[common.JSONLDKeyID].(string); ok {
+		contents.ID = id
+	}
+
+	// --- Context and types: read directly from the payload (no "vc" wrapper) ---
+	contents.Context = common.ToStringSlice(claims[common.JSONLDKeyContext])
+	contents.Types = common.ToStringSlice(claims[common.JSONLDKeyType])
+
+	// --- Credential subject ---
+	if cs, ok := claims[common.VCKeyCredentialSubject]; ok {
+		contents.Subject = parseSubjectsFromClaims(cs)
+	}
+
+	// VC-JOSE-COSE §3.3.1: sub MUST only be set when the credential has a
+	// single credentialSubject with an id property. When both are present,
+	// sub takes precedence. We only apply sub when there is at most one
+	// subject — a well-formed multi-subject vc+jwt will not carry sub.
+	if sub, ok := claims[common.JWTClaimSub].(string); ok && len(contents.Subject) <= 1 {
+		if len(contents.Subject) == 1 {
+			contents.Subject[0].ID = sub
+		} else {
+			contents.Subject = []common.Subject{{ID: sub, CustomFields: common.CustomFields{}}}
+		}
+	}
+
+	// --- Credential status ---
+	// VCDM 2.0 allows credentialStatus to be a single object or an array.
+	// Extract the first entry for contents.Status; the full value is still
+	// available via ToRawJSON() for callers that need every entry.
+	contents.Status = extractFirstCredentialStatus(claims[common.VCKeyCredentialStatus])
+
+	// --- Validity dates: JWT numeric claims take precedence ---
+	if nbf, ok := claims[common.JWTClaimNbf].(float64); ok {
+		t := time.Unix(int64(nbf), 0)
+		contents.ValidFrom = &t
+	} else if iat, ok := claims[common.JWTClaimIat].(float64); ok {
+		t := time.Unix(int64(iat), 0)
+		contents.ValidFrom = &t
+	}
+	if exp, ok := claims[common.JWTClaimExp].(float64); ok {
+		t := time.Unix(int64(exp), 0)
+		contents.ValidUntil = &t
+	}
+
+	// Fall back to VCDM 2.0 string dates in the payload (validFrom/validUntil,
+	// issuanceDate/expirationDate).
+	if contents.ValidFrom == nil || contents.ValidUntil == nil {
+		payloadFrom, payloadUntil := common.ParseCredentialDates(claims)
+		if contents.ValidFrom == nil {
+			contents.ValidFrom = payloadFrom
+		}
+		if contents.ValidUntil == nil {
+			contents.ValidUntil = payloadUntil
+		}
+	}
+
+	// --- Custom fields ---
+	customFields := common.CustomFields{}
+
+	// Preserve cnf (confirmation) claim for cryptographic holder binding (RFC 7800).
+	if cnf, ok := claims[common.JWTClaimCnf]; ok {
+		customFields[common.JWTClaimCnf] = cnf
+	}
+
+	cred, err := common.CreateCredential(contents, customFields)
+	if err != nil {
+		return nil, err
+	}
+
+	// For vc+jwt the entire payload IS the credential, so store the full
+	// claims map as the raw JSON.
+	cred.SetRawJSON(claims)
+
+	return cred, nil
+}
+
+// parseSubjectsFromClaims parses the credentialSubject claim value into a
+// slice of common.Subject. Handles both a single object and an array of
+// objects. This is the vc+jwt counterpart of the inline subject extraction
+// in jwtClaimsToCredential.
+func parseSubjectsFromClaims(cs interface{}) []common.Subject {
+	switch v := cs.(type) {
+	case map[string]interface{}:
+		return []common.Subject{parseOneSubjectFromClaims(v)}
+	case []interface{}:
+		subjects := make([]common.Subject, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				subjects = append(subjects, parseOneSubjectFromClaims(m))
+			}
+		}
+		return subjects
+	}
+	return nil
+}
+
+// parseOneSubjectFromClaims parses a single credentialSubject map into a
+// common.Subject, extracting the id and collecting remaining fields as
+// custom fields.
+func parseOneSubjectFromClaims(m map[string]interface{}) common.Subject {
+	s := common.Subject{CustomFields: common.CustomFields{}}
+	if id, ok := m[common.JSONLDKeyID].(string); ok {
+		s.ID = id
+	}
+	for k, v := range m {
+		if k != common.JSONLDKeyID {
+			s.CustomFields[k] = v
+		}
+	}
+	return s
+}
+
 // stringFromMap safely extracts a string value from a map.
 func stringFromMap(m map[string]interface{}, key string) string {
 	if v, ok := m[key].(string); ok {
 		return v
 	}
 	return ""
+}
+
+// extractPayloadIssuerID returns the issuer identity string from the payload's
+// "issuer" field (which may be a plain string or an {"id": ...} object).
+// Returns "" when the field is absent or has an unrecognised shape.
+func extractPayloadIssuerID(claims map[string]interface{}) string {
+	issuer, ok := claims[common.VCKeyIssuer]
+	if !ok {
+		return ""
+	}
+	switch v := issuer.(type) {
+	case string:
+		return v
+	case map[string]interface{}:
+		if id, ok := v[common.JSONLDKeyID].(string); ok {
+			return id
+		}
+	}
+	return ""
+}
+
+// extractFirstCredentialStatus extracts the first credentialStatus entry as a
+// *common.TypedID. The input may be a single map or an array of maps (VCDM 2.0
+// allows both). Returns nil when no valid entry is found.
+func extractFirstCredentialStatus(raw interface{}) *common.TypedID {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case map[string]interface{}:
+		return &common.TypedID{
+			ID:   stringFromMap(v, common.JSONLDKeyID),
+			Type: stringFromMap(v, common.JSONLDKeyType),
+		}
+	case []interface{}:
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				return &common.TypedID{
+					ID:   stringFromMap(m, common.JSONLDKeyID),
+					Type: stringFromMap(m, common.JSONLDKeyType),
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // parseJSONLDPresentation parses a JSON-LD Verifiable Presentation and
