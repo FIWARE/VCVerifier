@@ -3,6 +3,7 @@ package verifier
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/did"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -189,15 +191,28 @@ var _ = (*common.Credential)(nil)
 // ---------------------------------------------------------------------------
 
 // mockJWTVerifier is a test double for StatusListJWTVerifier. It records
-// whether it was called and returns the configured error.
+// whether it was called, which issuer it was asked to bind to, and returns the
+// configured error along with the token payload it was handed.
 type mockJWTVerifier struct {
-	called bool
-	err    error
+	called       bool
+	calledIssuer string
+	err          error
 }
 
 func (m *mockJWTVerifier) VerifyStatusListJWT(_ []byte) ([]byte, error) {
 	m.called = true
 	return nil, m.err
+}
+
+func (m *mockJWTVerifier) VerifyStatusListJWTForIssuer(jwtBytes []byte, issuer string) ([]byte, error) {
+	m.called = true
+	m.calledIssuer = issuer
+	if m.err != nil {
+		return nil, m.err
+	}
+	// The issuer-bound path parses what verification returned, so hand back the
+	// token's own payload rather than nil.
+	return extractJWTPayload(jwtBytes)
 }
 
 // testStatusListVCJWT is a minimal JWT-encoded BitstringStatusListCredential
@@ -415,15 +430,20 @@ func buildFakeJWTWithTyp(typ string, payload map[string]interface{}) string {
 }
 
 // TestParseStatusListCredentialBody_VCJoseJWT verifies that a vc+jwt-encoded
-// status list credential is correctly parsed. The vc+jwt payload has top-level
-// claims (no "vc" wrapper), so the status client must detect the typ header
-// and dispatch to vcJwtClaimsToCredential.
+// status list credential is parsed from its top-level claims (no "vc" wrapper)
+// and, crucially, that the signature is checked against the issuer the payload
+// names rather than through the envelope.
 func TestParseStatusListCredentialBody_VCJoseJWT(t *testing.T) {
+	verifier := &mockJWTVerifier{}
 	cred, err := parseStatusListCredentialBody(
-		[]byte(testStatusListVCJWT_VCJOSE), nil, nil,
+		[]byte(testStatusListVCJWT_VCJOSE), verifier, nil,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, cred)
+
+	assert.True(t, verifier.called, "a vc+jwt status list must have its signature verified")
+	assert.Equal(t, testStatusListIssuer, verifier.calledIssuer,
+		"verification must be bound to the issuer the status list itself names")
 
 	contents := cred.Contents()
 	assert.Equal(t, testStatusListIssuer, contents.Issuer.ID,
@@ -432,6 +452,62 @@ func TestParseStatusListCredentialBody_VCJoseJWT(t *testing.T) {
 	assert.Contains(t, contents.Context, common.ContextCredentialsV2)
 	assert.Len(t, contents.Subject, 1)
 	assert.Equal(t, "https://example.com/status/1#list", contents.Subject[0].ID)
+}
+
+// TestParseStatusListCredentialBody_VCJoseJWTFailsClosed is the regression test
+// for the vc+jwt status-list forgery.
+//
+// A vc+jwt names its issuer in the payload and carries no iss claim, so the
+// envelope-driven verifier took its x5c fallback - which lifts a key out of
+// whatever certificate the token carries without validating a chain. Anyone who
+// could answer the status-list URL could therefore serve a self-signed list
+// attributed to the credential's real issuer, with every revocation bit clear.
+// The vc+jwt path now has no fallback at all: no verifier, no acceptance.
+func TestParseStatusListCredentialBody_VCJoseJWTFailsClosed(t *testing.T) {
+	tests := []struct {
+		name     string
+		verifier StatusListJWTVerifier
+		wantErr  error
+	}{
+		{
+			name:     "no verifier configured",
+			verifier: nil,
+			wantErr:  ErrorStatusListVCJoseUnverifiable,
+		},
+		{
+			name:     "signature does not verify against the named issuer",
+			verifier: &mockJWTVerifier{err: errors.New("signature mismatch")},
+			wantErr:  ErrorStatusListUnparseable,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cred, err := parseStatusListCredentialBody(
+				[]byte(testStatusListVCJWT_VCJOSE), tc.verifier, nil,
+			)
+			assert.ErrorIs(t, err, tc.wantErr)
+			assert.Nil(t, cred)
+		})
+	}
+}
+
+// TestParseStatusListCredentialBody_VCJoseJWTNoIssuer checks that a vc+jwt
+// status list naming no issuer is rejected before any key lookup: there is
+// nothing to bind the signing key to.
+func TestParseStatusListCredentialBody_VCJoseJWTNoIssuer(t *testing.T) {
+	token := buildFakeJWTWithTyp("vc+jwt", map[string]interface{}{
+		"@context": []interface{}{common.ContextCredentialsV2},
+		"type":     []interface{}{"VerifiableCredential", "BitstringStatusListCredential"},
+	})
+
+	verifier := &mockJWTVerifier{}
+	cred, err := parseStatusListCredentialBody([]byte(token), verifier, nil)
+
+	assert.ErrorIs(t, err, ErrorStatusListUnparseable)
+	assert.ErrorIs(t, err, ErrorVCJWTNoIssuer)
+	assert.Nil(t, cred)
+	assert.False(t, verifier.called, "the issuer must be settled before a key is resolved")
 }
 
 // TestParseStatusListCredentialBody_ClassicJWTRegression ensures that a classic
@@ -461,7 +537,7 @@ func TestCachingStatusListClientFetch_VCJoseJWT(t *testing.T) {
 
 	client := NewCachingStatusListClient(
 		testStatusListCacheExpiry, testStatusListHTTPTimeout,
-		nil, nil,
+		&mockJWTVerifier{}, nil,
 	)
 	cred, err := client.Fetch(srv.URL+"/status/1", testStatusListIssuer)
 	require.NoError(t, err)
@@ -522,4 +598,76 @@ func TestParseUnsignedJWTCredential_ClassicJWTRegression(t *testing.T) {
 	assert.Equal(t, "did:web:issuer.example.com", contents.Issuer.ID)
 	assert.Contains(t, contents.Types, "VerifiableCredential")
 	assert.Contains(t, contents.Context, common.ContextCredentialsV1)
+}
+
+// TestParseStatusListCredentialBody_VCJoseIssuerBinding is the end-to-end
+// regression test for the vc+jwt status-list forgery, with a real verifier and
+// real signatures rather than a test double.
+//
+// A status list decides whether a credential is revoked. Before the issuer was
+// bound to the signing key, a list signed with a self-generated did:jwk key
+// could name the victim's DID in `issuer`, satisfy the issuer check that
+// assertStatusListIssuer performs, and report every credential as valid.
+func TestParseStatusListCredentialBody_VCJoseIssuerBinding(t *testing.T) {
+	signerKey, signerDID := generateTestKeyAndDIDJWK(t)
+	_, victimDID := generateTestKeyAndDIDJWK(t)
+
+	statusListVerifier := NewStatusListJWTVerifier(did.NewRegistry(did.WithVDR(did.NewJWKVDR())))
+
+	tests := []struct {
+		name    string
+		kid     string
+		issuer  string
+		wantErr bool
+	}{
+		{
+			name:    "list attributed to a DID the signer does not control",
+			kid:     signerDID + "#0",
+			issuer:  victimDID,
+			wantErr: true,
+		},
+		{
+			name:    "same forgery without a kid to give it away",
+			kid:     "",
+			issuer:  victimDID,
+			wantErr: true,
+		},
+		{
+			name:   "list signed by the issuer it names",
+			kid:    signerDID + "#0",
+			issuer: signerDID,
+		},
+		{
+			name:   "list signed by the issuer it names, no kid",
+			kid:    "",
+			issuer: signerDID,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := signVCJoseJWT(t, signerKey, common.JWTTypVCJWT, tc.kid, map[string]interface{}{
+				common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV2},
+				common.JSONLDKeyType:    []interface{}{"VerifiableCredential", "BitstringStatusListCredential"},
+				common.VCKeyIssuer:      tc.issuer,
+				"credentialSubject": map[string]interface{}{
+					"id":            "https://example.com/status/1#list",
+					"type":          "BitstringStatusList",
+					"statusPurpose": "revocation",
+					"encodedList":   "H4sIAAAAAAAA_2NgAAMAAAAEAAEAAAAA",
+				},
+			})
+
+			cred, err := parseStatusListCredentialBody(token, statusListVerifier, nil)
+
+			if tc.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, cred)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, cred.Contents().Issuer)
+			assert.Equal(t, signerDID, cred.Contents().Issuer.ID)
+		})
+	}
 }
