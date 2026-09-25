@@ -308,6 +308,16 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 			}
 			pres.AddCredentials(cred)
 		case map[string]interface{}:
+			// Try EnvelopedVerifiableCredential first (VCDM 2.0 §4.13).
+			// An enveloped credential wraps a vc+jwt inside a data: URI.
+			if isEnvelopedVerifiableCredential(v) {
+				cred, err := cpp.parseEnvelopedCredential(v, holderKey)
+				if err != nil {
+					return nil, err
+				}
+				pres.AddCredentials(cred)
+				continue
+			}
 			// A JSON-LD credential inside a JWT VP still needs its own LD
 			// proof verified — the VP signature says nothing about who
 			// issued the credentials it carries.
@@ -917,6 +927,16 @@ func (cpp *ConfigurablePresentationParser) parseJSONLDPresentation(data []byte) 
 			}
 			pres.AddCredentials(cred)
 		case map[string]interface{}:
+			// Try EnvelopedVerifiableCredential first (VCDM 2.0 §4.13).
+			// An enveloped credential wraps a vc+jwt inside a data: URI.
+			if isEnvelopedVerifiableCredential(v) {
+				cred, envErr := cpp.parseEnvelopedCredential(v, holderKey)
+				if envErr != nil {
+					return nil, envErr
+				}
+				pres.AddCredentials(cred)
+				continue
+			}
 			cred, credErr := cpp.parseAndVerifyJSONLDCredential(v, pres.Holder)
 			if credErr != nil {
 				return nil, credErr
