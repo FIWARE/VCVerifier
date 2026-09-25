@@ -130,6 +130,12 @@ var ErrorVCJoseReservedClaim = errors.New("vc_jose_reserved_claim_present")
 // a 1.1 document a valid vc+jwt.
 var ErrorVCJWTNotDataModel2 = errors.New("vc_jwt_credential_is_not_data_model_2_0")
 
+// ErrorVPJWTNotDataModel2 is returned when a vp+jwt does not carry the VCDM 2.0
+// base context. VC-JOSE-COSE §3.1.2 secures a VCDM 2.0 presentation, on the same
+// terms §3.1.1 sets for a credential, so the envelope is held to the same rule as
+// the documents it carries rather than being left ungated.
+var ErrorVPJWTNotDataModel2 = errors.New("vp_jwt_presentation_is_not_data_model_2_0")
+
 // ErrorSubClaimSubjectMismatch is returned when a vc+jwt carries both a `sub`
 // claim and a credentialSubject `id` that disagree. VC-JOSE-COSE §3.1.3 makes
 // `sub` a redundant copy of credentialSubject.id, so a conflict is malformed
@@ -473,6 +479,14 @@ func (cpp *ConfigurablePresentationParser) parseVPJWTPresentation(claims map[str
 	pres.Context = common.ToStringSlice(claims[common.JSONLDKeyContext])
 	pres.Type = common.ToStringSlice(claims[common.JSONLDKeyType])
 
+	// §3.1.2 secures a VCDM 2.0 presentation, so the envelope is held to the
+	// rule §3.1.1 sets for a credential. Checked before the credentials are
+	// parsed: a presentation that is not a well-formed vp+jwt should be refused
+	// on its own account, not on whatever its contents happen to say.
+	if err := assertDataModel2Context(pres.Context, ErrorVPJWTNotDataModel2); err != nil {
+		return nil, err
+	}
+
 	// verifiableCredential is optional — a VP may carry zero credentials.
 	vcsRaw, ok := claims[common.VPKeyVerifiableCredential]
 	if !ok {
@@ -729,6 +743,23 @@ func assertNoReservedVCJoseClaims(claims map[string]interface{}) error {
 	return nil
 }
 
+// assertDataModel2Context enforces the data model a VC-JOSE-COSE document is
+// defined over: §3.1.1 secures a VCDM 2.0 credential and §3.1.2 a VCDM 2.0
+// presentation.
+//
+// It is deliberately separate from the configurable version gate in
+// jwt_verifier.go. That gate answers "which data models does this deployment
+// accept"; this answers "what is a vc+jwt / vp+jwt", which no configuration can
+// loosen. The caller passes the error naming the position, so a rejected
+// envelope is not reported as a rejected credential.
+func assertDataModel2Context(context []string, notDataModel2 error) error {
+	if slices.Contains(common.DetectVCDataModelVersion(context), common.VCDataModelVersion20) {
+		return nil
+	}
+	logging.Log().Warnf("VC-JOSE-COSE document rejected: @context %v does not declare VC Data Model 2.0", context)
+	return fmt.Errorf("%w: @context %v", notDataModel2, context)
+}
+
 // reconcileRedundantClaim applies the rule VC-JOSE-COSE §3.1.3 states for the
 // claim/property pairs it names together - `iss` and `issuer`, `sub` and
 // `credentialSubject.id`, `jti` and `id`.
@@ -934,9 +965,8 @@ func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential,
 	// than leaving it to the configurable version gate means a v1.1 payload
 	// cannot be presented as a vc+jwt even where 1.1 credentials are accepted:
 	// the config says which data models are acceptable, not what a vc+jwt is.
-	if !slices.Contains(common.DetectVCDataModelVersion(contents.Context), common.VCDataModelVersion20) {
-		logging.Log().Warnf("vc+jwt rejected: @context %v does not declare VC Data Model 2.0", contents.Context)
-		return nil, fmt.Errorf("%w: @context %v", ErrorVCJWTNotDataModel2, contents.Context)
+	if err := assertDataModel2Context(contents.Context, ErrorVCJWTNotDataModel2); err != nil {
+		return nil, err
 	}
 
 	// --- Credential subject ---

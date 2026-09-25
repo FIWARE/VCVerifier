@@ -105,6 +105,21 @@ A presentation naming nobody at all is rejected (`ErrorVPJWTNoHolder`): `Present
 becomes the subject of the issued access token and drives holder policy validation, so there
 would be nothing for the signature to bind to.
 
+### Well-formedness
+
+- **`vc` / `vp` claims are rejected**, on the same §1.1.2.1 terms as a `vc+jwt`.
+- **A `vp+jwt` must be a VCDM 2.0 document.** §3.1.2 secures a 2.0 presentation just as §3.1.1
+  secures a 2.0 credential, so an envelope whose first `@context` entry is not the 2.0 base
+  context is rejected (`ErrorVPJWTNotDataModel2`), independently of
+  `verifier.vcDataModelVersions`. The check runs before the `verifiableCredential` array is
+  parsed: a presentation that is not a well-formed `vp+jwt` is refused on its own account,
+  not on whatever its contents happen to say.
+
+  This is the one place a presentation envelope's `@context` is checked. The configurable
+  version gate deliberately does not look at it (see `docs/vc-data-model-versions.md`) — that
+  gate decides which data models a deployment *accepts* for the credentials being asserted,
+  while this decides what a `vp+jwt` *is*. Classic JWT VPs and JSON-LD VPs remain ungated.
+
 ### Holder binding
 
 `vp+jwt` uses RFC 7800 `cnf`, the same mechanism as every other JWT path

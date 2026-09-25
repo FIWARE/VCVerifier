@@ -50,7 +50,10 @@ verifier:
   startup with `unsupported_vc_data_model_version`, naming the offending value.
 - **Credentials only.** The allowlist is applied to each incoming credential. The enclosing
   presentation's own `@context` is not checked: the presentation is an envelope built by the
-  wallet, and its data model version is not a property of the credentials being asserted.
+  wallet, and its data model version is not a property of the credentials being asserted. A
+  `vp+jwt` is the one envelope held to a data model, and not by this allowlist: VC-JOSE-COSE
+  §3.1.2 defines it over VCDM 2.0, so it is rejected at parse time when it says otherwise —
+  see `docs/vc-jose-cose.md`.
 - **SD-JWT VCs are exempt.** An SD-JWT VC (`dc+sd-jwt`, `vc+sd-jwt`) is an IETF credential typed
   via its `vct` claim. It carries no `@context` and no data model version, so no allowlist can
   apply to it. This is the only exemption, and it is keyed on the credential format — a

@@ -2125,7 +2125,7 @@ func TestVcJwtClaimsToCredential_IssClaimMatchesIssuerField(t *testing.T) {
 }
 
 func TestVcJwtClaimsToCredential_IssClaimMismatchIssuerFieldRejectsCredential(t *testing.T) {
-	// VC-JOSE-COSE §3.3.1: iss and issuer MUST be equal when both present.
+	// VC-JOSE-COSE §3.1.3: iss and issuer MUST be equal when both present.
 	// A mismatch is a malformed credential.
 	claims := map[string]interface{}{
 		"iss":      "did:web:iss-claim-issuer.example.com",
@@ -2799,7 +2799,7 @@ func TestParseVPJWT_HolderAndIssAgree(t *testing.T) {
 
 func TestParseVPJWT_HolderIssDisagreementReturnsError(t *testing.T) {
 	// When both "holder" and "iss" are present but disagree,
-	// VC-JOSE-COSE §3.3.2 requires them to match.
+	// VC-JOSE-COSE §3.1.3 requires them to match.
 	vpPayload := map[string]interface{}{
 		"iss":                  "did:web:iss-holder.example.com",
 		"holder":               "did:web:holder-field.example.com",
@@ -4402,4 +4402,105 @@ func TestVCJoseCredentialDataModelGateIgnoresConfig(t *testing.T) {
 	cred, err := vcJoseTestParser().parseJWTCredential(token)
 	assert.ErrorIs(t, err, ErrorVCJWTNotDataModel2)
 	assert.Nil(t, cred)
+}
+
+// TestVPJoseMustBeDataModel2 mirrors TestVCJoseCredentialMustBeDataModel2 for
+// the presentation position: VC-JOSE-COSE §3.1.2 secures a VCDM 2.0
+// presentation on the same terms §3.1.1 sets for a credential, so an envelope
+// that declares another data model is not a well-formed vp+jwt.
+func TestVPJoseMustBeDataModel2(t *testing.T) {
+	tests := []struct {
+		name    string
+		context interface{}
+		wantErr error
+	}{
+		{
+			name:    "VCDM 2.0 base context",
+			context: []interface{}{common.ContextCredentialsV2},
+		},
+		{
+			name:    "VCDM 2.0 base context with an extension",
+			context: []interface{}{common.ContextCredentialsV2, "https://example.com/vocab/v1"},
+		},
+		{
+			name:    "VCDM 1.1 base context",
+			context: []interface{}{common.ContextCredentialsV1},
+			wantErr: ErrorVPJWTNotDataModel2,
+		},
+		{
+			name:    "both base contexts declare no version",
+			context: []interface{}{common.ContextCredentialsV2, common.ContextCredentialsV1},
+			wantErr: ErrorVPJWTNotDataModel2,
+		},
+		{
+			name:    "an unrecognized first context",
+			context: []interface{}{"https://example.com/vocab/v1", common.ContextCredentialsV2},
+			wantErr: ErrorVPJWTNotDataModel2,
+		},
+		{
+			name:    "no context at all",
+			context: nil,
+			wantErr: ErrorVPJWTNotDataModel2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			vpPayload := map[string]interface{}{
+				common.VPKeyHolder:   "did:web:holder.example.com",
+				common.JSONLDKeyType: []interface{}{"VerifiablePresentation"},
+			}
+			if tc.context != nil {
+				vpPayload[common.JSONLDKeyContext] = tc.context
+			}
+
+			token := buildFakeVPJWT(t, common.JWTTypVPJWT, vpPayload)
+			pres, err := (&ConfigurablePresentationParser{ProofChecker: nil}).parseJWTPresentation(token)
+
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, pres)
+				return
+			}
+			require.NoError(t, err)
+			assert.NotNil(t, pres)
+		})
+	}
+}
+
+// TestVPJoseDataModelGateIgnoresConfig is the presentation counterpart of
+// TestVCJoseCredentialDataModelGateIgnoresConfig: the requirement is part of
+// what a vp+jwt *is*, so it holds on a properly signed presentation and
+// independently of verifier.vcDataModelVersions, which only says which data
+// models a deployment accepts.
+func TestVPJoseDataModelGateIgnoresConfig(t *testing.T) {
+	signerKey, signerDID := generateTestKeyAndDIDJWK(t)
+
+	token := signVCJoseJWT(t, signerKey, common.JWTTypVPJWT, signerDID+"#0", map[string]interface{}{
+		common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV1},
+		common.JSONLDKeyType:    []interface{}{"VerifiablePresentation"},
+		common.VPKeyHolder:      signerDID,
+	})
+
+	pres, err := vcJoseTestParser().ParsePresentation(token)
+	assert.ErrorIs(t, err, ErrorVPJWTNotDataModel2)
+	assert.Nil(t, pres)
+}
+
+// TestVPJoseDataModelCheckedBeforeCredentials checks the ordering: a
+// presentation that is not a well-formed vp+jwt is refused on its own account,
+// not on whatever its contents happen to say. The credential entry here would
+// fail on its own — the envelope error is what must surface.
+func TestVPJoseDataModelCheckedBeforeCredentials(t *testing.T) {
+	token := buildFakeVPJWT(t, common.JWTTypVPJWT, map[string]interface{}{
+		common.JSONLDKeyContext:          []interface{}{common.ContextCredentialsV1},
+		common.JSONLDKeyType:             []interface{}{"VerifiablePresentation"},
+		common.VPKeyHolder:               "did:web:holder.example.com",
+		common.VPKeyVerifiableCredential: []interface{}{float64(42)},
+	})
+
+	pres, err := (&ConfigurablePresentationParser{ProofChecker: nil}).parseJWTPresentation(token)
+	assert.ErrorIs(t, err, ErrorVPJWTNotDataModel2)
+	assert.NotErrorIs(t, err, ErrorUnexpectedCredentialEntryType)
+	assert.Nil(t, pres)
 }

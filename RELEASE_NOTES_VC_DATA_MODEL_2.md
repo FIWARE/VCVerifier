@@ -149,6 +149,14 @@ Per VC-JOSE-COSE §3.1.3, `iat` and `exp` time the *signature* rather than the c
 payload's `validFrom`/`validUntil` state its validity and `nbf`/`exp` may only narrow that window.
 `iat` is not mapped to `validFrom` at all.
 
+**Both formats must be VCDM 2.0 documents.** VC-JOSE-COSE §3.1.1 defines `vc+jwt` over a 2.0
+credential and §3.1.2 defines `vp+jwt` over a 2.0 presentation, so a payload whose first
+`@context` entry is not the 2.0 base context is rejected at parse time — regardless of
+`verifier.vcDataModelVersions`, which selects which data models a deployment accepts rather than
+what these formats are. On a presentation the check runs before its credentials are parsed. This
+is the only case where a presentation envelope's `@context` is examined; classic JWT VPs and
+JSON-LD VPs are unaffected.
+
 **Dispatch on `typ` is exhaustive.** A type that does not belong where it was found — a `vp+jwt`
 in a credential position, a `vc+jwt` in a presentation position, or any unimplemented type — is
 rejected with `unexpected_jwt_typ_header` rather than reinterpreted as the legacy `vc`/`vp`-claim
