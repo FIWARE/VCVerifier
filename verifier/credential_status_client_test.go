@@ -1,6 +1,8 @@
 package verifier
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -371,4 +373,153 @@ func TestParseStatusListCredentialBody_RejectsJSONLD(t *testing.T) {
 			assert.Nil(t, cred)
 		})
 	}
+}
+
+// --- vc+jwt status list credential parsing tests ---
+
+// testStatusListVCJWT_VCJOSE is a minimal vc+jwt-encoded BitstringStatusListCredential.
+// In a vc+jwt token the payload IS the credential (no "vc" wrapper).
+var testStatusListVCJWT_VCJOSE string // initialized in init()
+
+func init() {
+	// Build a vc+jwt status list credential. We cannot use buildFakeVCJoseJWT
+	// because it requires *testing.T; instead we build it inline. The typ
+	// header must be "vc+jwt" so parseUnsignedJWTCredential dispatches to
+	// vcJwtClaimsToCredential.
+	payload := map[string]interface{}{
+		"@context": []string{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []string{"VerifiableCredential", "BitstringStatusListCredential"},
+		"issuer":   testStatusListIssuer,
+		"credentialSubject": map[string]interface{}{
+			"id":            "https://example.com/status/1#list",
+			"type":          "BitstringStatusList",
+			"statusPurpose": "revocation",
+			"encodedList":   "H4sIAAAAAAAA_2NgAAMAAAAEAAEAAAAA",
+		},
+	}
+	testStatusListVCJWT_VCJOSE = buildFakeJWTWithTyp("vc+jwt", payload)
+}
+
+// buildFakeJWTWithTyp constructs a fake compact JWT with a custom typ header
+// and the given payload. Unlike buildFakeVCJoseJWT it does not require
+// *testing.T, making it suitable for package-level var initialization.
+func buildFakeJWTWithTyp(typ string, payload map[string]interface{}) string {
+	header := map[string]interface{}{"alg": "ES256"}
+	if typ != "" {
+		header["typ"] = typ
+	}
+	headerJSON, _ := json.Marshal(header)
+	payloadJSON, _ := json.Marshal(payload)
+	return base64.RawURLEncoding.EncodeToString(headerJSON) + "." +
+		base64.RawURLEncoding.EncodeToString(payloadJSON) + ".fakesig"
+}
+
+// TestParseStatusListCredentialBody_VCJoseJWT verifies that a vc+jwt-encoded
+// status list credential is correctly parsed. The vc+jwt payload has top-level
+// claims (no "vc" wrapper), so the status client must detect the typ header
+// and dispatch to vcJwtClaimsToCredential.
+func TestParseStatusListCredentialBody_VCJoseJWT(t *testing.T) {
+	cred, err := parseStatusListCredentialBody(
+		[]byte(testStatusListVCJWT_VCJOSE), nil, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, cred)
+
+	contents := cred.Contents()
+	assert.Equal(t, testStatusListIssuer, contents.Issuer.ID,
+		"issuer must come from the top-level payload 'issuer' field")
+	assert.Contains(t, contents.Types, "BitstringStatusListCredential")
+	assert.Contains(t, contents.Context, common.ContextCredentialsV2)
+	assert.Len(t, contents.Subject, 1)
+	assert.Equal(t, "https://example.com/status/1#list", contents.Subject[0].ID)
+}
+
+// TestParseStatusListCredentialBody_ClassicJWTRegression ensures that a classic
+// jwt_vc status list credential (with a "vc" wrapper) is still correctly parsed
+// after the vc+jwt dispatch was added to parseUnsignedJWTCredential.
+func TestParseStatusListCredentialBody_ClassicJWTRegression(t *testing.T) {
+	cred, err := parseStatusListCredentialBody(
+		[]byte(testStatusListVCJWT), nil, nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, cred)
+
+	contents := cred.Contents()
+	assert.Equal(t, testStatusListIssuer, contents.Issuer.ID)
+	assert.Contains(t, contents.Types, "BitstringStatusListCredential")
+}
+
+// TestCachingStatusListClientFetch_VCJoseJWT exercises the Fetch path
+// end-to-end with a vc+jwt status list credential served by an httptest
+// server. This confirms the wiring from HTTP fetch → parse → credential.
+func TestCachingStatusListClientFetch_VCJoseJWT(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", ContentTypeCredentialJWT)
+		_, _ = w.Write([]byte(testStatusListVCJWT_VCJOSE))
+	}))
+	defer srv.Close()
+
+	client := NewCachingStatusListClient(
+		testStatusListCacheExpiry, testStatusListHTTPTimeout,
+		nil, nil,
+	)
+	cred, err := client.Fetch(srv.URL+"/status/1", testStatusListIssuer)
+	require.NoError(t, err)
+	require.NotNil(t, cred)
+
+	contents := cred.Contents()
+	assert.Equal(t, testStatusListIssuer, contents.Issuer.ID)
+	assert.Contains(t, contents.Types, "BitstringStatusListCredential")
+	assert.Contains(t, contents.Context, common.ContextCredentialsV2)
+}
+
+// TestParseUnsignedJWTCredential_VCJoseJWT directly tests that
+// parseUnsignedJWTCredential dispatches to vcJwtClaimsToCredential when
+// the typ header is "vc+jwt".
+func TestParseUnsignedJWTCredential_VCJoseJWT(t *testing.T) {
+	token := string(buildFakeVCJoseJWT(t, "vc+jwt", map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer":   "did:web:issuer.example.com",
+		"credentialSubject": map[string]interface{}{
+			"id":   "did:web:subject.example.com",
+			"name": "Alice",
+		},
+	}))
+
+	cred, err := parseUnsignedJWTCredential(token)
+	require.NoError(t, err)
+	require.NotNil(t, cred)
+
+	contents := cred.Contents()
+	assert.Equal(t, "did:web:issuer.example.com", contents.Issuer.ID,
+		"issuer should come from the top-level payload, not a nested vc claim")
+	assert.Contains(t, contents.Types, "VerifiableCredential")
+	assert.Contains(t, contents.Context, common.ContextCredentialsV2)
+}
+
+// TestParseUnsignedJWTCredential_ClassicJWTRegression verifies that classic
+// jwt_vc tokens (with a "vc" wrapper and typ absent or "JWT") continue to
+// be parsed correctly via jwtClaimsToCredential.
+func TestParseUnsignedJWTCredential_ClassicJWTRegression(t *testing.T) {
+	token := buildFakeJWT(map[string]interface{}{
+		"iss": "did:web:issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context": []string{"https://www.w3.org/2018/credentials/v1"},
+			"type":     []string{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{
+				"id":   "did:web:subject.example.com",
+				"name": "Alice",
+			},
+		},
+	})
+
+	cred, err := parseUnsignedJWTCredential(token)
+	require.NoError(t, err)
+	require.NotNil(t, cred)
+
+	contents := cred.Contents()
+	assert.Equal(t, "did:web:issuer.example.com", contents.Issuer.ID)
+	assert.Contains(t, contents.Types, "VerifiableCredential")
+	assert.Contains(t, contents.Context, common.ContextCredentialsV1)
 }
