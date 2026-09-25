@@ -2603,11 +2603,11 @@ func TestParseVPJWT_HolderFromIss(t *testing.T) {
 	assert.Equal(t, "did:web:iss-holder.example.com", pres.Holder)
 }
 
-func TestParseVPJWT_HolderPrecedenceOverIss(t *testing.T) {
-	// When both "holder" and "iss" are present, "holder" wins.
+func TestParseVPJWT_HolderAndIssAgree(t *testing.T) {
+	// When both "holder" and "iss" are present and equal, parsing succeeds.
 	vpPayload := map[string]interface{}{
-		"iss":                  "did:web:iss-holder.example.com",
-		"holder":               "did:web:holder-field.example.com",
+		"iss":                  "did:web:holder.example.com",
+		"holder":               "did:web:holder.example.com",
 		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
 		"type":                 []interface{}{"VerifiablePresentation"},
 		"verifiableCredential": []interface{}{},
@@ -2618,7 +2618,28 @@ func TestParseVPJWT_HolderPrecedenceOverIss(t *testing.T) {
 	pres, err := parser.parseJWTPresentation(token)
 	require.NoError(t, err)
 
-	assert.Equal(t, "did:web:holder-field.example.com", pres.Holder)
+	assert.Equal(t, "did:web:holder.example.com", pres.Holder)
+}
+
+func TestParseVPJWT_HolderIssDisagreementReturnsError(t *testing.T) {
+	// When both "holder" and "iss" are present but disagree,
+	// VC-JOSE-COSE §3.3.2 requires them to match.
+	vpPayload := map[string]interface{}{
+		"iss":                  "did:web:iss-holder.example.com",
+		"holder":               "did:web:holder-field.example.com",
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"verifiableCredential": []interface{}{},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseJWTPresentation(token)
+	require.Error(t, err)
+
+	assert.ErrorIs(t, err, ErrorIssClaimHolderMismatch)
+	assert.Contains(t, err.Error(), "did:web:iss-holder.example.com")
+	assert.Contains(t, err.Error(), "did:web:holder-field.example.com")
 }
 
 func TestParseVPJWT_IDFromJti(t *testing.T) {
@@ -3056,6 +3077,34 @@ func TestParseVPJWT_VariousPayloads(t *testing.T) {
 			assert.Equal(t, tc.wantID, pres.ID)
 			assert.Len(t, pres.Credentials(), tc.wantNumCreds)
 			assert.Len(t, pres.Context, tc.wantContextLen)
+		})
+	}
+}
+
+func TestParseVPJWT_UnexpectedCredentialEntryType(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry interface{}
+	}{
+		{name: "null entry", entry: nil},
+		{name: "number entry", entry: float64(42)},
+		{name: "boolean entry", entry: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			vpPayload := map[string]interface{}{
+				"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+				"type":                 []interface{}{"VerifiablePresentation"},
+				"verifiableCredential": []interface{}{tc.entry},
+			}
+
+			token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+			parser := &ConfigurablePresentationParser{ProofChecker: nil}
+			_, err := parser.parseJWTPresentation(token)
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrorUnexpectedCredentialEntryType)
 		})
 	}
 }

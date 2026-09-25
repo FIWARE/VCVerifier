@@ -94,6 +94,18 @@ var ErrorEnvelopedCredentialMissingID = errors.New("enveloped_credential_missing
 // "data:application/vc+jwt," prefix, or is empty after the prefix.
 var ErrorEnvelopedCredentialInvalidDataURI = errors.New("enveloped_credential_invalid_data_uri")
 
+// ErrorIssClaimHolderMismatch is returned when a vp+jwt presentation carries
+// both an `iss` JWT claim and a `holder` payload field that disagree.
+// VC-JOSE-COSE §3.3.2 requires iss to represent the holder property when
+// both are present.
+var ErrorIssClaimHolderMismatch = errors.New("vp_jwt_iss_claim_does_not_match_holder_field")
+
+// ErrorUnexpectedCredentialEntryType is returned when a verifiableCredential
+// array entry in a vp+jwt presentation is neither a string (JWT) nor a
+// JSON object (JSON-LD VC or EnvelopedVerifiableCredential). Examples of
+// unexpected types include null, numbers, and booleans.
+var ErrorUnexpectedCredentialEntryType = errors.New("unexpected_credential_entry_type")
+
 // allow singleton access to the parser
 var presentationParser PresentationParser
 
@@ -334,8 +346,13 @@ func (cpp *ConfigurablePresentationParser) parseVPJWTPresentation(claims map[str
 
 	// Holder: payload "holder" takes precedence; "iss" is the fallback
 	// (VC-JOSE-COSE §3.3.2 maps iss → holder).
+	// When both are present they must agree — §3.3.2 requires iss to
+	// represent the holder property.
 	if holder, ok := claims[common.VPKeyHolder].(string); ok {
 		pres.Holder = holder
+		if iss, ok := claims[common.JWTClaimIss].(string); ok && iss != holder {
+			return nil, fmt.Errorf("%w: iss=%q, holder=%q", ErrorIssClaimHolderMismatch, iss, holder)
+		}
 	} else if iss, ok := claims[common.JWTClaimIss].(string); ok {
 		pres.Holder = iss
 	}
@@ -409,7 +426,7 @@ func (cpp *ConfigurablePresentationParser) parseVPJWTCredentialEntry(vc interfac
 		}
 		return cred, nil
 	default:
-		return nil, ErrorPresentationNoCredentials
+		return nil, fmt.Errorf("%w: got %T", ErrorUnexpectedCredentialEntryType, vc)
 	}
 }
 
