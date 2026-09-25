@@ -1334,6 +1334,29 @@ func signVPWithCredentials(t *testing.T, signer common.LDSigner, verificationMet
 	return marshal(t, vpMap)
 }
 
+// signVPWithCredentialsV2 builds a JSON-LD VP around the given credentials
+// using the VC Data Model 2.0 context and signs it, returning the full signed
+// VP JSON. Use this instead of signVPWithCredentials when the credentials
+// include EnvelopedVerifiableCredential objects that carry their own V2
+// context — the V1 and V2 contexts cannot coexist in the same document
+// because V2 redefines terms V1 declares as protected.
+func signVPWithCredentialsV2(t *testing.T, signer common.LDSigner, verificationMethod string, docLoader ld.DocumentLoader, credentials []interface{}, opts ldProofTestOptions) []byte {
+	t.Helper()
+
+	vpMap := map[string]interface{}{
+		common.JSONLDKeyContext: []interface{}{
+			common.ContextCredentialsV2,
+			common.ContextSecuritySuiteJWS2020,
+		},
+		common.JSONLDKeyType:             []interface{}{common.TypeVerifiablePresentation},
+		common.VPKeyHolder:               testHolderDID,
+		common.VPKeyVerifiableCredential: credentials,
+	}
+	vpMap[common.VPKeyProof] = signDocument(t, vpMap, signer, verificationMethod, docLoader, opts)
+
+	return marshal(t, vpMap)
+}
+
 // TestParseJSONLDPresentation_InvalidProofRejectedWithLDChecker verifies that
 // a VP with an invalid LD proof is rejected even when LDProofChecker is configured.
 func TestParseJSONLDPresentation_InvalidProofRejectedWithLDChecker(t *testing.T) {
@@ -3105,6 +3128,455 @@ func TestParseVPJWT_UnexpectedCredentialEntryType(t *testing.T) {
 
 			require.Error(t, err)
 			assert.ErrorIs(t, err, ErrorUnexpectedCredentialEntryType)
+		})
+	}
+}
+
+// --- Tests for EnvelopedVerifiableCredential in classic JWT VP ---
+
+func TestParseJWTPresentation_WithEnvelopedCredential(t *testing.T) {
+	// Classic JWT VP (typ: JWT / vp claim) carrying an EnvelopedVerifiableCredential.
+	issuerDID := "did:web:issuer.example.com"
+	subjectDID := "did:web:subject.example.com"
+	holderDID := "did:web:holder.example.com"
+	embeddedVC := buildEmbeddedVCJWT(t, issuerDID, subjectDID)
+
+	vpPayload := map[string]interface{}{
+		"iss": holderDID,
+		"vp": map[string]interface{}{
+			"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":     []interface{}{"VerifiablePresentation"},
+			"verifiableCredential": []interface{}{
+				buildEnvelopedCredential(embeddedVC),
+			},
+		},
+	}
+
+	token := []byte(buildFakeJWT(vpPayload))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, holderDID, pres.Holder)
+	require.Len(t, pres.Credentials(), 1, "enveloped credential must be parsed")
+	cred := pres.Credentials()[0]
+	assert.Equal(t, issuerDID, cred.Contents().Issuer.ID)
+	assert.Equal(t, common.FormatVCJWT, cred.Format())
+}
+
+func TestParseJWTPresentation_WithEnvelopedAndJWTCredentials(t *testing.T) {
+	// Classic JWT VP with mixed credential types: an enveloped credential and a
+	// regular JWT VC string.
+	issuerDID := "did:web:issuer.example.com"
+	subjectDID := "did:web:subject.example.com"
+	holderDID := "did:web:holder.example.com"
+
+	envelopedVC := buildEmbeddedVCJWT(t, issuerDID, subjectDID)
+	regularVC := buildFakeJWT(map[string]interface{}{
+		"iss": "did:web:other-issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":     []interface{}{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{
+				"id":   subjectDID,
+				"name": "Bob",
+			},
+		},
+	})
+
+	vpPayload := map[string]interface{}{
+		"iss": holderDID,
+		"vp": map[string]interface{}{
+			"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":     []interface{}{"VerifiablePresentation"},
+			"verifiableCredential": []interface{}{
+				buildEnvelopedCredential(envelopedVC),
+				regularVC,
+			},
+		},
+	}
+
+	token := []byte(buildFakeJWT(vpPayload))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	require.Len(t, pres.Credentials(), 2, "both credentials must be parsed")
+	assert.Equal(t, common.FormatVCJWT, pres.Credentials()[0].Format(), "enveloped must be vc+jwt")
+	assert.Equal(t, common.FormatJWTVC, pres.Credentials()[1].Format(), "regular must be jwt_vc")
+	assert.Equal(t, issuerDID, pres.Credentials()[0].Contents().Issuer.ID)
+	assert.Equal(t, "did:web:other-issuer.example.com", pres.Credentials()[1].Contents().Issuer.ID)
+}
+
+func TestParseJWTPresentation_EnvelopedCredentialInvalidDataURI(t *testing.T) {
+	// Classic JWT VP carrying an EnvelopedVerifiableCredential with an invalid
+	// data URI — must fail with ErrorEnvelopedCredentialInvalidDataURI.
+	holderDID := "did:web:holder.example.com"
+
+	envelope := map[string]interface{}{
+		"@context": "https://www.w3.org/ns/credentials/v2",
+		"type":     "EnvelopedVerifiableCredential",
+		"id":       "data:application/vc+jwt;base64,invalid",
+	}
+
+	vpPayload := map[string]interface{}{
+		"iss": holderDID,
+		"vp": map[string]interface{}{
+			"@context":             []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":                 []interface{}{"VerifiablePresentation"},
+			"verifiableCredential": []interface{}{envelope},
+		},
+	}
+
+	token := []byte(buildFakeJWT(vpPayload))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseJWTPresentation(token)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialInvalidDataURI)
+}
+
+func TestParseJWTPresentation_EnvelopedCredentialMissingID(t *testing.T) {
+	// Classic JWT VP carrying an EnvelopedVerifiableCredential without an "id"
+	// field — must fail with ErrorEnvelopedCredentialMissingID.
+	holderDID := "did:web:holder.example.com"
+
+	envelope := map[string]interface{}{
+		"@context": "https://www.w3.org/ns/credentials/v2",
+		"type":     "EnvelopedVerifiableCredential",
+		// No "id" field.
+	}
+
+	vpPayload := map[string]interface{}{
+		"iss": holderDID,
+		"vp": map[string]interface{}{
+			"@context":             []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":                 []interface{}{"VerifiablePresentation"},
+			"verifiableCredential": []interface{}{envelope},
+		},
+	}
+
+	token := []byte(buildFakeJWT(vpPayload))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseJWTPresentation(token)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialMissingID)
+}
+
+func TestParseJWTPresentation_NonEnvelopedMapStillFallsThrough(t *testing.T) {
+	// Classic JWT VP with a map credential that is NOT an EnvelopedVerifiableCredential
+	// — must fall through to the JSON-LD credential parsing path.
+	// Without a configured LDProofChecker, an unsigned JSON-LD VC is rejected.
+	holderDID := "did:web:holder.example.com"
+
+	jsonldVC := map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"issuer":   "did:web:issuer.example.com",
+		"credentialSubject": map[string]interface{}{
+			"id":   "did:web:subject.example.com",
+			"name": "Alice",
+		},
+	}
+
+	vpPayload := map[string]interface{}{
+		"iss": holderDID,
+		"vp": map[string]interface{}{
+			"@context":             []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":                 []interface{}{"VerifiablePresentation"},
+			"verifiableCredential": []interface{}{jsonldVC},
+		},
+	}
+
+	token := []byte(buildFakeJWT(vpPayload))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	// Without LDProofChecker configured, the unsigned JSON-LD credential must
+	// be rejected — proving the non-enveloped path is still used.
+	_, err := parser.parseJWTPresentation(token)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorUnsignedCredential)
+}
+
+// --- Tests for EnvelopedVerifiableCredential in JSON-LD VP ---
+
+func TestParseJSONLDPresentation_WithEnvelopedCredential(t *testing.T) {
+	// JSON-LD VP (V2 context) with an EnvelopedVerifiableCredential inside the
+	// verifiableCredential array. The VP is properly signed with an LD proof,
+	// and the enveloped credential is a fake vc+jwt (unsigned, no ProofChecker).
+	// The VP must use V2 context because EnvelopedVerifiableCredential is a V2
+	// type and V1+V2 contexts cannot coexist (protected term redefinition).
+	docLoader := newTestDocumentLoader()
+
+	holderPrivKey, _, holderPubJWK := generateTestECKeys(t)
+	holderSigner := &testES256Signer{key: holderPrivKey}
+
+	registry := createMultiKeyRegistry(t, map[string]ljwk.Key{
+		testHolderKeyID: holderPubJWK,
+	})
+	checker := NewLDProofChecker(registry, docLoader)
+
+	issuerDID := "did:web:issuer.example.com"
+	subjectDID := testHolderDID // subject == holder for holder binding
+	envelopedVC := buildEnvelopedCredential(buildEmbeddedVCJWT(t, issuerDID, subjectDID))
+
+	vpJSON := signVPWithCredentialsV2(t, holderSigner, testHolderKeyID, docLoader,
+		[]interface{}{envelopedVC},
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAuthentication})
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   nil, // No JWT proof checker — enveloped JWT is unsigned for this test.
+		LDProofChecker: checker,
+	}
+
+	result, err := parser.ParsePresentation(vpJSON)
+	require.NoError(t, err, "JSON-LD VP with enveloped credential must parse successfully")
+	require.NotNil(t, result)
+	require.Len(t, result.Credentials(), 1, "the enveloped credential must be extracted")
+	assert.Equal(t, issuerDID, result.Credentials()[0].Contents().Issuer.ID)
+	assert.Equal(t, common.FormatVCJWT, result.Credentials()[0].Format())
+	assert.NotNil(t, result.HolderKey(), "holder key must be populated from the VP LD proof")
+}
+
+func TestParseJSONLDPresentation_EnvelopedAndSignedLDCredentials(t *testing.T) {
+	// JSON-LD VP (V2 context) with mixed credential types: one enveloped
+	// vc+jwt credential and one properly signed JSON-LD credential. The VP
+	// uses V2 context because EnvelopedVerifiableCredential requires V2.
+	docLoader := newTestDocumentLoader()
+
+	holderPrivKey, _, holderPubJWK := generateTestECKeys(t)
+	holderSigner := &testES256Signer{key: holderPrivKey}
+
+	issuerPrivKey, _, issuerPubJWK := generateTestECKeys(t)
+	issuerSigner := &testES256Signer{key: issuerPrivKey}
+
+	registry := createMultiKeyRegistry(t, map[string]ljwk.Key{
+		testHolderKeyID: holderPubJWK,
+		testIssuerKeyID: issuerPubJWK,
+	})
+	checker := NewLDProofChecker(registry, docLoader)
+
+	// A properly signed JSON-LD credential (uses V1 context internally, but
+	// that's fine — credential contexts are independent of the VP context).
+	signedVC := signTestCredential(t, testIssuerDID, issuerSigner, testIssuerKeyID, docLoader)
+
+	// An enveloped vc+jwt credential from a different issuer.
+	envelopedIssuer := "did:web:enveloped-issuer.example.com"
+	envelopedVC := buildEnvelopedCredential(buildEmbeddedVCJWT(t, envelopedIssuer, testHolderDID))
+
+	vpJSON := signVPWithCredentialsV2(t, holderSigner, testHolderKeyID, docLoader,
+		[]interface{}{signedVC, envelopedVC},
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAuthentication})
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   nil,
+		LDProofChecker: checker,
+	}
+
+	result, err := parser.ParsePresentation(vpJSON)
+	require.NoError(t, err, "JSON-LD VP with mixed credential types must parse")
+	require.Len(t, result.Credentials(), 2)
+
+	// First credential is the signed JSON-LD VC.
+	assert.Equal(t, common.FormatLDPVC, result.Credentials()[0].Format())
+	assert.Equal(t, testIssuerDID, result.Credentials()[0].Contents().Issuer.ID)
+
+	// Second credential is the enveloped vc+jwt.
+	assert.Equal(t, common.FormatVCJWT, result.Credentials()[1].Format())
+	assert.Equal(t, envelopedIssuer, result.Credentials()[1].Contents().Issuer.ID)
+}
+
+func TestParseJSONLDPresentation_EnvelopedCredentialInvalidDataURI(t *testing.T) {
+	// JSON-LD VP (V2 context) with an EnvelopedVerifiableCredential whose data
+	// URI has parameters (;base64,...) — must fail with
+	// ErrorEnvelopedCredentialInvalidDataURI.
+	docLoader := newTestDocumentLoader()
+
+	holderPrivKey, _, holderPubJWK := generateTestECKeys(t)
+	holderSigner := &testES256Signer{key: holderPrivKey}
+
+	registry := createMultiKeyRegistry(t, map[string]ljwk.Key{
+		testHolderKeyID: holderPubJWK,
+	})
+	checker := NewLDProofChecker(registry, docLoader)
+
+	invalidEnvelope := map[string]interface{}{
+		"@context": "https://www.w3.org/ns/credentials/v2",
+		"type":     "EnvelopedVerifiableCredential",
+		"id":       "data:application/vc+jwt;base64,invalid-encoding",
+	}
+
+	vpJSON := signVPWithCredentialsV2(t, holderSigner, testHolderKeyID, docLoader,
+		[]interface{}{invalidEnvelope},
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAuthentication})
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   nil,
+		LDProofChecker: checker,
+	}
+
+	_, err := parser.ParsePresentation(vpJSON)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialInvalidDataURI)
+}
+
+func TestParseJSONLDPresentation_EnvelopedCredentialMissingID(t *testing.T) {
+	// JSON-LD VP (V2 context) with an EnvelopedVerifiableCredential without an
+	// "id" field — must fail with ErrorEnvelopedCredentialMissingID.
+	docLoader := newTestDocumentLoader()
+
+	holderPrivKey, _, holderPubJWK := generateTestECKeys(t)
+	holderSigner := &testES256Signer{key: holderPrivKey}
+
+	registry := createMultiKeyRegistry(t, map[string]ljwk.Key{
+		testHolderKeyID: holderPubJWK,
+	})
+	checker := NewLDProofChecker(registry, docLoader)
+
+	invalidEnvelope := map[string]interface{}{
+		"@context": "https://www.w3.org/ns/credentials/v2",
+		"type":     "EnvelopedVerifiableCredential",
+		// No "id" field.
+	}
+
+	vpJSON := signVPWithCredentialsV2(t, holderSigner, testHolderKeyID, docLoader,
+		[]interface{}{invalidEnvelope},
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAuthentication})
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   nil,
+		LDProofChecker: checker,
+	}
+
+	_, err := parser.ParsePresentation(vpJSON)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialMissingID)
+}
+
+func TestParseJSONLDPresentation_NonEnvelopedUnsignedVCStillRejected(t *testing.T) {
+	// JSON-LD VP with a non-enveloped, unsigned JSON-LD credential must still
+	// be rejected — proving the regular JSON-LD path is not bypassed.
+	docLoader := newTestDocumentLoader()
+
+	holderPrivKey, _, holderPubJWK := generateTestECKeys(t)
+	holderSigner := &testES256Signer{key: holderPrivKey}
+
+	registry := createMultiKeyRegistry(t, map[string]ljwk.Key{
+		testHolderKeyID: holderPubJWK,
+	})
+	checker := NewLDProofChecker(registry, docLoader)
+
+	unsignedVC := map[string]interface{}{
+		"@context": []interface{}{
+			"https://www.w3.org/2018/credentials/v1",
+			common.ContextSecuritySuiteJWS2020,
+		},
+		"type":   []interface{}{"VerifiableCredential"},
+		"issuer": testIssuerDID,
+		"credentialSubject": map[string]interface{}{
+			"id":   testHolderDID,
+			"name": "Alice",
+		},
+	}
+
+	vpJSON := signVPWithCredentials(t, holderSigner, testHolderKeyID, docLoader,
+		[]interface{}{unsignedVC},
+		ldProofTestOptions{proofPurpose: common.ProofPurposeAuthentication})
+
+	parser := &ConfigurablePresentationParser{
+		ProofChecker:   nil,
+		LDProofChecker: checker,
+	}
+
+	_, err := parser.ParsePresentation(vpJSON)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrorUnsignedCredential,
+		"non-enveloped unsigned credentials must still be rejected via the JSON-LD path")
+}
+
+// --- Tests for ParsePresentation dispatch with enveloped credentials ---
+
+func TestParsePresentation_DispatchesEnvelopedInClassicJWTVP(t *testing.T) {
+	// Verify the top-level ParsePresentation correctly handles a classic JWT VP
+	// with an enveloped credential via the parseJWTPresentation path.
+	issuerDID := "did:web:issuer.example.com"
+	subjectDID := "did:web:subject.example.com"
+	holderDID := "did:web:holder.example.com"
+	envelopedVC := buildEnvelopedCredential(buildEmbeddedVCJWT(t, issuerDID, subjectDID))
+
+	vpPayload := map[string]interface{}{
+		"iss": holderDID,
+		"vp": map[string]interface{}{
+			"@context": []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":     []interface{}{"VerifiablePresentation"},
+			"verifiableCredential": []interface{}{
+				envelopedVC,
+			},
+		},
+	}
+
+	token := []byte(buildFakeJWT(vpPayload))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.ParsePresentation(token)
+	require.NoError(t, err)
+
+	require.Len(t, pres.Credentials(), 1)
+	assert.Equal(t, common.FormatVCJWT, pres.Credentials()[0].Format())
+	assert.Equal(t, issuerDID, pres.Credentials()[0].Contents().Issuer.ID)
+}
+
+// --- Parameterized test for enveloped credentials across all VP types ---
+
+func TestEnvelopedCredential_InAllVPTypes(t *testing.T) {
+	issuerDID := "did:web:issuer.example.com"
+	subjectDID := "did:web:subject.example.com"
+	holderDID := "did:web:holder.example.com"
+	embeddedVC := buildEmbeddedVCJWT(t, issuerDID, subjectDID)
+	envelope := buildEnvelopedCredential(embeddedVC)
+
+	tests := []struct {
+		name    string
+		builder func(t *testing.T) []byte
+	}{
+		{
+			name: "classic JWT VP",
+			builder: func(t *testing.T) []byte {
+				vpPayload := map[string]interface{}{
+					"iss": holderDID,
+					"vp": map[string]interface{}{
+						"@context":             []interface{}{"https://www.w3.org/2018/credentials/v1"},
+						"type":                 []interface{}{"VerifiablePresentation"},
+						"verifiableCredential": []interface{}{envelope},
+					},
+				}
+				return []byte(buildFakeJWT(vpPayload))
+			},
+		},
+		{
+			name: "vp+jwt VP",
+			builder: func(t *testing.T) []byte {
+				vpPayload := map[string]interface{}{
+					"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+					"type":                 []interface{}{"VerifiablePresentation"},
+					"holder":               holderDID,
+					"verifiableCredential": []interface{}{envelope},
+				}
+				return buildFakeVPJWT(t, "vp+jwt", vpPayload)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := tc.builder(t)
+			parser := &ConfigurablePresentationParser{ProofChecker: nil}
+			pres, err := parser.ParsePresentation(token)
+			require.NoError(t, err)
+
+			assert.Equal(t, holderDID, pres.Holder)
+			require.Len(t, pres.Credentials(), 1)
+			assert.Equal(t, common.FormatVCJWT, pres.Credentials()[0].Format())
+			assert.Equal(t, issuerDID, pres.Credentials()[0].Contents().Issuer.ID)
 		})
 	}
 }
