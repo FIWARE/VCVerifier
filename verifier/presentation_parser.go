@@ -747,6 +747,42 @@ func extractJWTPayload(token []byte) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(parts[1])
 }
 
+// jwtMediaType reads the JOSE typ header from a compact JWT serialization and
+// returns its value. It base64url-decodes the first dot-delimited segment,
+// unmarshals it as JSON, and returns the "typ" field. When the token has no
+// typ header, is malformed, or does not contain valid JSON in the header
+// segment, an empty string is returned without error.
+func jwtMediaType(token []byte) string {
+	parts := strings.SplitN(string(token), ".", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return ""
+	}
+	var header map[string]interface{}
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return ""
+	}
+	typ, _ := header["typ"].(string)
+	return typ
+}
+
+// isVCJoseJWT reports whether the given JWT typ header value identifies a
+// VC-JOSE-COSE credential (typ: vc+jwt). The comparison is case-insensitive
+// per RFC 7515 §4.1.9 (JOSE media type values are case-insensitive).
+func isVCJoseJWT(typ string) bool {
+	return strings.EqualFold(typ, common.JWTTypVCJWT)
+}
+
+// isVPJoseJWT reports whether the given JWT typ header value identifies a
+// VC-JOSE-COSE presentation (typ: vp+jwt). The comparison is case-insensitive
+// per RFC 7515 §4.1.9 (JOSE media type values are case-insensitive).
+func isVPJoseJWT(typ string) bool {
+	return strings.EqualFold(typ, common.JWTTypVPJWT)
+}
+
 // parseUnsignedJWTCredential extracts claims from a JWT VC without signature verification.
 func parseUnsignedJWTCredential(tokenString string) (*common.Credential, error) {
 	parts := strings.SplitN(tokenString, ".", 3)

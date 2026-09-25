@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -1865,4 +1866,134 @@ func TestParseJWTCredential_RejectsIssuerSubstitution(t *testing.T) {
 	assert.ErrorIs(t, err, ErrorIssuerKeyMismatch,
 		"a credential signed by a key unrelated to its claimed issuer must be rejected")
 	assert.Nil(t, cred)
+}
+
+// --- Tests for jwtMediaType and VC-JOSE-COSE predicates ---
+
+// buildTestJWTWithTyp creates a compact-serialization JWT with a custom typ
+// header. The payload is arbitrary — these tests only need the header segment.
+func buildTestJWTWithTyp(t *testing.T, typ string) []byte {
+	t.Helper()
+	header := map[string]interface{}{
+		"alg": "ES256",
+	}
+	if typ != "" {
+		header["typ"] = typ
+	}
+	headerJSON, err := json.Marshal(header)
+	require.NoError(t, err)
+	payload, err := json.Marshal(map[string]interface{}{"iss": "test"})
+	require.NoError(t, err)
+
+	h := base64.RawURLEncoding.EncodeToString(headerJSON)
+	p := base64.RawURLEncoding.EncodeToString(payload)
+	return []byte(h + "." + p + ".fakesig")
+}
+
+func TestJwtMediaType(t *testing.T) {
+	tests := []struct {
+		name    string
+		token   []byte
+		wantTyp string
+	}{
+		{
+			name:    "vc+jwt typ header",
+			token:   buildTestJWTWithTyp(t, "vc+jwt"),
+			wantTyp: "vc+jwt",
+		},
+		{
+			name:    "vp+jwt typ header",
+			token:   buildTestJWTWithTyp(t, "vp+jwt"),
+			wantTyp: "vp+jwt",
+		},
+		{
+			name:    "classic JWT typ header",
+			token:   buildTestJWTWithTyp(t, "JWT"),
+			wantTyp: "JWT",
+		},
+		{
+			name:    "no typ header",
+			token:   buildTestJWTWithTyp(t, ""),
+			wantTyp: "",
+		},
+		{
+			name:    "empty token",
+			token:   []byte(""),
+			wantTyp: "",
+		},
+		{
+			name:    "not a JWT (no dots)",
+			token:   []byte("notajwt"),
+			wantTyp: "",
+		},
+		{
+			name:    "invalid base64 header segment",
+			token:   []byte("!!!invalid!!!.payload.sig"),
+			wantTyp: "",
+		},
+		{
+			name:    "non-JSON header segment",
+			token:   []byte(base64.RawURLEncoding.EncodeToString([]byte("not json")) + ".payload.sig"),
+			wantTyp: "",
+		},
+		{
+			name: "two-segment token (no signature)",
+			token: func() []byte {
+				full := buildTestJWTWithTyp(t, "vc+jwt")
+				// Remove the last ".fakesig" segment to get a header.payload token.
+				idx := bytes.LastIndex(full, []byte("."))
+				return full[:idx]
+			}(),
+			wantTyp: "vc+jwt",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := jwtMediaType(tc.token)
+			assert.Equal(t, tc.wantTyp, got)
+		})
+	}
+}
+
+func TestIsVCJoseJWT(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  string
+		want bool
+	}{
+		{"vc+jwt lowercase", "vc+jwt", true},
+		{"vc+jwt uppercase", "VC+JWT", true},
+		{"vc+jwt mixed case", "Vc+Jwt", true},
+		{"vp+jwt is not vc+jwt", "vp+jwt", false},
+		{"JWT is not vc+jwt", "JWT", false},
+		{"empty is not vc+jwt", "", false},
+		{"arbitrary string", "something", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isVCJoseJWT(tc.typ))
+		})
+	}
+}
+
+func TestIsVPJoseJWT(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  string
+		want bool
+	}{
+		{"vp+jwt lowercase", "vp+jwt", true},
+		{"vp+jwt uppercase", "VP+JWT", true},
+		{"vp+jwt mixed case", "Vp+Jwt", true},
+		{"vc+jwt is not vp+jwt", "vc+jwt", false},
+		{"JWT is not vp+jwt", "JWT", false},
+		{"empty is not vp+jwt", "", false},
+		{"arbitrary string", "something", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isVPJoseJWT(tc.typ))
+		})
+	}
 }

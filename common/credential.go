@@ -191,7 +191,32 @@ const (
 
 	// FormatSDJWT identifies an SD-JWT Verifiable Credential.
 	FormatSDJWT = "sd-jwt"
+
+	// FormatVCJWT identifies a vc+jwt Verifiable Credential (VC-JOSE-COSE).
+	// See https://www.w3.org/TR/vc-jose-cose/
+	FormatVCJWT = "vc+jwt"
+
+	// FormatVPJWT identifies a vp+jwt Verifiable Presentation (VC-JOSE-COSE).
+	// See https://www.w3.org/TR/vc-jose-cose/
+	FormatVPJWT = "vp+jwt"
 )
+
+// JWT typ header values for VC-JOSE-COSE media types (RFC 7515 §4.1.9).
+const (
+	// JWTTypVCJWT is the JWT typ header value for VC-JOSE-COSE credentials.
+	JWTTypVCJWT = "vc+jwt"
+
+	// JWTTypVPJWT is the JWT typ header value for VC-JOSE-COSE presentations.
+	JWTTypVPJWT = "vp+jwt"
+)
+
+// TypeEnvelopedVerifiableCredential is the JSON-LD type for credentials
+// embedded inside a VP via a data: URI (VCDM 2.0 §4.13).
+const TypeEnvelopedVerifiableCredential = "EnvelopedVerifiableCredential"
+
+// DataURISchemeVCJWT is the data: URI prefix for vc+jwt credentials
+// embedded as EnvelopedVerifiableCredential (VCDM 2.0 §4.13).
+const DataURISchemeVCJWT = "data:application/vc+jwt,"
 
 // Credential represents a Verifiable Credential.
 type Credential struct {
