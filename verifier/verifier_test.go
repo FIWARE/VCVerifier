@@ -508,11 +508,11 @@ func TestInitSiopFlow(t *testing.T) {
 		t.Run(tc.testName, func(t *testing.T) {
 			logging.Log().Info("TestInitSiopFlow +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}, errorToThrow: tc.sessionCacheError}
-			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
+			nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues(tc.testNonce, "my-super-random-id")}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, credentialsConfig: credentialsConfig, requestSigningKey: &testKey, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode)
-			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1)
+			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1, "my-super-random-id")
 		})
 	}
 }
@@ -529,16 +529,30 @@ func TestStartSiopFlow(t *testing.T) {
 		t.Run(tc.testName, func(t *testing.T) {
 			logging.Log().Info("TestStartSiopFlow +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}, errorToThrow: tc.sessionCacheError}
-			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
+			nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues(tc.testNonce, "my-super-random-id")}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 			authReq, err := verifier.StartSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode)
-			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1)
+			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1, "my-super-random-id")
 		})
 	}
 }
 
-func verifyInitTest(t *testing.T, tc siopInitTest, authRequest string, err error, sessionCache mockSessionCache, flowVersion int) {
+// sessionIdStaticValues builds the mockNonceGenerator static values so that, regardless of
+// whether the flow under test generates its own nonce (only when testNonce is empty, see
+// e.g. initSiopFlow), the *last* value consumed is always sessionId - the verifier-generated
+// internal session id, kept separate from whatever external state the test passes in.
+func sessionIdStaticValues(testNonce string, sessionId string) []string {
+	if testNonce == "" {
+		return []string{"randomNonce", sessionId}
+	}
+	return []string{sessionId}
+}
+
+// verifyInitTest checks a siopInitTest fixture. expectedSessionId is the verifier-generated
+// internal session id that sessionIdStaticValues was primed to produce - the login session
+// is stored under it, not under tc.testState (which becomes the session's externalState).
+func verifyInitTest(t *testing.T, tc siopInitTest, authRequest string, err error, sessionCache mockSessionCache, flowVersion int, expectedSessionId string) {
 	if tc.expectedError != err {
 		t.Errorf("%s - Expected %v but was %v.", tc.testName, tc.expectedError, err)
 	}
@@ -559,9 +573,11 @@ func verifyInitTest(t *testing.T, tc siopInitTest, authRequest string, err error
 	if authRequest != tc.expectedConnection && tc.requestMode != REQUEST_MODE_BY_VALUE {
 		t.Errorf("%s - Expected %s but was %s", tc.testName, tc.expectedConnection, authRequest)
 	}
-	cachedSession, found := sessionCache.sessions[tc.testState]
+	// The session is now stored under the verifier-generated session id, not the external
+	// state the caller passed in - see sessionIdStaticValues.
+	cachedSession, found := sessionCache.sessions[expectedSessionId]
 	if !found {
-		t.Errorf("%s - A login session should have been stored.", tc.testName)
+		t.Errorf("%s - A login session should have been stored under session id %s.", tc.testName, expectedSessionId)
 	}
 	var expectedSession loginSession
 
@@ -570,11 +586,15 @@ func verifyInitTest(t *testing.T, tc siopInitTest, authRequest string, err error
 		expectedNonce = "randomNonce"
 	}
 	if tc.requestMode == REQUEST_MODE_BY_REFERENCE {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
 		cachedSession.requestObject = removeSignature(cachedSession.requestObject)
 	} else {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
 	}
+	// externalState must be exactly what the (external) caller sent as state - this is the
+	// critical property the sessionId/externalState split exists to guarantee: whatever
+	// external client initiated the flow gets back precisely what it sent, never the
+	// verifier's internal session id.
 	if cachedSession != expectedSession {
 		t.Errorf("%s - The login session was expected to be %v but was %v.", tc.testName, expectedSession, cachedSession)
 	}
@@ -613,11 +633,11 @@ func TestStartSameDeviceFlow(t *testing.T) {
 		t.Run(tc.testName, func(t *testing.T) {
 			logging.Log().Info("TestSameDeviceFlow +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}, errorToThrow: tc.sessionCacheError}
-			nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
+			nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues("", "my-random-session-id")}
 			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 			authReq, err := verifier.StartSameDeviceFlow(tc.testHost, tc.testProtocol, tc.testState, tc.testAddress, tc.testClientId, "", tc.requestMode, tc.testScope, tc.testRequestProtocol)
-			verifyInitTest(t, tc, authReq, err, sessionCache, SAME_DEVICE)
+			verifyInitTest(t, tc, authReq, err, sessionCache, SAME_DEVICE, "my-random-session-id")
 		})
 	}
 
@@ -700,7 +720,7 @@ func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
-	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
+	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce", "my-session-id"}}
 	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
 	verifier := CredentialVerifier{
 		host:                 "verifier.org",
@@ -713,6 +733,8 @@ func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
 		clientIdentification: configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
 	}
 
+	// "my-random-session-id" plays the external client's state here - it must be echoed
+	// back to that client, but must never appear as the wallet-facing state/session id.
 	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-random-session-id", "/redirect", "", "", REQUEST_MODE_URL_ENCODED, "", "")
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -734,13 +756,20 @@ func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
 	assert.Equal(t, "direct_post", values.Get("response_mode"))
 	assert.Equal(t, "redirect_uri:https://verifier.org/api/v1/authentication_response", values.Get("client_id"))
 	assert.Equal(t, "https://verifier.org/api/v1/authentication_response", values.Get("response_uri"))
-	assert.Equal(t, "my-random-session-id", values.Get("state"))
+	assert.Equal(t, "my-session-id", values.Get("state"), "the wallet-facing state must be the verifier's own session id, not the external client's state")
 	assert.Equal(t, "randomNonce", values.Get("nonce"))
 	assert.Empty(t, values.Get("presentation_definition"))
 	assert.Empty(t, values.Get("dcql_query"))
 
+	// the session is stored under the verifier-generated session id...
+	cachedSession, found := sessionCache.sessions["my-session-id"]
+	if !found {
+		t.Fatalf("Expected a login session to be stored under the generated session id")
+	}
+	// ...but still remembers the external client's original state, to be echoed back to it
+	// at the end of the flow.
+	assert.Equal(t, "my-random-session-id", cachedSession.externalState)
 	// no signed request object is generated/cached for this mode
-	cachedSession := sessionCache.sessions["my-random-session-id"]
 	assert.Empty(t, cachedSession.requestObject)
 }
 
@@ -958,26 +987,26 @@ func TestAuthenticationResponse(t *testing.T) {
 
 	tests := []authTest{
 		// general behaviour
-		{"If the credential is invalid, return an error.", true, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{false}, nil, Response{}, nil, ErrorInvalidVC, nil, 0, nil},
-		{"If one credential is invalid, return an error.", true, "login-state", getVP([]string{"vc1", "vc2"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true, false}, nil, Response{}, nil, ErrorInvalidVC, nil, 0, nil},
+		{"If the credential is invalid, return an error.", true, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{false}, nil, Response{}, nil, ErrorInvalidVC, nil, 0, nil},
+		{"If one credential is invalid, return an error.", true, "login-state", getVP([]string{"vc1", "vc2"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true, false}, nil, Response{}, nil, ErrorInvalidVC, nil, 0, nil},
 		{"If an authentication response is received without a session, an error should be responded.", true, "", getVP([]string{"vc"}), "holder", loginSession{}, "login-state", nil, []bool{}, nil, Response{}, nil, ErrorNoSuchSession, nil, 0, nil},
-		{"If ssiKit throws an error, an error should be responded.", true, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{}, ssiKitError, Response{}, nil, ssiKitError, nil, 0, nil},
-		{"If tokenCache throws an error, an error should be responded.", true, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true}, nil, Response{}, nil, cacheError, cacheError, 0, nil},
-		{"If the credential is invalid, return an error.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{false}, nil, Response{}, nil, ErrorInvalidVC, nil, 0, nil},
-		{"If one credential is invalid, return an error.", false, "login-state", getVP([]string{"vc1", "vc2"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true, false}, nil, Response{}, nil, ErrorInvalidVC, nil, 0, nil},
+		{"If ssiKit throws an error, an error should be responded.", true, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{}, ssiKitError, Response{}, nil, ssiKitError, nil, 0, nil},
+		{"If tokenCache throws an error, an error should be responded.", true, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true}, nil, Response{}, nil, cacheError, cacheError, 0, nil},
+		{"If the credential is invalid, return an error.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{false}, nil, Response{}, nil, ErrorInvalidVC, nil, 0, nil},
+		{"If one credential is invalid, return an error.", false, "login-state", getVP([]string{"vc1", "vc2"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true, false}, nil, Response{}, nil, ErrorInvalidVC, nil, 0, nil},
 		{"If an authentication response is received without a session, an error should be responded.", false, "", getVP([]string{"vc"}), "holder", loginSession{}, "login-state", nil, []bool{}, nil, Response{}, nil, ErrorNoSuchSession, nil, 0, nil},
-		{"If ssiKit throws an error, an error should be responded.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{}, ssiKitError, Response{}, nil, ssiKitError, nil, 0, nil},
-		{"If tokenCache throws an error, an error should be responded.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true}, nil, Response{}, nil, cacheError, cacheError, 0, nil},
-		{"If a non-existent session is requested, an error should be responded.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "non-existent-state", nil, []bool{true}, nil, Response{}, nil, ErrorNoSuchSession, nil, 0, nil},
+		{"If ssiKit throws an error, an error should be responded.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{}, ssiKitError, Response{}, nil, ssiKitError, nil, 0, nil},
+		{"If tokenCache throws an error, an error should be responded.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true}, nil, Response{}, nil, cacheError, cacheError, 0, nil},
+		{"If a non-existent session is requested, an error should be responded.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "non-existent-state", nil, []bool{true}, nil, Response{}, nil, ErrorNoSuchSession, nil, 0, nil},
 
 		// same-device flow
-		{"When a same device flow is present, a proper response should be returned.", true, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true}, nil, Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"}, nil, nil, nil, 0, nil},
-		{"When a same device flow is present, a proper response should be returned for VPs.", true, "login-state", getVP([]string{"vc1", "vc2"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true, true}, nil, Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"}, nil, nil, nil, 0, nil},
+		{"When a same device flow is present, a proper response should be returned.", true, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true}, nil, Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", ExternalState: "my-session"}, nil, nil, nil, 0, nil},
+		{"When a same device flow is present, a proper response should be returned for VPs.", true, "login-state", getVP([]string{"vc1", "vc2"}), "holder", loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true, true}, nil, Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", ExternalState: "my-session"}, nil, nil, nil, 0, nil},
 
 		// cross-device flow
-		{"When a cross-device flow is present, a proper response should be sent to the requestors callback.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true}, nil, Response{}, getRequest("https://myhost.org/callback?code=authCode&state=my-session"), nil, nil, 0, nil},
-		{"When a cross-device flow is present, a proper response should be sent to the requestors callback for VPs.", false, "login-state", getVP([]string{"vc1", "vc2"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true, true}, nil, Response{}, getRequest("https://myhost.org/callback?code=authCode&state=my-session"), nil, nil, 0, nil},
-		{"When the requestor-callback fails, an error should be returned.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", callbackError, []bool{true}, nil, Response{}, nil, callbackError, nil, 0, nil},
+		{"When a cross-device flow is present, a proper response should be sent to the requestors callback.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true}, nil, Response{}, getRequest("https://myhost.org/callback?code=authCode&state=my-session"), nil, nil, 0, nil},
+		{"When a cross-device flow is present, a proper response should be sent to the requestors callback for VPs.", false, "login-state", getVP([]string{"vc1", "vc2"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", nil, []bool{true, true}, nil, Response{}, getRequest("https://myhost.org/callback?code=authCode&state=my-session"), nil, nil, 0, nil},
+		{"When the requestor-callback fails, an error should be returned.", false, "login-state", getVP([]string{"vc"}), "holder", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"}, "login-state", callbackError, []bool{true}, nil, Response{}, nil, callbackError, nil, 0, nil},
 
 		// regression: credential must not be duplicated when multiple validation services are present
 		{
@@ -985,9 +1014,9 @@ func TestAuthenticationResponse(t *testing.T) {
 			sameDevice: true, testState: "login-state",
 			testVP:         getVP([]string{"vc"}),
 			testHolder:     "holder",
-			testSession:    loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
+			testSession:    loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
 			requestedState: "login-state", verificationResult: []bool{true},
-			expectedResponse:      Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"},
+			expectedResponse:      Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", ExternalState: "my-session"},
 			numValidationServices: 2,
 			verifyToken: func(t *testing.T, tok jwt.Token) {
 				var vcClaim any
@@ -2731,17 +2760,17 @@ func TestAuthenticationResponse_V5ValidationServices(t *testing.T) {
 			sameDevice: true, testState: "login-state",
 			testVP:             getVP([]string{"vc"}),
 			testHolder:         "holder",
-			testSession:        loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
+			testSession:        loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
 			requestedState:     "login-state",
 			verificationResult: []bool{true},
-			expectedResponse:   Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"},
+			expectedResponse:   Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", ExternalState: "my-session"},
 		},
 		{
 			testName:   "Same-device flow with ebsi-v5 trust registries fails when credential is invalid.",
 			sameDevice: true, testState: "login-state",
 			testVP:             getVP([]string{"vc"}),
 			testHolder:         "holder",
-			testSession:        loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
+			testSession:        loginSession{version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "my-session", externalState: "my-session", clientId: "clientId", requestObject: "requestObjectJwt"},
 			requestedState:     "login-state",
 			verificationResult: []bool{false},
 			expectedError:      ErrorInvalidVC,
@@ -2931,7 +2960,7 @@ func TestAuthenticationResponseHttpsIssuer(t *testing.T) {
 		expectedResponse  Response
 	}
 
-	successResponse := Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", SessionId: "my-session"}
+	successResponse := Response{FlowVersion: SAME_DEVICE, RedirectTarget: "https://myhost.org/callback", Code: "authCode", ExternalState: "my-session"}
 
 	tests := []httpsAuthTest{
 		{
@@ -2974,6 +3003,7 @@ func TestAuthenticationResponseHttpsIssuer(t *testing.T) {
 				version:       SAME_DEVICE,
 				callback:      "https://myhost.org/callback",
 				sessionId:     "my-session",
+				externalState: "my-session",
 				clientId:      "clientId",
 				requestObject: "requestObjectJwt",
 			}
@@ -3200,6 +3230,7 @@ func TestAuthenticationResponseHttpsIssuerCrossDevice(t *testing.T) {
 		version:       CROSS_DEVICE_V1,
 		callback:      "https://myhost.org/callback",
 		sessionId:     "my-session",
+		externalState: "my-session",
 		clientId:      "clientId",
 		requestObject: "requestObjectJwt",
 	}
@@ -3661,6 +3692,7 @@ func TestAuthenticationResponse_VCDataModelVersionFiltering(t *testing.T) {
 				version:       SAME_DEVICE,
 				callback:      "https://myhost.org/callback",
 				sessionId:     "my-session",
+				externalState: "my-session",
 				clientId:      "clientId",
 				requestObject: "requestObjectJwt",
 			}
