@@ -1214,7 +1214,10 @@ func isVPJoseJWT(typ string) bool {
 	return strings.EqualFold(typ, common.JWTTypVPJWT)
 }
 
-// parseUnsignedJWTCredential extracts claims from a JWT VC without signature verification.
+// parseUnsignedJWTCredential extracts claims from a JWT VC without signature
+// verification. It inspects the JOSE typ header to distinguish vc+jwt
+// (VC-JOSE-COSE) tokens — whose payload IS the credential — from classic
+// jwt_vc tokens that wrap the credential inside a "vc" claim.
 func parseUnsignedJWTCredential(tokenString string) (*common.Credential, error) {
 	parts := strings.SplitN(tokenString, ".", 3)
 	if len(parts) < 2 {
@@ -1227,6 +1230,14 @@ func parseUnsignedJWTCredential(tokenString string) (*common.Credential, error) 
 	var claims map[string]interface{}
 	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
 		return nil, err
+	}
+
+	// Detect vc+jwt (VC-JOSE-COSE) via the typ header. In a vc+jwt token
+	// the payload IS the credential, so we dispatch to vcJwtClaimsToCredential.
+	// Classic jwt_vc tokens (typ absent or "JWT") wrap the credential in a "vc" claim.
+	typ := jwtMediaType([]byte(tokenString))
+	if isVCJoseJWT(typ) {
+		return vcJwtClaimsToCredential(claims)
 	}
 	return jwtClaimsToCredential(claims)
 }
