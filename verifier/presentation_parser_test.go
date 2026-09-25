@@ -2477,3 +2477,585 @@ func TestParseJWTCredential_VCJoseJWT_CaseInsensitive(t *testing.T) {
 
 	assert.Equal(t, common.FormatVCJWT, cred.Format())
 }
+
+// --- Tests for vp+jwt presentation parsing ---
+
+// buildFakeVPJWT constructs a fake compact JWT with a custom typ header and
+// the given payload. NOT cryptographically signed — uses a dummy signature.
+// Sufficient for unit tests that parse claims without verifying the JWS.
+func buildFakeVPJWT(t *testing.T, typ string, payload map[string]interface{}) []byte {
+	t.Helper()
+	return buildFakeVCJoseJWT(t, typ, payload)
+}
+
+// buildEmbeddedVCJWT constructs a vc+jwt compact JWT string suitable for
+// embedding inside a vp+jwt's verifiableCredential array.
+func buildEmbeddedVCJWT(t *testing.T, issuer string, subjectID string) string {
+	t.Helper()
+	payload := map[string]interface{}{
+		"iss":      issuer,
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"credentialSubject": map[string]interface{}{
+			"id":   subjectID,
+			"name": "Alice",
+		},
+	}
+	return string(buildFakeVCJoseJWT(t, "vc+jwt", payload))
+}
+
+// buildEnvelopedCredential constructs an EnvelopedVerifiableCredential map
+// wrapping the given compact JWT string in a data:application/vc+jwt, URI.
+func buildEnvelopedCredential(jwtString string) map[string]interface{} {
+	return map[string]interface{}{
+		"@context": "https://www.w3.org/ns/credentials/v2",
+		"type":     "EnvelopedVerifiableCredential",
+		"id":       common.DataURISchemeVCJWT + jwtString,
+	}
+}
+
+func TestParseVPJWT_WithVCJWTCredentials(t *testing.T) {
+	vcJWT := buildEmbeddedVCJWT(t, "did:web:issuer.example.com", "did:web:subject.example.com")
+	vpPayload := map[string]interface{}{
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"holder":               "did:web:holder.example.com",
+		"verifiableCredential": []interface{}{vcJWT},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "did:web:holder.example.com", pres.Holder)
+	assert.Equal(t, []string{"https://www.w3.org/ns/credentials/v2"}, pres.Context)
+	assert.Equal(t, []string{"VerifiablePresentation"}, pres.Type)
+	require.Len(t, pres.Credentials(), 1)
+	assert.Equal(t, common.FormatVCJWT, pres.Credentials()[0].Format())
+	assert.Equal(t, "did:web:issuer.example.com", pres.Credentials()[0].Contents().Issuer.ID)
+}
+
+func TestParseVPJWT_WithClassicJWTVCCredentials(t *testing.T) {
+	// Classic jwt_vc embedded in a vp+jwt presentation.
+	classicPayload := map[string]interface{}{
+		"iss": "did:web:classic-issuer.example.com",
+		"vc": map[string]interface{}{
+			"@context":          []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":              []interface{}{"VerifiableCredential"},
+			"credentialSubject": map[string]interface{}{"id": "did:web:subject.example.com"},
+		},
+	}
+	classicJWT := buildFakeJWT(classicPayload)
+
+	vpPayload := map[string]interface{}{
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"holder":               "did:web:holder.example.com",
+		"verifiableCredential": []interface{}{classicJWT},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	require.Len(t, pres.Credentials(), 1)
+	assert.Equal(t, common.FormatJWTVC, pres.Credentials()[0].Format())
+	assert.Equal(t, "did:web:classic-issuer.example.com", pres.Credentials()[0].Contents().Issuer.ID)
+}
+
+func TestParseVPJWT_WithEnvelopedCredential(t *testing.T) {
+	vcJWT := buildEmbeddedVCJWT(t, "did:web:issuer.example.com", "did:web:subject.example.com")
+	envelope := buildEnvelopedCredential(vcJWT)
+
+	vpPayload := map[string]interface{}{
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"holder":               "did:web:holder.example.com",
+		"verifiableCredential": []interface{}{envelope},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	require.Len(t, pres.Credentials(), 1)
+	assert.Equal(t, common.FormatVCJWT, pres.Credentials()[0].Format())
+	assert.Equal(t, "did:web:issuer.example.com", pres.Credentials()[0].Contents().Issuer.ID)
+}
+
+func TestParseVPJWT_HolderFromIss(t *testing.T) {
+	// When "holder" is not in the payload, "iss" is used as the holder.
+	vpPayload := map[string]interface{}{
+		"iss":                  "did:web:iss-holder.example.com",
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"verifiableCredential": []interface{}{},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "did:web:iss-holder.example.com", pres.Holder)
+}
+
+func TestParseVPJWT_HolderPrecedenceOverIss(t *testing.T) {
+	// When both "holder" and "iss" are present, "holder" wins.
+	vpPayload := map[string]interface{}{
+		"iss":                  "did:web:iss-holder.example.com",
+		"holder":               "did:web:holder-field.example.com",
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"verifiableCredential": []interface{}{},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "did:web:holder-field.example.com", pres.Holder)
+}
+
+func TestParseVPJWT_IDFromJti(t *testing.T) {
+	vpPayload := map[string]interface{}{
+		"jti":                  "urn:uuid:vp-id-from-jti",
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"verifiableCredential": []interface{}{},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "urn:uuid:vp-id-from-jti", pres.ID)
+}
+
+func TestParseVPJWT_IDFallbackToPayloadID(t *testing.T) {
+	vpPayload := map[string]interface{}{
+		"id":                   "urn:uuid:vp-id-from-payload",
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"verifiableCredential": []interface{}{},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "urn:uuid:vp-id-from-payload", pres.ID)
+}
+
+func TestParseVPJWT_JtiPrecedenceOverPayloadID(t *testing.T) {
+	vpPayload := map[string]interface{}{
+		"jti":                  "urn:uuid:from-jti",
+		"id":                   "urn:uuid:from-payload",
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"verifiableCredential": []interface{}{},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "urn:uuid:from-jti", pres.ID)
+}
+
+func TestParseVPJWT_MissingVerifiableCredentialIsOK(t *testing.T) {
+	// A vp+jwt without verifiableCredential is valid (zero credentials).
+	vpPayload := map[string]interface{}{
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiablePresentation"},
+		"holder":   "did:web:holder.example.com",
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "did:web:holder.example.com", pres.Holder)
+	assert.Empty(t, pres.Credentials())
+}
+
+func TestParseVPJWT_VerifiableCredentialNotArrayReturnsError(t *testing.T) {
+	vpPayload := map[string]interface{}{
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"verifiableCredential": "not-an-array",
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseJWTPresentation(token)
+
+	assert.ErrorIs(t, err, ErrorVCNotArray)
+}
+
+func TestParseVPJWT_MultipleCredentials(t *testing.T) {
+	vc1 := buildEmbeddedVCJWT(t, "did:web:issuer1.example.com", "did:web:subject1.example.com")
+	vc2 := buildEmbeddedVCJWT(t, "did:web:issuer2.example.com", "did:web:subject2.example.com")
+
+	vpPayload := map[string]interface{}{
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"holder":               "did:web:holder.example.com",
+		"verifiableCredential": []interface{}{vc1, vc2},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	require.Len(t, pres.Credentials(), 2)
+	assert.Equal(t, "did:web:issuer1.example.com", pres.Credentials()[0].Contents().Issuer.ID)
+	assert.Equal(t, "did:web:issuer2.example.com", pres.Credentials()[1].Contents().Issuer.ID)
+}
+
+func TestParseVPJWT_MixedCredentialTypes(t *testing.T) {
+	// Mix of vc+jwt string and EnvelopedVerifiableCredential in one VP.
+	vcJWT := buildEmbeddedVCJWT(t, "did:web:issuer1.example.com", "did:web:subject1.example.com")
+	envelopedJWT := buildEmbeddedVCJWT(t, "did:web:issuer2.example.com", "did:web:subject2.example.com")
+	envelope := buildEnvelopedCredential(envelopedJWT)
+
+	vpPayload := map[string]interface{}{
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"holder":               "did:web:holder.example.com",
+		"verifiableCredential": []interface{}{vcJWT, envelope},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	require.Len(t, pres.Credentials(), 2)
+	assert.Equal(t, "did:web:issuer1.example.com", pres.Credentials()[0].Contents().Issuer.ID)
+	assert.Equal(t, "did:web:issuer2.example.com", pres.Credentials()[1].Contents().Issuer.ID)
+}
+
+func TestParseVPJWT_CaseInsensitiveTypHeader(t *testing.T) {
+	vpPayload := map[string]interface{}{
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"holder":               "did:web:holder.example.com",
+		"verifiableCredential": []interface{}{},
+	}
+
+	// VP+JWT in uppercase — must still be recognized as vp+jwt.
+	token := buildFakeVPJWT(t, "VP+JWT", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "did:web:holder.example.com", pres.Holder)
+}
+
+func TestParseVPJWT_ClassicJWTVPStillWorks(t *testing.T) {
+	// Classic JWT VP with typ: "JWT" — must NOT go through vp+jwt path.
+	classicPayload := map[string]interface{}{
+		"iss": "did:web:classic-holder.example.com",
+		"vp": map[string]interface{}{
+			"@context":             []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":                 []interface{}{"VerifiablePresentation"},
+			"verifiableCredential": []interface{}{},
+		},
+	}
+
+	token := []byte(buildFakeJWT(classicPayload))
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "did:web:classic-holder.example.com", pres.Holder)
+}
+
+func TestParseVPJWT_NoTypHeaderUsesClassicPath(t *testing.T) {
+	// JWT with no typ header and a vp claim — must use the classic path.
+	payload := map[string]interface{}{
+		"iss": "did:web:no-typ-holder.example.com",
+		"vp": map[string]interface{}{
+			"@context":             []interface{}{"https://www.w3.org/2018/credentials/v1"},
+			"type":                 []interface{}{"VerifiablePresentation"},
+			"verifiableCredential": []interface{}{},
+		},
+	}
+
+	token := buildFakeVCJoseJWT(t, "", payload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "did:web:no-typ-holder.example.com", pres.Holder)
+}
+
+func TestParseVPJWT_ContextAndTypeFromPayload(t *testing.T) {
+	vpPayload := map[string]interface{}{
+		"@context": []interface{}{
+			"https://www.w3.org/ns/credentials/v2",
+			"https://example.com/custom-context",
+		},
+		"type":                 []interface{}{"VerifiablePresentation", "CustomType"},
+		"holder":               "did:web:holder.example.com",
+		"verifiableCredential": []interface{}{},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	pres, err := parser.parseJWTPresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"https://www.w3.org/ns/credentials/v2", "https://example.com/custom-context"}, pres.Context)
+	assert.Equal(t, []string{"VerifiablePresentation", "CustomType"}, pres.Type)
+}
+
+// --- Tests for isEnvelopedVerifiableCredential ---
+
+func TestIsEnvelopedVerifiableCredential(t *testing.T) {
+	tests := []struct {
+		name string
+		vc   map[string]interface{}
+		want bool
+	}{
+		{
+			name: "standard EnvelopedVerifiableCredential",
+			vc: map[string]interface{}{
+				"type": "EnvelopedVerifiableCredential",
+				"id":   "data:application/vc+jwt,eyJhbGciOiJFUzI1NiJ9.payload.sig",
+			},
+			want: true,
+		},
+		{
+			name: "array type with EnvelopedVerifiableCredential",
+			vc: map[string]interface{}{
+				"type": []interface{}{"EnvelopedVerifiableCredential"},
+			},
+			want: true,
+		},
+		{
+			name: "regular VerifiableCredential",
+			vc: map[string]interface{}{
+				"type": []interface{}{"VerifiableCredential"},
+			},
+			want: false,
+		},
+		{
+			name: "empty type",
+			vc:   map[string]interface{}{},
+			want: false,
+		},
+		{
+			name: "mixed type array including EnvelopedVerifiableCredential",
+			vc: map[string]interface{}{
+				"type": []interface{}{"VerifiableCredential", "EnvelopedVerifiableCredential"},
+			},
+			want: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isEnvelopedVerifiableCredential(tc.vc))
+		})
+	}
+}
+
+// --- Tests for parseEnvelopedCredential ---
+
+func TestParseEnvelopedCredential_Success(t *testing.T) {
+	vcJWT := buildEmbeddedVCJWT(t, "did:web:issuer.example.com", "did:web:subject.example.com")
+	envelope := buildEnvelopedCredential(vcJWT)
+
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	cred, err := parser.parseEnvelopedCredential(envelope, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, common.FormatVCJWT, cred.Format())
+	assert.Equal(t, "did:web:issuer.example.com", cred.Contents().Issuer.ID)
+	require.Len(t, cred.Contents().Subject, 1)
+	assert.Equal(t, "did:web:subject.example.com", cred.Contents().Subject[0].ID)
+}
+
+func TestParseEnvelopedCredential_MissingID(t *testing.T) {
+	envelope := map[string]interface{}{
+		"type": "EnvelopedVerifiableCredential",
+		// no "id" field
+	}
+
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseEnvelopedCredential(envelope, nil)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialMissingID)
+}
+
+func TestParseEnvelopedCredential_EmptyID(t *testing.T) {
+	envelope := map[string]interface{}{
+		"type": "EnvelopedVerifiableCredential",
+		"id":   "",
+	}
+
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseEnvelopedCredential(envelope, nil)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialMissingID)
+}
+
+func TestParseEnvelopedCredential_NonStringID(t *testing.T) {
+	envelope := map[string]interface{}{
+		"type": "EnvelopedVerifiableCredential",
+		"id":   12345,
+	}
+
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseEnvelopedCredential(envelope, nil)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialMissingID)
+}
+
+func TestParseEnvelopedCredential_InvalidDataURIPrefix(t *testing.T) {
+	envelope := map[string]interface{}{
+		"type": "EnvelopedVerifiableCredential",
+		"id":   "data:application/json,{\"not\":\"vc+jwt\"}",
+	}
+
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseEnvelopedCredential(envelope, nil)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialInvalidDataURI)
+}
+
+func TestParseEnvelopedCredential_EmptyJWSAfterPrefix(t *testing.T) {
+	envelope := map[string]interface{}{
+		"type": "EnvelopedVerifiableCredential",
+		"id":   common.DataURISchemeVCJWT, // prefix only, no JWS
+	}
+
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseEnvelopedCredential(envelope, nil)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialInvalidDataURI)
+}
+
+func TestParseEnvelopedCredential_DataURIWithParameters(t *testing.T) {
+	// data: URI with parameters (;base64,...) should not match the prefix.
+	envelope := map[string]interface{}{
+		"type": "EnvelopedVerifiableCredential",
+		"id":   "data:application/vc+jwt;base64,eyJhbGciOiJFUzI1NiJ9.payload.sig",
+	}
+
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+	_, err := parser.parseEnvelopedCredential(envelope, nil)
+	assert.ErrorIs(t, err, ErrorEnvelopedCredentialInvalidDataURI)
+}
+
+// --- Tests for ParsePresentation dispatching with vp+jwt ---
+
+func TestParsePresentation_VPJWTGoesToJWTPresentationPath(t *testing.T) {
+	vcJWT := buildEmbeddedVCJWT(t, "did:web:issuer.example.com", "did:web:subject.example.com")
+	vpPayload := map[string]interface{}{
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"holder":               "did:web:holder.example.com",
+		"verifiableCredential": []interface{}{vcJWT},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurablePresentationParser{ProofChecker: nil}
+
+	// ParsePresentation should see it as non-JSON (no leading '{'), route to parseJWTPresentation,
+	// which should detect vp+jwt and route to parseVPJWTPresentation.
+	pres, err := parser.ParsePresentation(token)
+	require.NoError(t, err)
+
+	assert.Equal(t, "did:web:holder.example.com", pres.Holder)
+	require.Len(t, pres.Credentials(), 1)
+}
+
+// --- Tests for ParseWithSdJwt fallthrough for vp+jwt ---
+
+func TestParseWithSdJwt_VPJWTFallsThrough(t *testing.T) {
+	// A vp+jwt has no "vp" claim, so ParseWithSdJwt should return
+	// ErrorPresentationNoCredentials — allowing tokenToPresentation to
+	// fall through to ParsePresentation.
+	vpPayload := map[string]interface{}{
+		"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":                 []interface{}{"VerifiablePresentation"},
+		"holder":               "did:web:holder.example.com",
+		"verifiableCredential": []interface{}{},
+	}
+
+	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+	parser := &ConfigurableSdJwtParser{}
+	_, err := parser.ParseWithSdJwt(token)
+
+	assert.ErrorIs(t, err, ErrorPresentationNoCredentials,
+		"vp+jwt tokens have no vp claim, so ParseWithSdJwt must return ErrorPresentationNoCredentials")
+}
+
+// --- Parameterized tests for vp+jwt edge cases ---
+
+func TestParseVPJWT_VariousPayloads(t *testing.T) {
+	tests := []struct {
+		name           string
+		payload        map[string]interface{}
+		wantHolder     string
+		wantID         string
+		wantNumCreds   int
+		wantContextLen int
+	}{
+		{
+			name: "empty verifiableCredential array",
+			payload: map[string]interface{}{
+				"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+				"type":                 []interface{}{"VerifiablePresentation"},
+				"holder":               "did:web:holder.example.com",
+				"verifiableCredential": []interface{}{},
+			},
+			wantHolder:     "did:web:holder.example.com",
+			wantNumCreds:   0,
+			wantContextLen: 1,
+		},
+		{
+			name: "no holder no iss",
+			payload: map[string]interface{}{
+				"@context":             []interface{}{"https://www.w3.org/ns/credentials/v2"},
+				"type":                 []interface{}{"VerifiablePresentation"},
+				"verifiableCredential": []interface{}{},
+			},
+			wantHolder:     "",
+			wantNumCreds:   0,
+			wantContextLen: 1,
+		},
+		{
+			name: "single string context",
+			payload: map[string]interface{}{
+				"@context":             "https://www.w3.org/ns/credentials/v2",
+				"type":                 "VerifiablePresentation",
+				"holder":               "did:web:holder.example.com",
+				"verifiableCredential": []interface{}{},
+			},
+			wantHolder:     "did:web:holder.example.com",
+			wantNumCreds:   0,
+			wantContextLen: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			token := buildFakeVPJWT(t, "vp+jwt", tc.payload)
+			parser := &ConfigurablePresentationParser{ProofChecker: nil}
+			pres, err := parser.parseJWTPresentation(token)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantHolder, pres.Holder)
+			assert.Equal(t, tc.wantID, pres.ID)
+			assert.Len(t, pres.Credentials(), tc.wantNumCreds)
+			assert.Len(t, pres.Context, tc.wantContextLen)
+		})
+	}
+}

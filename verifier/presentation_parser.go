@@ -84,6 +84,16 @@ var ErrorHolderSubjectMismatch = errors.New("credential_subject_does_not_match_h
 // VC-JOSE-COSE §3.3.1 requires them to be equal when both are present.
 var ErrorIssClaimIssuerMismatch = errors.New("vc_jwt_iss_claim_does_not_match_issuer_field")
 
+// ErrorEnvelopedCredentialMissingID is returned when an
+// EnvelopedVerifiableCredential object has no "id" field or the "id" is not a
+// string. The "id" must be a data: URI holding the compact JWS.
+var ErrorEnvelopedCredentialMissingID = errors.New("enveloped_credential_missing_id")
+
+// ErrorEnvelopedCredentialInvalidDataURI is returned when the "id" of an
+// EnvelopedVerifiableCredential does not start with the expected
+// "data:application/vc+jwt," prefix, or is empty after the prefix.
+var ErrorEnvelopedCredentialInvalidDataURI = errors.New("enveloped_credential_invalid_data_uri")
+
 // allow singleton access to the parser
 var presentationParser PresentationParser
 
@@ -216,6 +226,9 @@ func (cpp *ConfigurablePresentationParser) ParsePresentation(tokenBytes []byte) 
 }
 
 // parseJWTPresentation parses a JWT-encoded VP, verifies the VP signature, and parses embedded VCs.
+// If the JOSE typ header is "vp+jwt" (VC-JOSE-COSE), the JWT payload IS the presentation —
+// there is no wrapping "vp" claim. Otherwise the classic JWT-VP 1.1 path is used,
+// reading the presentation from the nested "vp" claim.
 // If a VC contains a cnf (confirmation) claim, it is verified against the VP signer's key (RFC 7800).
 func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byte) (*common.Presentation, error) {
 	var payload []byte
@@ -233,6 +246,14 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 	var claims map[string]interface{}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return nil, err
+	}
+
+	// Dispatch on the JOSE typ header: vp+jwt presentations carry the
+	// presentation directly in the payload (no wrapping "vp" claim),
+	// while classic JWT VPs use a nested "vp" object.
+	typ := jwtMediaType(tokenBytes)
+	if isVPJoseJWT(typ) {
+		return cpp.parseVPJWTPresentation(claims, holderKey)
 	}
 
 	vpClaim, ok := claims[common.JWTClaimVP].(map[string]interface{})
@@ -287,6 +308,160 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 	}
 
 	return pres, nil
+}
+
+// parseVPJWTPresentation parses a vp+jwt presentation (VC-JOSE-COSE §3.3.2).
+// In a vp+jwt token the JWT payload IS the presentation: @context, type,
+// holder, and verifiableCredential are top-level claims — there is no
+// wrapping "vp" object.
+//
+// Claim mapping per VC-JOSE-COSE §3.3.2:
+//   - "iss" maps to Holder (the presenter is the signer)
+//   - "jti" maps to ID
+//   - "@context", "type", "holder", "verifiableCredential" are read directly
+//
+// Each entry in verifiableCredential is handled as follows:
+//   - string: a JWT VC (either vc+jwt or classic jwt_vc — parseJWTCredential
+//     dispatches transparently)
+//   - map with type "EnvelopedVerifiableCredential": the data: URI in "id"
+//     is extracted and parsed as a vc+jwt credential
+//   - map (other): a JSON-LD VC that carries its own Linked Data Proof
+func (cpp *ConfigurablePresentationParser) parseVPJWTPresentation(claims map[string]interface{}, holderKey jwk.Key) (*common.Presentation, error) {
+	pres, _ := common.NewPresentation()
+	if holderKey != nil {
+		pres.SetHolderKey(holderKey)
+	}
+
+	// Holder: payload "holder" takes precedence; "iss" is the fallback
+	// (VC-JOSE-COSE §3.3.2 maps iss → holder).
+	if holder, ok := claims[common.VPKeyHolder].(string); ok {
+		pres.Holder = holder
+	} else if iss, ok := claims[common.JWTClaimIss].(string); ok {
+		pres.Holder = iss
+	}
+
+	// ID from jti, falling back to payload "id".
+	if jti, ok := claims[common.JWTClaimJti].(string); ok {
+		pres.ID = jti
+	} else if id, ok := claims["id"].(string); ok {
+		pres.ID = id
+	}
+
+	// Context and type directly from the payload.
+	pres.Context = common.ToStringSlice(claims[common.JSONLDKeyContext])
+	pres.Type = common.ToStringSlice(claims[common.JSONLDKeyType])
+
+	// verifiableCredential is optional — a VP may carry zero credentials.
+	vcsRaw, ok := claims[common.VPKeyVerifiableCredential]
+	if !ok {
+		return pres, nil
+	}
+
+	vcList, ok := vcsRaw.([]interface{})
+	if !ok {
+		return nil, ErrorVCNotArray
+	}
+
+	for _, vc := range vcList {
+		cred, err := cpp.parseVPJWTCredentialEntry(vc, holderKey, pres.Holder)
+		if err != nil {
+			return nil, err
+		}
+		pres.AddCredentials(cred)
+	}
+
+	return pres, nil
+}
+
+// parseVPJWTCredentialEntry parses a single entry from the verifiableCredential
+// array of a vp+jwt presentation. Entries may be:
+//   - string: a JWT VC (vc+jwt or classic jwt_vc)
+//   - map with type "EnvelopedVerifiableCredential": a VCDM 2.0 enveloped
+//     credential whose "id" is a data:application/vc+jwt,<JWS> URI
+//   - map (other): a JSON-LD VC with its own Linked Data Proof
+func (cpp *ConfigurablePresentationParser) parseVPJWTCredentialEntry(vc interface{}, holderKey jwk.Key, presentationHolder string) (*common.Credential, error) {
+	switch v := vc.(type) {
+	case string:
+		cred, err := cpp.parseJWTCredential([]byte(v))
+		if err != nil {
+			return nil, err
+		}
+		if holderKey != nil {
+			if err := verifyCnfBinding(cred, holderKey); err != nil {
+				return nil, err
+			}
+		}
+		return cred, nil
+	case map[string]interface{}:
+		if isEnvelopedVerifiableCredential(v) {
+			cred, err := cpp.parseEnvelopedCredential(v, holderKey)
+			if err != nil {
+				return nil, err
+			}
+			return cred, nil
+		}
+		// A JSON-LD credential inside a vp+jwt still needs its own LD
+		// proof verified — the VP signature says nothing about who
+		// issued the credentials it carries.
+		cred, err := cpp.parseAndVerifyJSONLDCredential(v, presentationHolder)
+		if err != nil {
+			return nil, err
+		}
+		return cred, nil
+	default:
+		return nil, ErrorPresentationNoCredentials
+	}
+}
+
+// isEnvelopedVerifiableCredential checks whether a JSON object represents an
+// EnvelopedVerifiableCredential (VCDM 2.0 §4.13). Such objects have
+// type "EnvelopedVerifiableCredential" and an "id" that is a data: URI.
+func isEnvelopedVerifiableCredential(vcMap map[string]interface{}) bool {
+	types := common.ToStringSlice(vcMap[common.JSONLDKeyType])
+	for _, t := range types {
+		if t == common.TypeEnvelopedVerifiableCredential {
+			return true
+		}
+	}
+	return false
+}
+
+// parseEnvelopedCredential extracts the JWT from an EnvelopedVerifiableCredential
+// (VCDM 2.0 §4.13) and parses it as a vc+jwt credential.
+//
+// An EnvelopedVerifiableCredential is a JSON object with:
+//   - "type": "EnvelopedVerifiableCredential"
+//   - "id": "data:application/vc+jwt,<compact-JWS>"
+//
+// The data: URI must not have parameters (no ";base64," etc.).
+func (cpp *ConfigurablePresentationParser) parseEnvelopedCredential(vcMap map[string]interface{}, holderKey jwk.Key) (*common.Credential, error) {
+	id, ok := vcMap["id"].(string)
+	if !ok || id == "" {
+		return nil, ErrorEnvelopedCredentialMissingID
+	}
+
+	if !strings.HasPrefix(id, common.DataURISchemeVCJWT) {
+		return nil, ErrorEnvelopedCredentialInvalidDataURI
+	}
+
+	// Extract the compact JWS from the data: URI.
+	jws := id[len(common.DataURISchemeVCJWT):]
+	if jws == "" {
+		return nil, ErrorEnvelopedCredentialInvalidDataURI
+	}
+
+	cred, err := cpp.parseJWTCredential([]byte(jws))
+	if err != nil {
+		return nil, fmt.Errorf("enveloped credential: %w", err)
+	}
+
+	if holderKey != nil {
+		if err := verifyCnfBinding(cred, holderKey); err != nil {
+			return nil, err
+		}
+	}
+
+	return cred, nil
 }
 
 // parseJWTCredential parses and verifies a JWT-encoded VC and sets the
