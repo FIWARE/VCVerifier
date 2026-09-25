@@ -648,3 +648,48 @@ func TestNormalizeVCDataModelVersion(t *testing.T) {
 		})
 	}
 }
+
+// TestVCJoseCoseConstants verifies the VC-JOSE-COSE format, typ header, type,
+// and data URI prefix constants have the expected values.
+func TestVCJoseCoseConstants(t *testing.T) {
+	// Format constants for VC-JOSE-COSE.
+	if FormatVCJWT != "vc+jwt" {
+		t.Errorf("FormatVCJWT = %q, want %q", FormatVCJWT, "vc+jwt")
+	}
+	if FormatVPJWT != "vp+jwt" {
+		t.Errorf("FormatVPJWT = %q, want %q", FormatVPJWT, "vp+jwt")
+	}
+
+	// JWT typ header values match the format constants (they share the same
+	// string value by design, but are separate constants for clarity).
+	if JWTTypVCJWT != "vc+jwt" {
+		t.Errorf("JWTTypVCJWT = %q, want %q", JWTTypVCJWT, "vc+jwt")
+	}
+	if JWTTypVPJWT != "vp+jwt" {
+		t.Errorf("JWTTypVPJWT = %q, want %q", JWTTypVPJWT, "vp+jwt")
+	}
+
+	// EnvelopedVerifiableCredential type.
+	if TypeEnvelopedVerifiableCredential != "EnvelopedVerifiableCredential" {
+		t.Errorf("TypeEnvelopedVerifiableCredential = %q, want %q",
+			TypeEnvelopedVerifiableCredential, "EnvelopedVerifiableCredential")
+	}
+
+	// Data URI prefix for enveloped vc+jwt credentials.
+	if DataURISchemeVCJWT != "data:application/vc+jwt," {
+		t.Errorf("DataURISchemeVCJWT = %q, want %q", DataURISchemeVCJWT, "data:application/vc+jwt,")
+	}
+}
+
+// TestVCJoseCoseFormatsDistinct verifies the new VC-JOSE-COSE format constants
+// do not collide with existing credential format constants.
+func TestVCJoseCoseFormatsDistinct(t *testing.T) {
+	formats := []string{FormatJWTVC, FormatLDPVC, FormatSDJWT, FormatVCJWT, FormatVPJWT}
+	seen := map[string]bool{}
+	for _, f := range formats {
+		if seen[f] {
+			t.Errorf("duplicate format constant: %q", f)
+		}
+		seen[f] = true
+	}
+}
