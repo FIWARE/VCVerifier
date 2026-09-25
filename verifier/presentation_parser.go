@@ -106,6 +106,18 @@ var ErrorIssClaimHolderMismatch = errors.New("vp_jwt_iss_claim_does_not_match_ho
 // unexpected types include null, numbers, and booleans.
 var ErrorUnexpectedCredentialEntryType = errors.New("unexpected_credential_entry_type")
 
+// ErrorVCJWTNoIssuer is returned when a vc+jwt credential names no issuer at
+// all - neither an `issuer` property nor an `iss` claim. VCDM 2.0 requires
+// `issuer`, and with no issuer there is no identity to bind the signing key
+// to: the signature would establish only that somebody signed the credential.
+var ErrorVCJWTNoIssuer = errors.New("vc_jwt_credential_has_no_issuer")
+
+// ErrorVPJWTNoHolder is returned when a vp+jwt presentation names no presenter
+// at all - neither a `holder` property nor an `iss` claim. Presentation.Holder
+// becomes the subject of the issued token and drives holder validation, so a
+// presentation that names nobody has nothing for the signature to bind to.
+var ErrorVPJWTNoHolder = errors.New("vp_jwt_presentation_has_no_holder")
+
 // allow singleton access to the parser
 var presentationParser PresentationParser
 
@@ -243,6 +255,13 @@ func (cpp *ConfigurablePresentationParser) ParsePresentation(tokenBytes []byte) 
 // reading the presentation from the nested "vp" claim.
 // If a VC contains a cnf (confirmation) claim, it is verified against the VP signer's key (RFC 7800).
 func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byte) (*common.Presentation, error) {
+	// Dispatch on the JOSE typ header: vp+jwt presentations carry the
+	// presentation directly in the payload (no wrapping "vp" claim),
+	// while classic JWT VPs use a nested "vp" object.
+	if isVPJoseJWT(jwtMediaType(tokenBytes)) {
+		return cpp.parseVPJosePresentation(tokenBytes)
+	}
+
 	var payload []byte
 	var holderKey jwk.Key
 	var err error
@@ -258,14 +277,6 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 	var claims map[string]interface{}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return nil, err
-	}
-
-	// Dispatch on the JOSE typ header: vp+jwt presentations carry the
-	// presentation directly in the payload (no wrapping "vp" claim),
-	// while classic JWT VPs use a nested "vp" object.
-	typ := jwtMediaType(tokenBytes)
-	if isVPJoseJWT(typ) {
-		return cpp.parseVPJWTPresentation(claims, holderKey)
 	}
 
 	vpClaim, ok := claims[common.JWTClaimVP].(map[string]interface{})
@@ -337,10 +348,8 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 // holder, and verifiableCredential are top-level claims — there is no
 // wrapping "vp" object.
 //
-// Claim mapping per VC-JOSE-COSE §3.3.2:
-//   - "iss" maps to Holder (the presenter is the signer)
-//   - "jti" maps to ID
-//   - "@context", "type", "holder", "verifiableCredential" are read directly
+// The presenter is named by the payload's "holder" property; "jti" maps to ID
+// and "@context", "type" and "verifiableCredential" are read directly.
 //
 // Each entry in verifiableCredential is handled as follows:
 //   - string: a JWT VC (either vc+jwt or classic jwt_vc — parseJWTCredential
@@ -348,24 +357,58 @@ func (cpp *ConfigurablePresentationParser) parseJWTPresentation(tokenBytes []byt
 //   - map with type "EnvelopedVerifiableCredential": the data: URI in "id"
 //     is extracted and parsed as a vc+jwt credential
 //   - map (other): a JSON-LD VC that carries its own Linked Data Proof
+// parseVPJosePresentation parses and verifies a vp+jwt presentation
+// (VC-JOSE-COSE).
+//
+// Like a vc+jwt credential, a vp+jwt names its signer in the payload rather
+// than the envelope: the presenter is the presentation's `holder`. So the same
+// two-pass shape applies — read the holder from the unverified payload to
+// decide whose key to resolve, verify against that key, then parse only what
+// the verification returned. See parseVCJoseCredential for why the first pass
+// is safe and why nothing else may be taken from it.
+func (cpp *ConfigurablePresentationParser) parseVPJosePresentation(tokenBytes []byte) (*common.Presentation, error) {
+	unverified, err := unverifiedJWTClaims(tokenBytes)
+	if err != nil {
+		return nil, err
+	}
+	holder, err := vpJwtHolder(unverified)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload []byte
+	var holderKey jwk.Key
+	if cpp.ProofChecker != nil {
+		payload, holderKey, err = cpp.ProofChecker.VerifyJWTForIssuer(tokenBytes, holder)
+	} else {
+		payload, err = extractJWTPayload(tokenBytes)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, err
+	}
+
+	return cpp.parseVPJWTPresentation(claims, holderKey)
+}
+
 func (cpp *ConfigurablePresentationParser) parseVPJWTPresentation(claims map[string]interface{}, holderKey jwk.Key) (*common.Presentation, error) {
 	pres, _ := common.NewPresentation()
 	if holderKey != nil {
 		pres.SetHolderKey(holderKey)
 	}
 
-	// Holder: payload "holder" takes precedence; "iss" is the fallback
-	// (VC-JOSE-COSE §3.3.2 maps iss → holder).
-	// When both are present they must agree — §3.3.2 requires iss to
-	// represent the holder property.
-	if holder, ok := claims[common.VPKeyHolder].(string); ok {
-		pres.Holder = holder
-		if iss, ok := claims[common.JWTClaimIss].(string); ok && iss != holder {
-			return nil, fmt.Errorf("%w: iss=%q, holder=%q", ErrorIssClaimHolderMismatch, iss, holder)
-		}
-	} else if iss, ok := claims[common.JWTClaimIss].(string); ok {
-		pres.Holder = iss
+	// The presenter, decided by the one rule that also chose the verification
+	// key — so pres.Holder is always the identity the signature was checked
+	// against, never an unbound claim the payload happens to make.
+	holder, err := vpJwtHolder(claims)
+	if err != nil {
+		return nil, err
 	}
+	pres.Holder = holder
 
 	// ID from jti, falling back to payload "id".
 	if jti, ok := claims[common.JWTClaimJti].(string); ok {
@@ -495,7 +538,18 @@ func (cpp *ConfigurablePresentationParser) parseEnvelopedCredential(vcMap map[st
 // credential format. When the JOSE typ header is "vc+jwt" (VC-JOSE-COSE),
 // the payload is parsed as a vc+jwt credential (format FormatVCJWT);
 // otherwise the classic JWT-VC 1.1 path is used (format FormatJWTVC).
+//
+// The two formats are verified differently, not merely parsed differently: a
+// classic JWT-VC names its issuer in the envelope (kid/iss), while a vc+jwt
+// names it in the credential body. See parseVCJoseCredential.
 func (cpp *ConfigurablePresentationParser) parseJWTCredential(tokenBytes []byte) (*common.Credential, error) {
+	// Dispatch on the JOSE typ header: vc+jwt credentials carry the payload
+	// directly (no wrapping "vc" claim), while classic JWT-VCs use a nested
+	// "vc" object.
+	if isVCJoseJWT(jwtMediaType(tokenBytes)) {
+		return cpp.parseVCJoseCredential(tokenBytes)
+	}
+
 	var payload []byte
 	var err error
 	if cpp.ProofChecker != nil {
@@ -512,25 +566,124 @@ func (cpp *ConfigurablePresentationParser) parseJWTCredential(tokenBytes []byte)
 		return nil, err
 	}
 
-	// Dispatch on the JOSE typ header: vc+jwt credentials carry the payload
-	// directly (no wrapping "vc" claim), while classic JWT-VCs use a nested
-	// "vc" object.
-	typ := jwtMediaType(tokenBytes)
-	if isVCJoseJWT(typ) {
-		cred, err := vcJwtClaimsToCredential(claims)
-		if err != nil {
-			return nil, err
-		}
-		cred.SetFormat(common.FormatVCJWT)
-		return cred, nil
-	}
-
 	cred, err := jwtClaimsToCredential(claims)
 	if err != nil {
 		return nil, err
 	}
 	cred.SetFormat(common.FormatJWTVC)
 	return cred, nil
+}
+
+// parseVCJoseCredential parses and verifies a vc+jwt credential (VC-JOSE-COSE).
+//
+// A vc+jwt has no iss claim to resolve a key from - the payload *is* the
+// credential, so the signer is its `issuer` property. That property is covered
+// by the signature, but reading it means decoding the payload before the
+// signature has been checked, so verification runs in two passes:
+//
+//  1. Decode the payload without verifying it and read nothing from it but the
+//     issuer, which only decides whose key to resolve. Lying here does not help
+//     a forger: naming an issuer they do not control means the verifier
+//     resolves that issuer's key, which will not verify their signature.
+//  2. Verify against a key belonging to that issuer, then re-read the
+//     credential from the payload the verification returned.
+//
+// The first pass is deliberately not reused for anything else: until step 2
+// succeeds an attacker controls every byte of it.
+func (cpp *ConfigurablePresentationParser) parseVCJoseCredential(tokenBytes []byte) (*common.Credential, error) {
+	unverified, err := unverifiedJWTClaims(tokenBytes)
+	if err != nil {
+		return nil, err
+	}
+	issuer, err := vcJwtIssuer(unverified)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload []byte
+	if cpp.ProofChecker != nil {
+		payload, _, err = cpp.ProofChecker.VerifyJWTForIssuer(tokenBytes, issuer)
+	} else {
+		payload, err = extractJWTPayload(tokenBytes)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, err
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	if err != nil {
+		return nil, err
+	}
+	cred.SetFormat(common.FormatVCJWT)
+	return cred, nil
+}
+
+// vcJwtIssuer determines the identity a vc+jwt credential is attributed to. It
+// is the single place that decides it, so the pre-verification key lookup and
+// the parsed credential cannot end up with different answers.
+//
+// The `issuer` property is the credential's own statement of who issued it. The
+// `iss` claim is optional in VC-JOSE-COSE and, where present, a redundant copy
+// that must agree with it (§3.1.3).
+func vcJwtIssuer(claims map[string]interface{}) (string, error) {
+	payloadIssuer := extractPayloadIssuerID(claims)
+	iss, _ := claims[common.JWTClaimIss].(string)
+
+	if iss != "" && payloadIssuer != "" && iss != payloadIssuer {
+		return "", fmt.Errorf("%w: iss=%q, issuer=%q", ErrorIssClaimIssuerMismatch, iss, payloadIssuer)
+	}
+	if payloadIssuer != "" {
+		return payloadIssuer, nil
+	}
+	if iss != "" {
+		return iss, nil
+	}
+	return "", ErrorVCJWTNoIssuer
+}
+
+// vpJwtHolder determines the identity a vp+jwt presentation is attributed to,
+// and like vcJwtIssuer is the single place that decides it.
+//
+// `holder` is the presentation's own statement of who presents it. VC-JOSE-COSE
+// defines no iss → holder mapping - §4.1.2 registers `iss` for key discovery
+// only - so `holder` decides and an `iss` that disagrees makes the token
+// malformed. `iss` is still accepted on its own, since VCDM 2.0 leaves `holder`
+// optional and an identity read from `iss` is bound to the signing key in
+// exactly the same way.
+func vpJwtHolder(claims map[string]interface{}) (string, error) {
+	holder, _ := claims[common.VPKeyHolder].(string)
+	iss, _ := claims[common.JWTClaimIss].(string)
+
+	if holder != "" && iss != "" && iss != holder {
+		return "", fmt.Errorf("%w: iss=%q, holder=%q", ErrorIssClaimHolderMismatch, iss, holder)
+	}
+	if holder != "" {
+		return holder, nil
+	}
+	if iss != "" {
+		return iss, nil
+	}
+	return "", ErrorVPJWTNoHolder
+}
+
+// unverifiedJWTClaims decodes a JWT payload into a claims map without checking
+// the signature. Everything it returns is attacker-controlled; the only
+// legitimate use is reading the identity to resolve a verification key for.
+func unverifiedJWTClaims(tokenBytes []byte) (map[string]interface{}, error) {
+	payload, err := extractJWTPayload(tokenBytes)
+	if err != nil {
+		return nil, err
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, err
+	}
+	return claims, nil
 }
 
 // jwtClaimsToCredential maps JWT VC claims to a common.Credential.
@@ -634,26 +787,14 @@ func jwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, e
 func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, error) {
 	contents := common.CredentialContents{}
 
-	// --- Issuer: iss takes precedence, then payload "issuer" (string or object) ---
-	// VC-JOSE-COSE §3.3.1 requires that when both iss and issuer are present
-	// they MUST be equal; a mismatch makes the credential malformed.
-	if iss, ok := claims[common.JWTClaimIss].(string); ok {
-		contents.Issuer = &common.Issuer{ID: iss}
-
-		// Verify consistency with the payload issuer field, if present.
-		if payloadIssuerID := extractPayloadIssuerID(claims); payloadIssuerID != "" && payloadIssuerID != iss {
-			return nil, fmt.Errorf("%w: iss=%q, issuer=%q", ErrorIssClaimIssuerMismatch, iss, payloadIssuerID)
-		}
-	} else if issuer, ok := claims[common.VCKeyIssuer]; ok {
-		switch v := issuer.(type) {
-		case string:
-			contents.Issuer = &common.Issuer{ID: v}
-		case map[string]interface{}:
-			if id, ok := v[common.JSONLDKeyID].(string); ok {
-				contents.Issuer = &common.Issuer{ID: id}
-			}
-		}
+	// --- Issuer ---
+	// Decided by the one rule that also chose the verification key, so the
+	// parsed issuer is always the identity the signature was checked against.
+	issuerID, err := vcJwtIssuer(claims)
+	if err != nil {
+		return nil, err
 	}
+	contents.Issuer = &common.Issuer{ID: issuerID}
 
 	// --- Credential ID: jti claim ---
 	if jti, ok := claims[common.JWTClaimJti].(string); ok {
