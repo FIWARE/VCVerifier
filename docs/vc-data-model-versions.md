@@ -50,7 +50,10 @@ verifier:
   startup with `unsupported_vc_data_model_version`, naming the offending value.
 - **Credentials only.** The allowlist is applied to each incoming credential. The enclosing
   presentation's own `@context` is not checked: the presentation is an envelope built by the
-  wallet, and its data model version is not a property of the credentials being asserted.
+  wallet, and its data model version is not a property of the credentials being asserted. A
+  `vp+jwt` is the one envelope held to a data model, and not by this allowlist: VC-JOSE-COSE
+  §3.1.2 defines it over VCDM 2.0, so it is rejected at parse time when it says otherwise —
+  see `docs/vc-jose-cose.md`.
 - **SD-JWT VCs are exempt.** An SD-JWT VC (`dc+sd-jwt`, `vc+sd-jwt`) is an IETF credential typed
   via its `vct` claim. It carries no `@context` and no data model version, so no allowlist can
   apply to it. This is the only exemption, and it is keyed on the credential format — a
@@ -81,19 +84,35 @@ secured by a mechanism VCVerifier verifies, which today means:
 |--------|--------------------|-----------|
 | `ldp_vc` | `JsonWebSignature2020` (Linked Data Proof) | ✅ |
 | `jwt_vc` | JWS over a v1.1-style `vc` claim, with a v2 context | ✅ |
+| `vc+jwt` / `vp+jwt` | VC-JOSE-COSE ([W3C](https://www.w3.org/TR/vc-jose-cose/)) | ✅ |
+| — | `EnvelopedVerifiableCredential` (VCDM 2.0 §4.13) | ✅ |
 | `ldp_vc` | `DataIntegrityProof` (`ecdsa-rdfc-2019`, `eddsa-rdfc-2022`, …) | ❌ parsed, not verified |
-| `vc+jwt` / `vp+jwt` | VC-JOSE-COSE | ❌ |
-| — | `EnvelopedVerifiableCredential` (VCDM 2.0 §4.13) | ❌ |
+
+### VC-JOSE-COSE (`vc+jwt` / `vp+jwt`)
+
+The [VC-JOSE-COSE](https://www.w3.org/TR/vc-jose-cose/) securing mechanism is fully supported.
+In a `vc+jwt` credential, the JWT payload **is** the credential (no `vc` claim wrapper). In a
+`vp+jwt` presentation, the JWT payload **is** the presentation (no `vp` claim wrapper). The
+`typ` JOSE header (`vc+jwt` or `vp+jwt`) selects the parsing path.
+
+`EnvelopedVerifiableCredential` (VCDM 2.0 §4.13) is recognized inside any VP format: a JSON-LD
+object with `"type": "EnvelopedVerifiableCredential"` whose `id` is a
+`data:application/vc+jwt,<compact-JWS>` URI is extracted and parsed as a `vc+jwt` credential.
+
+Neither format names its signer in the envelope: a `vc+jwt` is verified against a key
+belonging to the `issuer` property it carries, and a `vp+jwt` against a key belonging to its
+`holder`. Holder binding uses RFC 7800 `cnf` (VC-JOSE-COSE §4.1.3); VCDM 2.0's
+`confirmationMethod` is a reserved property with no defined semantics and is not implemented.
+
+A `vc+jwt` must carry the VCDM 2.0 base context — VC-JOSE-COSE §3.1.1 secures a 2.0 document,
+so a v1.1 payload is not a well-formed `vc+jwt` whatever `verifier.vcDataModelVersions` allows.
+Beyond that requirement, `vc+jwt` credentials participate in the version gate (they carry
+`@context`) the same way `jwt_vc` and `ldp_vc` credentials do.
+
+See [VC-JOSE-COSE support](vc-jose-cose.md) for the claim rules and the verification paths.
 
 ### Not supported
 
-- **VC-JOSE-COSE** ([W3C](https://www.w3.org/TR/vc-jose-cose/)) is the securing mechanism VCDM
-  2.0 defines for JOSE. The JWT payload *is* the credential or presentation, with no `vc`/`vp`
-  claim. VCVerifier reads the credential out of the `vc` claim and the presentation out of the
-  `vp` claim, so a `vc+jwt` credential parses with no issuer, types or subject, and a `vp+jwt`
-  presentation is rejected with `presentation_no_credentials`.
-- **Enveloped credentials** (`EnvelopedVerifiableCredential`, a `data:application/vc+jwt,…` URL
-  inside a presentation) are not recognized.
 - **Data Integrity cryptosuites** other than `JsonWebSignature2020` are parsed but not verified.
   A VC 2.0 issuer following the current W3C recommendations is more likely to use
   `DataIntegrityProof` than `JsonWebSignature2020`, so this is worth checking against the issuers
