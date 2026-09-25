@@ -112,6 +112,22 @@ var ErrorUnexpectedCredentialEntryType = errors.New("unexpected_credential_entry
 // to: the signature would establish only that somebody signed the credential.
 var ErrorVCJWTNoIssuer = errors.New("vc_jwt_credential_has_no_issuer")
 
+// ErrorSubClaimSubjectMismatch is returned when a vc+jwt carries both a `sub`
+// claim and a credentialSubject `id` that disagree. VC-JOSE-COSE §3.1.3 makes
+// `sub` a redundant copy of credentialSubject.id, so a conflict is malformed
+// rather than something to resolve by precedence.
+var ErrorSubClaimSubjectMismatch = errors.New("vc_jwt_sub_claim_does_not_match_credential_subject")
+
+// ErrorSubClaimMultipleSubjects is returned when a vc+jwt carries a `sub` claim
+// alongside more than one credentialSubject. §3.1.3 permits `sub` only for a
+// single subject with an id, so there is no property for it to be a copy of.
+var ErrorSubClaimMultipleSubjects = errors.New("vc_jwt_sub_claim_with_multiple_subjects")
+
+// ErrorJtiClaimIDMismatch is returned when a vc+jwt or vp+jwt carries both a
+// `jti` claim and an `id` property that disagree - the same rule as `sub` and
+// `iss`, applied to the pair §3.1.3 names alongside them.
+var ErrorJtiClaimIDMismatch = errors.New("jwt_jti_claim_does_not_match_id")
+
 // ErrorUnexpectedJWTType is returned when a token's JOSE typ header names a
 // format that does not belong in the position it was found in - a vp+jwt used
 // as a credential, a vc+jwt used as a presentation, or any type this verifier
@@ -421,11 +437,13 @@ func (cpp *ConfigurablePresentationParser) parseVPJWTPresentation(claims map[str
 	}
 	pres.Holder = holder
 
-	// ID from jti, falling back to payload "id".
-	if jti, ok := claims[common.JWTClaimJti].(string); ok {
-		pres.ID = jti
-	} else if id, ok := claims["id"].(string); ok {
-		pres.ID = id
+	// ID: `jti` is a redundant copy of the payload `id`, reconciled on the same
+	// terms as every other claim/property pair.
+	jti, _ := claims[common.JWTClaimJti].(string)
+	payloadID, _ := claims[common.JSONLDKeyID].(string)
+	pres.ID, err = reconcileRedundantClaim(payloadID, jti, ErrorJtiClaimIDMismatch)
+	if err != nil {
+		return nil, err
 	}
 
 	// Context and type directly from the payload.
@@ -660,19 +678,54 @@ func (cpp *ConfigurablePresentationParser) parseVCJoseCredential(tokenBytes []by
 // `iss` claim is optional in VC-JOSE-COSE and, where present, a redundant copy
 // that must agree with it (§3.1.3).
 func vcJwtIssuer(claims map[string]interface{}) (string, error) {
-	payloadIssuer := extractPayloadIssuerID(claims)
 	iss, _ := claims[common.JWTClaimIss].(string)
 
-	if iss != "" && payloadIssuer != "" && iss != payloadIssuer {
-		return "", fmt.Errorf("%w: iss=%q, issuer=%q", ErrorIssClaimIssuerMismatch, iss, payloadIssuer)
+	issuer, err := reconcileRedundantClaim(extractPayloadIssuerID(claims), iss, ErrorIssClaimIssuerMismatch)
+	if err != nil {
+		return "", err
 	}
-	if payloadIssuer != "" {
-		return payloadIssuer, nil
+	if issuer == "" {
+		return "", ErrorVCJWTNoIssuer
 	}
-	if iss != "" {
-		return iss, nil
+	return issuer, nil
+}
+
+// reconcileRedundantClaim applies the rule VC-JOSE-COSE §3.1.3 states for the
+// claim/property pairs it names together - `iss` and `issuer`, `sub` and
+// `credentialSubject.id`, `jti` and `id`.
+//
+// For a vc+jwt the payload *is* the credential, so the property is the
+// credential's own statement and the registered claim is a redundant copy of
+// it. A copy may agree or be absent; it may not overrule the original, and the
+// two disagreeing makes the document malformed. Letting the claim win instead
+// meant `sub` could rewrite the subject that holder binding and the holder
+// policies compare against.
+func reconcileRedundantClaim(property, claim string, mismatch error) (string, error) {
+	if property != "" && claim != "" && property != claim {
+		return "", fmt.Errorf("%w: claim=%q, property=%q", mismatch, claim, property)
 	}
-	return "", ErrorVCJWTNoIssuer
+	if property != "" {
+		return property, nil
+	}
+	return claim, nil
+}
+
+// narrowStart returns the later of an optional start and a bound: a bound may
+// move a validity window's start forward, never back.
+func narrowStart(current *time.Time, bound time.Time) *time.Time {
+	if current == nil || bound.After(*current) {
+		return &bound
+	}
+	return current
+}
+
+// narrowEnd returns the earlier of an optional end and a bound: a bound may
+// move a validity window's end back, never forward.
+func narrowEnd(current *time.Time, bound time.Time) *time.Time {
+	if current == nil || bound.Before(*current) {
+		return &bound
+	}
+	return current
 }
 
 // vpJwtHolder determines the identity a vp+jwt presentation is attributed to,
@@ -825,11 +878,12 @@ func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential,
 	}
 	contents.Issuer = &common.Issuer{ID: issuerID}
 
-	// --- Credential ID: jti claim ---
-	if jti, ok := claims[common.JWTClaimJti].(string); ok {
-		contents.ID = jti
-	} else if id, ok := claims[common.JSONLDKeyID].(string); ok {
-		contents.ID = id
+	// --- Credential ID ---
+	jti, _ := claims[common.JWTClaimJti].(string)
+	payloadID, _ := claims[common.JSONLDKeyID].(string)
+	contents.ID, err = reconcileRedundantClaim(payloadID, jti, ErrorJtiClaimIDMismatch)
+	if err != nil {
+		return nil, err
 	}
 
 	// --- Context and types: read directly from the payload (no "vc" wrapper) ---
@@ -841,15 +895,24 @@ func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential,
 		contents.Subject = parseSubjectsFromClaims(cs)
 	}
 
-	// VC-JOSE-COSE §3.3.1: sub MUST only be set when the credential has a
-	// single credentialSubject with an id property. When both are present,
-	// sub takes precedence. We only apply sub when there is at most one
-	// subject — a well-formed multi-subject vc+jwt will not carry sub.
-	if sub, ok := claims[common.JWTClaimSub].(string); ok && len(contents.Subject) <= 1 {
-		if len(contents.Subject) == 1 {
-			contents.Subject[0].ID = sub
-		} else {
+	// VC-JOSE-COSE §3.1.3 permits `sub` only for a single credentialSubject
+	// carrying an id, and makes it a redundant copy of that id. So it is
+	// reconciled rather than applied: a sub that disagrees is malformed, and a
+	// sub alongside several subjects has no property to be a copy of. Silently
+	// dropping it there - the previous behaviour - hides a claim the signature
+	// covers just as much as silently overriding one does.
+	if sub, ok := claims[common.JWTClaimSub].(string); ok && sub != "" {
+		switch len(contents.Subject) {
+		case 0:
 			contents.Subject = []common.Subject{{ID: sub, CustomFields: common.CustomFields{}}}
+		case 1:
+			subjectID, subErr := reconcileRedundantClaim(contents.Subject[0].ID, sub, ErrorSubClaimSubjectMismatch)
+			if subErr != nil {
+				return nil, subErr
+			}
+			contents.Subject[0].ID = subjectID
+		default:
+			return nil, fmt.Errorf("%w: %d subjects", ErrorSubClaimMultipleSubjects, len(contents.Subject))
 		}
 	}
 
@@ -859,29 +922,24 @@ func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential,
 	// available via ToRawJSON() for callers that need every entry.
 	contents.Status = extractFirstCredentialStatus(claims[common.VCKeyCredentialStatus])
 
-	// --- Validity dates: JWT numeric claims take precedence ---
+	// --- Validity window ---
+	// VC-JOSE-COSE §3.1.3 is explicit that iat and exp "represent the issuance
+	// and expiration time of the signature, respectively - different from
+	// credential's validFrom and validUntil", and that nbf is NOT RECOMMENDED.
+	// The credential's validity is therefore what the payload states.
+	//
+	// Letting the claims override it was wrong in both directions: iat, a
+	// signing timestamp, became the start of validity - so a credential with a
+	// future validFrom was usable immediately - and an exp earlier than
+	// validUntil silently shortened the credential instead of the signature.
+	// A claim that is present anyway may only narrow the window, never widen
+	// it, so a token cannot buy itself validity its own document does not grant.
+	contents.ValidFrom, contents.ValidUntil = common.ParseCredentialDates(claims)
 	if nbf, ok := claims[common.JWTClaimNbf].(float64); ok {
-		t := time.Unix(int64(nbf), 0)
-		contents.ValidFrom = &t
-	} else if iat, ok := claims[common.JWTClaimIat].(float64); ok {
-		t := time.Unix(int64(iat), 0)
-		contents.ValidFrom = &t
+		contents.ValidFrom = narrowStart(contents.ValidFrom, time.Unix(int64(nbf), 0))
 	}
 	if exp, ok := claims[common.JWTClaimExp].(float64); ok {
-		t := time.Unix(int64(exp), 0)
-		contents.ValidUntil = &t
-	}
-
-	// Fall back to VCDM 2.0 string dates in the payload (validFrom/validUntil,
-	// issuanceDate/expirationDate).
-	if contents.ValidFrom == nil || contents.ValidUntil == nil {
-		payloadFrom, payloadUntil := common.ParseCredentialDates(claims)
-		if contents.ValidFrom == nil {
-			contents.ValidFrom = payloadFrom
-		}
-		if contents.ValidUntil == nil {
-			contents.ValidUntil = payloadUntil
-		}
+		contents.ValidUntil = narrowEnd(contents.ValidUntil, time.Unix(int64(exp), 0))
 	}
 
 	// --- Custom fields ---

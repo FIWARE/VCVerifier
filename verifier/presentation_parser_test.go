@@ -2156,10 +2156,33 @@ func TestVcJwtClaimsToCredential_IssClaimMismatchIssuerObjectRejectsCredential(t
 	assert.ErrorIs(t, err, ErrorIssClaimIssuerMismatch)
 }
 
-func TestVcJwtClaimsToCredential_SubTakesPrecedenceOverSubjectID(t *testing.T) {
+// TestVcJwtClaimsToCredential_SubMustAgreeWithSubjectID checks that `sub` is
+// reconciled with credentialSubject.id rather than overriding it. It used to
+// win silently, which let it rewrite the subject that holder binding and the
+// holder policies compare against.
+func TestVcJwtClaimsToCredential_SubMustAgreeWithSubjectID(t *testing.T) {
 	claims := map[string]interface{}{
 		"iss":      "did:web:issuer.example.com",
 		"sub":      "did:web:sub-claim-subject.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"credentialSubject": map[string]interface{}{
+			"id":   "did:web:payload-subject.example.com",
+			"name": "Bob",
+		},
+	}
+
+	_, err := vcJwtClaimsToCredential(claims)
+	assert.ErrorIs(t, err, ErrorSubClaimSubjectMismatch)
+}
+
+// TestVcJwtClaimsToCredential_SubAgreeingWithSubjectID checks the other half of
+// the rule: a redundant copy that agrees is accepted, and the subject keeps its
+// other fields.
+func TestVcJwtClaimsToCredential_SubAgreeingWithSubjectID(t *testing.T) {
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
+		"sub":      "did:web:payload-subject.example.com",
 		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
 		"type":     []interface{}{"VerifiableCredential"},
 		"credentialSubject": map[string]interface{}{
@@ -2172,8 +2195,7 @@ func TestVcJwtClaimsToCredential_SubTakesPrecedenceOverSubjectID(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, cred.Contents().Subject, 1)
-	assert.Equal(t, "did:web:sub-claim-subject.example.com", cred.Contents().Subject[0].ID)
-	// Custom fields should still be preserved
+	assert.Equal(t, "did:web:payload-subject.example.com", cred.Contents().Subject[0].ID)
 	assert.Equal(t, "Bob", cred.Contents().Subject[0].CustomFields["name"])
 }
 
@@ -2271,46 +2293,126 @@ func TestVcJwtClaimsToCredential_DateFallbackToPayloadStrings(t *testing.T) {
 	assert.Equal(t, expectedUntil, *cred.Contents().ValidUntil)
 }
 
-func TestVcJwtClaimsToCredential_NumericDatesOverridePayloadStrings(t *testing.T) {
-	// Both JWT numeric claims and VCDM 2.0 string dates present —
-	// numeric claims should take precedence.
-	nbf := float64(1700000000)
-	exp := float64(1700100000)
-	claims := map[string]interface{}{
-		"iss":        "did:web:issuer.example.com",
-		"nbf":        nbf,
-		"exp":        exp,
-		"@context":   []interface{}{"https://www.w3.org/ns/credentials/v2"},
-		"type":       []interface{}{"VerifiableCredential"},
-		"validFrom":  "2024-01-01T00:00:00Z",
-		"validUntil": "2025-01-01T00:00:00Z",
+// TestVcJwtClaimsToCredential_ValidityWindow covers the rule VC-JOSE-COSE
+// §3.1.3 states: iat and exp are the issuance and expiration time of the
+// *signature*, not of the credential, and nbf is NOT RECOMMENDED. The payload's
+// validFrom/validUntil state the credential's validity, and a registered claim
+// present anyway may only narrow that window.
+func TestVcJwtClaimsToCredential_ValidityWindow(t *testing.T) {
+	const (
+		hour       = int64(3600)
+		base       = int64(1700000000)
+		baseRFC    = "2023-11-14T22:13:20Z"
+		laterRFC   = "2023-11-14T23:13:20Z"
+		earlierRFC = "2023-11-14T21:13:20Z"
+	)
+
+	tests := []struct {
+		name           string
+		claims         map[string]interface{}
+		wantValidFrom  *int64
+		wantValidUntil *int64
+	}{
+		{
+			// The bypass: a signing timestamp used to become the start of
+			// validity, so a credential that is not valid yet was usable now.
+			name: "iat does not start the validity window",
+			claims: map[string]interface{}{
+				"iat":       float64(base),
+				"validFrom": laterRFC,
+			},
+			wantValidFrom: ptrInt64(base + hour),
+		},
+		{
+			name: "iat alone leaves the window open",
+			claims: map[string]interface{}{
+				"iat": float64(base),
+			},
+		},
+		{
+			name: "exp may shorten a longer validUntil",
+			claims: map[string]interface{}{
+				"exp":        float64(base),
+				"validUntil": laterRFC,
+			},
+			wantValidUntil: ptrInt64(base),
+		},
+		{
+			name: "exp may not extend a shorter validUntil",
+			claims: map[string]interface{}{
+				"exp":        float64(base + hour),
+				"validUntil": baseRFC,
+			},
+			wantValidUntil: ptrInt64(base),
+		},
+		{
+			name: "nbf may delay an earlier validFrom",
+			claims: map[string]interface{}{
+				"nbf":       float64(base),
+				"validFrom": earlierRFC,
+			},
+			wantValidFrom: ptrInt64(base),
+		},
+		{
+			name: "nbf may not bring forward a later validFrom",
+			claims: map[string]interface{}{
+				"nbf":       float64(base - hour),
+				"validFrom": baseRFC,
+			},
+			wantValidFrom: ptrInt64(base),
+		},
+		{
+			name: "payload dates alone",
+			claims: map[string]interface{}{
+				"validFrom":  baseRFC,
+				"validUntil": laterRFC,
+			},
+			wantValidFrom:  ptrInt64(base),
+			wantValidUntil: ptrInt64(base + hour),
+		},
+		{
+			name: "claims alone still bound the window",
+			claims: map[string]interface{}{
+				"nbf": float64(base),
+				"exp": float64(base + hour),
+			},
+			wantValidFrom:  ptrInt64(base),
+			wantValidUntil: ptrInt64(base + hour),
+		},
 	}
 
-	cred, err := vcJwtClaimsToCredential(claims)
-	require.NoError(t, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			claims := map[string]interface{}{
+				"iss":      "did:web:issuer.example.com",
+				"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+				"type":     []interface{}{"VerifiableCredential"},
+			}
+			for k, v := range tc.claims {
+				claims[k] = v
+			}
 
-	require.NotNil(t, cred.Contents().ValidFrom)
-	assert.Equal(t, time.Unix(int64(nbf), 0), *cred.Contents().ValidFrom)
-	require.NotNil(t, cred.Contents().ValidUntil)
-	assert.Equal(t, time.Unix(int64(exp), 0), *cred.Contents().ValidUntil)
-}
+			cred, err := vcJwtClaimsToCredential(claims)
+			require.NoError(t, err)
 
-func TestVcJwtClaimsToCredential_IatFallback(t *testing.T) {
-	// iat used when nbf is absent
-	iat := float64(1700000000)
-	claims := map[string]interface{}{
-		"iss":      "did:web:issuer.example.com",
-		"iat":      iat,
-		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
-		"type":     []interface{}{"VerifiableCredential"},
+			contents := cred.Contents()
+			if tc.wantValidFrom == nil {
+				assert.Nil(t, contents.ValidFrom)
+			} else {
+				require.NotNil(t, contents.ValidFrom)
+				assert.Equal(t, *tc.wantValidFrom, contents.ValidFrom.Unix())
+			}
+			if tc.wantValidUntil == nil {
+				assert.Nil(t, contents.ValidUntil)
+			} else {
+				require.NotNil(t, contents.ValidUntil)
+				assert.Equal(t, *tc.wantValidUntil, contents.ValidUntil.Unix())
+			}
+		})
 	}
-
-	cred, err := vcJwtClaimsToCredential(claims)
-	require.NoError(t, err)
-
-	require.NotNil(t, cred.Contents().ValidFrom)
-	assert.Equal(t, time.Unix(int64(iat), 0), *cred.Contents().ValidFrom)
 }
+
+func ptrInt64(v int64) *int64 { return &v }
 
 func TestVcJwtClaimsToCredential_CnfPreserved(t *testing.T) {
 	cnf := map[string]interface{}{
@@ -2354,13 +2456,33 @@ func TestVcJwtClaimsToCredential_MultipleSubjects(t *testing.T) {
 	assert.Equal(t, "did:web:bob.example.com", cred.Contents().Subject[1].ID)
 }
 
-func TestVcJwtClaimsToCredential_SubIgnoredWithMultipleSubjects(t *testing.T) {
-	// VC-JOSE-COSE §3.3.1: sub MUST only be set when the credential has a
-	// single credentialSubject with an id. When there are multiple subjects,
-	// sub is ignored and the original subject IDs are preserved.
+// TestVcJwtClaimsToCredential_SubRejectedWithMultipleSubjects checks that a
+// `sub` alongside several subjects is rejected rather than dropped. §3.1.3
+// permits it only for a single subject, so there is no property for it to be a
+// redundant copy of - and silently ignoring a claim the signature covers hides
+// the same disagreement that silently applying it would.
+func TestVcJwtClaimsToCredential_SubRejectedWithMultipleSubjects(t *testing.T) {
 	claims := map[string]interface{}{
 		"iss":      "did:web:issuer.example.com",
-		"sub":      "did:web:should-be-ignored.example.com",
+		"sub":      "did:web:should-not-be-ignored.example.com",
+		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+		"type":     []interface{}{"VerifiableCredential"},
+		"credentialSubject": []interface{}{
+			map[string]interface{}{"id": "did:web:alice.example.com", "name": "Alice"},
+			map[string]interface{}{"id": "did:web:bob.example.com", "name": "Bob"},
+		},
+	}
+
+	_, err := vcJwtClaimsToCredential(claims)
+	assert.ErrorIs(t, err, ErrorSubClaimMultipleSubjects)
+}
+
+// TestVcJwtClaimsToCredential_MultipleSubjectsWithoutSub checks that several
+// subjects are fine on their own - the rejection above is about `sub`, not
+// about multi-subject credentials.
+func TestVcJwtClaimsToCredential_MultipleSubjectsWithoutSub(t *testing.T) {
+	claims := map[string]interface{}{
+		"iss":      "did:web:issuer.example.com",
 		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
 		"type":     []interface{}{"VerifiableCredential"},
 		"credentialSubject": []interface{}{
@@ -2373,7 +2495,6 @@ func TestVcJwtClaimsToCredential_SubIgnoredWithMultipleSubjects(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, cred.Contents().Subject, 2)
-	// sub should NOT override either subject's ID
 	assert.Equal(t, "did:web:alice.example.com", cred.Contents().Subject[0].ID)
 	assert.Equal(t, "did:web:bob.example.com", cred.Contents().Subject[1].ID)
 }
@@ -2392,18 +2513,46 @@ func TestVcJwtClaimsToCredential_IDFromPayload(t *testing.T) {
 	assert.Equal(t, "urn:uuid:payload-level-id", cred.Contents().ID)
 }
 
-func TestVcJwtClaimsToCredential_JtiTakesPrecedenceOverID(t *testing.T) {
-	claims := map[string]interface{}{
-		"iss":      "did:web:issuer.example.com",
-		"jti":      "urn:uuid:jti-id",
-		"id":       "urn:uuid:payload-id",
-		"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
-		"type":     []interface{}{"VerifiableCredential"},
+// TestVcJwtClaimsToCredential_JtiMustAgreeWithID applies the same rule to the
+// third pair §3.1.3 names: jti is a redundant copy of the payload id.
+func TestVcJwtClaimsToCredential_JtiMustAgreeWithID(t *testing.T) {
+	tests := []struct {
+		name    string
+		jti     string
+		id      string
+		wantID  string
+		wantErr error
+	}{
+		{name: "agreeing", jti: "urn:uuid:same", id: "urn:uuid:same", wantID: "urn:uuid:same"},
+		{name: "jti only", jti: "urn:uuid:jti-id", wantID: "urn:uuid:jti-id"},
+		{name: "id only", id: "urn:uuid:payload-id", wantID: "urn:uuid:payload-id"},
+		{name: "neither", wantID: ""},
+		{name: "disagreeing", jti: "urn:uuid:jti-id", id: "urn:uuid:payload-id", wantErr: ErrorJtiClaimIDMismatch},
 	}
 
-	cred, err := vcJwtClaimsToCredential(claims)
-	require.NoError(t, err)
-	assert.Equal(t, "urn:uuid:jti-id", cred.Contents().ID)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			claims := map[string]interface{}{
+				"iss":      "did:web:issuer.example.com",
+				"@context": []interface{}{"https://www.w3.org/ns/credentials/v2"},
+				"type":     []interface{}{"VerifiableCredential"},
+			}
+			if tc.jti != "" {
+				claims["jti"] = tc.jti
+			}
+			if tc.id != "" {
+				claims["id"] = tc.id
+			}
+
+			cred, err := vcJwtClaimsToCredential(claims)
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantID, cred.Contents().ID)
+		})
+	}
 }
 
 func TestVcJwtClaimsToCredential_IssuerStringFallback(t *testing.T) {
@@ -2703,7 +2852,10 @@ func TestParseVPJWT_IDFallbackToPayloadID(t *testing.T) {
 	assert.Equal(t, "urn:uuid:vp-id-from-payload", pres.ID)
 }
 
-func TestParseVPJWT_JtiPrecedenceOverPayloadID(t *testing.T) {
+// TestParseVPJWT_JtiMustAgreeWithPayloadID applies the jti/id rule on the
+// presentation side too: a disagreeing redundant copy is malformed, not a
+// value that overrules the document.
+func TestParseVPJWT_JtiMustAgreeWithPayloadID(t *testing.T) {
 	vpPayload := map[string]interface{}{
 		"jti":                  "urn:uuid:from-jti",
 		"id":                   "urn:uuid:from-payload",
@@ -2715,10 +2867,9 @@ func TestParseVPJWT_JtiPrecedenceOverPayloadID(t *testing.T) {
 
 	token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
 	parser := &ConfigurablePresentationParser{ProofChecker: nil}
-	pres, err := parser.parseJWTPresentation(token)
-	require.NoError(t, err)
+	_, err := parser.parseJWTPresentation(token)
 
-	assert.Equal(t, "urn:uuid:from-jti", pres.ID)
+	assert.ErrorIs(t, err, ErrorJtiClaimIDMismatch)
 }
 
 func TestParseVPJWT_MissingVerifiableCredentialIsOK(t *testing.T) {
