@@ -98,12 +98,23 @@ VC 2.0 support means the **data model**. The credential still has to be secured 
 VCVerifier verifies, which today means `ldp_vc` with a `JsonWebSignature2020` Linked Data Proof,
 or `jwt_vc` carrying a v1.1-style `vc` claim with a v2 context.
 
+### VC-JOSE-COSE (`vc+jwt` / `vp+jwt`)
+
+- [VC-JOSE-COSE](https://www.w3.org/TR/vc-jose-cose/) is now fully supported. In a `vc+jwt`
+  credential, the JWT payload **is** the credential (no `vc` claim wrapper). In a `vp+jwt`
+  presentation, the JWT payload **is** the presentation (no `vp` claim wrapper). The `typ` JOSE
+  header selects the parsing path.
+- `vc+jwt` credentials participate in the VC Data Model version gate — `verifier.vcDataModelVersions`
+  applies to them the same way it does to `jwt_vc` and `ldp_vc`.
+
+### Enveloped credentials
+
+- `EnvelopedVerifiableCredential` (VCDM 2.0 §4.13) is now recognized inside any VP format:
+  a JSON-LD object with `"type": "EnvelopedVerifiableCredential"` whose `id` is a
+  `data:application/vc+jwt,<compact-JWS>` URI is extracted and parsed as a `vc+jwt` credential.
+
 Not supported:
 
-- **VC-JOSE-COSE** (`typ: vc+jwt` / `vp+jwt`), the securing mechanism VCDM 2.0 defines for JOSE,
-  where the JWT payload *is* the credential or presentation. A `vc+jwt` credential parses with no
-  issuer, types or subject; a `vp+jwt` presentation is rejected with `presentation_no_credentials`.
-- **`EnvelopedVerifiableCredential`** (VCDM 2.0 §4.13).
 - **`DataIntegrityProof` cryptosuites** (`ecdsa-rdfc-2019`, `eddsa-rdfc-2022`, …) — parsed but
   not verified. A VC 2.0 issuer following the current W3C recommendations is more likely to use
   these than `JsonWebSignature2020`, so this is worth checking against the issuers a deployment
