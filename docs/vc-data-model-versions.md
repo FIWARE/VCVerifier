@@ -81,19 +81,26 @@ secured by a mechanism VCVerifier verifies, which today means:
 |--------|--------------------|-----------|
 | `ldp_vc` | `JsonWebSignature2020` (Linked Data Proof) | ✅ |
 | `jwt_vc` | JWS over a v1.1-style `vc` claim, with a v2 context | ✅ |
+| `vc+jwt` / `vp+jwt` | VC-JOSE-COSE ([W3C](https://www.w3.org/TR/vc-jose-cose/)) | ✅ |
+| — | `EnvelopedVerifiableCredential` (VCDM 2.0 §4.13) | ✅ |
 | `ldp_vc` | `DataIntegrityProof` (`ecdsa-rdfc-2019`, `eddsa-rdfc-2022`, …) | ❌ parsed, not verified |
-| `vc+jwt` / `vp+jwt` | VC-JOSE-COSE | ❌ |
-| — | `EnvelopedVerifiableCredential` (VCDM 2.0 §4.13) | ❌ |
+
+### VC-JOSE-COSE (`vc+jwt` / `vp+jwt`)
+
+The [VC-JOSE-COSE](https://www.w3.org/TR/vc-jose-cose/) securing mechanism is fully supported.
+In a `vc+jwt` credential, the JWT payload **is** the credential (no `vc` claim wrapper). In a
+`vp+jwt` presentation, the JWT payload **is** the presentation (no `vp` claim wrapper). The
+`typ` JOSE header (`vc+jwt` or `vp+jwt`) selects the parsing path.
+
+`EnvelopedVerifiableCredential` (VCDM 2.0 §4.13) is recognized inside any VP format: a JSON-LD
+object with `"type": "EnvelopedVerifiableCredential"` whose `id` is a
+`data:application/vc+jwt,<compact-JWS>` URI is extracted and parsed as a `vc+jwt` credential.
+
+`vc+jwt` credentials participate in the VC Data Model version gate (they carry `@context`), so
+`verifier.vcDataModelVersions` applies to them the same way it applies to `jwt_vc` and `ldp_vc`.
 
 ### Not supported
 
-- **VC-JOSE-COSE** ([W3C](https://www.w3.org/TR/vc-jose-cose/)) is the securing mechanism VCDM
-  2.0 defines for JOSE. The JWT payload *is* the credential or presentation, with no `vc`/`vp`
-  claim. VCVerifier reads the credential out of the `vc` claim and the presentation out of the
-  `vp` claim, so a `vc+jwt` credential parses with no issuer, types or subject, and a `vp+jwt`
-  presentation is rejected with `presentation_no_credentials`.
-- **Enveloped credentials** (`EnvelopedVerifiableCredential`, a `data:application/vc+jwt,…` URL
-  inside a presentation) are not recognized.
 - **Data Integrity cryptosuites** other than `JsonWebSignature2020` are parsed but not verified.
   A VC 2.0 issuer following the current W3C recommendations is more likely to use
   `DataIntegrityProof` than `JsonWebSignature2020`, so this is worth checking against the issuers
