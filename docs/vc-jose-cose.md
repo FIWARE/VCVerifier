@@ -23,7 +23,10 @@ the top level of the JWT payload.
 | `exp` | `validUntil` |
 
 Both the JWT-level claims and the payload-level JSON-LD fields are accepted. When both are
-present, the payload-level field takes precedence (it is the canonical representation).
+present, the JWT-level claim takes precedence; the payload-level field is used as a fallback
+when the JWT claim is absent. For `issuer`, a mismatch between `iss` and the payload `issuer`
+is an error. For `sub`, `jti`, and dates, the JWT claim silently overrides the payload value
+with no mismatch check.
 
 ### Parsing
 
