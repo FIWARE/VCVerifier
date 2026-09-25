@@ -65,14 +65,14 @@ func TestWsHandler_RejectsCrossOriginUpgrade(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 	})
 
 	t.Run("cross-origin is rejected", func(t *testing.T) {
 		header := http.Header{"Origin": {"https://attacker.example"}}
 		conn, resp, err := websocket.DefaultDialer.Dial(wsURL, header)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			t.Fatalf("Expected the upgrade to be rejected, got a successful connection")
 		}
 		if statusOf(resp) != http.StatusForbidden {
@@ -83,7 +83,7 @@ func TestWsHandler_RejectsCrossOriginUpgrade(t *testing.T) {
 	t.Run("missing origin is rejected", func(t *testing.T) {
 		conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			t.Fatalf("Expected the upgrade to be rejected, got a successful connection")
 		}
 		if statusOf(resp) != http.StatusForbidden {
