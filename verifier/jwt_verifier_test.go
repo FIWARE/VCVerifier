@@ -845,9 +845,9 @@ func TestHasOverlap(t *testing.T) {
 
 // TestIsVersionedDataModelCredential_FormatDispatch verifies that the version
 // gate applies to every W3C credential format (jwt_vc, ldp_vc, vc+jwt) and
-// exempts only SD-JWT. The vp+jwt format is not tested here because the gate
-// acts on credentials, not presentations — but the gate helper would treat
-// it as versioned too since it is not SD-JWT.
+// exempts only SD-JWT. The vp+jwt format is included for completeness: the
+// gate acts on credentials, not presentations, but the gate helper treats
+// vp+jwt as versioned too since it is not SD-JWT.
 func TestIsVersionedDataModelCredential_FormatDispatch(t *testing.T) {
 	tests := []struct {
 		name   string
