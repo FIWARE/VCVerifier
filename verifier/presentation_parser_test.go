@@ -4275,3 +4275,131 @@ func TestParseEnvelopedCredential_MediaTypeBinding(t *testing.T) {
 		})
 	}
 }
+
+// --- VC-JOSE-COSE well-formedness ---
+
+// TestVCJoseReservedClaimsRejected covers VC-JOSE-COSE §1.1.2.1: "The JWT Claim
+// Names `vc` and `vp` MUST NOT be present in any JWT Claims Set that comprises
+// a verifiable credential or presentation."
+//
+// The mapping used to ignore such a claim, which is worse than accepting it:
+// the token then describes two documents at once and which one a verifier reads
+// depends on how it dispatches.
+func TestVCJoseReservedClaimsRejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		reserved string
+	}{
+		{name: "vc claim", reserved: common.JWTClaimVC},
+		{name: "vp claim", reserved: common.JWTClaimVP},
+	}
+
+	for _, tc := range tests {
+		t.Run("credential with a "+tc.name, func(t *testing.T) {
+			claims := map[string]interface{}{
+				"iss":                   "did:web:issuer.example.com",
+				common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV2},
+				common.JSONLDKeyType:    []interface{}{"VerifiableCredential"},
+				tc.reserved:             map[string]interface{}{"type": []interface{}{"VerifiableCredential"}},
+			}
+
+			_, err := vcJwtClaimsToCredential(claims)
+			assert.ErrorIs(t, err, ErrorVCJoseReservedClaim)
+		})
+
+		t.Run("presentation with a "+tc.name, func(t *testing.T) {
+			vpPayload := map[string]interface{}{
+				common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV2},
+				common.JSONLDKeyType:    []interface{}{"VerifiablePresentation"},
+				common.VPKeyHolder:      "did:web:holder.example.com",
+				tc.reserved:             map[string]interface{}{"type": []interface{}{"VerifiablePresentation"}},
+			}
+
+			token := buildFakeVPJWT(t, "vp+jwt", vpPayload)
+			parser := &ConfigurablePresentationParser{ProofChecker: nil}
+			_, err := parser.parseJWTPresentation(token)
+			assert.ErrorIs(t, err, ErrorVCJoseReservedClaim)
+		})
+	}
+}
+
+// TestVCJoseCredentialMustBeDataModel2 covers VC-JOSE-COSE §3.1.1: a vc+jwt
+// secures a VCDM 2.0 document.
+//
+// The check lives in the parser rather than in the configurable version gate:
+// verifier.vcDataModelVersions selects which data models are acceptable, and
+// its default accepts 1.1, so leaving it to the gate meant a v1.1 payload could
+// be presented as a vc+jwt out of the box.
+func TestVCJoseCredentialMustBeDataModel2(t *testing.T) {
+	tests := []struct {
+		name    string
+		context interface{}
+		wantErr error
+	}{
+		{
+			name:    "VCDM 2.0 base context",
+			context: []interface{}{common.ContextCredentialsV2},
+		},
+		{
+			name:    "VCDM 2.0 base context with an extension",
+			context: []interface{}{common.ContextCredentialsV2, "https://example.com/vocab/v1"},
+		},
+		{
+			name:    "VCDM 1.1 base context",
+			context: []interface{}{common.ContextCredentialsV1},
+			wantErr: ErrorVCJWTNotDataModel2,
+		},
+		{
+			name:    "both base contexts declare no version",
+			context: []interface{}{common.ContextCredentialsV2, common.ContextCredentialsV1},
+			wantErr: ErrorVCJWTNotDataModel2,
+		},
+		{
+			name:    "an unrecognized first context",
+			context: []interface{}{"https://example.com/vocab/v1", common.ContextCredentialsV2},
+			wantErr: ErrorVCJWTNotDataModel2,
+		},
+		{
+			name:    "no context at all",
+			context: nil,
+			wantErr: ErrorVCJWTNotDataModel2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			claims := map[string]interface{}{
+				"iss":                "did:web:issuer.example.com",
+				common.JSONLDKeyType: []interface{}{"VerifiableCredential"},
+			}
+			if tc.context != nil {
+				claims[common.JSONLDKeyContext] = tc.context
+			}
+
+			cred, err := vcJwtClaimsToCredential(claims)
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.NotNil(t, cred)
+		})
+	}
+}
+
+// TestVCJoseCredentialDataModelGateIgnoresConfig checks that the vc+jwt version
+// requirement holds even when the configurable gate would accept 1.1 — the two
+// answer different questions.
+func TestVCJoseCredentialDataModelGateIgnoresConfig(t *testing.T) {
+	signerKey, signerDID := generateTestKeyAndDIDJWK(t)
+
+	token := signVCJoseJWT(t, signerKey, common.JWTTypVCJWT, signerDID+"#0", map[string]interface{}{
+		common.JSONLDKeyContext: []interface{}{common.ContextCredentialsV1},
+		common.JSONLDKeyType:    []interface{}{"VerifiableCredential"},
+		common.VCKeyIssuer:      signerDID,
+	})
+
+	cred, err := vcJoseTestParser().parseJWTCredential(token)
+	assert.ErrorIs(t, err, ErrorVCJWTNotDataModel2)
+	assert.Nil(t, cred)
+}

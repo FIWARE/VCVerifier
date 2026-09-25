@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -111,6 +112,21 @@ var ErrorUnexpectedCredentialEntryType = errors.New("unexpected_credential_entry
 // `issuer`, and with no issuer there is no identity to bind the signing key
 // to: the signature would establish only that somebody signed the credential.
 var ErrorVCJWTNoIssuer = errors.New("vc_jwt_credential_has_no_issuer")
+
+// ErrorVCJoseReservedClaim is returned when a VC-JOSE-COSE token carries a `vc`
+// or `vp` claim. VC-JOSE-COSE §1.1.2.1: "The JWT Claim Names `vc` and `vp` MUST
+// NOT be present in any JWT Claims Set that comprises a verifiable credential
+// or presentation." A token carrying both shapes is ambiguous - it describes
+// two different credentials depending on which parser reads it - so it is
+// rejected rather than resolved by precedence.
+var ErrorVCJoseReservedClaim = errors.New("vc_jose_reserved_claim_present")
+
+// ErrorVCJWTNotDataModel2 is returned when a vc+jwt does not carry the VCDM 2.0
+// base context. VC-JOSE-COSE §3.1.1 secures a VCDM 2.0 document, so a v1.1
+// credential is not a well-formed vc+jwt whatever verifier.vcDataModelVersions
+// says: that setting selects which data models are acceptable, it does not make
+// a 1.1 document a valid vc+jwt.
+var ErrorVCJWTNotDataModel2 = errors.New("vc_jwt_credential_is_not_data_model_2_0")
 
 // ErrorSubClaimSubjectMismatch is returned when a vc+jwt carries both a `sub`
 // claim and a credentialSubject `id` that disagree. VC-JOSE-COSE §3.1.3 makes
@@ -428,6 +444,10 @@ func (cpp *ConfigurablePresentationParser) parseVPJWTPresentation(claims map[str
 		pres.SetHolderKey(holderKey)
 	}
 
+	if err := assertNoReservedVCJoseClaims(claims); err != nil {
+		return nil, err
+	}
+
 	// The presenter, decided by the one rule that also chose the verification
 	// key — so pres.Holder is always the identity the signature was checked
 	// against, never an unbound claim the payload happens to make.
@@ -690,6 +710,22 @@ func vcJwtIssuer(claims map[string]interface{}) (string, error) {
 	return issuer, nil
 }
 
+// assertNoReservedVCJoseClaims enforces VC-JOSE-COSE §1.1.2.1: a JWT Claims Set
+// that *is* a credential or presentation must not also carry a `vc` or `vp`
+// claim. Such a token describes two documents at once - the payload and the
+// wrapped claim - and which one a verifier reads depends on how it dispatches.
+// Ignoring the extra claim, as the mapping previously did, leaves that
+// ambiguity in place instead of refusing it.
+func assertNoReservedVCJoseClaims(claims map[string]interface{}) error {
+	for _, reserved := range []string{common.JWTClaimVC, common.JWTClaimVP} {
+		if _, present := claims[reserved]; present {
+			logging.Log().Warnf("VC-JOSE-COSE token rejected: it carries the reserved %q claim", reserved)
+			return fmt.Errorf("%w: %q", ErrorVCJoseReservedClaim, reserved)
+		}
+	}
+	return nil
+}
+
 // reconcileRedundantClaim applies the rule VC-JOSE-COSE §3.1.3 states for the
 // claim/property pairs it names together - `iss` and `issuer`, `sub` and
 // `credentialSubject.id`, `jti` and `id`.
@@ -867,6 +903,10 @@ func jwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, e
 //     from the top-level payload
 //   - cnf  → preserved in custom fields for holder binding
 func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential, error) {
+	if err := assertNoReservedVCJoseClaims(claims); err != nil {
+		return nil, err
+	}
+
 	contents := common.CredentialContents{}
 
 	// --- Issuer ---
@@ -889,6 +929,15 @@ func vcJwtClaimsToCredential(claims map[string]interface{}) (*common.Credential,
 	// --- Context and types: read directly from the payload (no "vc" wrapper) ---
 	contents.Context = common.ToStringSlice(claims[common.JSONLDKeyContext])
 	contents.Types = common.ToStringSlice(claims[common.JSONLDKeyType])
+
+	// VC-JOSE-COSE §3.1.1 secures a VCDM 2.0 document. Checking it here rather
+	// than leaving it to the configurable version gate means a v1.1 payload
+	// cannot be presented as a vc+jwt even where 1.1 credentials are accepted:
+	// the config says which data models are acceptable, not what a vc+jwt is.
+	if !slices.Contains(common.DetectVCDataModelVersion(contents.Context), common.VCDataModelVersion20) {
+		logging.Log().Warnf("vc+jwt rejected: @context %v does not declare VC Data Model 2.0", contents.Context)
+		return nil, fmt.Errorf("%w: @context %v", ErrorVCJWTNotDataModel2, contents.Context)
+	}
 
 	// --- Credential subject ---
 	if cs, ok := claims[common.VCKeyCredentialSubject]; ok {
