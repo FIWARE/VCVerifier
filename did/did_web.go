@@ -215,7 +215,13 @@ func parseVerificationMethod(data []byte) (*VerificationMethod, error) {
 		logging.Log().Debugf("Parsed JWK for verification method %s (type: %s)", raw.ID, raw.Type)
 	} else if raw.PublicKeyMultibase != "" {
 		vm.Value = []byte(raw.PublicKeyMultibase)
-		logging.Log().Debugf("Stored multibase key for verification method %s (type: %s)", raw.ID, raw.Type)
+		key, err := DecodeMultibaseKey(raw.PublicKeyMultibase)
+		if err != nil {
+			logging.Log().Debugf("Failed to decode publicKeyMultibase for verification method %s: %v", raw.ID, err)
+		} else {
+			vm.jsonWebKey = key
+			logging.Log().Debugf("Decoded publicKeyMultibase to JWK for verification method %s (type: %s)", raw.ID, raw.Type)
+		}
 	} else {
 		logging.Log().Debugf("Verification method %s has no publicKeyJwk or publicKeyMultibase", raw.ID)
 	}
