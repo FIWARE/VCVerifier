@@ -33,9 +33,10 @@ JWS (`jws` member). For `DataIntegrityProof` the same hash data is signed
 directly and the raw signature bytes are multibase-encoded as the `proofValue`
 member.
 
-The proof options document is the proof without its `jws`/`proofValue` member.
-Its `@context` is the *document's* context extended with a suite-specific
-context: `https://w3id.org/security/suites/jws-2020/v1` for
+The proof options document holds the proof's signed fields — everything but
+its `jws`/`proofValue` member (with the caveat in
+[§ Limitations](#limitations)). Its `@context` is the *document's* context
+extended with a suite-specific context: `https://w3id.org/security/suites/jws-2020/v1` for
 `JsonWebSignature2020`, or `https://www.w3.org/ns/credentials/v2` (the VCDM
 2.0 context) for `DataIntegrityProof`. The suite context is what defines
 `created`, `verificationMethod`, `proofPurpose`, `challenge` and `domain`.
@@ -246,8 +247,10 @@ cryptosuites:
 
 ### Algorithm
 
-1. **Canonicalize** both the document and the proof options (proof minus
-   `proofValue`) with URDNA2015, the same way `JsonWebSignature2020` does.
+1. **Canonicalize** both the document and the proof options with URDNA2015,
+   the same way `JsonWebSignature2020` does. The proof options are assembled
+   from the proof's signed fields; see [§ Limitations](#limitations) for how
+   that differs from the specification.
 2. **Hash**: `hashData = hash(canonical proof options) || hash(canonical
    document)`, where the hash is SHA-256 (P-256 / Ed25519) or SHA-384
    (P-384).
@@ -264,12 +267,15 @@ verification methods, where the public key is encoded as a `publicKeyMultibase`
 string (multibase + multicodec prefix). The key resolution path
 (`did/multikey.go`) decodes these into JWKs:
 
-| Multicodec code | Key type    | Curve / algorithm | Constant in code          |
-| --------------- | ----------- | ----------------- | ------------------------- |
-| `0x1200`        | EC          | P-256             | `MulticodecP256Pub`       |
-| `0x1201`        | EC          | P-384             | `MulticodecP384Pub`       |
-| `0xed`          | OKP         | Ed25519           | `MulticodecEd25519Pub`    |
-| `0xe7`          | OKP         | secp256k1         | `MulticodecSecp256k1Pub`  |
+| Multicodec code | Key type    | Curve / algorithm | Constant in code       |
+| --------------- | ----------- | ----------------- | ---------------------- |
+| `0x1200`        | EC          | P-256             | `MulticodecP256Pub`    |
+| `0x1201`        | EC          | P-384             | `MulticodecP384Pub`    |
+| `0xed`          | OKP         | Ed25519           | `MulticodecEd25519Pub` |
+
+`secp256k1` (`MulticodecSecp256k1Pub`, `0xe7`) is recognized and **rejected**:
+the curve is not available in Go's standard library, so a verification method
+carrying one produces an explicit error rather than a silently unusable key.
 
 `JsonWebKey2020` verification methods (with `publicKeyJwk`) are also supported,
 so both VM types work with Data Integrity proofs.
@@ -282,21 +288,52 @@ so both VM types work with Data Integrity proofs.
   suite is rejected with `ErrorLDProofUnsupportedCryptosuite`.
 - The resolved key must match the cryptosuite: `ecdsa-rdfc-2019` requires an
   EC key (P-256 or P-384), `eddsa-rdfc-2022` requires an OKP/Ed25519 key.
-  A mismatch is rejected with `ErrorLDProofCurveMismatch`.
-- The `proofValue` must decode from multibase; a decoding failure is rejected
-  with `ErrorLDProofVerifyDataIntegrity`.
+  A mismatch is rejected with `ErrorLDProofCryptosuiteKeyMismatch`.
+- The `proofValue` must decode from multibase and have the length the curve
+  requires (`2 x` the coordinate size for ECDSA, 64 bytes for Ed25519);
+  anything else is rejected with `ErrorLDProofMalformedProofValue`.
+- A failing signature is rejected with `ErrorLDProofVerifyDataIntegrity`.
 
 ### Integration with the proof pipeline
 
-The proof type dispatch is in `LDProofChecker.verifyLDProof`: if the proof's
-`type` is `DataIntegrityProof`, it calls `VerifyDataIntegrityProof`; otherwise
-it falls through to `VerifyLinkedDataProof` for `JsonWebSignature2020`. All
-other layers — identity binding (§2), proof purpose (§3), verification
-relationship enforcement (§4), replay / freshness / holder binding — apply
-identically to both proof types.
+The proof type dispatch is `selectProofVerifier` in
+`verifier/ld_proof_checker.go`, called from `verifyLDProofWithCandidateKeys`:
+
+| `proof.type`            | Verified by                    |
+| ----------------------- | ------------------------------ |
+| `JsonWebSignature2020`  | `common.VerifyLinkedDataProof` |
+| `DataIntegrityProof`    | `common.VerifyDataIntegrityProof` |
+| anything else           | rejected, `ErrorLDProofUnsupportedType` |
+
+The dispatch is exhaustive: an unrecognized proof type is **rejected**, never
+reinterpreted as one of the two supported ones. All other layers — identity
+binding (§2), proof purpose (§3), verification relationship enforcement (§4),
+replay / freshness / holder binding — apply identically to both proof types.
 
 Mixed-proof scenarios are supported: a VP signed with `JsonWebSignature2020`
 can contain credentials signed with `DataIntegrityProof`, and vice versa.
+
+### Limitations
+
+- **The proof options are rebuilt from a fixed set of fields** (`type`,
+  `created`, `verificationMethod`, `proofPurpose`, `challenge`, `domain`,
+  `cryptosuite`) rather than copied from the proof. A proof carrying any
+  other member — `expires`, `nonce`, `id`, `previousProof` — canonicalizes
+  differently for the verifier than it did for the issuer, so its signature
+  does not verify. The W3C algorithm (VC-DI-ECDSA §3.2.5) uses a clone of the
+  whole proof minus `proofValue`.
+- **`created` is required**, while VC-DATA-INTEGRITY §2.1 makes it optional.
+  A conformant Data Integrity proof without it is rejected with
+  `ErrorLDProofMissingCreated`.
+- **The proof options `@context` is extended, not copied.** The VCDM 2.0
+  context is appended when absent, where the specification sets the proof
+  options context to the document's context verbatim. For a VCDM 2.0 document
+  the two are the same; for a document that does not carry that context they
+  are not.
+- **The JCS cryptosuites** (`ecdsa-jcs-2019`, `eddsa-jcs-2022`), the
+  selective-disclosure suites (`bbs-2023`, `ecdsa-sd-2023`), proof sets and
+  proof chains (`previousProof`), and Data Integrity on VCDM 1.1 documents are
+  not supported.
 
 ## Signing
 
