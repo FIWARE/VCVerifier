@@ -74,10 +74,12 @@ func dataIntegrityTestDocument() map[string]interface{} {
 	}
 }
 
-// p256CoordinateSize is the byte length of each P-256 coordinate.
+// p256CoordSize is the byte length of each P-256 coordinate, matching
+// p1363CoordinateSize[elliptic.P256()].
 const p256CoordSize = 32
 
-// p384CoordinateSize is the byte length of each P-384 coordinate.
+// p384CoordSize is the byte length of each P-384 coordinate, matching
+// p1363CoordinateSize[elliptic.P384()].
 const p384CoordSize = 48
 
 // signDataIntegrityP256 creates an ecdsa-rdfc-2019 P-256 proof over the given
@@ -234,7 +236,9 @@ func computeTestHashData(t *testing.T, doc map[string]interface{}, proof *LDProo
 	return append(proofHash[:], docHash[:]...)
 }
 
-// copyMap returns a shallow copy of a map.
+// copyMap returns a shallow copy of a map. Nested maps (e.g. credentialSubject,
+// issuer) are shared between the original and the copy — callers that need to
+// mutate nested values should re-unmarshal from JSON instead.
 func copyMap(m map[string]interface{}) map[string]interface{} {
 	result := make(map[string]interface{}, len(m))
 	for k, v := range m {
@@ -305,6 +309,25 @@ func TestVerifyDataIntegrityProof_TamperedDocument(t *testing.T) {
 				privKey, _, pubJWK := generateECTestKeys(t)
 				doc := dataIntegrityTestDocument()
 				docJSON, proof := signDataIntegrityP256(t, doc, privKey, "did:web:example.com#key-1")
+
+				// Tamper with a field defined in the VC context so it
+				// survives JSON-LD expansion and changes the canonical form.
+				var docMap map[string]interface{}
+				require.NoError(t, json.Unmarshal(docJSON, &docMap))
+				subject := docMap["credentialSubject"].(map[string]interface{})
+				subject["id"] = "did:web:attacker.example.com"
+				tampered, err := json.Marshal(docMap)
+				require.NoError(t, err)
+
+				return tampered, proof, pubJWK
+			},
+		},
+		{
+			name: "ecdsa-rdfc-2019_P-384_tampered",
+			setupFunc: func(t *testing.T) ([]byte, *LDProof, jwk.Key) {
+				privKey, _, pubJWK := generateP384TestKeys(t)
+				doc := dataIntegrityTestDocument()
+				docJSON, proof := signDataIntegrityP384(t, doc, privKey, "did:web:example.com#key-1")
 
 				// Tamper with a field defined in the VC context so it
 				// survives JSON-LD expansion and changes the canonical form.

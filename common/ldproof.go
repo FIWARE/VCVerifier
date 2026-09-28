@@ -1054,11 +1054,10 @@ func verifyEdDSASignature(publicKey jwk.Key, hashData []byte, sigBytes []byte) e
 			ErrorLDProofCryptosuiteKeyMismatch, err)
 	}
 
-	// Ed25519 signature must be 64 bytes.
-	const ed25519SignatureSize = 64
-	if len(sigBytes) != ed25519SignatureSize {
+	// Ed25519 signature must be exactly ed25519.SignatureSize (64) bytes.
+	if len(sigBytes) != ed25519.SignatureSize {
 		return fmt.Errorf("%w: expected %d-byte Ed25519 signature, got %d bytes",
-			ErrorLDProofMalformedProofValue, ed25519SignatureSize, len(sigBytes))
+			ErrorLDProofMalformedProofValue, ed25519.SignatureSize, len(sigBytes))
 	}
 
 	if !ed25519.Verify(rawKey, hashData, sigBytes) {
