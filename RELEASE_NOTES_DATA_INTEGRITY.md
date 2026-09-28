@@ -88,16 +88,25 @@ Out of scope for this release:
 - **Data Integrity on VCDM 1.1 documents**, which would additionally require vendoring the
   `https://w3id.org/security/data-integrity/v2` context.
 
-Known limitations of what is implemented, all of which reject a conformant proof rather than
-accept a bad one:
+### Proof members beyond the modelled ones
 
-- **The proof options are rebuilt from a fixed set of fields** (`type`, `created`,
-  `verificationMethod`, `proofPurpose`, `challenge`, `domain`, `cryptosuite`) instead of being
-  copied from the proof, as VC-DI-ECDSA §3.2.5 specifies. A proof carrying any other member —
-  `expires`, `nonce`, `id`, `previousProof` — canonicalizes differently for the verifier than it
-  did for the issuer, and its signature does not verify.
-- **`created` is required**, although VC-DATA-INTEGRITY §2.1 makes it optional. It is needed for
-  the freshness check on presentations; on credential proofs it is an added restriction.
-- **The proof options `@context` is extended rather than copied.** The VCDM 2.0 context is
-  appended when absent, where the specification uses the document's context verbatim. For a
-  VCDM 2.0 document — which is what a Data Integrity credential carries — the two are the same.
+The proof configuration that is canonicalized and hashed is the proof itself, minus its
+`proofValue`/`jws` member, under the document's own `@context` — as VC-DI-ECDSA §3.2.5
+specifies, rather than a document rebuilt from the fields VCVerifier models. A proof carrying
+`expires`, `nonce`, `id` or a vendor extension therefore verifies, and those members are covered
+by the signature: rewriting one in a captured document invalidates the proof.
+
+`expires` is also enforced. A proof past it is rejected (`ld_proof_expired`), with the same clock
+skew the freshness check tolerates, on credentials and presentations alike.
+
+### Optional `created`
+
+`created` is optional on a `DataIntegrityProof`, per VC-DATA-INTEGRITY §2.1, and only has to be a
+valid RFC 3339 date-time when present. Presentations still need one to pass the freshness check
+on the grants that have no server-issued nonce, and `JsonWebSignature2020` still requires it
+outright.
+
+### Encoding
+
+`proofValue` must be base58-btc, as both cryptosuites require. A signature in another multibase
+alphabet is rejected even when the bytes it carries would verify.
