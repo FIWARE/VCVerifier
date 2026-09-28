@@ -234,6 +234,14 @@ type LDProof struct {
 	Domain             string `json:"domain,omitempty"`
 	ProofValue         string `json:"proofValue,omitempty"`
 	Cryptosuite        string `json:"cryptosuite,omitempty"`
+
+	// Raw is the proof exactly as it was parsed, before any field was mapped
+	// onto this struct. The proof configuration that is canonicalized and
+	// hashed is a copy of the whole proof minus its signature member
+	// (VC-DI-ECDSA 3.2.5), so a member this struct has no field for still has
+	// to reach it. It is nil for a proof this codebase built rather than
+	// parsed; the signing path then falls back to the struct.
+	Raw JSONObject `json:"-"`
 }
 
 // LDSigner signs data for use in Linked Data Proofs.
@@ -300,6 +308,13 @@ func ParseLDProof(proofMap map[string]interface{}) (*LDProof, error) {
 	// A valid proof must carry at least one signature field.
 	if proof.JWS == "" && proof.ProofValue == "" {
 		return nil, ErrorLDProofNoSignature
+	}
+
+	// Keep the proof as it arrived. The copy matters: a later mutation of the
+	// caller's map must not change what the signature is checked against.
+	proof.Raw = make(JSONObject, len(proofMap))
+	for key, value := range proofMap {
+		proof.Raw[key] = value
 	}
 
 	return proof, nil
@@ -379,62 +394,35 @@ func EnsureSuiteContext(contextValue interface{}) interface{} {
 	}
 }
 
-// EnsureDataIntegrityContext returns the given JSON-LD @context value with the
-// VCDM 2.0 context appended when it is not already present.
+// proofOptionsContext returns the @context the proof options are canonicalized
+// under, which differs per suite.
 //
-// The VCDM 2.0 context defines the Data Integrity proof terms (cryptosuite,
-// proofValue, created, verificationMethod, proofPurpose, challenge, domain).
-// It is the Data Integrity counterpart of ContextSecuritySuiteJWS2020 for
-// JsonWebSignature2020.
-func EnsureDataIntegrityContext(contextValue interface{}) interface{} {
-	switch ctx := contextValue.(type) {
-	case nil:
-		return []interface{}{ContextCredentialsV2}
-	case string:
-		if ctx == ContextCredentialsV2 {
-			return ctx
-		}
-		return []interface{}{ctx, ContextCredentialsV2}
-	case []interface{}:
-		for _, entry := range ctx {
-			if s, ok := entry.(string); ok && s == ContextCredentialsV2 {
-				return ctx
-			}
-		}
-		extended := make([]interface{}, 0, len(ctx)+1)
-		extended = append(extended, ctx...)
-		return append(extended, ContextCredentialsV2)
-	case []string:
-		for _, entry := range ctx {
-			if entry == ContextCredentialsV2 {
-				return ctx
-			}
-		}
-		return append(append([]string{}, ctx...), ContextCredentialsV2)
-	default:
-		return []interface{}{ctx, ContextCredentialsV2}
-	}
-}
-
-// ensureProofContext selects the appropriate proof-suite context for the given
-// proof type and ensures it is present in the context value. For
-// JsonWebSignature2020 it adds the JWS 2020 suite context; for
-// DataIntegrityProof it adds the VCDM 2.0 context (which defines
-// cryptosuite, proofValue, and all other Data Integrity terms).
-func ensureProofContext(contextValue interface{}, proofType string) interface{} {
+// For DataIntegrityProof it is the document's own context, verbatim:
+// VC-DI-ECDSA 3.2.5 step 4 sets the proof configuration's @context to the
+// unsecured document's @context, and any deviation changes the canonical form
+// away from the one the issuer signed. A VCDM 2.0 document already defines
+// every Data Integrity proof term, so nothing needs adding.
+//
+// For JsonWebSignature2020 the suite context is added when missing. That suite
+// predates VCDM 2.0 and its terms are defined nowhere else, so without it the
+// proof options would canonicalize to a single type triple - a signature
+// covering nothing about the proof.
+func proofOptionsContext(documentContext interface{}, proofType string) interface{} {
 	if proofType == ProofTypeDataIntegrityProof {
-		return EnsureDataIntegrityContext(contextValue)
+		return documentContext
 	}
-	return EnsureSuiteContext(contextValue)
+	return EnsureSuiteContext(documentContext)
 }
 
-// buildProofOptions assembles the proof-options document that is
-// canonicalized and hashed alongside the signed document. The @context is the
-// document's own context extended with the appropriate suite context so that
-// every proof term expands to a real IRI.
+// buildProofOptions assembles the proof-options document from the fields this
+// struct carries. It is the signing path's view of the proof: a proof being
+// created has exactly these members and no others.
+//
+// Verification uses buildVerificationProofOptions instead, which starts from
+// the proof as it was received.
 func buildProofOptions(documentContext interface{}, proof *LDProof) JSONObject {
 	proofOptions := JSONObject{
-		JSONLDKeyContext:             ensureProofContext(documentContext, proof.Type),
+		JSONLDKeyContext:             proofOptionsContext(documentContext, proof.Type),
 		JSONLDKeyType:                proof.Type,
 		LDProofKeyCreated:            proof.Created,
 		LDProofKeyVerificationMethod: proof.VerificationMethod,
@@ -451,6 +439,37 @@ func buildProofOptions(documentContext interface{}, proof *LDProof) JSONObject {
 	if proof.Cryptosuite != "" {
 		proofOptions[LDProofKeyCryptosuite] = proof.Cryptosuite
 	}
+	return proofOptions
+}
+
+// buildVerificationProofOptions assembles the proof-options document to verify
+// a received proof against. It is a copy of the proof minus its signature
+// member, per VC-DI-ECDSA 3.2.5 and the JsonWebSignature2020 equivalent - not
+// a document rebuilt from the fields LDProof happens to model.
+//
+// The difference is not cosmetic. `expires`, `nonce`, `id` and `previousProof`
+// are all defined for a proof and all expand to real triples, so the issuer
+// signed over them. Reconstructing the options without them yields a different
+// canonical form and rejects a conformant proof.
+//
+// Proofs built in code rather than parsed carry no Raw map and fall back to the
+// struct, which for them holds everything there is.
+func buildVerificationProofOptions(documentContext interface{}, proof *LDProof) JSONObject {
+	if proof.Raw == nil {
+		return buildProofOptions(documentContext, proof)
+	}
+
+	proofOptions := make(JSONObject, len(proof.Raw))
+	for key, value := range proof.Raw {
+		// The signature cannot cover itself.
+		if key == LDProofKeyProofValue || key == LDProofKeyJWS {
+			continue
+		}
+		proofOptions[key] = value
+	}
+	// The document's context wins over any the proof carries: it is what the
+	// signer canonicalized under.
+	proofOptions[JSONLDKeyContext] = proofOptionsContext(documentContext, proof.Type)
 	return proofOptions
 }
 
@@ -767,7 +786,7 @@ func VerifyLinkedDataProof(documentJSON []byte, proof *LDProof, publicKey jwk.Ke
 	delete(docMap, VPKeyProof)
 
 	// 9. Build proof options map
-	proofOptions := buildProofOptions(docMap[JSONLDKeyContext], proof)
+	proofOptions := buildVerificationProofOptions(docMap[JSONLDKeyContext], proof)
 
 	// 10. Canonicalize both document and proof options using URDNA2015
 	proc := ld.NewJsonLdProcessor()
@@ -873,7 +892,7 @@ func VerifyDataIntegrityProof(documentJSON []byte, proof *LDProof, publicKey jwk
 	delete(docMap, VPKeyProof)
 
 	// 7. Build proof options (includes cryptosuite).
-	proofOptions := buildProofOptions(docMap[JSONLDKeyContext], proof)
+	proofOptions := buildVerificationProofOptions(docMap[JSONLDKeyContext], proof)
 
 	// 8. Canonicalize both document and proof options using URDNA2015.
 	proc := ld.NewJsonLdProcessor()

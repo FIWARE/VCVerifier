@@ -161,6 +161,8 @@ func signDIDocumentEd25519(t *testing.T, doc map[string]interface{}, privKey ed2
 // and proof options, and computes the hashData for signing. It replicates the
 // logic of common.buildProofOptions and common.computeDataIntegrityHashData,
 // including the curve-conditional hash: SHA-384 for P-384, SHA-256 otherwise.
+// The proof options carry the document's context verbatim, as VC-DI-ECDSA
+// 3.2.5 requires of an issuer.
 func computeDITestHashData(t *testing.T, doc map[string]interface{}, proof *common.LDProof, useSHA384 bool) []byte {
 	t.Helper()
 
@@ -168,7 +170,7 @@ func computeDITestHashData(t *testing.T, doc map[string]interface{}, proof *comm
 
 	// Build proof options matching common.buildProofOptions.
 	proofOptions := map[string]interface{}{
-		common.JSONLDKeyContext:             common.EnsureDataIntegrityContext(doc[common.JSONLDKeyContext]),
+		common.JSONLDKeyContext:             doc[common.JSONLDKeyContext],
 		common.JSONLDKeyType:                proof.Type,
 		common.LDProofKeyCreated:            proof.Created,
 		common.LDProofKeyVerificationMethod: proof.VerificationMethod,

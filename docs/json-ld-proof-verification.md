@@ -33,13 +33,14 @@ JWS (`jws` member). For `DataIntegrityProof` the same hash data is signed
 directly and the raw signature bytes are multibase-encoded as the `proofValue`
 member.
 
-The proof options document holds the proof's signed fields — everything but
-its `jws`/`proofValue` member (with the caveat in
-[§ Limitations](#limitations)). Its `@context` is the *document's* context
-extended with a suite-specific context: `https://w3id.org/security/suites/jws-2020/v1` for
-`JsonWebSignature2020`, or `https://www.w3.org/ns/credentials/v2` (the VCDM
-2.0 context) for `DataIntegrityProof`. The suite context is what defines
-`created`, `verificationMethod`, `proofPurpose`, `challenge` and `domain`.
+The proof options document is the proof itself, minus its `jws`/`proofValue`
+member — every other member it carries is covered, including ones VCVerifier
+has no field for. Its `@context` depends on the suite: for `JsonWebSignature2020` the document's context extended with
+`https://w3id.org/security/suites/jws-2020/v1`, which is what defines
+`created`, `verificationMethod`, `proofPurpose`, `challenge` and `domain` for
+that suite; for `DataIntegrityProof` the document's context verbatim, as
+VC-DI-ECDSA §3.2.5 requires — a VCDM 2.0 document already defines every proof
+term.
 
 This matters more than it looks. The plain W3C
 `https://www.w3.org/2018/credentials/v1` context does not define those terms
@@ -248,9 +249,8 @@ cryptosuites:
 ### Algorithm
 
 1. **Canonicalize** both the document and the proof options with URDNA2015,
-   the same way `JsonWebSignature2020` does. The proof options are assembled
-   from the proof's signed fields; see [§ Limitations](#limitations) for how
-   that differs from the specification.
+   the same way `JsonWebSignature2020` does. The proof options are the proof
+   minus its `proofValue`, under the document's own `@context`.
 2. **Hash**: `hashData = hash(canonical proof options) || hash(canonical
    document)`, where the hash is SHA-256 (P-256 / Ed25519) or SHA-384
    (P-384).
@@ -315,21 +315,12 @@ can contain credentials signed with `DataIntegrityProof`, and vice versa.
 
 ### Limitations
 
-- **The proof options are rebuilt from a fixed set of fields** (`type`,
-  `created`, `verificationMethod`, `proofPurpose`, `challenge`, `domain`,
-  `cryptosuite`) rather than copied from the proof. A proof carrying any
-  other member — `expires`, `nonce`, `id`, `previousProof` — canonicalizes
-  differently for the verifier than it did for the issuer, so its signature
-  does not verify. The W3C algorithm (VC-DI-ECDSA §3.2.5) uses a clone of the
-  whole proof minus `proofValue`.
 - **`created` is required**, while VC-DATA-INTEGRITY §2.1 makes it optional.
   A conformant Data Integrity proof without it is rejected with
   `ErrorLDProofMissingCreated`.
-- **The proof options `@context` is extended, not copied.** The VCDM 2.0
-  context is appended when absent, where the specification sets the proof
-  options context to the document's context verbatim. For a VCDM 2.0 document
-  the two are the same; for a document that does not carry that context they
-  are not.
+- **`expires` is canonicalized but not enforced.** It is covered by the
+  signature, so it cannot be altered, but an expired proof is not rejected on
+  that ground.
 - **The JCS cryptosuites** (`ecdsa-jcs-2019`, `eddsa-jcs-2022`), the
   selective-disclosure suites (`bbs-2023`, `ecdsa-sd-2023`), proof sets and
   proof chains (`previousProof`), and Data Integrity on VCDM 1.1 documents are

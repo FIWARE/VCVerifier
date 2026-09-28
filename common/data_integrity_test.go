@@ -680,57 +680,54 @@ func TestVerifyDataIntegrityProof_ECDSAUnsupportedCurve(t *testing.T) {
 		"expected ErrorLDProofCryptosuiteKeyMismatch, got: %v", err)
 }
 
-// --- Tests for EnsureDataIntegrityContext ---
+// --- Tests for proofOptionsContext ---
 
-// TestEnsureDataIntegrityContext tests the context-ensuring function for
-// Data Integrity proofs.
-func TestEnsureDataIntegrityContext(t *testing.T) {
+// TestProofOptionsContext verifies that the proof options are canonicalized
+// under the context each suite requires: the document's own context verbatim
+// for DataIntegrityProof, the document's context plus the suite context for
+// JsonWebSignature2020.
+func TestProofOptionsContext(t *testing.T) {
 	tests := []struct {
-		name  string
-		input interface{}
-		want  interface{}
+		name            string
+		documentContext interface{}
+		proofType       string
+		want            interface{}
 	}{
 		{
-			name:  "nil_context",
-			input: nil,
-			want:  []interface{}{ContextCredentialsV2},
+			name:            "data_integrity_keeps_v2_context_verbatim",
+			documentContext: []interface{}{ContextCredentialsV2},
+			proofType:       ProofTypeDataIntegrityProof,
+			want:            []interface{}{ContextCredentialsV2},
 		},
 		{
-			name:  "single_string_not_v2",
-			input: ContextCredentialsV1,
-			want:  []interface{}{ContextCredentialsV1, ContextCredentialsV2},
+			name:            "data_integrity_adds_nothing_to_a_foreign_context",
+			documentContext: []interface{}{ContextCredentialsV1},
+			proofType:       ProofTypeDataIntegrityProof,
+			want:            []interface{}{ContextCredentialsV1},
 		},
 		{
-			name:  "string_already_v2",
-			input: ContextCredentialsV2,
-			want:  ContextCredentialsV2,
+			name:            "data_integrity_passes_a_nil_context_through",
+			documentContext: nil,
+			proofType:       ProofTypeDataIntegrityProof,
+			want:            nil,
 		},
 		{
-			name:  "slice_without_v2",
-			input: []interface{}{ContextCredentialsV1},
-			want:  []interface{}{ContextCredentialsV1, ContextCredentialsV2},
+			name:            "jws_2020_adds_the_suite_context",
+			documentContext: []interface{}{ContextCredentialsV1},
+			proofType:       ProofTypeJsonWebSignature2020,
+			want:            []interface{}{ContextCredentialsV1, ContextSecuritySuiteJWS2020},
 		},
 		{
-			name:  "slice_with_v2_unchanged",
-			input: []interface{}{ContextCredentialsV2},
-			want:  []interface{}{ContextCredentialsV2},
-		},
-		{
-			name:  "string_slice_without_v2",
-			input: []string{ContextCredentialsV1},
-			want:  []string{ContextCredentialsV1, ContextCredentialsV2},
-		},
-		{
-			name:  "string_slice_with_v2",
-			input: []string{ContextCredentialsV2, "https://example.com/custom"},
-			want:  []string{ContextCredentialsV2, "https://example.com/custom"},
+			name:            "jws_2020_keeps_an_existing_suite_context",
+			documentContext: []interface{}{ContextCredentialsV1, ContextSecuritySuiteJWS2020},
+			proofType:       ProofTypeJsonWebSignature2020,
+			want:            []interface{}{ContextCredentialsV1, ContextSecuritySuiteJWS2020},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := EnsureDataIntegrityContext(tc.input)
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, proofOptionsContext(tc.documentContext, tc.proofType))
 		})
 	}
 }
