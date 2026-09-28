@@ -1,13 +1,15 @@
 # Release Notes — W3C Data Integrity Proof Support
 
 This release adds verification of [W3C Data Integrity](https://www.w3.org/TR/vc-data-integrity/)
-proofs (`DataIntegrityProof`) on JSON-LD credentials and presentations, for the two
-RDF-canonicalization cryptosuites in common use:
+proofs (`DataIntegrityProof`) on JSON-LD credentials and presentations, for all four
+non-selective-disclosure cryptosuites:
 
-| Cryptosuite | Specification | Keys |
-| --- | --- | --- |
-| `ecdsa-rdfc-2019` | [VC-DI-ECDSA](https://www.w3.org/TR/vc-di-ecdsa/) | EC P-256, P-384 |
-| `eddsa-rdfc-2022` | [VC-DI-EDDSA](https://www.w3.org/TR/vc-di-eddsa/) | Ed25519 |
+| Cryptosuite | Canonicalization | Specification | Keys |
+| --- | --- | --- | --- |
+| `ecdsa-rdfc-2019` | RDFC-1.0 | [VC-DI-ECDSA](https://www.w3.org/TR/vc-di-ecdsa/) | EC P-256, P-384 |
+| `ecdsa-jcs-2019` | JCS (RFC 8785) | [VC-DI-ECDSA](https://www.w3.org/TR/vc-di-ecdsa/) | EC P-256, P-384 |
+| `eddsa-rdfc-2022` | RDFC-1.0 | [VC-DI-EDDSA](https://www.w3.org/TR/vc-di-eddsa/) | Ed25519 |
+| `eddsa-jcs-2022` | JCS (RFC 8785) | [VC-DI-EDDSA](https://www.w3.org/TR/vc-di-eddsa/) | Ed25519 |
 
 Until now `JsonWebSignature2020` was the only suite VCVerifier verified. `DataIntegrityProof` is
 the securing mechanism VCDM 2.0 defines for JSON-LD, so an issuer following the current W3C
@@ -32,13 +34,26 @@ unverified**. This release closes an interoperability gap, not a hole.
 URDNA2015, computes `hash(canonical proof options) || hash(canonical document)` and verifies the
 multibase-encoded raw signature carried in `proofValue`.
 
-The hash is curve-conditional, as the specifications require: SHA-384 for P-384 with
-`ecdsa-rdfc-2019`, SHA-256 for P-256 and Ed25519. ECDSA signatures are IEEE P1363 (`r || s`),
+The hash is curve-conditional, as the specifications require: SHA-384 for P-384 with the ECDSA
+suites, SHA-256 for P-256 and Ed25519. ECDSA signatures are IEEE P1363 (`r || s`),
 Ed25519 signatures are the raw 64 bytes.
 
-The implementation is verified against the **published W3C test vectors** for all three
-curve/suite combinations (`common/data_integrity_vectors_test.go`), not only against fixtures
+The implementation is verified against the **published W3C test vectors** for all six
+suite/curve combinations (`common/data_integrity_vectors_test.go`), not only against fixtures
 this codebase signs itself.
+
+### JCS canonicalization
+
+`common/jcs.go` implements the JSON Canonicalization Scheme (RFC 8785) that the `-jcs-` suites
+use in place of RDF canonicalization: ECMAScript number serialization, the RFC's string escaping,
+and property names sorted by UTF-16 code units. It is checked against the RFC's own test data,
+including the appendix B number samples and the sorting vector where UTF-8 and UTF-16 order
+disagree.
+
+A JCS proof configuration is the proof verbatim, including the `@context` the proof itself
+carries — a conforming issuer copies the document's context into the proof before signing
+(VC-DI-ECDSA §3.3.5). Rewriting it in a signed document breaks the signature, as does swapping
+a cryptosuite for the other canonicalization's variant of the same algorithm.
 
 ### `Multikey` verification methods
 
@@ -81,8 +96,6 @@ None. No new configuration keys; Data Integrity proofs are verified wherever
 
 Out of scope for this release:
 
-- **The JCS cryptosuites** (`ecdsa-jcs-2019`, `eddsa-jcs-2022`), which canonicalize with
-  RFC 8785 instead of RDFC-1.0.
 - **The selective-disclosure suites** (`bbs-2023`, `ecdsa-sd-2023`), which involve derived proofs.
 - **Proof sets and proof chains** (`previousProof`).
 - **Data Integrity on VCDM 1.1 documents**, which would additionally require vendoring the

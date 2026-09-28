@@ -8,9 +8,10 @@ Two proof families are verified:
 - **`JsonWebSignature2020`** — detached JWS (`jws` member) over URDNA2015
   canonicalized data. Verification is in `common.VerifyLinkedDataProof`.
 - **`DataIntegrityProof`** — multibase-encoded raw signature (`proofValue`
-  member) over URDNA2015 canonicalized data. Verification is in
+  member) over canonicalized data. Verification is in
   `common.VerifyDataIntegrityProof`. Supported cryptosuites:
-  `ecdsa-rdfc-2019` (P-256, P-384) and `eddsa-rdfc-2022` (Ed25519).
+  `ecdsa-rdfc-2019` / `ecdsa-jcs-2019` (P-256, P-384) and `eddsa-rdfc-2022` /
+  `eddsa-jcs-2022` (Ed25519).
 
 ## Why a valid signature is not enough
 
@@ -241,16 +242,28 @@ cryptosuites:
 
 ### Supported cryptosuites
 
-| Cryptosuite          | Algorithm       | Key types             | Signature encoding |
-| -------------------- | --------------- | --------------------- | ------------------ |
-| `ecdsa-rdfc-2019`    | ECDSA over P-256 / P-384 | EC (P-256, P-384) | IEEE P1363 (r ‖ s) |
-| `eddsa-rdfc-2022`    | EdDSA (Ed25519) | OKP (Ed25519)         | raw 64-byte signature |
+| Cryptosuite       | Canonicalization | Algorithm                | Key types         | Signature encoding    |
+| ----------------- | ---------------- | ------------------------ | ----------------- | --------------------- |
+| `ecdsa-rdfc-2019` | RDFC-1.0         | ECDSA over P-256 / P-384 | EC (P-256, P-384) | IEEE P1363 (r ‖ s)    |
+| `ecdsa-jcs-2019`  | JCS (RFC 8785)   | ECDSA over P-256 / P-384 | EC (P-256, P-384) | IEEE P1363 (r ‖ s)    |
+| `eddsa-rdfc-2022` | RDFC-1.0         | EdDSA (Ed25519)          | OKP (Ed25519)     | raw 64-byte signature |
+| `eddsa-jcs-2022`  | JCS (RFC 8785)   | EdDSA (Ed25519)          | OKP (Ed25519)     | raw 64-byte signature |
+
+The two axes are independent: the cryptosuite identifier selects a
+canonicalization and a signature algorithm, and `common/ldproof.go` models it
+that way (`dataIntegritySuites`). The cryptosuite is part of the signed proof
+configuration, so a signature made under one suite cannot be presented as
+another's — not even between the RDFC and JCS variants of the same algorithm.
 
 ### Algorithm
 
-1. **Canonicalize** both the document and the proof options with URDNA2015,
-   the same way `JsonWebSignature2020` does. The proof options are the proof
-   minus its `proofValue`, under the document's own `@context`.
+1. **Canonicalize** both the document and the proof options. The proof options
+   are the proof minus its `proofValue`. The `-rdfc-` suites use URDNA2015,
+   the same way `JsonWebSignature2020` does, under the document's own
+   `@context`. The `-jcs-` suites use JCS (RFC 8785, `common/jcs.go`) and take
+   the proof configuration exactly as it stands — including the `@context` the
+   proof itself carries, which a conforming issuer copies from the document
+   before signing (VC-DI-ECDSA §3.3.5).
 2. **Hash**: `hashData = hash(canonical proof options) || hash(canonical
    document)`, where the hash is SHA-256 (P-256 / Ed25519) or SHA-384
    (P-384).
@@ -279,6 +292,22 @@ carrying one produces an explicit error rather than a silently unusable key.
 
 `JsonWebKey2020` verification methods (with `publicKeyJwk`) are also supported,
 so both VM types work with Data Integrity proofs.
+
+### JCS and the coverage assertion
+
+The `assertProofOptionsCovered` guard (§1) applies to the RDFC suites only. It
+exists because JSON-LD expansion silently drops any term the document's context
+does not define, which would leave `challenge` and `domain` outside the
+signature. JCS has no expansion step and drops nothing: every member of the
+proof configuration is in the canonical form by construction, so there is
+nothing to assert and nothing that could quietly fall out.
+
+`common/jcs.go` implements RFC 8785 directly — ECMAScript number serialization,
+the five predefined string escapes with `\uhhhh` in lowercase for the
+remaining control characters, and property names sorted by their UTF-16 code
+units. It is checked against the RFC's own test data, including the appendix B
+number samples and the sorting vector whose point is that UTF-8 and UTF-16
+order disagree.
 
 ### Cross-checks
 
@@ -325,10 +354,9 @@ can contain credentials signed with `DataIntegrityProof`, and vice versa.
 
 ### Limitations
 
-- **The JCS cryptosuites** (`ecdsa-jcs-2019`, `eddsa-jcs-2022`), the
-  selective-disclosure suites (`bbs-2023`, `ecdsa-sd-2023`), proof sets and
-  proof chains (`previousProof`), and Data Integrity on VCDM 1.1 documents are
-  not supported.
+- **The selective-disclosure suites** (`bbs-2023`, `ecdsa-sd-2023`), **proof
+  sets and proof chains** (`previousProof`), and **Data Integrity on VCDM 1.1
+  documents** are not supported.
 
 ## Signing
 

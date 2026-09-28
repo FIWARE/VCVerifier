@@ -188,7 +188,59 @@ const (
 	// URDNA2015 (RDFC-1.0) canonicalization and EdDSA with Ed25519.
 	// See https://www.w3.org/TR/vc-di-eddsa/.
 	CryptosuiteEddsaRdfc2022 = "eddsa-rdfc-2022"
+
+	// CryptosuiteEcdsaJcs2019 is the ecdsa-jcs-2019 cryptosuite: the same
+	// ECDSA over P-256 or P-384, canonicalized with JCS (RFC 8785) instead of
+	// RDFC-1.0. See https://www.w3.org/TR/vc-di-ecdsa/.
+	CryptosuiteEcdsaJcs2019 = "ecdsa-jcs-2019"
+
+	// CryptosuiteEddsaJcs2022 is the eddsa-jcs-2022 cryptosuite: Ed25519 with
+	// JCS canonicalization. See https://www.w3.org/TR/vc-di-eddsa/.
+	CryptosuiteEddsaJcs2022 = "eddsa-jcs-2022"
 )
+
+// Canonicalization algorithms a Data Integrity cryptosuite can use.
+const (
+	// canonicalizationRDFC is RDF Dataset Canonicalization (URDNA2015). It
+	// expands the document against its JSON-LD context, so a term the context
+	// does not define produces no triple and is not signed over.
+	canonicalizationRDFC = "rdfc"
+
+	// canonicalizationJCS is the JSON Canonicalization Scheme (RFC 8785). It
+	// is a pure JSON transform: no context is consulted and nothing is
+	// dropped, which is what makes the suite available to issuers who cannot
+	// run an RDF canonicalizer.
+	canonicalizationJCS = "jcs"
+)
+
+// Signature algorithms a Data Integrity cryptosuite can use.
+const (
+	signatureAlgorithmECDSA = "ecdsa"
+	signatureAlgorithmEdDSA = "eddsa"
+)
+
+// dataIntegritySuite describes what a cryptosuite identifier selects. The two
+// choices are orthogonal, which is exactly why the suites come in pairs.
+type dataIntegritySuite struct {
+	canonicalization string
+	algorithm        string
+}
+
+// dataIntegritySuites is the set of supported cryptosuites. A suite that is
+// not in this map is rejected; nothing falls back to a default.
+var dataIntegritySuites = map[string]dataIntegritySuite{
+	CryptosuiteEcdsaRdfc2019: {canonicalization: canonicalizationRDFC, algorithm: signatureAlgorithmECDSA},
+	CryptosuiteEddsaRdfc2022: {canonicalization: canonicalizationRDFC, algorithm: signatureAlgorithmEdDSA},
+	CryptosuiteEcdsaJcs2019:  {canonicalization: canonicalizationJCS, algorithm: signatureAlgorithmECDSA},
+	CryptosuiteEddsaJcs2022:  {canonicalization: canonicalizationJCS, algorithm: signatureAlgorithmEdDSA},
+}
+
+// usesJCSCanonicalization reports whether the cryptosuite canonicalizes with
+// JCS. An unknown suite is not a JCS suite; it is rejected before it matters.
+func usesJCSCanonicalization(cryptosuite string) bool {
+	suite, known := dataIntegritySuites[cryptosuite]
+	return known && suite.canonicalization == canonicalizationJCS
+}
 
 // p1363CoordinateSize maps supported EC curves to their IEEE P1363 coordinate
 // byte size. ECDSA proofValue is r||s where each component is zero-padded to
@@ -476,8 +528,17 @@ func buildVerificationProofOptions(documentContext interface{}, proof *LDProof) 
 		}
 		proofOptions[key] = value
 	}
-	// The document's context wins over any the proof carries: it is what the
-	// signer canonicalized under.
+	// A JCS proof configuration is a plain clone of the proof (VC-DI-ECDSA
+	// 3.3.5): whatever @context it carries is part of it, and none is added.
+	// JCS never expands anything, so the context is data here rather than a
+	// term definition, and a conforming issuer copied the document's into the
+	// proof before signing.
+	if usesJCSCanonicalization(proof.Cryptosuite) {
+		return proofOptions
+	}
+
+	// For the RDFC suites the document's context wins over any the proof
+	// carries: it is what the signer canonicalized under.
 	proofOptions[JSONLDKeyContext] = proofOptionsContext(documentContext, proof.Type)
 	return proofOptions
 }
@@ -871,8 +932,10 @@ func VerifyLinkedDataProof(documentJSON []byte, proof *LDProof, publicKey jwk.Ke
 // verifying the raw cryptographic signature.
 //
 // Supported cryptosuites:
-//   - ecdsa-rdfc-2019 — ECDSA with P-256 (SHA-256) or P-384 (SHA-384)
-//   - eddsa-rdfc-2022 — EdDSA with Ed25519 (SHA-256)
+//   - ecdsa-rdfc-2019 — ECDSA with P-256 (SHA-256) or P-384 (SHA-384), RDFC-1.0
+//   - eddsa-rdfc-2022 — EdDSA with Ed25519 (SHA-256), RDFC-1.0
+//   - ecdsa-jcs-2019  — the same ECDSA, canonicalized with JCS (RFC 8785)
+//   - eddsa-jcs-2022  — the same EdDSA, canonicalized with JCS (RFC 8785)
 //
 // The documentJSON must be the full JSON-LD document (including the proof
 // member if present — it will be stripped internally). The publicKey is the
@@ -888,10 +951,8 @@ func VerifyDataIntegrityProof(documentJSON []byte, proof *LDProof, publicKey jwk
 	}
 
 	// 2. Validate cryptosuite.
-	switch proof.Cryptosuite {
-	case CryptosuiteEcdsaRdfc2019, CryptosuiteEddsaRdfc2022:
-		// supported
-	default:
+	suite, supported := dataIntegritySuites[proof.Cryptosuite]
+	if !supported {
 		return fmt.Errorf("%w: %s", ErrorLDProofUnsupportedCryptosuite, proof.Cryptosuite)
 	}
 
@@ -930,47 +991,79 @@ func VerifyDataIntegrityProof(documentJSON []byte, proof *LDProof, publicKey jwk
 	// 7. Build proof options (includes cryptosuite).
 	proofOptions := buildVerificationProofOptions(docMap[JSONLDKeyContext], proof)
 
-	// 8. Canonicalize both document and proof options using URDNA2015.
+	// 8. Canonicalize both document and proof options, and - for the RDFC
+	// suites - assert that the proof options survived it.
+	canonicalProof, canonicalDoc, err := canonicalizeForDataIntegrity(suite, docMap, proofOptions, proof, documentLoader)
+	if err != nil {
+		return err
+	}
+
+	// 9. Compute hash data — curve-conditional per W3C VC-DI-ECDSA specs.
+	hashData, err := computeDataIntegrityHashData(suite, publicKey, canonicalProof, canonicalDoc)
+	if err != nil {
+		return err
+	}
+
+	// 10. Verify the raw signature over hashData.
+	return verifyDataIntegritySignature(suite, publicKey, hashData, sigBytes)
+}
+
+// canonicalizeForDataIntegrity canonicalizes the unsecured document and the
+// proof configuration with the algorithm the cryptosuite selects, and returns
+// both canonical forms, proof configuration first.
+//
+// The coverage assertion only applies to the RDFC suites. There, a term the
+// document's context does not define expands to nothing and silently drops out
+// of what is signed, so the assertion is what keeps `challenge`, `domain` and
+// the rest from becoming rewritable. JCS has no expansion step and drops
+// nothing: every member of the proof configuration is in the canonical form by
+// construction, so there is nothing to assert.
+func canonicalizeForDataIntegrity(suite dataIntegritySuite, docMap JSONObject, proofOptions JSONObject, proof *LDProof, documentLoader ld.DocumentLoader) (canonicalProof string, canonicalDoc string, err error) {
+	if suite.canonicalization == canonicalizationJCS {
+		canonicalProof, err = CanonicalizeJSON(proofOptions)
+		if err != nil {
+			logging.Log().Warnf("VerifyDataIntegrityProof: failed to JCS-canonicalize proof options: %v", err)
+			return "", "", fmt.Errorf("%w: %v", ErrorLDProofVerifyCanonProof, err)
+		}
+		canonicalDoc, err = CanonicalizeJSON(docMap)
+		if err != nil {
+			logging.Log().Warnf("VerifyDataIntegrityProof: failed to JCS-canonicalize document: %v", err)
+			return "", "", fmt.Errorf("%w: %v", ErrorLDProofVerifyCanonDoc, err)
+		}
+		return canonicalProof, canonicalDoc, nil
+	}
+
 	proc := ld.NewJsonLdProcessor()
 	ldOpts := ld.NewJsonLdOptions("")
 	ldOpts.Format = LDNormFormatNQuads
 	ldOpts.Algorithm = LDNormAlgorithmURDNA
 	ldOpts.DocumentLoader = documentLoader
 
-	canonDoc, err := proc.Normalize(docMap, ldOpts)
+	normalizedDoc, err := proc.Normalize(docMap, ldOpts)
 	if err != nil {
 		logging.Log().Warnf("VerifyDataIntegrityProof: failed to canonicalize document: %v", err)
-		return fmt.Errorf("%w: %v", ErrorLDProofVerifyCanonDoc, err)
+		return "", "", fmt.Errorf("%w: %v", ErrorLDProofVerifyCanonDoc, err)
 	}
 
-	canonProof, err := proc.Normalize(proofOptions, ldOpts)
+	normalizedProof, err := proc.Normalize(proofOptions, ldOpts)
 	if err != nil {
 		logging.Log().Warnf("VerifyDataIntegrityProof: failed to canonicalize proof options: %v", err)
-		return fmt.Errorf("%w: %v", ErrorLDProofVerifyCanonProof, err)
+		return "", "", fmt.Errorf("%w: %v", ErrorLDProofVerifyCanonProof, err)
 	}
 
-	// 9. Assert proof options are covered.
-	canonicalProof, err := canonicalNQuads(canonProof, ErrorLDProofVerifyCanonProof)
+	canonicalProof, err = canonicalNQuads(normalizedProof, ErrorLDProofVerifyCanonProof)
 	if err != nil {
-		return err
+		return "", "", err
 	}
-	canonicalDoc, err := canonicalNQuads(canonDoc, ErrorLDProofVerifyCanonDoc)
+	canonicalDoc, err = canonicalNQuads(normalizedDoc, ErrorLDProofVerifyCanonDoc)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 
 	if err := assertProofOptionsCovered(canonicalProof, proof); err != nil {
-		return err
+		return "", "", err
 	}
-
-	// 10. Compute hash data — curve-conditional per W3C VC-DI-ECDSA specs.
-	hashData, err := computeDataIntegrityHashData(proof.Cryptosuite, publicKey, canonicalProof, canonicalDoc)
-	if err != nil {
-		return err
-	}
-
-	// 11. Verify the raw signature over hashData.
-	return verifyDataIntegritySignature(proof.Cryptosuite, publicKey, hashData, sigBytes)
+	return canonicalProof, canonicalDoc, nil
 }
 
 // canonicalNQuads converts the result of ld.JsonLdProcessor.Normalize into the
@@ -1006,8 +1099,8 @@ func assertCreatedWellFormed(created string) error {
 // proof. The hash algorithm is curve-conditional:
 //   - P-256 and Ed25519: sha256(canonProofOptions) || sha256(canonDoc)
 //   - P-384: sha384(canonProofOptions) || sha384(canonDoc)
-func computeDataIntegrityHashData(cryptosuite string, publicKey jwk.Key, canonProof string, canonDoc string) ([]byte, error) {
-	useSHA384, err := shouldUseSHA384(cryptosuite, publicKey)
+func computeDataIntegrityHashData(suite dataIntegritySuite, publicKey jwk.Key, canonProof string, canonDoc string) ([]byte, error) {
+	useSHA384, err := shouldUseSHA384(suite, publicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -1026,8 +1119,8 @@ func computeDataIntegrityHashData(cryptosuite string, publicKey jwk.Key, canonPr
 // shouldUseSHA384 determines if the SHA-384 hash should be used instead of
 // SHA-256 for the given cryptosuite and key. Returns true for P-384 keys
 // with ecdsa-rdfc-2019, false for P-256 and eddsa-rdfc-2022.
-func shouldUseSHA384(cryptosuite string, publicKey jwk.Key) (bool, error) {
-	if cryptosuite != CryptosuiteEcdsaRdfc2019 {
+func shouldUseSHA384(suite dataIntegritySuite, publicKey jwk.Key) (bool, error) {
+	if suite.algorithm != signatureAlgorithmECDSA {
 		return false, nil
 	}
 
@@ -1058,20 +1151,20 @@ func extractECCurve(key jwk.Key) (elliptic.Curve, error) {
 	case crv == jwa.P384():
 		return elliptic.P384(), nil
 	default:
-		return nil, fmt.Errorf("%w: ecdsa-rdfc-2019 requires P-256 or P-384, got %s", ErrorLDProofCryptosuiteKeyMismatch, crv)
+		return nil, fmt.Errorf("%w: the ECDSA cryptosuites require P-256 or P-384, got %s", ErrorLDProofCryptosuiteKeyMismatch, crv)
 	}
 }
 
 // verifyDataIntegritySignature dispatches the raw signature verification to
 // the appropriate algorithm based on the cryptosuite.
-func verifyDataIntegritySignature(cryptosuite string, publicKey jwk.Key, hashData []byte, sigBytes []byte) error {
-	switch cryptosuite {
-	case CryptosuiteEcdsaRdfc2019:
+func verifyDataIntegritySignature(suite dataIntegritySuite, publicKey jwk.Key, hashData []byte, sigBytes []byte) error {
+	switch suite.algorithm {
+	case signatureAlgorithmECDSA:
 		return verifyECDSASignature(publicKey, hashData, sigBytes)
-	case CryptosuiteEddsaRdfc2022:
+	case signatureAlgorithmEdDSA:
 		return verifyEdDSASignature(publicKey, hashData, sigBytes)
 	default:
-		return fmt.Errorf("%w: %s", ErrorLDProofUnsupportedCryptosuite, cryptosuite)
+		return fmt.Errorf("%w: %s", ErrorLDProofUnsupportedCryptosuite, suite.algorithm)
 	}
 }
 
@@ -1083,7 +1176,7 @@ func verifyDataIntegritySignature(cryptosuite string, publicKey jwk.Key, hashDat
 func verifyECDSASignature(publicKey jwk.Key, hashData []byte, sigBytes []byte) error {
 	// Validate key type.
 	if publicKey.KeyType() != jwa.EC() {
-		return fmt.Errorf("%w: ecdsa-rdfc-2019 requires an EC key, got %s",
+		return fmt.Errorf("%w: the ECDSA cryptosuites require an EC key, got %s",
 			ErrorLDProofCryptosuiteKeyMismatch, publicKey.KeyType())
 	}
 
@@ -1097,7 +1190,7 @@ func verifyECDSASignature(publicKey jwk.Key, hashData []byte, sigBytes []byte) e
 	// Determine coordinate size from the curve.
 	coordSize, ok := p1363CoordinateSize[rawKey.Curve]
 	if !ok {
-		return fmt.Errorf("%w: unsupported curve %v for ecdsa-rdfc-2019",
+		return fmt.Errorf("%w: unsupported curve %v for the ECDSA cryptosuites",
 			ErrorLDProofCryptosuiteKeyMismatch, rawKey.Curve.Params().Name)
 	}
 
@@ -1136,7 +1229,7 @@ func verifyECDSASignature(publicKey jwk.Key, hashData []byte, sigBytes []byte) e
 func verifyEdDSASignature(publicKey jwk.Key, hashData []byte, sigBytes []byte) error {
 	// Validate key type.
 	if publicKey.KeyType() != jwa.OKP() {
-		return fmt.Errorf("%w: eddsa-rdfc-2022 requires an OKP key, got %s",
+		return fmt.Errorf("%w: the EdDSA cryptosuites require an OKP key, got %s",
 			ErrorLDProofCryptosuiteKeyMismatch, publicKey.KeyType())
 	}
 

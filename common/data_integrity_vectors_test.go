@@ -246,3 +246,255 @@ func TestDataIntegritySpecVectorIntermediateHashes(t *testing.T) {
 	assert.Equal(t, vectorEddsaProofOptionsHashHex, hex.EncodeToString(proofOptionsHash[:]),
 		"canonicalized proof options must hash to the value published in VC-DI-EDDSA Example 13")
 }
+
+// --- JCS cryptosuite vectors -------------------------------------------
+//
+// The JCS suites differ from the RDFC ones in canonicalization only, but the
+// difference reaches the proof itself: a JCS proof carries the document's
+// `@context` as one of its own members, and that member is part of the signed
+// proof configuration (VC-DI-ECDSA 3.3.5). These vectors are what says the
+// implementation copies it rather than rebuilding it.
+//
+// Sources:
+//   - ecdsa-jcs-2019 (P-256): VC-DI-ECDSA A.5, Examples 49-59
+//   - ecdsa-jcs-2019 (P-384): VC-DI-ECDSA A.6, Examples 60-70
+//   - eddsa-jcs-2022: VC-DI-EDDSA B.3, Examples 29-39
+
+// vectorJcsCanonicalCredential is the JCS canonical form of the unsecured
+// credential, VC-DI-ECDSA Example 51.
+const vectorJcsCanonicalCredential = `{"@context":["https://www.w3.org/ns/credentials/v2","https://www.w3.org/ns/credentials/examples/v2"],"credentialSubject":{"alumniOf":"The School of Examples","id":"did:example:abcdefgh"},"description":"A minimum viable example of an Alumni Credential.","id":"urn:uuid:58172aac-d8ba-11ed-83dd-0b3aef56cc33","issuer":"https://vc.example/issuers/5678","name":"Alumni Credential","type":["VerifiableCredential","AlumniCredential"],"validFrom":"2023-01-01T00:00:00Z"}`
+
+// vectorJcsCanonicalProofOptions is the JCS canonical form of the P-256 proof
+// configuration, VC-DI-ECDSA Example 54.
+const vectorJcsCanonicalProofOptions = `{"@context":["https://www.w3.org/ns/credentials/v2","https://www.w3.org/ns/credentials/examples/v2"],"created":"2023-02-24T23:36:38Z","cryptosuite":"ecdsa-jcs-2019","proofPurpose":"assertionMethod","type":"DataIntegrityProof","verificationMethod":"did:key:zDnaepBuvsQ8cpsWrVKw8fbpGpvPeNSjVPTWoq6cRqaYzBKVP#zDnaepBuvsQ8cpsWrVKw8fbpGpvPeNSjVPTWoq6cRqaYzBKVP"}`
+
+// vectorJcsDocumentHashHex is VC-DI-ECDSA Example 52, the SHA-256 of the
+// canonical credential above.
+const vectorJcsDocumentHashHex = "59b7cb6251b8991add1ce0bc83107e3db9dbbab5bd2c28f687db1a03abc92f19"
+
+// vectorJcsProofOptionsHashHex is VC-DI-ECDSA Example 55.
+const vectorJcsProofOptionsHashHex = "fe5799489119c7fe3c528715e72bd39d2ec6b4ab345978df32e9a9312648ec25"
+
+// vectorEcdsaJcs2019P256Credential is VC-DI-ECDSA Example 59.
+const vectorEcdsaJcs2019P256Credential = `{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    "https://www.w3.org/ns/credentials/examples/v2"
+  ],
+  "id": "urn:uuid:58172aac-d8ba-11ed-83dd-0b3aef56cc33",
+  "type": ["VerifiableCredential", "AlumniCredential"],
+  "name": "Alumni Credential",
+  "description": "A minimum viable example of an Alumni Credential.",
+  "issuer": "https://vc.example/issuers/5678",
+  "validFrom": "2023-01-01T00:00:00Z",
+  "credentialSubject": {
+    "id": "did:example:abcdefgh",
+    "alumniOf": "The School of Examples"
+  },
+  "proof": {
+    "type": "DataIntegrityProof",
+    "cryptosuite": "ecdsa-jcs-2019",
+    "created": "2023-02-24T23:36:38Z",
+    "verificationMethod": "did:key:zDnaepBuvsQ8cpsWrVKw8fbpGpvPeNSjVPTWoq6cRqaYzBKVP#zDnaepBuvsQ8cpsWrVKw8fbpGpvPeNSjVPTWoq6cRqaYzBKVP",
+    "proofPurpose": "assertionMethod",
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2",
+      "https://www.w3.org/ns/credentials/examples/v2"
+    ],
+    "proofValue": "z5ptCet75SaEgzG4v4zJhbJtfNi74Wv7Fq15hhKouJQQjEPQvPZKaYxcMXAMLPQS2FXrkCWokNJkFVkwxNzZfD5oT"
+  }
+}`
+
+// vectorEcdsaJcs2019P384Credential is VC-DI-ECDSA Example 70.
+const vectorEcdsaJcs2019P384Credential = `{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    "https://www.w3.org/ns/credentials/examples/v2"
+  ],
+  "id": "urn:uuid:58172aac-d8ba-11ed-83dd-0b3aef56cc33",
+  "type": ["VerifiableCredential", "AlumniCredential"],
+  "name": "Alumni Credential",
+  "description": "A minimum viable example of an Alumni Credential.",
+  "issuer": "https://vc.example/issuers/5678",
+  "validFrom": "2023-01-01T00:00:00Z",
+  "credentialSubject": {
+    "id": "did:example:abcdefgh",
+    "alumniOf": "The School of Examples"
+  },
+  "proof": {
+    "type": "DataIntegrityProof",
+    "cryptosuite": "ecdsa-jcs-2019",
+    "created": "2023-02-24T23:36:38Z",
+    "verificationMethod": "did:key:z82LkuBieyGShVBhvtE2zoiD6Kma4tJGFtkAhxR5pfkp5QPw4LutoYWhvQCnGjdVn14kujQ#z82LkuBieyGShVBhvtE2zoiD6Kma4tJGFtkAhxR5pfkp5QPw4LutoYWhvQCnGjdVn14kujQ",
+    "proofPurpose": "assertionMethod",
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2",
+      "https://www.w3.org/ns/credentials/examples/v2"
+    ],
+    "proofValue": "zq3EuTeLiGurmB2JR5oL8oWEsT7u2tba4HT1oZbiMYWc5qzsoW2kLYcBcF4HM5vCpJyTkceULKrVXuJQkXeN5seL4uXrFNFRMm53GWy1Yrto8rTWxZi9DkNeWP7yUPs7ELAm"
+  }
+}`
+
+// vectorEddsaJcs2022Credential is VC-DI-EDDSA Example 39.
+const vectorEddsaJcs2022Credential = `{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    "https://www.w3.org/ns/credentials/examples/v2"
+  ],
+  "id": "urn:uuid:58172aac-d8ba-11ed-83dd-0b3aef56cc33",
+  "type": ["VerifiableCredential", "AlumniCredential"],
+  "name": "Alumni Credential",
+  "description": "A minimum viable example of an Alumni Credential.",
+  "issuer": "https://vc.example/issuers/5678",
+  "validFrom": "2023-01-01T00:00:00Z",
+  "credentialSubject": {
+    "id": "did:example:abcdefgh",
+    "alumniOf": "The School of Examples"
+  },
+  "proof": {
+    "type": "DataIntegrityProof",
+    "cryptosuite": "eddsa-jcs-2022",
+    "created": "2023-02-24T23:36:38Z",
+    "verificationMethod": "did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2#z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2",
+    "proofPurpose": "assertionMethod",
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2",
+      "https://www.w3.org/ns/credentials/examples/v2"
+    ],
+    "proofValue": "z2HnFSSPPBzR36zdDgK8PbEHeXbR56YF24jwMpt3R1eHXQzJDMWS93FCzpvJpwTWd3GAVFuUfjoJdcnTMuVor51aX"
+  }
+}`
+
+// TestDataIntegrityJCSSpecVectors verifies the published W3C vectors for the
+// JCS cryptosuites.
+func TestDataIntegrityJCSSpecVectors(t *testing.T) {
+	loader := newVectorDocumentLoader(t)
+
+	tests := []struct {
+		name               string
+		credential         string
+		publicKeyMultibase string
+	}{
+		{"ecdsa-jcs-2019 (P-256)", vectorEcdsaJcs2019P256Credential, vectorEcdsaRdfc2019P256PublicKey},
+		{"ecdsa-jcs-2019 (P-384)", vectorEcdsaJcs2019P384Credential, vectorEcdsaRdfc2019P384PublicKey},
+		{"eddsa-jcs-2022 (Ed25519)", vectorEddsaJcs2022Credential, vectorEddsaRdfc2022PublicKey},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var document JSONObject
+			require.NoError(t, json.Unmarshal([]byte(tc.credential), &document))
+
+			proofMap, ok := document[VPKeyProof].(map[string]interface{})
+			require.True(t, ok, "the vector must carry a proof object")
+			proof, err := ParseLDProof(proofMap)
+			require.NoError(t, err)
+
+			key, err := did.DecodeMultibaseKey(tc.publicKeyMultibase)
+			require.NoError(t, err)
+
+			assert.NoError(t, VerifyDataIntegrityProof([]byte(tc.credential), proof, key, loader))
+		})
+	}
+}
+
+// TestDataIntegrityJCSSpecVectorCanonicalForms asserts the canonical forms and
+// their hashes that VC-DI-ECDSA A.5 publishes. Unlike the signature check they
+// say which of the two canonicalization inputs is wrong when one is.
+func TestDataIntegrityJCSSpecVectorCanonicalForms(t *testing.T) {
+	var document JSONObject
+	require.NoError(t, json.Unmarshal([]byte(vectorEcdsaJcs2019P256Credential), &document))
+
+	proofMap, ok := document[VPKeyProof].(map[string]interface{})
+	require.True(t, ok)
+	proof, err := ParseLDProof(proofMap)
+	require.NoError(t, err)
+
+	unsecured := JSONObject{}
+	for key, value := range document {
+		if key != VPKeyProof {
+			unsecured[key] = value
+		}
+	}
+
+	canonicalDocument, err := CanonicalizeJSON(unsecured)
+	require.NoError(t, err)
+	assert.Equal(t, vectorJcsCanonicalCredential, canonicalDocument)
+	documentHash := sha256.Sum256([]byte(canonicalDocument))
+	assert.Equal(t, vectorJcsDocumentHashHex, hex.EncodeToString(documentHash[:]))
+
+	canonicalProofOptions, err := CanonicalizeJSON(
+		buildVerificationProofOptions(unsecured[JSONLDKeyContext], proof))
+	require.NoError(t, err)
+	assert.Equal(t, vectorJcsCanonicalProofOptions, canonicalProofOptions)
+	proofOptionsHash := sha256.Sum256([]byte(canonicalProofOptions))
+	assert.Equal(t, vectorJcsProofOptionsHashHex, hex.EncodeToString(proofOptionsHash[:]))
+}
+
+// TestDataIntegrityJCSSpecVectorRejections checks the JCS path the way the
+// RDFC one is checked: the vectors prove it accepts what it should, these
+// prove it rejects what it should.
+func TestDataIntegrityJCSSpecVectorRejections(t *testing.T) {
+	loader := newVectorDocumentLoader(t)
+
+	tests := []struct {
+		name    string
+		tamper  func(document JSONObject, proofMap map[string]interface{})
+		wantErr error
+	}{
+		{
+			name: "tampered_document",
+			tamper: func(document JSONObject, _ map[string]interface{}) {
+				document["name"] = "Someone Else's Credential"
+			},
+			wantErr: ErrorLDProofVerifyDataIntegrity,
+		},
+		{
+			name: "tampered_proof_context",
+			tamper: func(_ JSONObject, proofMap map[string]interface{}) {
+				// The proof's own @context is part of a JCS proof
+				// configuration, so rewriting it must break the signature.
+				proofMap[JSONLDKeyContext] = []interface{}{ContextCredentialsV2}
+			},
+			wantErr: ErrorLDProofVerifyDataIntegrity,
+		},
+		{
+			name: "cryptosuite_switched_to_the_rdfc_variant",
+			tamper: func(_ JSONObject, proofMap map[string]interface{}) {
+				// Same algorithm, different canonicalization: the suite name
+				// is signed over, so this cannot be swapped.
+				proofMap[LDProofKeyCryptosuite] = CryptosuiteEcdsaRdfc2019
+			},
+			wantErr: ErrorLDProofVerifyDataIntegrity,
+		},
+		{
+			name: "unknown_cryptosuite",
+			tamper: func(_ JSONObject, proofMap map[string]interface{}) {
+				proofMap[LDProofKeyCryptosuite] = "ecdsa-jcs-2099"
+			},
+			wantErr: ErrorLDProofUnsupportedCryptosuite,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var document JSONObject
+			require.NoError(t, json.Unmarshal([]byte(vectorEcdsaJcs2019P256Credential), &document))
+			proofMap, ok := document[VPKeyProof].(map[string]interface{})
+			require.True(t, ok)
+
+			tc.tamper(document, proofMap)
+
+			tamperedJSON, err := json.Marshal(document)
+			require.NoError(t, err)
+			proof, err := ParseLDProof(proofMap)
+			require.NoError(t, err)
+
+			key, err := did.DecodeMultibaseKey(vectorEcdsaRdfc2019P256PublicKey)
+			require.NoError(t, err)
+
+			err = VerifyDataIntegrityProof(tamperedJSON, proof, key, loader)
+			assert.ErrorIs(t, err, tc.wantErr)
+		})
+	}
+}
