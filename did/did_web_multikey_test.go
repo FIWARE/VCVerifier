@@ -469,11 +469,16 @@ func TestParseDIDDocument_MultikeyVerificationMethods(t *testing.T) {
 	}
 }
 
-// TestKeyResolverWithMultikeyVM verifies that the standard key resolution
-// path (verifier/key_resolver.go's ResolveKeyFromDID) works end-to-end
-// with Multikey verification methods in a did:web document. Since we cannot
-// easily serve a real HTTP endpoint in a unit test, we test through a mock
-// VDR that returns a document with Multikey VMs.
+// TestKeyResolverWithMultikeyVM verifies that the did.Registry → Doc →
+// VerificationMethod → JSONWebKey() pipeline produces usable JWKs for
+// Multikey verification methods. It exercises the same data structures
+// that verifier/key_resolver.go operates on, but cannot call
+// ResolveKeyFromDID / ResolveKeyForRelationship directly because the
+// verifier package imports did (not the reverse), so calling through would
+// create an import cycle. The resolveKeyFromRegistry helper below
+// simulates that resolution logic. For a true integration test that calls
+// the real key resolver with Multikey VMs, see
+// TestResolveKeyFromDID_MultikeyVM in verifier/key_resolver_test.go.
 func TestKeyResolverWithMultikeyVM(t *testing.T) {
 	tests := []struct {
 		name        string
