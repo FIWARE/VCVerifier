@@ -608,13 +608,22 @@ func CreateLinkedDataProof(documentMap JSONObject, ctx *LinkedDataProofContext) 
 		return nil, fmt.Errorf("%w: %w", ErrorLDProofCanonProof, err)
 	}
 
-	if err := assertProofOptionsCovered(canonProof.(string), proof); err != nil {
+	canonicalProof, err := canonicalNQuads(canonProof, ErrorLDProofCanonProof)
+	if err != nil {
+		return nil, err
+	}
+	canonicalDoc, err := canonicalNQuads(canonDoc, ErrorLDProofCanonDoc)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := assertProofOptionsCovered(canonicalProof, proof); err != nil {
 		return nil, err
 	}
 
 	// Hash both canonical forms
-	docHash := sha256.Sum256([]byte(canonDoc.(string)))
-	proofHash := sha256.Sum256([]byte(canonProof.(string)))
+	docHash := sha256.Sum256([]byte(canonicalDoc))
+	proofHash := sha256.Sum256([]byte(canonicalProof))
 
 	// tbs = hash(proof_options) || hash(document)
 	tbs := append(proofHash[:], docHash[:]...)
@@ -819,13 +828,22 @@ func VerifyLinkedDataProof(documentJSON []byte, proof *LDProof, publicKey jwk.Ke
 	// 10b. Refuse to continue when the canonical proof options do not actually
 	// cover the proof metadata — otherwise challenge, domain and created would
 	// be attacker-controlled while the signature still verified.
-	if err := assertProofOptionsCovered(canonProof.(string), proof); err != nil {
+	canonicalProof, err := canonicalNQuads(canonProof, ErrorLDProofVerifyCanonProof)
+	if err != nil {
+		return err
+	}
+	canonicalDoc, err := canonicalNQuads(canonDoc, ErrorLDProofVerifyCanonDoc)
+	if err != nil {
+		return err
+	}
+
+	if err := assertProofOptionsCovered(canonicalProof, proof); err != nil {
 		return err
 	}
 
 	// 11. Compute tbs = sha256(canonicalProofOptions) || sha256(canonicalDocument)
-	docHash := sha256.Sum256([]byte(canonDoc.(string)))
-	proofHash := sha256.Sum256([]byte(canonProof.(string)))
+	docHash := sha256.Sum256([]byte(canonicalDoc))
+	proofHash := sha256.Sum256([]byte(canonicalProof))
 	tbs := append(proofHash[:], docHash[:]...)
 
 	// 12. Verify the detached JWS signature
@@ -890,10 +908,16 @@ func VerifyDataIntegrityProof(documentJSON []byte, proof *LDProof, publicKey jwk
 		return ErrorLDProofMissingProofValue
 	}
 
-	// 5. Decode proofValue from multibase encoding.
-	_, sigBytes, err := multibase.Decode(proof.ProofValue)
+	// 5. Decode proofValue. Both suites pin the encoding: VC-DI-ECDSA 3.2.2
+	// and VC-DI-EDDSA 3.1.2 take "the Multibase decoded base58-btc value",
+	// and accepting another multibase alphabet would let a non-conforming
+	// issuer look interoperable against this verifier alone.
+	encoding, sigBytes, err := multibase.Decode(proof.ProofValue)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrorLDProofMalformedProofValue, err)
+	}
+	if encoding != multibase.Base58BTC {
+		return fmt.Errorf("%w: proofValue must be base58-btc encoded", ErrorLDProofMalformedProofValue)
 	}
 
 	// 6. Unmarshal document and strip proof.
@@ -926,18 +950,41 @@ func VerifyDataIntegrityProof(documentJSON []byte, proof *LDProof, publicKey jwk
 	}
 
 	// 9. Assert proof options are covered.
-	if err := assertProofOptionsCovered(canonProof.(string), proof); err != nil {
+	canonicalProof, err := canonicalNQuads(canonProof, ErrorLDProofVerifyCanonProof)
+	if err != nil {
+		return err
+	}
+	canonicalDoc, err := canonicalNQuads(canonDoc, ErrorLDProofVerifyCanonDoc)
+	if err != nil {
+		return err
+	}
+
+	if err := assertProofOptionsCovered(canonicalProof, proof); err != nil {
 		return err
 	}
 
 	// 10. Compute hash data — curve-conditional per W3C VC-DI-ECDSA specs.
-	hashData, err := computeDataIntegrityHashData(proof.Cryptosuite, publicKey, canonProof.(string), canonDoc.(string))
+	hashData, err := computeDataIntegrityHashData(proof.Cryptosuite, publicKey, canonicalProof, canonicalDoc)
 	if err != nil {
 		return err
 	}
 
 	// 11. Verify the raw signature over hashData.
 	return verifyDataIntegritySignature(proof.Cryptosuite, publicKey, hashData, sigBytes)
+}
+
+// canonicalNQuads converts the result of ld.JsonLdProcessor.Normalize into the
+// N-Quads string the hashing steps operate on. The processor returns a string
+// for the N-Quads format and a structured object otherwise, so a non-string
+// result means the options were not the ones this code passed - a bug rather
+// than bad input, but not one that should reach a type assertion panic on a
+// verification path.
+func canonicalNQuads(normalized interface{}, wrapped error) (string, error) {
+	nquads, ok := normalized.(string)
+	if !ok {
+		return "", fmt.Errorf("%w: canonicalization did not return N-Quads", wrapped)
+	}
+	return nquads, nil
 }
 
 // assertCreatedWellFormed checks the proof's "created" timestamp when it

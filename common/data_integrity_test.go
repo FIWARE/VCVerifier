@@ -564,6 +564,29 @@ func TestVerifyDataIntegrityProof_InvalidMultibase(t *testing.T) {
 		"expected ErrorLDProofMalformedProofValue, got: %v", err)
 }
 
+// TestVerifyDataIntegrityProof_NonBase58ProofValue verifies that a proofValue
+// in another multibase alphabet is rejected. VC-DI-ECDSA 3.2.2 and
+// VC-DI-EDDSA 3.1.2 both take "the Multibase decoded base58-btc value", so a
+// base64url-encoded signature is not a conforming proof even when the bytes
+// it carries would verify.
+func TestVerifyDataIntegrityProof_NonBase58ProofValue(t *testing.T) {
+	privKey, _, pubJWK := generateECTestKeys(t)
+	loader := newTestDocumentLoader()
+
+	doc := dataIntegrityTestDocument()
+	docJSON, proof := signDataIntegrityP256(t, doc, privKey, "did:web:example.com#key-1")
+
+	// Re-encode the very same signature bytes as base64url.
+	_, sigBytes, err := multibase.Decode(proof.ProofValue)
+	require.NoError(t, err)
+	proof.ProofValue, err = multibase.Encode(multibase.Base64url, sigBytes)
+	require.NoError(t, err)
+
+	err = VerifyDataIntegrityProof(docJSON, proof, pubJWK, loader)
+	assert.True(t, errors.Is(err, ErrorLDProofMalformedProofValue),
+		"expected ErrorLDProofMalformedProofValue, got: %v", err)
+}
+
 // TestVerifyDataIntegrityProof_WrongProofType verifies that a proof with a
 // non-DataIntegrityProof type is rejected.
 func TestVerifyDataIntegrityProof_WrongProofType(t *testing.T) {

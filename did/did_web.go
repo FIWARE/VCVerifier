@@ -214,10 +214,15 @@ func parseVerificationMethod(data []byte) (*VerificationMethod, error) {
 		vm.Value = raw.PublicKeyJwk
 		logging.Log().Debugf("Parsed JWK for verification method %s (type: %s)", raw.ID, raw.Type)
 	} else if raw.PublicKeyMultibase != "" {
+		// Value keeps the original encoding; jsonWebKey is what callers use.
 		vm.Value = []byte(raw.PublicKeyMultibase)
 		key, err := DecodeMultibaseKey(raw.PublicKeyMultibase)
 		if err != nil {
-			logging.Log().Debugf("Failed to decode publicKeyMultibase for verification method %s: %v", raw.ID, err)
+			// Deliberately not fatal: one unusable verification method must
+			// not cost the document its other keys. The warning matters
+			// because the failure otherwise only surfaces much later, as a
+			// missing verification key for a proof that named this method.
+			logging.Log().Warnf("Failed to decode publicKeyMultibase for verification method %s, it will not be usable: %v", raw.ID, err)
 		} else {
 			vm.jsonWebKey = key
 			logging.Log().Debugf("Decoded publicKeyMultibase to JWK for verification method %s (type: %s)", raw.ID, raw.Type)

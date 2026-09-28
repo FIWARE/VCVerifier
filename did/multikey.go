@@ -13,8 +13,14 @@ import (
 )
 
 const (
-	// TypeMultikey is the W3C Multikey verification method type.
+	// TypeMultikey is the W3C Multikey verification method type, the one a
+	// Data Integrity issuer normally publishes.
 	// See https://www.w3.org/TR/controller-document/#multikey
+	//
+	// Key resolution deliberately does not branch on it: a verification method
+	// is usable when it yields a key, whatever type it declares. The constant
+	// exists to name the type in DID documents and tests rather than to gate
+	// on it.
 	TypeMultikey = "Multikey"
 
 	// TypeEd25519VerificationKey2020 is the verification method type for
