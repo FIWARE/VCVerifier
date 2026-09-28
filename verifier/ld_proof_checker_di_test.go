@@ -21,9 +21,9 @@ import (
 )
 
 // --- Data Integrity test constants ---
-
-// diP256CoordSize is the byte length of each P-256 coordinate in IEEE P1363 format.
-const diP256CoordSize = 32
+//
+// testP256KeySize (defined in ld_proof_checker_test.go) is reused as the byte
+// length of each P-256 coordinate in IEEE P1363 format.
 
 // --- Data Integrity signing helpers ---
 //
@@ -92,11 +92,11 @@ func signDIDocumentECDSA(t *testing.T, doc map[string]interface{}, privKey *ecds
 	require.NoError(t, err)
 
 	// Encode as IEEE P1363 (r || s).
-	sigBytes := make([]byte, diP256CoordSize*2)
+	sigBytes := make([]byte, testP256KeySize*2)
 	rBytes := r.Bytes()
 	sBytes := s.Bytes()
-	copy(sigBytes[diP256CoordSize-len(rBytes):diP256CoordSize], rBytes)
-	copy(sigBytes[2*diP256CoordSize-len(sBytes):], sBytes)
+	copy(sigBytes[testP256KeySize-len(rBytes):testP256KeySize], rBytes)
+	copy(sigBytes[2*testP256KeySize-len(sBytes):], sBytes)
 
 	proof.ProofValue, err = multibase.Encode(multibase.Base58BTC, sigBytes)
 	require.NoError(t, err)
@@ -646,8 +646,9 @@ func TestLDProofChecker_JWSAndDICoexist(t *testing.T) {
 	jwsVC := signTestCredential(t, issuerDID, signer, keyID, docLoader)
 	jwsVCJSONNoProof := marshalWithoutProof(t, jwsVC)
 	// Extract the proof from the signed VC map.
-	jwsProofRaw, ok := jwsVC[common.VPKeyProof].(map[string]interface{})
-	require.True(t, ok, "signed VC should have a proof map")
+	require.IsType(t, map[string]interface{}{}, jwsVC[common.VPKeyProof],
+		"signed VC proof should be a map, not %T", jwsVC[common.VPKeyProof])
+	jwsProofRaw := jwsVC[common.VPKeyProof].(map[string]interface{})
 	jwsProof, err := common.ParseLDProof(jwsProofRaw)
 	require.NoError(t, err)
 
