@@ -286,6 +286,11 @@ so both VM types work with Data Integrity proofs.
 
 - The `cryptosuite` field must be one of the supported values; an unknown
   suite is rejected with `ErrorLDProofUnsupportedCryptosuite`.
+- `expires` is optional; where it is present the proof is rejected once it has
+  passed (`ErrorProofExpired`), with the same clock skew the freshness check
+  tolerates, and an unparseable value is rejected outright
+  (`ErrorProofExpiresUnparseable`). The timestamp is part of the signed proof
+  configuration, so a holder cannot extend it.
 - `created` is optional (VC-DATA-INTEGRITY §2.1), but a value that is present
   must be a valid RFC 3339 date-time — otherwise
   `ErrorLDProofMalformedCreated`. A presentation proof additionally needs one
@@ -320,9 +325,6 @@ can contain credentials signed with `DataIntegrityProof`, and vice versa.
 
 ### Limitations
 
-- **`expires` is canonicalized but not enforced.** It is covered by the
-  signature, so it cannot be altered, but an expired proof is not rejected on
-  that ground.
 - **The JCS cryptosuites** (`ecdsa-jcs-2019`, `eddsa-jcs-2022`), the
   selective-disclosure suites (`bbs-2023`, `ecdsa-sd-2023`), proof sets and
   proof chains (`previousProof`), and Data Integrity on VCDM 1.1 documents are

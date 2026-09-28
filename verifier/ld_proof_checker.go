@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/did"
@@ -51,6 +52,7 @@ type LDProofChecker struct {
 	registry      *did.Registry
 	docLoader     ld.DocumentLoader
 	httpsResolver HttpsIssuerResolver
+	clock         common.Clock
 }
 
 // NewLDProofChecker creates an LDProofChecker that resolves DIDs via the
@@ -60,7 +62,16 @@ func NewLDProofChecker(registry *did.Registry, docLoader ld.DocumentLoader) *LDP
 	return &LDProofChecker{
 		registry:  registry,
 		docLoader: docLoader,
+		clock:     common.RealClock{},
 	}
+}
+
+// WithClock sets the clock the proof expiry check reads the current time
+// from. It exists for tests; production uses the real clock.
+// Returns the checker to allow method chaining.
+func (lpc *LDProofChecker) WithClock(clock common.Clock) *LDProofChecker {
+	lpc.clock = clock
+	return lpc
 }
 
 // WithHttpsResolver sets the HttpsIssuerResolver used to resolve proof keys
@@ -88,7 +99,6 @@ func (lpc *LDProofChecker) WithHttpsResolver(resolver HttpsIssuerResolver) *LDPr
 //
 // Returns the resolved public key on success (for downstream holder binding),
 // or an error describing the verification failure.
-//
 func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDProof, expectedHolder string) (jwk.Key, error) {
 	if expectedHolder == "" {
 		logging.Log().Warn("JSON-LD VP has no holder — the proof cannot be bound to a presenter")
@@ -96,6 +106,10 @@ func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDPro
 	}
 
 	if err := assertProofPurpose(proof, common.ProofPurposeAuthentication); err != nil {
+		return nil, err
+	}
+
+	if err := lpc.assertProofNotExpired(proof); err != nil {
 		return nil, err
 	}
 
@@ -131,7 +145,6 @@ func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDPro
 //
 // did:elsi signers are explicitly rejected — did:elsi uses JWS/JAdES
 // signatures, not Linked Data Proofs.
-//
 func (lpc *LDProofChecker) VerifyCredential(vcJSON []byte, proof *common.LDProof, expectedIssuer string) error {
 	if expectedIssuer == "" {
 		logging.Log().Warn("JSON-LD VC has no issuer — the proof cannot be bound to an issuer")
@@ -139,6 +152,10 @@ func (lpc *LDProofChecker) VerifyCredential(vcJSON []byte, proof *common.LDProof
 	}
 
 	if err := assertProofPurpose(proof, common.ProofPurposeAssertionMethod); err != nil {
+		return err
+	}
+
+	if err := lpc.assertProofNotExpired(proof); err != nil {
 		return err
 	}
 
@@ -172,6 +189,35 @@ func assertProofPurpose(proof *common.LDProof, expectedPurpose string) error {
 	if proof.ProofPurpose != expectedPurpose {
 		logging.Log().Warnf("LD proof purpose %q does not match the expected purpose %q", proof.ProofPurpose, expectedPurpose)
 		return fmt.Errorf("%w: expected %s but got %s", ErrorProofPurposeMismatch, expectedPurpose, proof.ProofPurpose)
+	}
+	return nil
+}
+
+// assertProofNotExpired rejects a proof whose `expires` timestamp has passed.
+//
+// The property is optional (VC-DATA-INTEGRITY 2.1) and a proof without one
+// never expires. Where it is present it is part of the signed proof
+// configuration, so a holder cannot extend it - which is what makes it worth
+// acting on rather than merely canonicalizing. The same clock skew the
+// freshness check tolerates applies here.
+//
+// An unparseable value is a rejection, not a skipped check: a proof that
+// declares an expiry nobody can read is not one whose validity has been
+// established.
+func (lpc *LDProofChecker) assertProofNotExpired(proof *common.LDProof) error {
+	if proof.Expires == "" {
+		return nil
+	}
+
+	expires, err := time.Parse(time.RFC3339, proof.Expires)
+	if err != nil {
+		logging.Log().Warnf("LD proof expires timestamp %q is not a valid RFC3339 date-time: %v", proof.Expires, err)
+		return fmt.Errorf("%w: %s", ErrorProofExpiresUnparseable, proof.Expires)
+	}
+
+	if now := lpc.clock.Now(); now.After(expires.Add(ldProofClockSkew)) {
+		logging.Log().Warnf("LD proof expired at %s, now is %s", proof.Expires, now.Format(time.RFC3339))
+		return fmt.Errorf("%w: expired at %s", ErrorProofExpired, proof.Expires)
 	}
 	return nil
 }

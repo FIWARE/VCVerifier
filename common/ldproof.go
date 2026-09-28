@@ -29,6 +29,7 @@ const (
 	LDProofKeyProofPurpose       = "proofPurpose"
 	LDProofKeyChallenge          = "challenge"
 	LDProofKeyDomain             = "domain"
+	LDProofKeyExpires            = "expires"
 	LDProofKeyProofValue         = "proofValue"
 	LDProofKeyCryptosuite        = "cryptosuite"
 	LDProofKeyJWS                = "jws"
@@ -231,6 +232,7 @@ var algCurveMap = map[string]jwa.EllipticCurveAlgorithm{
 type LDProof struct {
 	Type               string `json:"type"`
 	Created            string `json:"created"`
+	Expires            string `json:"expires,omitempty"`
 	VerificationMethod string `json:"verificationMethod"`
 	JWS                string `json:"jws,omitempty"`
 	ProofPurpose       string `json:"proofPurpose,omitempty"`
@@ -286,6 +288,9 @@ func ParseLDProof(proofMap map[string]interface{}) (*LDProof, error) {
 
 	if v, ok := proofMap[LDProofKeyCreated].(string); ok {
 		proof.Created = v
+	}
+	if v, ok := proofMap[LDProofKeyExpires].(string); ok {
+		proof.Expires = v
 	}
 	if v, ok := proofMap[LDProofKeyVerificationMethod].(string); ok {
 		proof.VerificationMethod = v

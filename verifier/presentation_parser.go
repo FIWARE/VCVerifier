@@ -74,6 +74,14 @@ var ErrorProofCreatedInFuture = errors.New("vp_proof_created_in_future")
 // configured freshness window, indicating a replayed presentation.
 var ErrorProofNotFresh = errors.New("vp_proof_not_fresh")
 
+// ErrorProofExpired is returned when a Linked Data Proof declares an
+// `expires` timestamp that has passed.
+var ErrorProofExpired = errors.New("ld_proof_expired")
+
+// ErrorProofExpiresUnparseable is returned when a Linked Data Proof's
+// `expires` timestamp is not a valid RFC3339 date-time.
+var ErrorProofExpiresUnparseable = errors.New("ld_proof_expires_unparseable")
+
 // ErrorHolderSubjectMismatch is returned when a JSON-LD credential inside a
 // presentation names a subject that is not the presentation's holder. Without
 // this check a credential issued to somebody else could be replayed inside an
