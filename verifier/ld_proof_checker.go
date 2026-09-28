@@ -32,10 +32,12 @@ var ErrorProofPurposeMismatch = errors.New("ld_proof_purpose_mismatch")
 // the document.
 var ErrorMissingProofSubject = errors.New("ld_proof_binding_subject_missing")
 
-// LDProofChecker verifies Linked Data Proofs (JsonWebSignature2020) on
-// Verifiable Presentations and Verifiable Credentials by resolving the
-// proof's verificationMethod to a public key and delegating cryptographic
-// verification to common.VerifyLinkedDataProof.
+// LDProofChecker verifies Linked Data Proofs on Verifiable Presentations and
+// Verifiable Credentials. It supports both JsonWebSignature2020 proofs and
+// W3C Data Integrity proofs (DataIntegrityProof with ecdsa-rdfc-2019 or
+// eddsa-rdfc-2022 cryptosuites). The proof's verificationMethod is resolved
+// to a public key and cryptographic verification is delegated to
+// common.VerifyLinkedDataProof or common.VerifyDataIntegrityProof.
 //
 // The verificationMethod is treated as a generic URI: a DID URL is resolved
 // through the did.Registry, an https:// URL through the HttpsIssuerResolver
@@ -220,22 +222,50 @@ func (lpc *LDProofChecker) resolveProofKeys(proof *common.LDProof, signerDID str
 }
 
 // verifyLDProofWithCandidateKeys verifies a Linked Data Proof against the
-// candidate keys and returns the key that verified it. Only the key that
-// actually signed the document produces a valid signature, so trying each
-// candidate does not weaken the check — it is what makes a fragment-less
-// HTTPS verificationMethod usable against a multi-key JWKS.
+// candidate keys and returns the key that verified it. It dispatches to the
+// appropriate verification function based on the proof type:
+//   - JsonWebSignature2020 → common.VerifyLinkedDataProof
+//   - DataIntegrityProof   → common.VerifyDataIntegrityProof
+//   - anything else        → common.ErrorLDProofUnsupportedType
+//
+// Only the key that actually signed the document produces a valid signature,
+// so trying each candidate does not weaken the check — it is what makes a
+// fragment-less HTTPS verificationMethod usable against a multi-key JWKS.
 func verifyLDProofWithCandidateKeys(documentJSON []byte, proof *common.LDProof, keys []jwk.Key, docLoader ld.DocumentLoader) (jwk.Key, error) {
 	if len(keys) == 0 {
 		return nil, ErrorNoVerificationKey
 	}
+
+	verifyFunc, err := selectProofVerifier(proof)
+	if err != nil {
+		return nil, err
+	}
+
 	var lastErr error
 	for _, key := range keys {
-		lastErr = common.VerifyLinkedDataProof(documentJSON, proof, key, docLoader)
+		lastErr = verifyFunc(documentJSON, proof, key, docLoader)
 		if lastErr == nil {
 			return key, nil
 		}
 	}
 	return nil, lastErr
+}
+
+// proofVerifyFunc is the signature shared by common.VerifyLinkedDataProof and
+// common.VerifyDataIntegrityProof, allowing dispatch by proof type.
+type proofVerifyFunc func(documentJSON []byte, proof *common.LDProof, publicKey jwk.Key, documentLoader ld.DocumentLoader) error
+
+// selectProofVerifier returns the verification function for the given proof
+// type, or an error if the type is not supported.
+func selectProofVerifier(proof *common.LDProof) (proofVerifyFunc, error) {
+	switch proof.Type {
+	case common.ProofTypeJsonWebSignature2020:
+		return common.VerifyLinkedDataProof, nil
+	case common.ProofTypeDataIntegrityProof:
+		return common.VerifyDataIntegrityProof, nil
+	default:
+		return nil, fmt.Errorf("%w: %s", common.ErrorLDProofUnsupportedType, proof.Type)
+	}
 }
 
 // resolveHttpsProofKeys resolves the candidate keys for an HTTPS-based signer
