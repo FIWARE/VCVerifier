@@ -103,7 +103,7 @@ func TestDecodeMultibaseKey(t *testing.T) {
 			wantErr: "invalid P-256 key",
 		},
 		{
-			name: "key data too short for multicodec",
+			name: "key data too short for varint and key",
 			setup: func(t *testing.T) string {
 				// Only 1 byte total — not enough for varint + key
 				encoded, _ := multibase.Encode(multibase.Base58BTC, []byte{0xed})

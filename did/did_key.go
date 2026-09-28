@@ -1,11 +1,9 @@
 package did
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"github.com/fiware/VCVerifier/logging"
-	"github.com/multiformats/go-multibase"
 )
 
 const (
@@ -51,31 +49,11 @@ func (k *KeyVDR) Read(didStr string) (*DocResolution, error) {
 		logging.Log().Debugf("Stripped fragment from did:key, base DID: %s", baseDID)
 	}
 
-	// Decode multibase
-	_, keyBytes, err := multibase.Decode(methodSpecificID)
+	// Decode multibase + multicodec prefix and convert to JWK using the shared helper
+	jwkKey, vmType, err := DecodeMultibaseKeyWithType(methodSpecificID)
 	if err != nil {
-		logging.Log().Debugf("Failed to decode multibase for did:key %s: %v", didStr, err)
-		return nil, fmt.Errorf("failed to decode did:key multibase: %w", err)
-	}
-
-	if len(keyBytes) < 2 {
-		return nil, fmt.Errorf("%w: key data too short: %s", ErrInvalidDID, didStr)
-	}
-
-	// Read multicodec varint prefix
-	codec, n := binary.Uvarint(keyBytes)
-	if n <= 0 {
-		return nil, fmt.Errorf("%w: invalid multicodec prefix: %s", ErrInvalidDID, didStr)
-	}
-	rawKey := keyBytes[n:]
-
-	logging.Log().Debugf("did:key multicodec=0x%x, raw key length=%d", codec, len(rawKey))
-
-	// Convert to JWK based on codec using the shared multicodec helper
-	jwkKey, vmType, err := MulticodecToJWK(codec, rawKey)
-	if err != nil {
-		logging.Log().Infof("Failed to convert did:key to JWK (codec=0x%x): %v", codec, err)
-		return nil, fmt.Errorf("failed to convert did:key to JWK: %w", err)
+		logging.Log().Infof("Failed to decode did:key %s: %v", didStr, err)
+		return nil, fmt.Errorf("failed to decode did:key: %w", err)
 	}
 
 	vmID := baseDID + "#" + methodSpecificID

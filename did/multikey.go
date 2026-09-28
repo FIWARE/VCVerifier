@@ -38,28 +38,36 @@ const (
 // DecodeMultibaseKey decodes a multibase-encoded public key (e.g. "z6Mk...")
 // that carries a multicodec varint prefix, and returns the corresponding JWK.
 // This handles the encoding used by W3C Multikey verification methods and
-// did:key identifiers.
+// did:key identifiers. It discards the verification method type; use
+// DecodeMultibaseKeyWithType when the type string is also needed (e.g. for
+// DID document construction).
 func DecodeMultibaseKey(multibaseEncoded string) (jwk.Key, error) {
+	key, _, err := DecodeMultibaseKeyWithType(multibaseEncoded)
+	return key, err
+}
+
+// DecodeMultibaseKeyWithType decodes a multibase-encoded public key (e.g.
+// "z6Mk...") that carries a multicodec varint prefix, and returns both the
+// JWK and the verification method type string (e.g. "Ed25519VerificationKey2020",
+// "JsonWebKey2020"). This is the mid-level entry point used by both
+// DecodeMultibaseKey and did:key resolution.
+func DecodeMultibaseKeyWithType(multibaseEncoded string) (jwk.Key, string, error) {
 	_, keyBytes, err := multibase.Decode(multibaseEncoded)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode multibase: %w", err)
+		return nil, "", fmt.Errorf("failed to decode multibase: %w", err)
 	}
 
 	if len(keyBytes) < 2 {
-		return nil, fmt.Errorf("key data too short: %d bytes", len(keyBytes))
+		return nil, "", fmt.Errorf("key data too short: %d bytes", len(keyBytes))
 	}
 
 	codec, n := binary.Uvarint(keyBytes)
 	if n <= 0 {
-		return nil, fmt.Errorf("invalid multicodec varint prefix")
+		return nil, "", fmt.Errorf("invalid multicodec varint prefix")
 	}
 	rawKey := keyBytes[n:]
 
-	key, _, err := MulticodecToJWK(codec, rawKey)
-	if err != nil {
-		return nil, err
-	}
-	return key, nil
+	return MulticodecToJWK(codec, rawKey)
 }
 
 // MulticodecToJWK converts raw public key bytes identified by a multicodec
