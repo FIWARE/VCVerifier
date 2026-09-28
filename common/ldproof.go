@@ -1,11 +1,16 @@
 package common
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -13,6 +18,7 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
+	"github.com/multiformats/go-multibase"
 	"github.com/piprate/json-gold/ld"
 )
 
@@ -62,6 +68,7 @@ const (
 	IRIProofPurpose            = "https://w3id.org/security#proofPurpose"
 	IRIProofChallenge          = "https://w3id.org/security#challenge"
 	IRIProofDomain             = "https://w3id.org/security#domain"
+	IRIProofCryptosuite        = "https://w3id.org/security#cryptosuite"
 )
 
 // Proof purposes defined by the Verifiable Credential Data Integrity spec.
@@ -130,14 +137,61 @@ var (
 	// ErrorLDProofCurveMismatch is returned when the JWS algorithm requires a
 	// specific elliptic curve that the supplied key does not use.
 	ErrorLDProofCurveMismatch = errors.New("ld_proof_algorithm_curve_mismatch")
+
+	// ErrorLDProofMissingProofValue is returned when a DataIntegrityProof
+	// has no "proofValue" field.
+	ErrorLDProofMissingProofValue = errors.New("ld_proof_missing_proof_value")
+
+	// ErrorLDProofMalformedProofValue is returned when the multibase-encoded
+	// proofValue cannot be decoded.
+	ErrorLDProofMalformedProofValue = errors.New("ld_proof_malformed_proof_value")
+
+	// ErrorLDProofUnsupportedCryptosuite is returned when a DataIntegrityProof
+	// uses a cryptosuite that is not recognized or supported.
+	ErrorLDProofUnsupportedCryptosuite = errors.New("ld_proof_unsupported_cryptosuite")
+
+	// ErrorLDProofCryptosuiteKeyMismatch is returned when the public key type
+	// does not match the requirements of the declared cryptosuite
+	// (e.g. an RSA key with ecdsa-rdfc-2019).
+	ErrorLDProofCryptosuiteKeyMismatch = errors.New("ld_proof_cryptosuite_key_mismatch")
+
+	// ErrorLDProofVerifyDataIntegrity is returned when a Data Integrity proof
+	// signature verification fails.
+	ErrorLDProofVerifyDataIntegrity = errors.New("ld_proof_data_integrity_signature_failed")
 )
 
-// Supported proof type for verification.
+// Supported proof types for verification.
 const (
 	// ProofTypeJsonWebSignature2020 is the W3C JsonWebSignature2020 proof type
 	// using detached JWS with b64=false.
 	ProofTypeJsonWebSignature2020 = "JsonWebSignature2020"
+
+	// ProofTypeDataIntegrityProof is the W3C Data Integrity proof type using
+	// proofValue (multibase-encoded raw signature) and a declared cryptosuite.
+	// See https://www.w3.org/TR/vc-data-integrity/.
+	ProofTypeDataIntegrityProof = "DataIntegrityProof"
 )
+
+// Supported Data Integrity cryptosuites.
+const (
+	// CryptosuiteEcdsaRdfc2019 is the ecdsa-rdfc-2019 cryptosuite using
+	// URDNA2015 (RDFC-1.0) canonicalization and ECDSA with P-256 or P-384.
+	// See https://www.w3.org/TR/vc-di-ecdsa/.
+	CryptosuiteEcdsaRdfc2019 = "ecdsa-rdfc-2019"
+
+	// CryptosuiteEddsaRdfc2022 is the eddsa-rdfc-2022 cryptosuite using
+	// URDNA2015 (RDFC-1.0) canonicalization and EdDSA with Ed25519.
+	// See https://www.w3.org/TR/vc-di-eddsa/.
+	CryptosuiteEddsaRdfc2022 = "eddsa-rdfc-2022"
+)
+
+// p1363CoordinateSize maps supported EC curves to their IEEE P1363 coordinate
+// byte size. ECDSA proofValue is r||s where each component is zero-padded to
+// the curve's field size.
+var p1363CoordinateSize = map[elliptic.Curve]int{
+	elliptic.P256(): 32,
+	elliptic.P384(): 48,
+}
 
 // jwsDetachedParts is the expected number of parts in a compact JWS (header.payload.signature).
 const jwsDetachedParts = 3
@@ -325,13 +379,62 @@ func EnsureSuiteContext(contextValue interface{}) interface{} {
 	}
 }
 
+// EnsureDataIntegrityContext returns the given JSON-LD @context value with the
+// VCDM 2.0 context appended when it is not already present.
+//
+// The VCDM 2.0 context defines the Data Integrity proof terms (cryptosuite,
+// proofValue, created, verificationMethod, proofPurpose, challenge, domain).
+// It is the Data Integrity counterpart of ContextSecuritySuiteJWS2020 for
+// JsonWebSignature2020.
+func EnsureDataIntegrityContext(contextValue interface{}) interface{} {
+	switch ctx := contextValue.(type) {
+	case nil:
+		return []interface{}{ContextCredentialsV2}
+	case string:
+		if ctx == ContextCredentialsV2 {
+			return ctx
+		}
+		return []interface{}{ctx, ContextCredentialsV2}
+	case []interface{}:
+		for _, entry := range ctx {
+			if s, ok := entry.(string); ok && s == ContextCredentialsV2 {
+				return ctx
+			}
+		}
+		extended := make([]interface{}, 0, len(ctx)+1)
+		extended = append(extended, ctx...)
+		return append(extended, ContextCredentialsV2)
+	case []string:
+		for _, entry := range ctx {
+			if entry == ContextCredentialsV2 {
+				return ctx
+			}
+		}
+		return append(append([]string{}, ctx...), ContextCredentialsV2)
+	default:
+		return []interface{}{ctx, ContextCredentialsV2}
+	}
+}
+
+// ensureProofContext selects the appropriate proof-suite context for the given
+// proof type and ensures it is present in the context value. For
+// JsonWebSignature2020 it adds the JWS 2020 suite context; for
+// DataIntegrityProof it adds the VCDM 2.0 context (which defines
+// cryptosuite, proofValue, and all other Data Integrity terms).
+func ensureProofContext(contextValue interface{}, proofType string) interface{} {
+	if proofType == ProofTypeDataIntegrityProof {
+		return EnsureDataIntegrityContext(contextValue)
+	}
+	return EnsureSuiteContext(contextValue)
+}
+
 // buildProofOptions assembles the proof-options document that is
 // canonicalized and hashed alongside the signed document. The @context is the
-// document's own context extended with the JsonWebSignature2020 suite context
-// so that every proof term expands to a real IRI.
+// document's own context extended with the appropriate suite context so that
+// every proof term expands to a real IRI.
 func buildProofOptions(documentContext interface{}, proof *LDProof) JSONObject {
 	proofOptions := JSONObject{
-		JSONLDKeyContext:             EnsureSuiteContext(documentContext),
+		JSONLDKeyContext:             ensureProofContext(documentContext, proof.Type),
 		JSONLDKeyType:                proof.Type,
 		LDProofKeyCreated:            proof.Created,
 		LDProofKeyVerificationMethod: proof.VerificationMethod,
@@ -344,6 +447,9 @@ func buildProofOptions(documentContext interface{}, proof *LDProof) JSONObject {
 	}
 	if proof.Domain != "" {
 		proofOptions[LDProofKeyDomain] = proof.Domain
+	}
+	if proof.Cryptosuite != "" {
+		proofOptions[LDProofKeyCryptosuite] = proof.Cryptosuite
 	}
 	return proofOptions
 }
@@ -379,6 +485,10 @@ func assertProofOptionsCovered(canonicalProofOptions string, proof *LDProof) err
 		{IRIProofPurpose, LDProofKeyProofPurpose, proof.ProofPurpose, ""},
 		{IRIProofChallenge, LDProofKeyChallenge, proof.Challenge, proof.Challenge},
 		{IRIProofDomain, LDProofKeyDomain, proof.Domain, proof.Domain},
+		// cryptosuite is typed cryptosuiteString (a plain literal), so the
+		// canonicalized value is the suite name verbatim — match it the same
+		// way created and challenge are checked.
+		{IRIProofCryptosuite, LDProofKeyCryptosuite, proof.Cryptosuite, proof.Cryptosuite},
 	}
 	for _, r := range required {
 		if r.value == "" {
@@ -704,6 +814,254 @@ func VerifyLinkedDataProof(documentJSON []byte, proof *LDProof, publicKey jwk.Ke
 	if err != nil {
 		logging.Log().Warnf("VerifyLinkedDataProof: signature verification failed: %v", err)
 		return fmt.Errorf("%w: %v", ErrorLDProofVerifySignature, err)
+	}
+
+	return nil
+}
+
+// VerifyDataIntegrityProof verifies a W3C Data Integrity proof (type
+// "DataIntegrityProof") by canonicalizing the document and proof options,
+// computing the hash data, decoding the multibase-encoded proofValue and
+// verifying the raw cryptographic signature.
+//
+// Supported cryptosuites:
+//   - ecdsa-rdfc-2019 — ECDSA with P-256 (SHA-256) or P-384 (SHA-384)
+//   - eddsa-rdfc-2022 — EdDSA with Ed25519 (SHA-256)
+//
+// The documentJSON must be the full JSON-LD document (including the proof
+// member if present — it will be stripped internally). The publicKey is the
+// JWK public key of the proof creator. The documentLoader is used for
+// JSON-LD context resolution during canonicalization.
+//
+// Returns nil on successful verification, or a wrapped error describing the
+// failure.
+func VerifyDataIntegrityProof(documentJSON []byte, proof *LDProof, publicKey jwk.Key, documentLoader ld.DocumentLoader) error {
+	// 1. Validate proof type.
+	if proof.Type != ProofTypeDataIntegrityProof {
+		return fmt.Errorf("%w: %s", ErrorLDProofUnsupportedType, proof.Type)
+	}
+
+	// 2. Validate cryptosuite.
+	switch proof.Cryptosuite {
+	case CryptosuiteEcdsaRdfc2019, CryptosuiteEddsaRdfc2022:
+		// supported
+	default:
+		return fmt.Errorf("%w: %s", ErrorLDProofUnsupportedCryptosuite, proof.Cryptosuite)
+	}
+
+	// 3. Validate created timestamp.
+	if proof.Created == "" {
+		return ErrorLDProofMissingCreated
+	}
+
+	// 4. Validate proofValue presence.
+	if proof.ProofValue == "" {
+		return ErrorLDProofMissingProofValue
+	}
+
+	// 5. Decode proofValue from multibase encoding.
+	_, sigBytes, err := multibase.Decode(proof.ProofValue)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrorLDProofMalformedProofValue, err)
+	}
+
+	// 6. Unmarshal document and strip proof.
+	var docMap JSONObject
+	if err := json.Unmarshal(documentJSON, &docMap); err != nil {
+		return fmt.Errorf("%w: %v", ErrorLDProofVerifyMarshal, err)
+	}
+	delete(docMap, VPKeyProof)
+
+	// 7. Build proof options (includes cryptosuite).
+	proofOptions := buildProofOptions(docMap[JSONLDKeyContext], proof)
+
+	// 8. Canonicalize both document and proof options using URDNA2015.
+	proc := ld.NewJsonLdProcessor()
+	ldOpts := ld.NewJsonLdOptions("")
+	ldOpts.Format = LDNormFormatNQuads
+	ldOpts.Algorithm = LDNormAlgorithmURDNA
+	ldOpts.DocumentLoader = documentLoader
+
+	canonDoc, err := proc.Normalize(docMap, ldOpts)
+	if err != nil {
+		logging.Log().Warnf("VerifyDataIntegrityProof: failed to canonicalize document: %v", err)
+		return fmt.Errorf("%w: %v", ErrorLDProofVerifyCanonDoc, err)
+	}
+
+	canonProof, err := proc.Normalize(proofOptions, ldOpts)
+	if err != nil {
+		logging.Log().Warnf("VerifyDataIntegrityProof: failed to canonicalize proof options: %v", err)
+		return fmt.Errorf("%w: %v", ErrorLDProofVerifyCanonProof, err)
+	}
+
+	// 9. Assert proof options are covered.
+	if err := assertProofOptionsCovered(canonProof.(string), proof); err != nil {
+		return err
+	}
+
+	// 10. Compute hash data — curve-conditional per W3C VC-DI-ECDSA specs.
+	hashData, err := computeDataIntegrityHashData(proof.Cryptosuite, publicKey, canonProof.(string), canonDoc.(string))
+	if err != nil {
+		return err
+	}
+
+	// 11. Verify the raw signature over hashData.
+	return verifyDataIntegritySignature(proof.Cryptosuite, publicKey, hashData, sigBytes)
+}
+
+// computeDataIntegrityHashData computes the hash data for a Data Integrity
+// proof. The hash algorithm is curve-conditional:
+//   - P-256 and Ed25519: sha256(canonProofOptions) || sha256(canonDoc)
+//   - P-384: sha384(canonProofOptions) || sha384(canonDoc)
+func computeDataIntegrityHashData(cryptosuite string, publicKey jwk.Key, canonProof string, canonDoc string) ([]byte, error) {
+	useSHA384, err := shouldUseSHA384(cryptosuite, publicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	if useSHA384 {
+		proofHash := sha512.Sum384([]byte(canonProof))
+		docHash := sha512.Sum384([]byte(canonDoc))
+		return append(proofHash[:], docHash[:]...), nil
+	}
+
+	proofHash := sha256.Sum256([]byte(canonProof))
+	docHash := sha256.Sum256([]byte(canonDoc))
+	return append(proofHash[:], docHash[:]...), nil
+}
+
+// shouldUseSHA384 determines if the SHA-384 hash should be used instead of
+// SHA-256 for the given cryptosuite and key. Returns true for P-384 keys
+// with ecdsa-rdfc-2019, false for P-256 and eddsa-rdfc-2022.
+func shouldUseSHA384(cryptosuite string, publicKey jwk.Key) (bool, error) {
+	if cryptosuite != CryptosuiteEcdsaRdfc2019 {
+		return false, nil
+	}
+
+	curve, err := extractECCurve(publicKey)
+	if err != nil {
+		return false, err
+	}
+
+	return curve == elliptic.P384(), nil
+}
+
+// extractECCurve extracts the elliptic curve from a JWK EC key.
+// Returns an error if the key is not an EC key or does not expose a curve.
+func extractECCurve(key jwk.Key) (elliptic.Curve, error) {
+	curveHolder, ok := key.(ecdsaCurveHolder)
+	if !ok {
+		return nil, fmt.Errorf("%w: expected EC key, got %s", ErrorLDProofCryptosuiteKeyMismatch, key.KeyType())
+	}
+
+	crv, ok := curveHolder.Crv()
+	if !ok {
+		return nil, fmt.Errorf("%w: EC key does not declare a curve", ErrorLDProofCryptosuiteKeyMismatch)
+	}
+
+	switch {
+	case crv == jwa.P256():
+		return elliptic.P256(), nil
+	case crv == jwa.P384():
+		return elliptic.P384(), nil
+	default:
+		return nil, fmt.Errorf("%w: ecdsa-rdfc-2019 requires P-256 or P-384, got %s", ErrorLDProofCryptosuiteKeyMismatch, crv)
+	}
+}
+
+// verifyDataIntegritySignature dispatches the raw signature verification to
+// the appropriate algorithm based on the cryptosuite.
+func verifyDataIntegritySignature(cryptosuite string, publicKey jwk.Key, hashData []byte, sigBytes []byte) error {
+	switch cryptosuite {
+	case CryptosuiteEcdsaRdfc2019:
+		return verifyECDSASignature(publicKey, hashData, sigBytes)
+	case CryptosuiteEddsaRdfc2022:
+		return verifyEdDSASignature(publicKey, hashData, sigBytes)
+	default:
+		return fmt.Errorf("%w: %s", ErrorLDProofUnsupportedCryptosuite, cryptosuite)
+	}
+}
+
+// verifyECDSASignature verifies an ECDSA signature in IEEE P1363 format
+// (r || s, each zero-padded to the curve's field size). The hashData is
+// the concatenation of the proof-options hash and the document hash; per
+// W3C VC-DI-ECDSA the ECDSA verification algorithm hashes this
+// concatenation once more with the curve's hash algorithm before verifying.
+func verifyECDSASignature(publicKey jwk.Key, hashData []byte, sigBytes []byte) error {
+	// Validate key type.
+	if publicKey.KeyType() != jwa.EC() {
+		return fmt.Errorf("%w: ecdsa-rdfc-2019 requires an EC key, got %s",
+			ErrorLDProofCryptosuiteKeyMismatch, publicKey.KeyType())
+	}
+
+	// Extract the raw ecdsa.PublicKey from the JWK.
+	var rawKey ecdsa.PublicKey
+	if err := jwk.Export(publicKey, &rawKey); err != nil {
+		return fmt.Errorf("%w: failed to extract raw EC key: %v",
+			ErrorLDProofCryptosuiteKeyMismatch, err)
+	}
+
+	// Determine coordinate size from the curve.
+	coordSize, ok := p1363CoordinateSize[rawKey.Curve]
+	if !ok {
+		return fmt.Errorf("%w: unsupported curve %v for ecdsa-rdfc-2019",
+			ErrorLDProofCryptosuiteKeyMismatch, rawKey.Curve.Params().Name)
+	}
+
+	// P1363 format: r || s, each coordSize bytes.
+	expectedSigLen := coordSize * 2
+	if len(sigBytes) != expectedSigLen {
+		return fmt.Errorf("%w: expected %d-byte P1363 signature, got %d bytes",
+			ErrorLDProofMalformedProofValue, expectedSigLen, len(sigBytes))
+	}
+
+	r := new(big.Int).SetBytes(sigBytes[:coordSize])
+	s := new(big.Int).SetBytes(sigBytes[coordSize:])
+
+	// Per W3C VC-DI-ECDSA, the ECDSA verification algorithm hashes
+	// hashData with the curve's hash (SHA-256 for P-256, SHA-384 for
+	// P-384) before ECDSA verification. Go's ecdsa.Verify expects the
+	// pre-computed digest.
+	var digest []byte
+	if rawKey.Curve == elliptic.P384() {
+		h := sha512.Sum384(hashData)
+		digest = h[:]
+	} else {
+		h := sha256.Sum256(hashData)
+		digest = h[:]
+	}
+
+	if !ecdsa.Verify(&rawKey, digest, r, s) {
+		return ErrorLDProofVerifyDataIntegrity
+	}
+
+	return nil
+}
+
+// verifyEdDSASignature verifies an Ed25519 signature. The hashData is signed
+// directly (Ed25519 performs its own internal hashing).
+func verifyEdDSASignature(publicKey jwk.Key, hashData []byte, sigBytes []byte) error {
+	// Validate key type.
+	if publicKey.KeyType() != jwa.OKP() {
+		return fmt.Errorf("%w: eddsa-rdfc-2022 requires an OKP key, got %s",
+			ErrorLDProofCryptosuiteKeyMismatch, publicKey.KeyType())
+	}
+
+	// Extract the raw ed25519.PublicKey from the JWK.
+	var rawKey ed25519.PublicKey
+	if err := jwk.Export(publicKey, &rawKey); err != nil {
+		return fmt.Errorf("%w: failed to extract raw Ed25519 key: %v",
+			ErrorLDProofCryptosuiteKeyMismatch, err)
+	}
+
+	// Ed25519 signature must be exactly ed25519.SignatureSize (64) bytes.
+	if len(sigBytes) != ed25519.SignatureSize {
+		return fmt.Errorf("%w: expected %d-byte Ed25519 signature, got %d bytes",
+			ErrorLDProofMalformedProofValue, ed25519.SignatureSize, len(sigBytes))
+	}
+
+	if !ed25519.Verify(rawKey, hashData, sigBytes) {
+		return ErrorLDProofVerifyDataIntegrity
 	}
 
 	return nil
