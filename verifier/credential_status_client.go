@@ -82,6 +82,12 @@ var (
 	// verify the Linked Data Proof. This prevents MITM attacks on
 	// status-list resolution.
 	ErrorStatusListJSONLDProofUnsupported = errors.New("json_ld_status_list_proof_verification_not_supported")
+
+	// ErrorStatusListVCJoseUnverifiable is returned when a vc+jwt status list
+	// credential is encountered and no StatusListJWTVerifier is configured to
+	// check its signature. A status list decides whether a credential is
+	// revoked, so an unverifiable one is rejected rather than trusted.
+	ErrorStatusListVCJoseUnverifiable = errors.New("vc_jose_status_list_verification_not_supported")
 	// ErrorStatusListJSONLDProofMissing is returned when a JSON-LD status
 	// list credential does not contain a proof member, even though an
 	// LDProofChecker is available.
@@ -313,6 +319,12 @@ func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifie
 		return parseJSONLDStatusListCredential([]byte(trimmed), ldProofChecker)
 	}
 
+	// A vc+jwt status list names its issuer in the payload, not in an iss claim,
+	// so it needs the issuer-bound verification path rather than the envelope one.
+	if isVCJoseJWT(jwtMediaType([]byte(trimmed))) {
+		return parseVCJoseStatusListCredential([]byte(trimmed), jwtVerifier)
+	}
+
 	logging.Log().Debug("Parsing status-list credential as JWT")
 	if jwtVerifier != nil {
 		if _, err := jwtVerifier.VerifyStatusListJWT([]byte(trimmed)); err != nil {
@@ -328,6 +340,58 @@ func parseStatusListCredentialBody(body []byte, jwtVerifier StatusListJWTVerifie
 		logging.Log().Debugf("JWT credential parse failed: %v", err)
 		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
 	}
+	return cred, nil
+}
+
+// parseVCJoseStatusListCredential parses and verifies a vc+jwt status-list
+// credential (VC-JOSE-COSE).
+//
+// The issuer is read from the unverified payload, used to resolve the key, and
+// the credential is then parsed from the payload the verification returned -
+// the same two-pass shape as parseVCJoseCredential, for the same reason: a
+// vc+jwt names its issuer in the document rather than in a claim.
+//
+// Unlike the classic JWT path this fails closed when no verifier is configured.
+// A status list decides whether a credential is revoked, and an unverified one
+// is worth less than none at all.
+func parseVCJoseStatusListCredential(token []byte, jwtVerifier StatusListJWTVerifier) (*common.Credential, error) {
+	unverified, err := unverifiedJWTClaims(token)
+	if err != nil {
+		logging.Log().Debugf("vc+jwt status list payload could not be decoded: %v", err)
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+
+	issuer, err := vcJwtIssuer(unverified)
+	if err != nil {
+		logging.Log().Debugf("vc+jwt status list names no usable issuer: %v", err)
+		// Both errors stay in the chain: callers match on ErrorStatusListUnparseable,
+		// while the inner one says which rule the list broke.
+		return nil, fmt.Errorf("%w: %w", ErrorStatusListUnparseable, err)
+	}
+
+	if jwtVerifier == nil {
+		logging.Log().Warn("No JWT verifier configured — rejecting vc+jwt status list credential")
+		return nil, fmt.Errorf("%w: vc+jwt status list credentials cannot be verified without a JWT verifier",
+			ErrorStatusListVCJoseUnverifiable)
+	}
+
+	payload, err := jwtVerifier.VerifyStatusListJWTForIssuer(token, issuer)
+	if err != nil {
+		logging.Log().Debugf("vc+jwt status list signature verification failed for %s: %v", issuer, err)
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+
+	cred, err := vcJwtClaimsToCredential(claims)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, err)
+	}
+	cred.SetFormat(common.FormatVCJWT)
+	logging.Log().Debugf("vc+jwt status list credential verified for issuer %s", issuer)
 	return cred, nil
 }
 
@@ -450,6 +514,13 @@ type IETFStatusListClient interface {
 type StatusListJWTVerifier interface {
 	// VerifyStatusListJWT verifies the JWT signature and returns the payload.
 	VerifyStatusListJWT(jwtBytes []byte) (payload []byte, err error)
+
+	// VerifyStatusListJWTForIssuer verifies the JWT signature against a key
+	// belonging to the given issuer, which the caller read from the status-list
+	// credential itself rather than from a claim. It is the status-list
+	// counterpart of JWTProofChecker.VerifyJWTForIssuer and never falls back to
+	// an unauthenticated key source.
+	VerifyStatusListJWTForIssuer(jwtBytes []byte, issuer string) (payload []byte, err error)
 }
 
 // StatusListJWTVerifierImpl verifies IETF Token Status List JWTs using two
@@ -514,6 +585,34 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 	return v.verifyWithX5C(jwtBytes, headers)
 }
 
+// VerifyStatusListJWTForIssuer verifies the signature against a key belonging to
+// the given issuer identifier.
+//
+// A vc+jwt status-list credential has no iss claim - the payload *is* the
+// credential, so the issuer is its `issuer` property - and VerifyStatusListJWT
+// would therefore take the x5c fallback, which extracts a key from whatever
+// certificate the token carries without validating a chain. Combined with an
+// issuer read from that same unverified payload, anyone able to answer the
+// status-list URL could serve a self-signed list attributed to the credential's
+// real issuer and clear every revocation bit. This entry point takes the issuer
+// as a parameter and has no fallback: the key must belong to that issuer.
+func (v *StatusListJWTVerifierImpl) VerifyStatusListJWTForIssuer(jwtBytes []byte, issuer string) ([]byte, error) {
+	if issuer == "" {
+		return nil, fmt.Errorf("%w: no issuer to resolve a status list key for", ErrorStatusListUnparseable)
+	}
+
+	msg, err := jws.Parse(jwtBytes)
+	if err != nil {
+		logging.Log().Debugf("JWS parse failed: %v", err)
+		return nil, fmt.Errorf("%w: JWS parse failed: %v", ErrorStatusListUnparseable, err)
+	}
+	if len(msg.Signatures()) == 0 {
+		return nil, fmt.Errorf("%w: no signatures in status list JWT", ErrorStatusListUnparseable)
+	}
+
+	return v.verifyWithISS(jwtBytes, msg, issuer)
+}
+
 // verifyWithISS resolves the public key from the iss identifier and verifies
 // the JWT signature. The identifier may be a DID or an https:// URL. The
 // algorithm is taken from and validated against the protected headers by
@@ -521,6 +620,14 @@ func (v *StatusListJWTVerifierImpl) VerifyStatusListJWT(jwtBytes []byte) ([]byte
 func (v *StatusListJWTVerifierImpl) verifyWithISS(jwtBytes []byte, msg *jws.Message, issuerDID string) ([]byte, error) {
 	headers := msg.Signatures()[0].ProtectedHeaders()
 	kid, _ := headers.KeyID()
+
+	// The kid selects which of the issuer's keys to use; a kid naming a different
+	// DID means the signing key is not the claimed issuer's. Key resolution would
+	// fail to find it anyway - this makes the reason explicit.
+	if kidDID := extractDIDFromKid(kid); kidDID != "" && kidDID != issuerDID {
+		logging.Log().Warnf("Status list JWT rejected: the kid names DID %q but the list is attributed to %q", kidDID, issuerDID)
+		return nil, fmt.Errorf("%w: %v", ErrorStatusListUnparseable, ErrorIssuerKeyMismatch)
+	}
 
 	keys, err := v.resolveKeysFromIssuer(issuerDID, kid)
 	if err != nil {
@@ -583,15 +690,13 @@ func (v *StatusListJWTVerifierImpl) verifyWithX5C(jwtBytes []byte, headers jws.H
 // issuer identifier, treating it as a generic URI: an https:// URL is resolved
 // via well-known issuer metadata and JWKS, anything else via DID resolution.
 //
-// DID resolution yields a single key. An HTTPS issuer can yield several when
-// the JWT carries no kid, because a JWKS offers nothing to select on then.
+// Either kind can yield several keys when the JWT carries no kid - a JWKS and a
+// DID document with more than one verification method both offer nothing to
+// select on then, and a vc+jwt routinely has no kid because its issuer is named
+// by the document rather than the envelope.
 func (v *StatusListJWTVerifierImpl) resolveKeysFromIssuer(issuer, kid string) ([]jwk.Key, error) {
 	if !isHttpsIssuer(issuer) {
-		key, err := v.resolveKeyFromDID(issuer, kid)
-		if err != nil {
-			return nil, err
-		}
-		return []jwk.Key{key}, nil
+		return ResolveCandidateKeysFromDID(v.registry, issuer, kid)
 	}
 
 	if v.httpsResolver == nil {
@@ -608,32 +713,6 @@ func (v *StatusListJWTVerifierImpl) resolveKeysFromIssuer(issuer, kid string) ([
 	}
 	logging.Log().Debugf("Resolved %d status list verification key(s) for HTTPS issuer %s (kid=%s)", len(keys), issuer, kid)
 	return keys, nil
-}
-
-// resolveKeyFromDID resolves the DID document and finds the verification
-// method matching the given kid. When kid is empty, the first verification
-// method with a JWK key is returned.
-func (v *StatusListJWTVerifierImpl) resolveKeyFromDID(issuerDID, kid string) (jwk.Key, error) {
-	docRes, err := v.registry.Resolve(issuerDID)
-	if err != nil {
-		logging.Log().Warnf("Failed to resolve DID %s for status list verification: %v", issuerDID, err)
-		return nil, err
-	}
-
-	for _, vm := range docRes.DIDDocument.VerificationMethod {
-		if kid != "" && !compareVerificationMethod(kid, vm.ID) {
-			logging.Log().Debugf("Skipping verification method %s (does not match kid %s)", vm.ID, kid)
-			continue
-		}
-		key := vm.JSONWebKey()
-		if key != nil {
-			logging.Log().Debugf("Resolved verification key from DID %s (method=%s)", issuerDID, vm.ID)
-			return key, nil
-		}
-	}
-
-	logging.Log().Warnf("No matching verification method for status list issuer %s (kid=%s)", issuerDID, kid)
-	return nil, ErrorNoVerificationKey
 }
 
 // Compile-time assertion.

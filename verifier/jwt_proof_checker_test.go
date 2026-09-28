@@ -942,3 +942,137 @@ func generateTestKeyAndDIDJWK(t *testing.T) (privateKey jwk.Key, didJWK string) 
 
 	return privateKey, "did:jwk:" + base64.RawURLEncoding.EncodeToString(publicJSON)
 }
+
+// TestVerifyJWTForIssuer_DIDIssuer covers the VC-JOSE-COSE case the envelope cannot
+// express: a token with no iss claim whose signer is named by the document itself.
+// The issuer passed in is what the key must belong to, whatever the kid says.
+func TestVerifyJWTForIssuer_DIDIssuer(t *testing.T) {
+	signerKey, signerDID := generateTestKeyAndDIDJWK(t)
+	_, otherDID := generateTestKeyAndDIDJWK(t)
+
+	tests := []struct {
+		name    string
+		kid     string
+		issuer  string
+		wantErr error
+	}{
+		{
+			name:   "issuer from the document, kid agrees",
+			kid:    signerDID + "#0",
+			issuer: signerDID,
+		},
+		{
+			// The VC-JOSE-COSE shape: nothing in the envelope names an identity,
+			// so the credential's own issuer property is the only thing to bind to.
+			name:   "issuer from the document, no kid at all",
+			kid:    "",
+			issuer: signerDID,
+		},
+		{
+			// A bare key id asserts no identity of its own and is not compared.
+			name:   "issuer from the document, bare key id",
+			kid:    "0",
+			issuer: signerDID,
+		},
+		{
+			// The forgery the issuer parameter exists to stop: signed with a key
+			// the attacker generated, attributed to an issuer they do not control.
+			name:    "kid names a DID other than the claimed issuer",
+			kid:     signerDID + "#0",
+			issuer:  otherDID,
+			wantErr: ErrorIssuerKeyMismatch,
+		},
+		{
+			// Without a kid the mismatch is caught by resolution and verification
+			// instead: the other DID's key cannot have produced this signature.
+			name:    "issuer is a DID that did not sign",
+			kid:     "",
+			issuer:  otherDID,
+			wantErr: nil, // any error; asserted below
+		},
+		{
+			name:    "no issuer at all",
+			kid:     signerDID + "#0",
+			issuer:  "",
+			wantErr: ErrorNoDIDInJWT,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// No iss claim: the document, not the envelope, names the signer.
+			token := signTestJWT(t, signerKey, tc.kid, map[string]interface{}{})
+
+			checker := NewJWTProofChecker(did.NewRegistry(did.WithVDR(did.NewJWKVDR())))
+			payload, key, err := checker.VerifyJWTForIssuer(token, tc.issuer)
+
+			if tc.name == "issuer is a DID that did not sign" {
+				assert.Error(t, err)
+				return
+			}
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			assert.NoError(t, err)
+			assert.NotNil(t, payload)
+			assert.NotNil(t, key)
+		})
+	}
+}
+
+// TestVerifyJWTForIssuer_HttpsIssuer checks that an HTTPS issuer identifier read from
+// the document drives metadata discovery, with no iss claim involved.
+func TestVerifyJWTForIssuer_HttpsIssuer(t *testing.T) {
+	privKey, pubKey := generateTestECKeyPair(t, "key-1")
+	issuerURL := "https://issuer.example.com"
+
+	token := signTestJWT(t, privKey, "key-1", map[string]interface{}{})
+
+	mockResolver := &mockHttpsIssuerResolver{key: pubKey}
+	checker := NewJWTProofChecker(did.NewRegistry()).WithHttpsResolver(mockResolver)
+
+	payload, key, err := checker.VerifyJWTForIssuer(token, issuerURL)
+	assert.NoError(t, err)
+	assert.NotNil(t, payload)
+	assert.NotNil(t, key)
+	assert.Equal(t, issuerURL, mockResolver.calledURL)
+	assert.Equal(t, "key-1", mockResolver.calledKid)
+}
+
+// TestVerifyJWTForIssuer_DidElsi checks the did:elsi path for a document-named issuer.
+// VerifyJWTAndReturnKey refuses this shape on purpose - a did:elsi with no iss claim has
+// nothing authoritative behind the kid - but here the issuer comes from the credential.
+func TestVerifyJWTForIssuer_DidElsi(t *testing.T) {
+	caCert, caKey := generateTestCACert(t)
+	orgId := "VATES-B12345678"
+	leafCert, leafKey := generateTestLeafCert(t, caCert, caKey, orgId)
+
+	// No iss claim: the issuer is the credential's own issuer property.
+	token := signElsiJWT(t, leafKey, []*x509.Certificate{leafCert, caCert}, map[string]interface{}{})
+
+	checker := NewJWTProofChecker(did.NewRegistry()).WithTrustStore(createTestTrustStore(t, caCert))
+
+	t.Run("certificate organizationIdentifier matches the claimed issuer", func(t *testing.T) {
+		payload, key, err := checker.VerifyJWTForIssuer(token, "did:elsi:"+orgId)
+		assert.NoError(t, err)
+		assert.NotNil(t, payload)
+		assert.NotNil(t, key)
+	})
+
+	t.Run("certificate belongs to a different organization", func(t *testing.T) {
+		_, _, err := checker.VerifyJWTForIssuer(token, "did:elsi:VATES-B99999999")
+		assert.ErrorIs(t, err, ErrorIssuerValidationFailed)
+	})
+}
+
+// TestVerifyJWTForIssuer_MalformedToken checks that the parameterised entry point fails
+// on the same malformed input as the envelope-driven one, rather than reaching key
+// resolution with a token it could not parse.
+func TestVerifyJWTForIssuer_MalformedToken(t *testing.T) {
+	_, signerDID := generateTestKeyAndDIDJWK(t)
+	checker := NewJWTProofChecker(did.NewRegistry(did.WithVDR(did.NewJWKVDR())))
+
+	_, _, err := checker.VerifyJWTForIssuer([]byte("not-a-jwt"), signerDID)
+	assert.Error(t, err)
+}

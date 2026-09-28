@@ -648,3 +648,38 @@ func TestNormalizeVCDataModelVersion(t *testing.T) {
 		})
 	}
 }
+
+// TestVCJoseCoseConstantsRelationships verifies the structural relationships
+// between VC-JOSE-COSE constants that must hold for correct dispatch behavior.
+func TestVCJoseCoseConstantsRelationships(t *testing.T) {
+	// The JWT typ header values must match their corresponding format constants.
+	// They are separate constants for clarity, but dispatch logic depends on
+	// this identity (e.g. the typ header extracted from a JWT is compared
+	// against the typ constants to select the vc+jwt / vp+jwt parsing path).
+	if JWTTypVCJWT != FormatVCJWT {
+		t.Errorf("JWTTypVCJWT (%q) must equal FormatVCJWT (%q) for correct dispatch", JWTTypVCJWT, FormatVCJWT)
+	}
+	if JWTTypVPJWT != FormatVPJWT {
+		t.Errorf("JWTTypVPJWT (%q) must equal FormatVPJWT (%q) for correct dispatch", JWTTypVPJWT, FormatVPJWT)
+	}
+
+	// The data URI prefix must embed the vc+jwt MIME type so that stripping
+	// the prefix from an enveloped credential yields a valid vc+jwt token.
+	expectedPrefix := "data:application/" + FormatVCJWT + ","
+	if DataURISchemeVCJWT != expectedPrefix {
+		t.Errorf("DataURISchemeVCJWT (%q) must be %q to match FormatVCJWT", DataURISchemeVCJWT, expectedPrefix)
+	}
+}
+
+// TestVCJoseCoseFormatsDistinct verifies the new VC-JOSE-COSE format constants
+// do not collide with existing credential format constants.
+func TestVCJoseCoseFormatsDistinct(t *testing.T) {
+	formats := []string{FormatJWTVC, FormatLDPVC, FormatSDJWT, FormatVCJWT, FormatVPJWT}
+	seen := map[string]bool{}
+	for _, f := range formats {
+		if seen[f] {
+			t.Errorf("duplicate format constant: %q", f)
+		}
+		seen[f] = true
+	}
+}

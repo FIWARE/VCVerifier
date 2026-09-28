@@ -115,7 +115,12 @@ func (jpc *JWTProofChecker) VerifyJWT(token []byte) ([]byte, error) {
 }
 
 // VerifyJWTAndReturnKey verifies the JWT signature and returns both the payload and the
-// resolved signer key.
+// resolved signer key. The identity the signature is checked against is taken from the
+// token envelope: the `kid` header, falling back to the `iss` claim.
+//
+// This is the right entry point for every token that names its signer in the envelope -
+// classic jwt_vc credentials, JWT VPs, SD-JWTs. VC-JOSE-COSE tokens do not: their issuer
+// and holder live in the payload document, so they go through VerifyJWTForIssuer instead.
 func (jpc *JWTProofChecker) VerifyJWTAndReturnKey(token []byte) ([]byte, jwk.Key, error) {
 	msg, err := jws.Parse(token)
 	if err != nil {
@@ -155,34 +160,84 @@ func (jpc *JWTProofChecker) VerifyJWTAndReturnKey(token []byte) ([]byte, jwk.Key
 		return nil, nil, ErrorNoDIDInJWT
 	}
 
+	// A did:elsi identity has to come from something the payload asserts, not from the
+	// kid: the certificate carries the key, so a did:elsi kid is only a key reference
+	// with no DID document behind it. The general kid/iss check above already rejects a
+	// differing iss, so what remains here is a did:elsi kid with no iss claim at all.
+	if IsDidElsi(issuerDID) && !IsDidElsi(issFromPayload) {
+		logging.Log().Warnf("did:elsi dispatch triggered by kid (%s) but iss claim (%s) is not a did:elsi DID", issuerDID, issFromPayload)
+		return nil, nil, ErrorNoDIDInJWT
+	}
+
+	return jpc.verifyForIssuer(token, msg, issuerDID)
+}
+
+// VerifyJWTForIssuer verifies the JWS against a key belonging to the given issuer
+// identifier - one the caller read from the secured document itself rather than from a
+// JOSE header or a registered claim - and returns the payload and the key that verified it.
+//
+// VC-JOSE-COSE (https://www.w3.org/TR/vc-jose-cose/) has no iss claim: in a vc+jwt the
+// JWT payload *is* the credential, so the signer is its `issuer` property, and in a vp+jwt
+// it is the presentation's `holder`. Neither is part of the envelope, so the envelope
+// cannot say who the key must belong to. Callers read the identity out of the payload and
+// pass it here, which keeps the "the key must belong to the claimed issuer" invariant in
+// one place instead of giving the JOSE path its own answer to the same question.
+//
+// The caller must treat the payload it read for this purpose as unverified and use only
+// the payload this method returns.
+func (jpc *JWTProofChecker) VerifyJWTForIssuer(token []byte, issuer string) ([]byte, jwk.Key, error) {
+	if issuer == "" {
+		return nil, nil, ErrorNoDIDInJWT
+	}
+
+	msg, err := jws.Parse(token)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(msg.Signatures()) == 0 {
+		return nil, nil, ErrorNoSignatures
+	}
+
+	return jpc.verifyForIssuer(token, msg, issuer)
+}
+
+// verifyForIssuer resolves a key for the given issuer identifier and verifies the JWS
+// against it. It is the shared tail of VerifyJWTAndReturnKey and VerifyJWTForIssuer:
+// the two differ only in where the issuer comes from, never in what is done with it.
+//
+// The kid still selects *which* of the issuer's keys to use, but a kid naming a different
+// DID is rejected - that is the signature of a token signed with a key its claimed issuer
+// does not control.
+func (jpc *JWTProofChecker) verifyForIssuer(token []byte, msg *jws.Message, issuer string) ([]byte, jwk.Key, error) {
+	headers := msg.Signatures()[0].ProtectedHeaders()
+	kid, _ := headers.KeyID()
+
+	if kidDID := extractDIDFromKid(kid); kidDID != "" && kidDID != issuer {
+		logging.Log().Warnf("JWT rejected: the kid names DID %q but the document is attributed to %q - the signing key is not the claimed issuer's",
+			kidDID, issuer)
+		return nil, nil, ErrorIssuerKeyMismatch
+	}
+
 	// Handle did:elsi issuers via X.509 certificate chain + eIDAS trust list.
-	// For did:elsi, the iss claim from the payload is authoritative (not kid),
-	// since the certificate carries the key, not a DID document.
-	// Guard: when dispatch was triggered by kid, ensure iss is also did:elsi.
-	// The general kid/iss check above already rejects a differing iss, so what
-	// remains here is a did:elsi kid with no iss claim at all to be authoritative.
-	if IsDidElsi(issuerDID) {
-		if !IsDidElsi(issFromPayload) {
-			logging.Log().Warnf("did:elsi dispatch triggered by kid (%s) but iss claim (%s) is not a did:elsi DID", issuerDID, issFromPayload)
-			return nil, nil, ErrorNoDIDInJWT
-		}
-		return jpc.verifyElsiJWT(token, issFromPayload, headers)
+	if IsDidElsi(issuer) {
+		return jpc.verifyElsiJWT(token, issuer, headers)
 	}
 
 	// Handle HTTPS-based issuer identifiers via metadata discovery
-	if isHttpsIssuer(issuerDID) {
-		return jpc.verifyHttpsIssuerJWT(token, issuerDID, kid, headers)
+	if isHttpsIssuer(issuer) {
+		return jpc.verifyHttpsIssuerJWT(token, issuer, kid, headers)
 	}
 
-	// Resolve DID → public key
-	key, err := jpc.resolveKey(issuerDID, kid)
+	// Resolve DID → public key(s). Without a kid every verification method the
+	// document declares is a candidate; verifyJWSWithCandidateKeys tries each.
+	keys, err := jpc.resolveKeys(issuer, kid)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	payload, verifiedKey, err := verifyJWSWithCandidateKeys(token, headers, []jwk.Key{key})
+	payload, verifiedKey, err := verifyJWSWithCandidateKeys(token, headers, keys)
 	if err != nil {
-		logging.Log().Warnf("JWT signature verification failed for %s: %v", issuerDID, err)
+		logging.Log().Warnf("JWT signature verification failed for %s: %v", issuer, err)
 		return nil, nil, err
 	}
 	return payload, verifiedKey, nil
@@ -217,9 +272,11 @@ func (jpc *JWTProofChecker) verifyHttpsIssuerJWT(token []byte, issuerURL string,
 	return payload, key, nil
 }
 
-// resolveKey delegates to the shared ResolveKeyFromDID function.
-func (jpc *JWTProofChecker) resolveKey(didStr, kid string) (jwk.Key, error) {
-	return ResolveKeyFromDID(jpc.registry, didStr, kid)
+// resolveKeys delegates to the shared ResolveCandidateKeysFromDID function, which
+// narrows to a single verification method when a kid is present and offers all of
+// them when it is not.
+func (jpc *JWTProofChecker) resolveKeys(didStr, kid string) ([]jwk.Key, error) {
+	return ResolveCandidateKeysFromDID(jpc.registry, didStr, kid)
 }
 
 // extractDIDFromKid extracts the DID from a kid header value.

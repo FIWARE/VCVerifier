@@ -666,6 +666,49 @@ func TestValidateVC_VCDataModelVersionFiltering(t *testing.T) {
 			validationMode:      ValidationModeBaseContext,
 			wantErr:             nil,
 		},
+		// --- vc+jwt (VC-JOSE-COSE) format tests ---
+		// vc+jwt credentials carry @context and participate in the version gate,
+		// just like jwt_vc and ldp_vc. They are NOT exempt like SD-JWT.
+		{
+			name:                "vc+jwt V2 credential accepted when config allows 2.0",
+			contexts:            []string{common.ContextCredentialsV2},
+			format:              common.FormatVCJWT,
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             nil,
+		},
+		{
+			name:                "vc+jwt V2 credential rejected when config allows only 1.1",
+			contexts:            []string{common.ContextCredentialsV2},
+			format:              common.FormatVCJWT,
+			vcDataModelVersions: []string{common.VCDataModelVersion11},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "vc+jwt V1 credential rejected when config allows only 2.0",
+			contexts:            []string{common.ContextCredentialsV1},
+			format:              common.FormatVCJWT,
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "vc+jwt with no context rejected when config allows both",
+			contexts:            nil,
+			format:              common.FormatVCJWT,
+			vcDataModelVersions: []string{common.VCDataModelVersion11, common.VCDataModelVersion20},
+			validationMode:      ValidationModeNone,
+			wantErr:             ErrorVCDataModelVersionNotAccepted,
+		},
+		{
+			name:                "vc+jwt V2 credential accepted in baseContext mode with config allows 2.0",
+			contexts:            []string{common.ContextCredentialsV2},
+			format:              common.FormatVCJWT,
+			vcDataModelVersions: []string{common.VCDataModelVersion20},
+			validationMode:      ValidationModeBaseContext,
+			wantErr:             nil,
+		},
 	}
 
 	for _, tc := range tests {
@@ -795,6 +838,37 @@ func TestHasOverlap(t *testing.T) {
 			got := hasOverlap(tc.a, tc.b)
 			if got != tc.want {
 				t.Errorf("hasOverlap(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsVersionedDataModelCredential_FormatDispatch verifies that the version
+// gate applies to every W3C credential format (jwt_vc, ldp_vc, vc+jwt) and
+// exempts only SD-JWT. The vp+jwt format is included for completeness: the
+// gate acts on credentials, not presentations, but the gate helper treats
+// vp+jwt as versioned too since it is not SD-JWT.
+func TestIsVersionedDataModelCredential_FormatDispatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		format string
+		want   bool
+	}{
+		{"jwt_vc is versioned", common.FormatJWTVC, true},
+		{"ldp_vc is versioned", common.FormatLDPVC, true},
+		{"vc+jwt is versioned", common.FormatVCJWT, true},
+		{"vp+jwt is versioned", common.FormatVPJWT, true},
+		{"sd-jwt is exempt", common.FormatSDJWT, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cred := makeCredentialWithContextAndFormat(
+				[]string{common.ContextCredentialsV2}, tc.format,
+			)
+			got := isVersionedDataModelCredential(cred)
+			if got != tc.want {
+				t.Errorf("isVersionedDataModelCredential(format=%q) = %v, want %v",
+					tc.format, got, tc.want)
 			}
 		})
 	}

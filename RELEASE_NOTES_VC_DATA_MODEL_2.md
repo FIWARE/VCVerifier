@@ -53,6 +53,32 @@ key id, continue to verify unchanged. A deployment that was (knowingly or not) a
 credentials signed by a key belonging to a DID other than the issuer will see them
 rejected.
 
+## 🔒 Security Fix — VC-JOSE-COSE documents are bound to the identity they name
+
+The fix above binds the signing key to the *envelope's* `iss` claim. VC-JOSE-COSE tokens have
+no `iss` claim: a `vc+jwt`'s issuer is the credential's own `issuer` property and a `vp+jwt`'s
+presenter is the presentation's `holder`, both inside the payload. Those properties were read
+after verification but never checked against the key that produced the signature, so with the
+`kid` deciding key resolution on its own:
+
+- a `vc+jwt` signed with a self-generated `did:jwk` key could name **any** trusted issuer in
+  `issuer` and be accepted — and `issuer` is what the trusted-issuer registry lookups key off,
+  so this was full issuer impersonation;
+- a `vp+jwt` could claim **any** `holder`, which becomes the subject of the issued access token
+  and drives holder policy validation;
+- a `vc+jwt` **status list** took the `x5c` fallback, which lifts a key out of whatever
+  certificate the token carries without validating a chain. Anyone able to answer the
+  status-list URL could serve a self-signed list attributed to the credential's real issuer,
+  with every revocation bit clear.
+
+`JWTProofChecker.VerifyJWTForIssuer` now verifies these tokens against a key belonging to the
+identity the document itself names, and the parsers read that identity before resolving a key.
+A document naming nobody is rejected (`vc_jwt_credential_has_no_issuer`,
+`vp_jwt_presentation_has_no_holder`), and the `vc+jwt` status-list path has no fallback at all
+(`vc_jose_status_list_verification_not_supported`).
+
+Tokens signed by a key their claimed issuer or holder actually controls verify unchanged.
+
 ## New Features
 
 ### VC Data Model 2.0 context
@@ -98,12 +124,60 @@ VC 2.0 support means the **data model**. The credential still has to be secured 
 VCVerifier verifies, which today means `ldp_vc` with a `JsonWebSignature2020` Linked Data Proof,
 or `jwt_vc` carrying a v1.1-style `vc` claim with a v2 context.
 
+### VC-JOSE-COSE (`vc+jwt` / `vp+jwt`)
+
+- [VC-JOSE-COSE](https://www.w3.org/TR/vc-jose-cose/) is now fully supported. In a `vc+jwt`
+  credential, the JWT payload **is** the credential (no `vc` claim wrapper). In a `vp+jwt`
+  presentation, the JWT payload **is** the presentation (no `vp` claim wrapper). The `typ` JOSE
+  header selects the parsing path.
+- `vc+jwt` credentials participate in the VC Data Model version gate — `verifier.vcDataModelVersions`
+  applies to them the same way it does to `jwt_vc` and `ldp_vc`. On top of that a `vc+jwt` must
+  carry the VCDM 2.0 base context: VC-JOSE-COSE §3.1.1 secures a 2.0 document, so a v1.1 payload
+  is not a well-formed `vc+jwt` even where 1.1 credentials are accepted.
+
+**Identity binding.** Neither format names its signer in the JWT envelope — a `vc+jwt` has no
+`iss` claim, and its issuer is the credential's own `issuer` property; a `vp+jwt`'s presenter is
+the presentation's `holder`. Both are verified against a key belonging to the identity the
+*document* names, not the one the `kid` or `iss` header suggests. A credential or presentation
+attributed to a party whose key did not sign it is rejected, which matters because the credential
+issuer is what the trusted-issuer registry lookups key off and the presentation holder becomes the
+subject of the issued access token.
+
+**Registered claims are redundant copies.** `iss`/`issuer`, `sub`/`credentialSubject.id` and
+`jti`/`id` must agree where both are present; a disagreement makes the document malformed.
+Per VC-JOSE-COSE §3.1.3, `iat` and `exp` time the *signature* rather than the credential, so the
+payload's `validFrom`/`validUntil` state its validity and `nbf`/`exp` may only narrow that window.
+`iat` is not mapped to `validFrom` at all.
+
+**Both formats must be VCDM 2.0 documents.** VC-JOSE-COSE §3.1.1 defines `vc+jwt` over a 2.0
+credential and §3.1.2 defines `vp+jwt` over a 2.0 presentation, so a payload whose first
+`@context` entry is not the 2.0 base context is rejected at parse time — regardless of
+`verifier.vcDataModelVersions`, which selects which data models a deployment accepts rather than
+what these formats are. On a presentation the check runs before its credentials are parsed. This
+is the only case where a presentation envelope's `@context` is examined; classic JWT VPs and
+JSON-LD VPs are unaffected.
+
+**Dispatch on `typ` is exhaustive.** A type that does not belong where it was found — a `vp+jwt`
+in a credential position, a `vc+jwt` in a presentation position, or any unimplemented type — is
+rejected with `unexpected_jwt_typ_header` rather than reinterpreted as the legacy `vc`/`vp`-claim
+format. Per RFC 7515 §4.1.9, `application/vc+jwt` and `vc+jwt` are the same type, in any case.
+
+**Holder binding** on `vp+jwt` uses RFC 7800 `cnf`, which VC-JOSE-COSE §4.1.3 registers for that
+purpose. VCDM 2.0's `confirmationMethod` is a reserved property with no defined semantics and is
+not implemented.
+
+### Enveloped credentials
+
+- `EnvelopedVerifiableCredential` (VCDM 2.0 §4.13) is now recognized inside any VP format:
+  a JSON-LD object with `"type": "EnvelopedVerifiableCredential"` whose `id` is a
+  `data:application/vc+jwt,<compact-JWS>` URI is extracted and parsed as a `vc+jwt` credential.
+- The declared media type binds what is inside the envelope: the token must itself be a `vc+jwt`.
+  The prefix is matched case-insensitively, as RFC 2397 requires; parameters and the `;base64`
+  variant are rejected.
+
 Not supported:
 
-- **VC-JOSE-COSE** (`typ: vc+jwt` / `vp+jwt`), the securing mechanism VCDM 2.0 defines for JOSE,
-  where the JWT payload *is* the credential or presentation. A `vc+jwt` credential parses with no
-  issuer, types or subject; a `vp+jwt` presentation is rejected with `presentation_no_credentials`.
-- **`EnvelopedVerifiableCredential`** (VCDM 2.0 §4.13).
+- **COSE** (`vc+cose`) — only the JOSE half of VC-JOSE-COSE is implemented.
 - **`DataIntegrityProof` cryptosuites** (`ecdsa-rdfc-2019`, `eddsa-rdfc-2022`, …) — parsed but
   not verified. A VC 2.0 issuer following the current W3C recommendations is more likely to use
   these than `JsonWebSignature2020`, so this is worth checking against the issuers a deployment

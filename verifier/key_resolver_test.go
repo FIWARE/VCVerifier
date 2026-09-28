@@ -12,6 +12,7 @@ import (
 	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/stretchr/testify/assert"
 )
 
 var _ = logging.Log()
@@ -239,6 +240,59 @@ func TestVdrKeyResolver_ExtractKIDFromJWT(t *testing.T) {
 			if err != tc.expectedError {
 				t.Errorf("Expected error %v, but got %v", tc.expectedError, err)
 			}
+		})
+	}
+}
+
+// TestResolveCandidateKeysFromDID covers the kid-optional resolution the VC-JOSE-COSE
+// paths depend on: a token whose issuer is named by the document rather than the
+// envelope often carries no kid, and the DID document's keys are then all candidates.
+func TestResolveCandidateKeysFromDID(t *testing.T) {
+	_, signerDID := generateTestKeyAndDIDJWK(t)
+	registry := did.NewRegistry(did.WithVDR(did.NewJWKVDR()))
+
+	tests := []struct {
+		name      string
+		didStr    string
+		kid       string
+		wantCount int
+		wantErr   bool
+	}{
+		{
+			name:      "kid selects a single verification method",
+			didStr:    signerDID,
+			kid:       signerDID + "#0",
+			wantCount: 1,
+		},
+		{
+			name:      "no kid offers every verification method",
+			didStr:    signerDID,
+			kid:       "",
+			wantCount: 1, // a did:jwk document declares exactly one
+		},
+		{
+			name:    "kid names a method the document does not declare",
+			didStr:  signerDID,
+			kid:     signerDID + "#does-not-exist",
+			wantErr: true,
+		},
+		{
+			name:    "unresolvable DID",
+			didStr:  "did:jwk:not-valid-base64url",
+			kid:     "",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			keys, err := ResolveCandidateKeysFromDID(registry, tc.didStr, tc.kid)
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Len(t, keys, tc.wantCount)
 		})
 	}
 }

@@ -93,6 +93,47 @@ func ResolveKeyFromDID(registry *did.Registry, didStr string, kid string) (jwk.K
 	return ResolveKeyForRelationship(registry, didStr, kid, "")
 }
 
+// ResolveCandidateKeysFromDID resolves the keys of a DID document that could have
+// produced a signature.
+//
+// When a kid is given it selects a single verification method, exactly as
+// ResolveKeyFromDID does. When it is empty every verification method in the document is
+// a candidate and the caller tries each in turn. A kid is only a hint, and VC-JOSE-COSE
+// tokens routinely carry none: the issuer is named by the secured document rather than
+// by the envelope, so there is nothing in the header to select on.
+//
+// Returning several keys does not weaken the check. Every candidate is a key the DID
+// document itself publishes, so a signature that verifies against any of them was made
+// with a key the DID's controller declared - which is the whole of what DID-based key
+// resolution establishes in the single-key case too.
+func ResolveCandidateKeysFromDID(registry *did.Registry, didStr string, kid string) ([]jwk.Key, error) {
+	if kid != "" {
+		key, err := ResolveKeyFromDID(registry, didStr, kid)
+		if err != nil {
+			return nil, err
+		}
+		return []jwk.Key{key}, nil
+	}
+
+	docRes, err := registry.Resolve(didStr)
+	if err != nil {
+		logging.Log().Warnf("Failed to resolve DID %s: %v", didStr, err)
+		return nil, err
+	}
+
+	keys := []jwk.Key{}
+	for _, vm := range docRes.DIDDocument.VerificationMethod {
+		if key := vm.JSONWebKey(); key != nil {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		logging.Log().Warnf("DID document %s declares no usable verification key", didStr)
+		return nil, ErrorNoVerificationKey
+	}
+	return keys, nil
+}
+
 // ResolveKeyForRelationship resolves a DID to a public JWK key and, when a
 // relationship is given (did.RelationshipAuthentication or
 // did.RelationshipAssertionMethod), additionally requires the verification
