@@ -3,8 +3,10 @@ package verifier
 import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -66,12 +68,14 @@ func signDIPresentationEd25519(t *testing.T, vpMap map[string]interface{}, privK
 		common.ProofPurposeAuthentication, "", "")
 }
 
-// signDIDocumentECDSA creates a DataIntegrityProof with ecdsa-rdfc-2019 (P-256)
-// over the given document. It performs URDNA2015 canonicalization, SHA-256
-// hashing, and ECDSA signing in IEEE P1363 format, matching the W3C
-// VC-DI-ECDSA specification.
+// signDIDocumentECDSA creates a DataIntegrityProof with ecdsa-rdfc-2019 over
+// the given document. It performs URDNA2015 canonicalization, curve-conditional
+// hashing (SHA-256 for P-256, SHA-384 for P-384) and ECDSA signing in IEEE
+// P1363 format, matching the W3C VC-DI-ECDSA specification.
 func signDIDocumentECDSA(t *testing.T, doc map[string]interface{}, privKey *ecdsa.PrivateKey, verificationMethod, proofPurpose, challenge, domain string) ([]byte, *common.LDProof) {
 	t.Helper()
+
+	coordSize, useSHA384 := ecdsaCurveParameters(t, privKey)
 
 	proof := &common.LDProof{
 		Type:               common.ProofTypeDataIntegrityProof,
@@ -83,25 +87,49 @@ func signDIDocumentECDSA(t *testing.T, doc map[string]interface{}, privKey *ecds
 		Domain:             domain,
 	}
 
-	hashData := computeDITestHashData(t, doc, proof)
+	hashData := computeDITestHashData(t, doc, proof, useSHA384)
 
-	// Per W3C VC-DI-ECDSA, ECDSA internally hashes the hashData. Go's
-	// ecdsa.Sign expects the pre-computed digest.
-	digest := sha256.Sum256(hashData)
-	r, s, err := ecdsa.Sign(rand.Reader, privKey, digest[:])
+	// Per W3C VC-DI-ECDSA, ECDSA internally hashes the hashData with the
+	// curve's hash. Go's ecdsa.Sign expects the pre-computed digest.
+	var digest []byte
+	if useSHA384 {
+		sum := sha512.Sum384(hashData)
+		digest = sum[:]
+	} else {
+		sum := sha256.Sum256(hashData)
+		digest = sum[:]
+	}
+
+	r, s, err := ecdsa.Sign(rand.Reader, privKey, digest)
 	require.NoError(t, err)
 
-	// Encode as IEEE P1363 (r || s).
-	sigBytes := make([]byte, testP256KeySize*2)
+	// Encode as IEEE P1363 (r || s), each component zero-padded to the
+	// curve's field size.
+	sigBytes := make([]byte, coordSize*2)
 	rBytes := r.Bytes()
 	sBytes := s.Bytes()
-	copy(sigBytes[testP256KeySize-len(rBytes):testP256KeySize], rBytes)
-	copy(sigBytes[2*testP256KeySize-len(sBytes):], sBytes)
+	copy(sigBytes[coordSize-len(rBytes):coordSize], rBytes)
+	copy(sigBytes[2*coordSize-len(sBytes):], sBytes)
 
 	proof.ProofValue, err = multibase.Encode(multibase.Base58BTC, sigBytes)
 	require.NoError(t, err)
 
 	return marshalDocWithDIProof(t, doc, proof), proof
+}
+
+// ecdsaCurveParameters returns the IEEE P1363 coordinate size and whether
+// SHA-384 is the hash for the key's curve, per W3C VC-DI-ECDSA.
+func ecdsaCurveParameters(t *testing.T, privKey *ecdsa.PrivateKey) (coordSize int, useSHA384 bool) {
+	t.Helper()
+	switch privKey.Curve {
+	case elliptic.P256():
+		return testP256KeySize, false
+	case elliptic.P384():
+		return testP384KeySize, true
+	default:
+		t.Fatalf("unsupported curve for ecdsa-rdfc-2019: %s", privKey.Curve.Params().Name)
+		return 0, false
+	}
 }
 
 // signDIDocumentEd25519 creates a DataIntegrityProof with eddsa-rdfc-2022
@@ -119,7 +147,7 @@ func signDIDocumentEd25519(t *testing.T, doc map[string]interface{}, privKey ed2
 		Domain:             domain,
 	}
 
-	hashData := computeDITestHashData(t, doc, proof)
+	hashData := computeDITestHashData(t, doc, proof, false)
 	sig := ed25519.Sign(privKey, hashData)
 
 	var err error
@@ -131,8 +159,9 @@ func signDIDocumentEd25519(t *testing.T, doc map[string]interface{}, privKey ed2
 
 // computeDITestHashData builds proof options, canonicalizes both the document
 // and proof options, and computes the hashData for signing. It replicates the
-// logic of common.buildProofOptions and common.computeDataIntegrityHashData.
-func computeDITestHashData(t *testing.T, doc map[string]interface{}, proof *common.LDProof) []byte {
+// logic of common.buildProofOptions and common.computeDataIntegrityHashData,
+// including the curve-conditional hash: SHA-384 for P-384, SHA-256 otherwise.
+func computeDITestHashData(t *testing.T, doc map[string]interface{}, proof *common.LDProof, useSHA384 bool) []byte {
 	t.Helper()
 
 	loader := newTestDocumentLoader()
@@ -140,8 +169,8 @@ func computeDITestHashData(t *testing.T, doc map[string]interface{}, proof *comm
 	// Build proof options matching common.buildProofOptions.
 	proofOptions := map[string]interface{}{
 		common.JSONLDKeyContext:             common.EnsureDataIntegrityContext(doc[common.JSONLDKeyContext]),
-		common.JSONLDKeyType:               proof.Type,
-		common.LDProofKeyCreated:           proof.Created,
+		common.JSONLDKeyType:                proof.Type,
+		common.LDProofKeyCreated:            proof.Created,
 		common.LDProofKeyVerificationMethod: proof.VerificationMethod,
 	}
 	if proof.ProofPurpose != "" {
@@ -170,7 +199,13 @@ func computeDITestHashData(t *testing.T, doc map[string]interface{}, proof *comm
 	canonProof, err := proc.Normalize(proofOptions, ldOpts)
 	require.NoError(t, err)
 
-	// Compute hash data: SHA-256(canonProof) || SHA-256(canonDoc) for P-256/Ed25519.
+	// Compute hash data: hash(canonProof) || hash(canonDoc), SHA-384 for
+	// P-384 and SHA-256 for P-256 / Ed25519.
+	if useSHA384 {
+		proofHash := sha512.Sum384([]byte(canonProof.(string)))
+		docHash := sha512.Sum384([]byte(canonDoc.(string)))
+		return append(proofHash[:], docHash[:]...)
+	}
 	proofHash := sha256.Sum256([]byte(canonProof.(string)))
 	docHash := sha256.Sum256([]byte(canonDoc.(string)))
 	return append(proofHash[:], docHash[:]...)
@@ -214,6 +249,28 @@ func shallowCopyMap(m map[string]interface{}) map[string]interface{} {
 
 // --- Data Integrity key generation helpers ---
 
+// testP384KeySize is the byte length of a P-384 coordinate in IEEE P1363
+// format, the counterpart of testP256KeySize.
+const testP384KeySize = 48
+
+// generateTestECKeysP384 generates an ECDSA P-384 key pair and returns the raw
+// private key, the private JWK, and the public JWK. It is the P-384
+// counterpart of generateTestECKeys, and the only way to reach the SHA-384
+// branch of the Data Integrity verifier from the verifier package.
+func generateTestECKeysP384(t *testing.T) (*ecdsa.PrivateKey, jwk.Key, jwk.Key) {
+	t.Helper()
+	privKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+
+	privJWK, err := jwk.Import(privKey)
+	require.NoError(t, err)
+
+	pubJWK, err := jwk.Import(privKey.Public())
+	require.NoError(t, err)
+
+	return privKey, privJWK, pubJWK
+}
+
 // generateTestEd25519Keys generates an Ed25519 key pair and returns the
 // raw private key, the private JWK, and the public JWK.
 func generateTestEd25519Keys(t *testing.T) (ed25519.PrivateKey, jwk.Key, jwk.Key) {
@@ -254,8 +311,8 @@ func createDITestVP(holderDID string) map[string]interface{} {
 		common.JSONLDKeyContext: []interface{}{
 			common.ContextCredentialsV2,
 		},
-		common.JSONLDKeyType:   []interface{}{common.TypeVerifiablePresentation},
-		common.VPKeyHolder:     holderDID,
+		common.JSONLDKeyType: []interface{}{common.TypeVerifiablePresentation},
+		common.VPKeyHolder:   holderDID,
 	}
 }
 
@@ -286,6 +343,25 @@ func TestLDProofChecker_VerifyCredential_DataIntegrity(t *testing.T) {
 				vcJSONNoProof := stripProof(t, vcJSON)
 
 				registry := createMockRegistry(t, "web", keyID, pubJWK)
+				return vcJSONNoProof, proof, registry, issuerDID
+			},
+		},
+		{
+			name: "valid_vc_ecdsa_rdfc_2019_p384",
+			setupFunc: func(t *testing.T) ([]byte, *common.LDProof, *did.Registry, string) {
+				privKey, _, pubJWK := generateTestECKeysP384(t)
+				issuerDID := testIssuerDID
+				keyID := testIssuerKeyID
+
+				vcMap := createDITestVC(issuerDID, testSubjectDID)
+				vcJSON, proof := signDICredential(t, vcMap, privKey, keyID)
+				vcJSONNoProof := stripProof(t, vcJSON)
+
+				// A Multikey verification method is what a P-384 Data
+				// Integrity issuer publishes, and SHA-384 is the only hash
+				// branch this case reaches.
+				registry := createMockRegistryWithVMType(t, keyID, pubJWK, did.TypeMultikey,
+					[]string{keyID}, []string{keyID})
 				return vcJSONNoProof, proof, registry, issuerDID
 			},
 		},

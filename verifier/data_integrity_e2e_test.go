@@ -79,8 +79,8 @@ func signDIVPWithCredentials(t *testing.T, holderDID string, holderPrivKey *ecds
 
 	vpMap := map[string]interface{}{
 		common.JSONLDKeyContext:          []interface{}{common.ContextCredentialsV2},
-		common.JSONLDKeyType:            []interface{}{common.TypeVerifiablePresentation},
-		common.VPKeyHolder:              holderDID,
+		common.JSONLDKeyType:             []interface{}{common.TypeVerifiablePresentation},
+		common.VPKeyHolder:               holderDID,
 		common.VPKeyVerifiableCredential: credentials,
 	}
 
@@ -95,8 +95,8 @@ func signDIVPWithCredentialsEd25519(t *testing.T, holderDID string, holderPrivKe
 
 	vpMap := map[string]interface{}{
 		common.JSONLDKeyContext:          []interface{}{common.ContextCredentialsV2},
-		common.JSONLDKeyType:            []interface{}{common.TypeVerifiablePresentation},
-		common.VPKeyHolder:              holderDID,
+		common.JSONLDKeyType:             []interface{}{common.TypeVerifiablePresentation},
+		common.VPKeyHolder:               holderDID,
 		common.VPKeyVerifiableCredential: credentials,
 	}
 
@@ -139,7 +139,9 @@ func signDIDocumentWithCreated(t *testing.T, doc map[string]interface{}, privKey
 		ProofPurpose:       common.ProofPurposeAuthentication,
 	}
 
-	hashData := computeDITestHashData(t, doc, proof)
+	// The freshness tests are about `created`, not about the curve, so this
+	// helper stays on P-256 and its SHA-256 hash.
+	hashData := computeDITestHashData(t, doc, proof, false)
 
 	// ECDSA P-256: hash then sign.
 	digest := sha256.Sum256(hashData)
@@ -205,6 +207,52 @@ func TestE2E_DI_FullPipeline_EcdsaRdfc2019(t *testing.T) {
 
 	credentials := result.Credentials()
 	require.Len(t, credentials, 1, "VP should contain one credential")
+	assert.Equal(t, issuerDID, credentials[0].Contents().Issuer.ID)
+}
+
+// ---------------------------------------------------------------------------
+// Test: Full pipeline — ecdsa-rdfc-2019 on P-384 with Multikey methods
+// ---------------------------------------------------------------------------
+
+// TestE2E_DI_FullPipeline_EcdsaRdfc2019P384 exercises the combination a P-384
+// Data Integrity issuer actually produces: Multikey verification methods in
+// the DID document and SHA-384 hashing throughout. It is the only end-to-end
+// test that reaches the SHA-384 branch — the other suites hash with SHA-256,
+// so a curve-conditional regression would otherwise only be caught by the
+// unit tests in common.
+func TestE2E_DI_FullPipeline_EcdsaRdfc2019P384(t *testing.T) {
+	docLoader := newTestDocumentLoader()
+
+	issuerPrivKey, _, issuerPubJWK := generateTestECKeysP384(t)
+	holderPrivKey, _, holderPubJWK := generateTestECKeysP384(t)
+
+	issuerDID := "did:web:issuer.e2e.example.com"
+	issuerKeyID := issuerDID + "#key-1"
+	holderDID := "did:web:holder.e2e.example.com"
+	holderKeyID := holderDID + "#key-1"
+
+	registry := e2eCreateMultiDIDRegistry(t, map[string]e2eDIDEntry{
+		issuerDID: {keyID: issuerKeyID, pubJWK: issuerPubJWK, vmType: did.TypeMultikey},
+		holderDID: {keyID: holderKeyID, pubJWK: holderPubJWK, vmType: did.TypeMultikey},
+	})
+
+	vcMap := createDITestVC(issuerDID, holderDID)
+	signedVC := signDICredentialAsMap(t, vcMap, issuerPrivKey, issuerKeyID)
+
+	vpJSON := signDIVPWithCredentials(t, holderDID, holderPrivKey, holderKeyID, []interface{}{signedVC})
+
+	parser := &ConfigurablePresentationParser{
+		LDProofChecker: NewLDProofChecker(registry, docLoader),
+	}
+
+	result, err := parser.ParsePresentation(vpJSON)
+	require.NoError(t, err, "full pipeline should accept VP+VC with ecdsa-rdfc-2019 P-384 DI proofs")
+	require.NotNil(t, result)
+	assert.Equal(t, holderDID, result.Holder)
+	assert.NotNil(t, result.HolderKey(), "holder key must be populated from DI proof")
+
+	credentials := result.Credentials()
+	require.Len(t, credentials, 1)
 	assert.Equal(t, issuerDID, credentials[0].Contents().Issuer.ID)
 }
 
@@ -330,8 +378,8 @@ func TestE2E_DI_MixedProofs_DIVP_JWSCredential(t *testing.T) {
 	// Sign the VP with DI. The VP uses VCDM 2.0 context.
 	vpMap := map[string]interface{}{
 		common.JSONLDKeyContext:          []interface{}{common.ContextCredentialsV2},
-		common.JSONLDKeyType:            []interface{}{common.TypeVerifiablePresentation},
-		common.VPKeyHolder:              holderDID,
+		common.JSONLDKeyType:             []interface{}{common.TypeVerifiablePresentation},
+		common.VPKeyHolder:               holderDID,
 		common.VPKeyVerifiableCredential: []interface{}{vcMap},
 	}
 
@@ -538,10 +586,10 @@ func TestE2E_DI_UnsignedCredentialRejected(t *testing.T) {
 
 	// An unsigned credential (no proof).
 	unsignedVC := map[string]interface{}{
-		common.JSONLDKeyContext:        []interface{}{common.ContextCredentialsV2},
-		common.JSONLDKeyType:           []interface{}{common.TypeVerifiableCredential},
-		common.VCKeyIssuer:             "did:web:issuer.unsigned.example.com",
-		common.VCKeyCredentialSubject:  map[string]interface{}{common.JSONLDKeyID: holderDID},
+		common.JSONLDKeyContext:       []interface{}{common.ContextCredentialsV2},
+		common.JSONLDKeyType:          []interface{}{common.TypeVerifiableCredential},
+		common.VCKeyIssuer:            "did:web:issuer.unsigned.example.com",
+		common.VCKeyCredentialSubject: map[string]interface{}{common.JSONLDKeyID: holderDID},
 	}
 
 	vpJSON := signDIVPWithCredentials(t, holderDID, holderPrivKey, holderKeyID, []interface{}{unsignedVC})
