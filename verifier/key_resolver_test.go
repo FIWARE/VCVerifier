@@ -2,17 +2,22 @@ package verifier
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/fiware/VCVerifier/did"
 	"github.com/fiware/VCVerifier/logging"
+	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/multiformats/go-multibase"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var _ = logging.Log()
@@ -293,6 +298,201 @@ func TestResolveCandidateKeysFromDID(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.Len(t, keys, tc.wantCount)
+		})
+	}
+}
+
+// testMultibaseKey encodes a raw public key as a multibase string with the
+// given multicodec prefix, using base58btc ('z') encoding.
+func testMultibaseKey(codec uint64, rawKey []byte) string {
+	var prefix [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(prefix[:], codec)
+	multicodecKey := append(prefix[:n], rawKey...)
+	encoded, _ := multibase.Encode(multibase.Base58BTC, multicodecKey)
+	return encoded
+}
+
+// createMultikeyDocResolution builds a DocResolution containing a single
+// Multikey verification method with the given publicKeyMultibase value.
+// Optional authentication and assertionMethod string slices add the VM to
+// the corresponding verification relationships.
+func createMultikeyDocResolution(
+	didID, vmID, multibaseKey string,
+	authentication, assertionMethod []string,
+) *did.DocResolution {
+	// DecodeMultibaseKey produces the same JWK that the did:web parser would.
+	key, err := did.DecodeMultibaseKey(multibaseKey)
+	if err != nil || key == nil {
+		// Callers that test invalid input pass a nil-JWK VM.
+		vm := did.NewVerificationMethodFromBytes(vmID, did.TypeMultikey, didID, []byte(multibaseKey))
+		doc := &did.Doc{
+			ID:                 didID,
+			VerificationMethod: []did.VerificationMethod{*vm},
+			Authentication:     authentication,
+			AssertionMethod:    assertionMethod,
+		}
+		return &did.DocResolution{DIDDocument: doc}
+	}
+
+	vm, _ := did.NewVerificationMethodFromJWK(vmID, did.TypeMultikey, didID, key)
+	doc := &did.Doc{
+		ID:                 didID,
+		VerificationMethod: []did.VerificationMethod{*vm},
+		Authentication:     authentication,
+		AssertionMethod:    assertionMethod,
+	}
+	return &did.DocResolution{DIDDocument: doc}
+}
+
+// TestResolveKeyFromDID_MultikeyVM is the real integration test for Multikey
+// verification methods through the actual ResolveKeyFromDID function from
+// key_resolver.go. It constructs DID documents with Multikey VMs (decoded
+// via did.DecodeMultibaseKey) and resolves keys through a mock VDR, proving
+// that the full resolution pipeline works end-to-end.
+func TestResolveKeyFromDID_MultikeyVM(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+		setup       func(t *testing.T) (docRes *did.DocResolution, vmID string, wantKeyType jwa.KeyType, wantCurve jwa.EllipticCurveAlgorithm)
+	}{
+		{
+			name:        "Ed25519 Multikey resolved via ResolveKeyFromDID",
+			description: "A Multikey VM with an Ed25519 publicKeyMultibase is resolved to a usable OKP/Ed25519 JWK",
+			setup: func(t *testing.T) (*did.DocResolution, string, jwa.KeyType, jwa.EllipticCurveAlgorithm) {
+				pub, _, err := ed25519.GenerateKey(rand.Reader)
+				require.NoError(t, err)
+				mb := testMultibaseKey(did.MulticodecEd25519Pub, pub)
+				docRes := createMultikeyDocResolution(
+					"did:web:example.com", "did:web:example.com#key-1", mb, nil, nil,
+				)
+				return docRes, "did:web:example.com#key-1", jwa.OKP(), jwa.Ed25519()
+			},
+		},
+		{
+			name:        "P-256 Multikey resolved via ResolveKeyFromDID",
+			description: "A Multikey VM with a P-256 publicKeyMultibase is resolved to a usable EC/P-256 JWK",
+			setup: func(t *testing.T) (*did.DocResolution, string, jwa.KeyType, jwa.EllipticCurveAlgorithm) {
+				privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				require.NoError(t, err)
+				compressed := elliptic.MarshalCompressed(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				mb := testMultibaseKey(did.MulticodecP256Pub, compressed)
+				docRes := createMultikeyDocResolution(
+					"did:web:example.com", "did:web:example.com#key-2", mb, nil, nil,
+				)
+				return docRes, "did:web:example.com#key-2", jwa.EC(), jwa.P256()
+			},
+		},
+		{
+			name:        "P-384 Multikey resolved via ResolveKeyFromDID",
+			description: "A Multikey VM with a P-384 publicKeyMultibase is resolved to a usable EC/P-384 JWK",
+			setup: func(t *testing.T) (*did.DocResolution, string, jwa.KeyType, jwa.EllipticCurveAlgorithm) {
+				privKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+				require.NoError(t, err)
+				compressed := elliptic.MarshalCompressed(elliptic.P384(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				mb := testMultibaseKey(did.MulticodecP384Pub, compressed)
+				docRes := createMultikeyDocResolution(
+					"did:web:example.com", "did:web:example.com#key-3", mb, nil, nil,
+				)
+				return docRes, "did:web:example.com#key-3", jwa.EC(), jwa.P384()
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			docRes, vmID, wantKeyType, wantCurve := tc.setup(t)
+
+			registry := did.NewRegistry(did.WithVDR(&mockVDR{
+				readFunc: func(_ string) (*did.DocResolution, error) {
+					return docRes, nil
+				},
+			}))
+
+			key, err := ResolveKeyFromDID(registry, "did:web:example.com", vmID)
+			require.NoError(t, err)
+			require.NotNil(t, key, "ResolveKeyFromDID should return a non-nil key")
+			assert.Equal(t, wantKeyType, key.KeyType())
+
+			var crv jwa.EllipticCurveAlgorithm
+			if err := key.Get(jwk.ECDSACrvKey, &crv); err != nil {
+				err = key.Get(jwk.OKPCrvKey, &crv)
+				require.NoError(t, err, "key should have a curve parameter")
+			}
+			assert.Equal(t, wantCurve, crv)
+		})
+	}
+}
+
+// TestResolveKeyForRelationship_MultikeyVM verifies that the real
+// ResolveKeyForRelationship function enforces verification relationships
+// correctly for Multikey verification methods.
+func TestResolveKeyForRelationship_MultikeyVM(t *testing.T) {
+	// Generate a P-256 Multikey VM
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	compressed := elliptic.MarshalCompressed(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y)
+	mb := testMultibaseKey(did.MulticodecP256Pub, compressed)
+
+	const (
+		didID = "did:web:example.com"
+		vmID  = "did:web:example.com#key-assert"
+	)
+
+	tests := []struct {
+		name         string
+		description  string
+		relationship string
+		auth         []string
+		assertion    []string
+		wantErr      error
+	}{
+		{
+			name:         "allowed for assertionMethod",
+			description:  "A Multikey VM listed under assertionMethod is accepted when assertionMethod is required",
+			relationship: did.RelationshipAssertionMethod,
+			assertion:    []string{vmID},
+			wantErr:      nil,
+		},
+		{
+			name:         "rejected for authentication when only assertionMethod",
+			description:  "A Multikey VM listed only under assertionMethod is rejected when authentication is required",
+			relationship: did.RelationshipAuthentication,
+			assertion:    []string{vmID},
+			wantErr:      ErrorVerificationRelationshipNotAllowed,
+		},
+		{
+			name:         "allowed for authentication",
+			description:  "A Multikey VM listed under authentication is accepted when authentication is required",
+			relationship: did.RelationshipAuthentication,
+			auth:         []string{vmID},
+			wantErr:      nil,
+		},
+		{
+			name:         "no relationship enforcement when document declares none",
+			description:  "When the document declares no relationships, the key is accepted regardless",
+			relationship: did.RelationshipAuthentication,
+			wantErr:      nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			docRes := createMultikeyDocResolution(didID, vmID, mb, tc.auth, tc.assertion)
+			registry := did.NewRegistry(did.WithVDR(&mockVDR{
+				readFunc: func(_ string) (*did.DocResolution, error) {
+					return docRes, nil
+				},
+			}))
+
+			key, err := ResolveKeyForRelationship(registry, didID, vmID, tc.relationship)
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, key)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, key)
+				assert.Equal(t, jwa.EC(), key.KeyType())
+			}
 		})
 	}
 }
