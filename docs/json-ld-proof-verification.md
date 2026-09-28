@@ -24,17 +24,21 @@ layers, and all of them have to hold.
 ### 1. The signature covers the proof metadata
 
 For both proof types the input to the signature is
-`sha256(canonical proof options) || sha256(canonical document)`, both
-canonicalized with URDNA2015. For `JsonWebSignature2020` this hash data is
-signed via a detached JWS (`jws` member). For `DataIntegrityProof` the same
-hash data is signed directly and the raw signature bytes are multibase-encoded
-as the `proofValue` member.
+`hash(canonical proof options) || hash(canonical document)`, both
+canonicalized with URDNA2015. The hash is SHA-256 for P-256, Ed25519 and
+`JsonWebSignature2020`, or SHA-384 for P-384 with `ecdsa-rdfc-2019` (see
+[§ Data Integrity proof verification](#data-integrity-proof-verification) for
+details). For `JsonWebSignature2020` this hash data is signed via a detached
+JWS (`jws` member). For `DataIntegrityProof` the same hash data is signed
+directly and the raw signature bytes are multibase-encoded as the `proofValue`
+member.
 
 The proof options document is the proof without its `jws`/`proofValue` member.
-Its `@context` is the *document's* context extended with
-`https://w3id.org/security/suites/jws-2020/v1` — the suite context is what
-defines `created`, `verificationMethod`, `proofPurpose`, `challenge` and
-`domain`.
+Its `@context` is the *document's* context extended with a suite-specific
+context: `https://w3id.org/security/suites/jws-2020/v1` for
+`JsonWebSignature2020`, or `https://www.w3.org/ns/credentials/v2` (the VCDM
+2.0 context) for `DataIntegrityProof`. The suite context is what defines
+`created`, `verificationMethod`, `proofPurpose`, `challenge` and `domain`.
 
 This matters more than it looks. The plain W3C
 `https://www.w3.org/2018/credentials/v1` context does not define those terms
@@ -244,8 +248,9 @@ cryptosuites:
 
 1. **Canonicalize** both the document and the proof options (proof minus
    `proofValue`) with URDNA2015, the same way `JsonWebSignature2020` does.
-2. **Hash**: `hashData = sha256(canonical proof options) || sha256(canonical
-   document)`.
+2. **Hash**: `hashData = hash(canonical proof options) || hash(canonical
+   document)`, where the hash is SHA-256 (P-256 / Ed25519) or SHA-384
+   (P-384).
 3. **Decode** the `proofValue` from multibase (base58btc, prefix `z`).
 4. **Verify** the signature against `hashData`:
    - `ecdsa-rdfc-2019`: hash `hashData` with SHA-256 (P-256) or SHA-384
@@ -259,13 +264,12 @@ verification methods, where the public key is encoded as a `publicKeyMultibase`
 string (multibase + multicodec prefix). The key resolution path
 (`did/multikey.go`) decodes these into JWKs:
 
-| Multicodec prefix | Key type    | Curve / algorithm |
-| ------------------ | ----------- | ----------------- |
-| `0x8024`           | EC          | P-256             |
-| `0x8124`           | EC          | P-384             |
-| `0xed01`           | OKP         | Ed25519           |
-| `0xec01`           | OKP         | X25519            |
-| `0x1205`           | RSA         | —                 |
+| Multicodec code | Key type    | Curve / algorithm | Constant in code          |
+| --------------- | ----------- | ----------------- | ------------------------- |
+| `0x1200`        | EC          | P-256             | `MulticodecP256Pub`       |
+| `0x1201`        | EC          | P-384             | `MulticodecP384Pub`       |
+| `0xed`          | OKP         | Ed25519           | `MulticodecEd25519Pub`    |
+| `0xe7`          | OKP         | secp256k1         | `MulticodecSecp256k1Pub`  |
 
 `JsonWebKey2020` verification methods (with `publicKeyJwk`) are also supported,
 so both VM types work with Data Integrity proofs.
