@@ -43,7 +43,7 @@ Make `parseVerificationMethod` in `did/did_web.go` decode `publicKeyMultibase` v
 - `did/did_web.go` — In `parseVerificationMethod` (line 216–218), when `publicKeyMultibase` is non-empty and `publicKeyJwk` is absent:
   1. Call `DecodeMultibaseKey(raw.PublicKeyMultibase)`.
   2. On success, set `vm.jsonWebKey = key` and `vm.Value = []byte(raw.PublicKeyMultibase)`.
-  3. On failure, log a debug message and leave `vm.jsonWebKey` as nil (fail-open at parse time; key resolution will reject the VM later).
+  3. On failure, log a debug message and leave `vm.jsonWebKey` as nil (deferred failure at parse time — key resolution rejects the VM later via `ErrorNoVerificationKey`).
   
   This means `Multikey`, `Ed25519VerificationKey2020`, and any other type that uses `publicKeyMultibase` will now produce a usable JWK. The existing `publicKeyJwk` path remains the priority.
 
@@ -69,14 +69,16 @@ Add the cryptographic verification logic for `DataIntegrityProof` proofs with th
 **Signature verification algorithm (per W3C Data Integrity specs):**
 1. Validate proof type is `DataIntegrityProof` and `cryptosuite` is recognized.
 2. Validate `created` is non-empty (same as JWS path).
-3. Decode `proofValue` from multibase encoding.
+3. Decode `proofValue` from multibase encoding. The raw bytes are in IEEE P1363 format for ECDSA (`r || s`, each zero-padded to the curve's field size — 32 bytes for P-256, 48 bytes for P-384), not ASN.1 DER. In Go, use `ecdsa.Verify(pubKey, hash, r, s)` with `r` and `s` extracted from the P1363 byte layout, **not** `ecdsa.VerifyASN1`.
 4. Unmarshal document, strip `proof`, build proof options (with `cryptosuite` field included).
 5. Canonicalize both document and proof options using URDNA2015 (same `json-gold` `Normalize` already in use — RDFC-1.0 is URDNA2015 standardized).
-6. Assert proof options are covered (same `assertProofOptionsCovered` logic, extended for `cryptosuite`).
-7. Compute `hashData = sha256(canonProofOptions) || sha256(canonDoc)`.
+6. Assert proof options are covered (same `assertProofOptionsCovered` logic, extended for `cryptosuite` — see below).
+7. Compute hash data (curve-conditional per W3C VC-DI-ECDSA §3.3.3/§3.3.4):
+   - P-256 and Ed25519: `hashData = sha256(canonProofOptions) || sha256(canonDoc)`.
+   - P-384: `hashData = sha384(canonProofOptions) || sha384(canonDoc)`.
 8. Verify raw signature over `hashData`:
-   - `ecdsa-rdfc-2019`: ECDSA signature (P-256 uses SHA-256, P-384 uses SHA-384) — note the spec says the hash data is already the two SHA-256 hashes concatenated, then the signature algorithm applies its own hash.
-   - `eddsa-rdfc-2022`: Ed25519 signature over the hash data directly.
+   - `ecdsa-rdfc-2019`: ECDSA verification — `ecdsa.Verify(pubKey, hashData, r, s)`. The `hashData` already contains the final hash (SHA-256 for P-256, SHA-384 for P-384); **no additional hashing** is applied by the verification step.
+   - `eddsa-rdfc-2022`: Ed25519 signature over the hash data directly (`ed25519.Verify(pubKey, hashData, sig)`).
 
 **Files to modify:**
 - `common/ldproof.go`:
@@ -91,12 +93,12 @@ Add the cryptographic verification logic for `DataIntegrityProof` proofs with th
     - Strips proof from document, builds proof options (including `cryptosuite` in the options map).
     - Canonicalizes both with URDNA2015.
     - Asserts proof options are covered.
-    - Computes `sha256(canonProofOptions) || sha256(canonDoc)`.
-    - For `ecdsa-rdfc-2019`: validates key is EC (P-256 or P-384), verifies ECDSA signature. P-256 uses SHA-256 over the hash data; P-384 uses SHA-384 over the hash data.
-    - For `eddsa-rdfc-2022`: validates key is OKP/Ed25519, verifies Ed25519 signature over the hash data directly.
+    - Computes hash data (curve-conditional): P-256 and Ed25519 use `sha256(canonProofOptions) || sha256(canonDoc)`; P-384 uses `sha384(canonProofOptions) || sha384(canonDoc)` (per W3C VC-DI-ECDSA §3.3.4).
+    - For `ecdsa-rdfc-2019`: validates key is EC (P-256 or P-384), decodes `proofValue` from IEEE P1363 format (`r || s`), verifies ECDSA signature over `hashData` directly using `ecdsa.Verify` (no additional hashing — `hashData` is already the final digest).
+    - For `eddsa-rdfc-2022`: validates key is OKP/Ed25519, verifies Ed25519 signature over `hashData` directly.
   - Modify `buildProofOptions` to include `cryptosuite` when present on the proof — add `if proof.Cryptosuite != "" { proofOptions[LDProofKeyCryptosuite] = proof.Cryptosuite }`.
-  - Extend `assertProofOptionsCovered` to check the `cryptosuite` IRI (`https://w3id.org/security#cryptosuite`) when the proof carries one.
-  - For the proof options context: Data Integrity proof terms (`cryptosuite`, `proofValue`) are defined by the VCDM 2.0 context (`credentials-v2.jsonld`), which is already vendored. The `buildProofOptions` context needs to include the Data Integrity context. Add an `EnsureDataIntegrityContext` function (or a more general `EnsureProofContext` that selects between JWS-2020 and DI contexts based on proof type).
+  - Extend `assertProofOptionsCovered` to check both the `cryptosuite` IRI (`https://w3id.org/security#cryptosuite`) **and** its canonicalized object value (the literal string, e.g. `"ecdsa-rdfc-2019"`) against the expected value from the proof. Since `cryptosuite` is typed `cryptosuiteString` (a plain literal), the canonicalized value is directly comparable — match it against `expectedObject` the same way `created` and `challenge` are checked.
+  - For the proof options context: Data Integrity proof terms (`cryptosuite`, `proofValue`) are defined by the VCDM 2.0 context (`https://www.w3.org/ns/credentials/v2`), which is already vendored as `credentials-v2.jsonld`. Use this as the proof suite context for Data Integrity proofs (the DI counterpart of `https://w3id.org/security/suites/jws-2020/v1` for JWS-2020). Do **not** add `https://w3id.org/security/data-integrity/v2` — the VCDM 2.0 context already defines all the needed terms, and adding a second context would change the canonicalization. Add an `EnsureDataIntegrityContext` function that ensures the VCDM 2.0 context is present in the proof options document (or a more general `EnsureProofContext` that selects between JWS-2020 and VCDM 2.0 based on proof type).
 
 **Files to create:**
 - `common/data_integrity_test.go` — Tests for `VerifyDataIntegrityProof`:
@@ -195,7 +197,7 @@ Add support for the JCS (JSON Canonicalization Scheme, RFC 8785) variants of the
   - Modify `VerifyDataIntegrityProof` to handle JCS suites. The JCS suites differ from RDFC suites in:
     1. Canonicalization: use JCS (RFC 8785) instead of URDNA2015.
     2. The proof options document: JCS suites canonicalize a JSON object (not JSON-LD), so no `@context` is needed.
-    3. The hash data construction is similar: `sha256(canonProofOptions) || sha256(canonDoc)`.
+    3. The hash data construction is similar: curve-conditional as in the RDFC path (SHA-256 for P-256/Ed25519, SHA-384 for P-384).
   - Factor the common signature verification logic (multibase decode, key type check, ECDSA/EdDSA verify) into a shared helper called by both RDFC and JCS paths.
 
 **Files to create:**
