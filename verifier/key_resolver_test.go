@@ -374,7 +374,7 @@ func TestResolveKeyFromDID_MultikeyVM(t *testing.T) {
 			setup: func(t *testing.T) (*did.DocResolution, string, jwa.KeyType, jwa.EllipticCurveAlgorithm) {
 				privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				require.NoError(t, err)
-				compressed := elliptic.MarshalCompressed(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				compressed := elliptic.MarshalCompressed(elliptic.P256(), privKey.X, privKey.Y)
 				mb := testMultibaseKey(did.MulticodecP256Pub, compressed)
 				docRes := createMultikeyDocResolution(
 					"did:web:example.com", "did:web:example.com#key-2", mb, nil, nil,
@@ -388,7 +388,7 @@ func TestResolveKeyFromDID_MultikeyVM(t *testing.T) {
 			setup: func(t *testing.T) (*did.DocResolution, string, jwa.KeyType, jwa.EllipticCurveAlgorithm) {
 				privKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 				require.NoError(t, err)
-				compressed := elliptic.MarshalCompressed(elliptic.P384(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				compressed := elliptic.MarshalCompressed(elliptic.P384(), privKey.X, privKey.Y)
 				mb := testMultibaseKey(did.MulticodecP384Pub, compressed)
 				docRes := createMultikeyDocResolution(
 					"did:web:example.com", "did:web:example.com#key-3", mb, nil, nil,
@@ -430,7 +430,7 @@ func TestResolveKeyForRelationship_MultikeyVM(t *testing.T) {
 	// Generate a P-256 Multikey VM
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	compressed := elliptic.MarshalCompressed(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y)
+	compressed := elliptic.MarshalCompressed(elliptic.P256(), privKey.X, privKey.Y)
 	mb := testMultibaseKey(did.MulticodecP256Pub, compressed)
 
 	const (

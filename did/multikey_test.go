@@ -51,7 +51,7 @@ func TestDecodeMultibaseKey(t *testing.T) {
 			setup: func(t *testing.T) string {
 				privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				require.NoError(t, err)
-				compressed := elliptic.MarshalCompressed(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				compressed := elliptic.MarshalCompressed(elliptic.P256(), privKey.X, privKey.Y)
 				return encodeMultibaseKey(MulticodecP256Pub, compressed)
 			},
 			wantKeyType: jwa.EC(),
@@ -63,7 +63,7 @@ func TestDecodeMultibaseKey(t *testing.T) {
 			setup: func(t *testing.T) string {
 				privKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 				require.NoError(t, err)
-				compressed := elliptic.MarshalCompressed(elliptic.P384(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				compressed := elliptic.MarshalCompressed(elliptic.P384(), privKey.X, privKey.Y)
 				return encodeMultibaseKey(MulticodecP384Pub, compressed)
 			},
 			wantKeyType: jwa.EC(),
@@ -174,7 +174,7 @@ func TestMulticodecToJWK(t *testing.T) {
 			rawKey: func(t *testing.T) []byte {
 				privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				require.NoError(t, err)
-				return elliptic.MarshalCompressed(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				return elliptic.MarshalCompressed(elliptic.P256(), privKey.X, privKey.Y)
 			},
 			wantVMType: TypeJsonWebKey2020,
 		},
@@ -184,7 +184,7 @@ func TestMulticodecToJWK(t *testing.T) {
 			rawKey: func(t *testing.T) []byte {
 				privKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 				require.NoError(t, err)
-				return elliptic.MarshalCompressed(elliptic.P384(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				return elliptic.MarshalCompressed(elliptic.P384(), privKey.X, privKey.Y)
 			},
 			wantVMType: TypeJsonWebKey2020,
 		},
@@ -230,7 +230,7 @@ func TestDecodeCompressedEC(t *testing.T) {
 			setup: func(t *testing.T) []byte {
 				privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				require.NoError(t, err)
-				return elliptic.MarshalCompressed(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				return elliptic.MarshalCompressed(elliptic.P256(), privKey.X, privKey.Y)
 			},
 		},
 		{
@@ -239,7 +239,12 @@ func TestDecodeCompressedEC(t *testing.T) {
 			setup: func(t *testing.T) []byte {
 				privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				require.NoError(t, err)
-				return elliptic.Marshal(elliptic.P256(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				// crypto/ecdh's Bytes() is the uncompressed SEC 1 encoding
+				// (0x04 || x || y) that the deprecated elliptic.Marshal
+				// produced.
+				ecdhKey, err := privKey.ECDH()
+				require.NoError(t, err)
+				return ecdhKey.PublicKey().Bytes()
 			},
 		},
 		{
@@ -248,7 +253,7 @@ func TestDecodeCompressedEC(t *testing.T) {
 			setup: func(t *testing.T) []byte {
 				privKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 				require.NoError(t, err)
-				return elliptic.MarshalCompressed(elliptic.P384(), privKey.PublicKey.X, privKey.PublicKey.Y)
+				return elliptic.MarshalCompressed(elliptic.P384(), privKey.X, privKey.Y)
 			},
 		},
 		{
@@ -274,8 +279,11 @@ func TestDecodeCompressedEC(t *testing.T) {
 
 			require.NoError(t, err)
 			require.NotNil(t, pubKey)
-			assert.True(t, tc.curve.IsOnCurve(pubKey.X, pubKey.Y),
-				"decoded point should be on the curve")
+			// ECDH() performs the on-curve check the deprecated
+			// elliptic.Curve.IsOnCurve did: crypto/ecdh's NewPublicKey
+			// rejects a point that is not on the curve.
+			_, err = pubKey.ECDH()
+			assert.NoError(t, err, "decoded point should be on the curve")
 		})
 	}
 }

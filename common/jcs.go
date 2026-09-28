@@ -57,6 +57,20 @@ const (
 	es6ExponentPrefixLength = 2
 )
 
+// Pieces of the \uhhhh escape RFC 8785 section 3.2.2.2 prescribes for the
+// control characters that have no short form.
+const (
+	// controlEscapePrefix is the constant part of the escape. Every character
+	// that needs it is below U+0020, so the two high hex digits are always 0.
+	controlEscapePrefix = `\u00`
+	// lowercaseHexDigits indexes the two remaining digits. The RFC asks for
+	// lowercase hexadecimal specifically.
+	lowercaseHexDigits = "0123456789abcdef"
+	// hexNibbleBits and hexNibbleMask split a byte into its two hex digits.
+	hexNibbleBits = 4
+	hexNibbleMask = 0x0f
+)
+
 // CanonicalizeJSON returns the RFC 8785 canonical form of a JSON value.
 //
 // The value is what encoding/json produces when unmarshalling into an
@@ -226,7 +240,9 @@ func writeCanonicalString(builder *strings.Builder, value string) error {
 			builder.WriteString(`\r`)
 		default:
 			if codePoint < 0x20 {
-				builder.WriteString(fmt.Sprintf(`\u%04x`, codePoint))
+				builder.WriteString(controlEscapePrefix)
+				builder.WriteByte(lowercaseHexDigits[codePoint>>hexNibbleBits])
+				builder.WriteByte(lowercaseHexDigits[codePoint&hexNibbleMask])
 				continue
 			}
 			if codePoint == utf8.RuneError {
