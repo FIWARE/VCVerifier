@@ -502,28 +502,42 @@ func TestVerifyDataIntegrityProof_MissingProofValue(t *testing.T) {
 		"expected ErrorLDProofMissingProofValue, got: %v", err)
 }
 
-// TestVerifyDataIntegrityProof_MissingCreated verifies that a proof without
-// a created timestamp is rejected.
-func TestVerifyDataIntegrityProof_MissingCreated(t *testing.T) {
+// TestVerifyDataIntegrityProof_MalformedCreated verifies that a created
+// timestamp that is present but unparseable is rejected. It is checked before
+// the signature, so the error names the real problem rather than surfacing as
+// a signature failure.
+func TestVerifyDataIntegrityProof_MalformedCreated(t *testing.T) {
 	_, _, pubJWK := generateECTestKeys(t)
 	loader := newTestDocumentLoader()
 
-	proof := &LDProof{
-		Type:               ProofTypeDataIntegrityProof,
-		Cryptosuite:        CryptosuiteEcdsaRdfc2019,
-		Created:            "", // missing
-		VerificationMethod: "did:web:example.com#key-1",
-		ProofPurpose:       ProofPurposeAssertionMethod,
-		ProofValue:         "z3FXQ",
+	tests := []struct {
+		name    string
+		created string
+	}{
+		{name: "not_a_date", created: "yesterday"},
+		{name: "date_without_time", created: "2024-01-01"},
+		{name: "missing_timezone", created: "2024-01-01T00:00:00"},
 	}
 
 	docJSON, err := json.Marshal(dataIntegrityTestDocument())
 	require.NoError(t, err)
 
-	err = VerifyDataIntegrityProof(docJSON, proof, pubJWK, loader)
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, ErrorLDProofMissingCreated),
-		"expected ErrorLDProofMissingCreated, got: %v", err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proof := &LDProof{
+				Type:               ProofTypeDataIntegrityProof,
+				Cryptosuite:        CryptosuiteEcdsaRdfc2019,
+				Created:            tc.created,
+				VerificationMethod: "did:web:example.com#key-1",
+				ProofPurpose:       ProofPurposeAssertionMethod,
+				ProofValue:         "z3FXQ",
+			}
+
+			err := VerifyDataIntegrityProof(docJSON, proof, pubJWK, loader)
+			assert.True(t, errors.Is(err, ErrorLDProofMalformedCreated),
+				"expected ErrorLDProofMalformedCreated, got: %v", err)
+		})
+	}
 }
 
 // TestVerifyDataIntegrityProof_InvalidMultibase verifies that an invalid

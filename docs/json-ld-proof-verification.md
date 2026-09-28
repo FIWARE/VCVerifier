@@ -286,6 +286,11 @@ so both VM types work with Data Integrity proofs.
 
 - The `cryptosuite` field must be one of the supported values; an unknown
   suite is rejected with `ErrorLDProofUnsupportedCryptosuite`.
+- `created` is optional (VC-DATA-INTEGRITY §2.1), but a value that is present
+  must be a valid RFC 3339 date-time — otherwise
+  `ErrorLDProofMalformedCreated`. A presentation proof additionally needs one
+  to pass `VerifyLDVPProofFreshness` on the grants that have no server-issued
+  nonce; `JsonWebSignature2020` still requires it outright.
 - The resolved key must match the cryptosuite: `ecdsa-rdfc-2019` requires an
   EC key (P-256 or P-384), `eddsa-rdfc-2022` requires an OKP/Ed25519 key.
   A mismatch is rejected with `ErrorLDProofCryptosuiteKeyMismatch`.
@@ -315,9 +320,6 @@ can contain credentials signed with `DataIntegrityProof`, and vice versa.
 
 ### Limitations
 
-- **`created` is required**, while VC-DATA-INTEGRITY §2.1 makes it optional.
-  A conformant Data Integrity proof without it is rejected with
-  `ErrorLDProofMissingCreated`.
 - **`expires` is canonicalized but not enforced.** It is covered by the
   signature, so it cannot be altered, but an expired proof is not rejected on
   that ground.

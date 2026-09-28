@@ -292,3 +292,29 @@ func TestParseLDProofRawIsIndependentOfTheCaller(t *testing.T) {
 
 	assert.NotContains(t, proof.Raw, proofMemberNonce)
 }
+
+// TestVerifyDataIntegrityProof_WithoutCreated verifies a proof that carries no
+// `created` timestamp. VC-DATA-INTEGRITY §2.1 makes the property OPTIONAL, and
+// VC-DI-ECDSA §3.2.5 only constrains it "if proofConfig.created is set", so a
+// credential proof without one is conformant. Presentations are bounded in
+// time separately, by VerifyLDVPProofFreshness.
+func TestVerifyDataIntegrityProof_WithoutCreated(t *testing.T) {
+	loader := newTestDocumentLoader()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	key, err := jwk.Import(publicKey)
+	require.NoError(t, err)
+
+	proofMap := baseDataIntegrityProofMap()
+	delete(proofMap, LDProofKeyCreated)
+
+	securedJSON, signedProof := signDataIntegrityFromProofMap(
+		t, dataIntegrityTestDocument(), proofMap, privateKey)
+
+	proof, err := ParseLDProof(signedProof)
+	require.NoError(t, err)
+	require.Empty(t, proof.Created)
+
+	assert.NoError(t, VerifyDataIntegrityProof(securedJSON, proof, key, loader))
+}

@@ -158,6 +158,10 @@ var (
 	// ErrorLDProofVerifyDataIntegrity is returned when a Data Integrity proof
 	// signature verification fails.
 	ErrorLDProofVerifyDataIntegrity = errors.New("ld_proof_data_integrity_signature_failed")
+
+	// ErrorLDProofMalformedCreated is returned when a proof carries a
+	// "created" timestamp that is not a valid date-time.
+	ErrorLDProofMalformedCreated = errors.New("ld_proof_malformed_created")
 )
 
 // Supported proof types for verification.
@@ -868,9 +872,12 @@ func VerifyDataIntegrityProof(documentJSON []byte, proof *LDProof, publicKey jwk
 		return fmt.Errorf("%w: %s", ErrorLDProofUnsupportedCryptosuite, proof.Cryptosuite)
 	}
 
-	// 3. Validate created timestamp.
-	if proof.Created == "" {
-		return ErrorLDProofMissingCreated
+	// 3. Validate the created timestamp when there is one. VC-DATA-INTEGRITY
+	// 2.1 makes it optional; VC-DI-ECDSA 3.2.5 only requires it to be a valid
+	// date-time if it is set. Presentations are bound in time separately, by
+	// VerifyLDVPProofFreshness, which does insist on it.
+	if err := assertCreatedWellFormed(proof.Created); err != nil {
+		return err
 	}
 
 	// 4. Validate proofValue presence.
@@ -926,6 +933,21 @@ func VerifyDataIntegrityProof(documentJSON []byte, proof *LDProof, publicKey jwk
 
 	// 11. Verify the raw signature over hashData.
 	return verifyDataIntegritySignature(proof.Cryptosuite, publicKey, hashData, sigBytes)
+}
+
+// assertCreatedWellFormed checks the proof's "created" timestamp when it
+// carries one. An empty value is not an error here: the property is optional
+// (VC-DATA-INTEGRITY 2.1). A value that is present but unparseable is, since
+// nothing downstream could bound the proof in time with it.
+func assertCreatedWellFormed(created string) error {
+	if created == "" {
+		return nil
+	}
+	if _, err := time.Parse(time.RFC3339, created); err != nil {
+		logging.Log().Warnf("Proof created timestamp %q is not a valid RFC3339 date-time: %v", created, err)
+		return fmt.Errorf("%w: %s", ErrorLDProofMalformedCreated, created)
+	}
+	return nil
 }
 
 // computeDataIntegrityHashData computes the hash data for a Data Integrity
