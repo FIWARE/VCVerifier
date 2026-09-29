@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/did"
@@ -32,10 +33,13 @@ var ErrorProofPurposeMismatch = errors.New("ld_proof_purpose_mismatch")
 // the document.
 var ErrorMissingProofSubject = errors.New("ld_proof_binding_subject_missing")
 
-// LDProofChecker verifies Linked Data Proofs (JsonWebSignature2020) on
-// Verifiable Presentations and Verifiable Credentials by resolving the
-// proof's verificationMethod to a public key and delegating cryptographic
-// verification to common.VerifyLinkedDataProof.
+// LDProofChecker verifies Linked Data Proofs on Verifiable Presentations and
+// Verifiable Credentials. It supports both JsonWebSignature2020 proofs and
+// W3C Data Integrity proofs (DataIntegrityProof with the ecdsa-rdfc-2019,
+// ecdsa-jcs-2019, eddsa-rdfc-2022 and eddsa-jcs-2022 cryptosuites). The
+// proof's verificationMethod is resolved to a public key and cryptographic
+// verification is delegated to common.VerifyLinkedDataProof or
+// common.VerifyDataIntegrityProof.
 //
 // The verificationMethod is treated as a generic URI: a DID URL is resolved
 // through the did.Registry, an https:// URL through the HttpsIssuerResolver
@@ -49,6 +53,7 @@ type LDProofChecker struct {
 	registry      *did.Registry
 	docLoader     ld.DocumentLoader
 	httpsResolver HttpsIssuerResolver
+	clock         common.Clock
 }
 
 // NewLDProofChecker creates an LDProofChecker that resolves DIDs via the
@@ -58,7 +63,16 @@ func NewLDProofChecker(registry *did.Registry, docLoader ld.DocumentLoader) *LDP
 	return &LDProofChecker{
 		registry:  registry,
 		docLoader: docLoader,
+		clock:     common.RealClock{},
 	}
+}
+
+// WithClock sets the clock the proof expiry check reads the current time
+// from. It exists for tests; production uses the real clock.
+// Returns the checker to allow method chaining.
+func (lpc *LDProofChecker) WithClock(clock common.Clock) *LDProofChecker {
+	lpc.clock = clock
+	return lpc
 }
 
 // WithHttpsResolver sets the HttpsIssuerResolver used to resolve proof keys
@@ -86,7 +100,6 @@ func (lpc *LDProofChecker) WithHttpsResolver(resolver HttpsIssuerResolver) *LDPr
 //
 // Returns the resolved public key on success (for downstream holder binding),
 // or an error describing the verification failure.
-//
 func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDProof, expectedHolder string) (jwk.Key, error) {
 	if expectedHolder == "" {
 		logging.Log().Warn("JSON-LD VP has no holder — the proof cannot be bound to a presenter")
@@ -94,6 +107,10 @@ func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDPro
 	}
 
 	if err := assertProofPurpose(proof, common.ProofPurposeAuthentication); err != nil {
+		return nil, err
+	}
+
+	if err := lpc.assertProofNotExpired(proof); err != nil {
 		return nil, err
 	}
 
@@ -129,7 +146,6 @@ func (lpc *LDProofChecker) VerifyPresentation(vpJSON []byte, proof *common.LDPro
 //
 // did:elsi signers are explicitly rejected — did:elsi uses JWS/JAdES
 // signatures, not Linked Data Proofs.
-//
 func (lpc *LDProofChecker) VerifyCredential(vcJSON []byte, proof *common.LDProof, expectedIssuer string) error {
 	if expectedIssuer == "" {
 		logging.Log().Warn("JSON-LD VC has no issuer — the proof cannot be bound to an issuer")
@@ -137,6 +153,10 @@ func (lpc *LDProofChecker) VerifyCredential(vcJSON []byte, proof *common.LDProof
 	}
 
 	if err := assertProofPurpose(proof, common.ProofPurposeAssertionMethod); err != nil {
+		return err
+	}
+
+	if err := lpc.assertProofNotExpired(proof); err != nil {
 		return err
 	}
 
@@ -170,6 +190,35 @@ func assertProofPurpose(proof *common.LDProof, expectedPurpose string) error {
 	if proof.ProofPurpose != expectedPurpose {
 		logging.Log().Warnf("LD proof purpose %q does not match the expected purpose %q", proof.ProofPurpose, expectedPurpose)
 		return fmt.Errorf("%w: expected %s but got %s", ErrorProofPurposeMismatch, expectedPurpose, proof.ProofPurpose)
+	}
+	return nil
+}
+
+// assertProofNotExpired rejects a proof whose `expires` timestamp has passed.
+//
+// The property is optional (VC-DATA-INTEGRITY 2.1) and a proof without one
+// never expires. Where it is present it is part of the signed proof
+// configuration, so a holder cannot extend it - which is what makes it worth
+// acting on rather than merely canonicalizing. The same clock skew the
+// freshness check tolerates applies here.
+//
+// An unparseable value is a rejection, not a skipped check: a proof that
+// declares an expiry nobody can read is not one whose validity has been
+// established.
+func (lpc *LDProofChecker) assertProofNotExpired(proof *common.LDProof) error {
+	if proof.Expires == "" {
+		return nil
+	}
+
+	expires, err := time.Parse(time.RFC3339, proof.Expires)
+	if err != nil {
+		logging.Log().Warnf("LD proof expires timestamp %q is not a valid RFC3339 date-time: %v", proof.Expires, err)
+		return fmt.Errorf("%w: %s", ErrorProofExpiresUnparseable, proof.Expires)
+	}
+
+	if now := lpc.clock.Now(); now.After(expires.Add(ldProofClockSkew)) {
+		logging.Log().Warnf("LD proof expired at %s, now is %s", proof.Expires, now.Format(time.RFC3339))
+		return fmt.Errorf("%w: expired at %s", ErrorProofExpired, proof.Expires)
 	}
 	return nil
 }
@@ -220,22 +269,50 @@ func (lpc *LDProofChecker) resolveProofKeys(proof *common.LDProof, signerDID str
 }
 
 // verifyLDProofWithCandidateKeys verifies a Linked Data Proof against the
-// candidate keys and returns the key that verified it. Only the key that
-// actually signed the document produces a valid signature, so trying each
-// candidate does not weaken the check — it is what makes a fragment-less
-// HTTPS verificationMethod usable against a multi-key JWKS.
+// candidate keys and returns the key that verified it. It dispatches to the
+// appropriate verification function based on the proof type:
+//   - JsonWebSignature2020 → common.VerifyLinkedDataProof
+//   - DataIntegrityProof   → common.VerifyDataIntegrityProof
+//   - anything else        → common.ErrorLDProofUnsupportedType
+//
+// Only the key that actually signed the document produces a valid signature,
+// so trying each candidate does not weaken the check — it is what makes a
+// fragment-less HTTPS verificationMethod usable against a multi-key JWKS.
 func verifyLDProofWithCandidateKeys(documentJSON []byte, proof *common.LDProof, keys []jwk.Key, docLoader ld.DocumentLoader) (jwk.Key, error) {
 	if len(keys) == 0 {
 		return nil, ErrorNoVerificationKey
 	}
+
+	verifyFunc, err := selectProofVerifier(proof)
+	if err != nil {
+		return nil, err
+	}
+
 	var lastErr error
 	for _, key := range keys {
-		lastErr = common.VerifyLinkedDataProof(documentJSON, proof, key, docLoader)
+		lastErr = verifyFunc(documentJSON, proof, key, docLoader)
 		if lastErr == nil {
 			return key, nil
 		}
 	}
 	return nil, lastErr
+}
+
+// proofVerifyFunc is the signature shared by common.VerifyLinkedDataProof and
+// common.VerifyDataIntegrityProof, allowing dispatch by proof type.
+type proofVerifyFunc func(documentJSON []byte, proof *common.LDProof, publicKey jwk.Key, documentLoader ld.DocumentLoader) error
+
+// selectProofVerifier returns the verification function for the given proof
+// type, or an error if the type is not supported.
+func selectProofVerifier(proof *common.LDProof) (proofVerifyFunc, error) {
+	switch proof.Type {
+	case common.ProofTypeJsonWebSignature2020:
+		return common.VerifyLinkedDataProof, nil
+	case common.ProofTypeDataIntegrityProof:
+		return common.VerifyDataIntegrityProof, nil
+	default:
+		return nil, fmt.Errorf("%w: %s", common.ErrorLDProofUnsupportedType, proof.Type)
+	}
 }
 
 // resolveHttpsProofKeys resolves the candidate keys for an HTTPS-based signer

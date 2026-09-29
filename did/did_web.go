@@ -2,6 +2,7 @@ package did
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -214,8 +215,28 @@ func parseVerificationMethod(data []byte) (*VerificationMethod, error) {
 		vm.Value = raw.PublicKeyJwk
 		logging.Log().Debugf("Parsed JWK for verification method %s (type: %s)", raw.ID, raw.Type)
 	} else if raw.PublicKeyMultibase != "" {
+		// Value keeps the original encoding; jsonWebKey is what callers use.
 		vm.Value = []byte(raw.PublicKeyMultibase)
-		logging.Log().Debugf("Stored multibase key for verification method %s (type: %s)", raw.ID, raw.Type)
+		key, err := DecodeMultibaseKey(raw.PublicKeyMultibase)
+		if err != nil {
+			// Deliberately not fatal: one unusable verification method must
+			// not cost the document its other keys.
+			//
+			// A key type this verifier does not do signatures with - X25519
+			// key agreement above all - is a normal part of a well-formed
+			// document and would otherwise warn on every resolution, so it is
+			// logged at Debug. Warn stays for an actual decoding failure,
+			// which matters because it otherwise only surfaces much later, as
+			// a missing verification key for a proof that named this method.
+			if errors.Is(err, ErrorUnsupportedMulticodec) {
+				logging.Log().Debugf("Verification method %s uses a key type that cannot verify signatures, it will not be usable: %v", raw.ID, err)
+			} else {
+				logging.Log().Warnf("Failed to decode publicKeyMultibase for verification method %s, it will not be usable: %v", raw.ID, err)
+			}
+		} else {
+			vm.jsonWebKey = key
+			logging.Log().Debugf("Decoded publicKeyMultibase to JWK for verification method %s (type: %s)", raw.ID, raw.Type)
+		}
 	} else {
 		logging.Log().Debugf("Verification method %s has no publicKeyJwk or publicKeyMultibase", raw.ID)
 	}
