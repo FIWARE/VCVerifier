@@ -35,10 +35,11 @@ var ErrorMissingProofSubject = errors.New("ld_proof_binding_subject_missing")
 
 // LDProofChecker verifies Linked Data Proofs on Verifiable Presentations and
 // Verifiable Credentials. It supports both JsonWebSignature2020 proofs and
-// W3C Data Integrity proofs (DataIntegrityProof with ecdsa-rdfc-2019 or
-// eddsa-rdfc-2022 cryptosuites). The proof's verificationMethod is resolved
-// to a public key and cryptographic verification is delegated to
-// common.VerifyLinkedDataProof or common.VerifyDataIntegrityProof.
+// W3C Data Integrity proofs (DataIntegrityProof with the ecdsa-rdfc-2019,
+// ecdsa-jcs-2019, eddsa-rdfc-2022 and eddsa-jcs-2022 cryptosuites). The
+// proof's verificationMethod is resolved to a public key and cryptographic
+// verification is delegated to common.VerifyLinkedDataProof or
+// common.VerifyDataIntegrityProof.
 //
 // The verificationMethod is treated as a generic URI: a DID URL is resolved
 // through the did.Registry, an https:// URL through the HttpsIssuerResolver

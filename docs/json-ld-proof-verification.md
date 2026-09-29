@@ -27,7 +27,7 @@ layers, and all of them have to hold.
 For both proof types the input to the signature is
 `hash(canonical proof options) || hash(canonical document)`, both
 canonicalized with URDNA2015. The hash is SHA-256 for P-256, Ed25519 and
-`JsonWebSignature2020`, or SHA-384 for P-384 with `ecdsa-rdfc-2019` (see
+`JsonWebSignature2020`, or SHA-384 for P-384 with either ECDSA suite (see
 [§ Data Integrity proof verification](#data-integrity-proof-verification) for
 details). For `JsonWebSignature2020` this hash data is signed via a detached
 JWS (`jws` member). For `DataIntegrityProof` the same hash data is signed
@@ -280,9 +280,11 @@ another's — not even between the RDFC and JCS variants of the same algorithm.
    (P-384).
 3. **Decode** the `proofValue` from multibase (base58btc, prefix `z`).
 4. **Verify** the signature against `hashData`:
-   - `ecdsa-rdfc-2019`: hash `hashData` with SHA-256 (P-256) or SHA-384
-     (P-384), then verify the IEEE P1363-encoded ECDSA signature.
-   - `eddsa-rdfc-2022`: verify the Ed25519 signature over `hashData` directly.
+   - `ecdsa-rdfc-2019` / `ecdsa-jcs-2019`: hash `hashData` with SHA-256
+     (P-256) or SHA-384 (P-384), then verify the IEEE P1363-encoded ECDSA
+     signature.
+   - `eddsa-rdfc-2022` / `eddsa-jcs-2022`: verify the Ed25519 signature over
+     `hashData` directly.
 
 ### Key resolution and Multikey verification methods
 

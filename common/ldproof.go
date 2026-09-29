@@ -1218,8 +1218,10 @@ func computeDataIntegrityHashData(suite dataIntegritySuite, publicKey jwk.Key, c
 }
 
 // shouldUseSHA384 determines if the SHA-384 hash should be used instead of
-// SHA-256 for the given cryptosuite and key. Returns true for P-384 keys
-// with ecdsa-rdfc-2019, false for P-256 and eddsa-rdfc-2022.
+// SHA-256 for the given cryptosuite and key. It branches on the suite's
+// signature algorithm rather than its name, as VC-DI-ECDSA 3.2.4 and 3.3.4
+// require: the hash follows the curve, so both ECDSA suites use SHA-384 for a
+// P-384 key. P-256 and the EdDSA suites use SHA-256.
 func shouldUseSHA384(suite dataIntegritySuite, publicKey jwk.Key) (bool, error) {
 	if suite.algorithm != signatureAlgorithmECDSA {
 		return false, nil
