@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -40,6 +41,16 @@ const (
 	// MulticodecSecp256k1Pub is the multicodec code for secp256k1 public keys.
 	MulticodecSecp256k1Pub = 0xe7
 )
+
+// ErrorUnsupportedMulticodec is returned for a key whose multicodec is
+// well-formed but names a key type this verifier cannot verify signatures
+// with - X25519 key agreement above all, which DID documents publish
+// routinely alongside their signing keys.
+//
+// It is deliberately distinct from a decoding failure: a document carrying
+// such a key is perfectly valid, so a caller holding other keys should carry
+// on without treating it as a problem.
+var ErrorUnsupportedMulticodec = errors.New("unsupported_multicodec")
 
 // DecodeMultibaseKey decodes a multibase-encoded public key (e.g. "z6Mk...")
 // that carries a multicodec varint prefix, and returns the corresponding JWK.
@@ -120,10 +131,10 @@ func MulticodecToJWK(codec uint64, rawKey []byte) (jwk.Key, string, error) {
 		return key, TypeJsonWebKey2020, nil
 
 	case MulticodecSecp256k1Pub:
-		return nil, "", fmt.Errorf("unsupported multicodec: 0x%x (secp256k1 is not supported in Go's standard crypto library)", codec)
+		return nil, "", fmt.Errorf("%w: 0x%x (secp256k1 is not supported in Go's standard crypto library)", ErrorUnsupportedMulticodec, codec)
 
 	default:
-		return nil, "", fmt.Errorf("unsupported multicodec: 0x%x", codec)
+		return nil, "", fmt.Errorf("%w: 0x%x", ErrorUnsupportedMulticodec, codec)
 	}
 }
 

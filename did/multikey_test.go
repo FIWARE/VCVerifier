@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/multiformats/go-multibase"
@@ -15,6 +16,11 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 )
+
+// multicodecX25519Pub is the multicodec code for X25519 key-agreement public
+// keys. DID documents publish them routinely next to their signing keys, and
+// they are the reason an unsupported codec must not warn.
+const multicodecX25519Pub = 0xec
 
 // encodeMultibaseKey is a test helper that multibase-encodes a raw public key
 // with the given multicodec prefix using base58btc ('z') encoding.
@@ -34,6 +40,12 @@ func TestDecodeMultibaseKey(t *testing.T) {
 		wantCurve   jwa.EllipticCurveAlgorithm
 		checkCurve  bool   // whether to verify the curve
 		wantErr     string // substring of expected error; empty means success
+		// wantUnsupported says whether the error must be
+		// ErrorUnsupportedMulticodec. did_web.go decides between Debug and
+		// Warn on it, so a decoding failure that started matching it - or an
+		// unsupported codec that stopped - would silently invert the log
+		// level for every DID document that publishes such a key.
+		wantUnsupported bool
 	}{
 		{
 			name: "valid Ed25519 key",
@@ -83,7 +95,16 @@ func TestDecodeMultibaseKey(t *testing.T) {
 				// Use a multicodec code that is not supported (0xFF)
 				return encodeMultibaseKey(0xFF, make([]byte, 32))
 			},
-			wantErr: "unsupported multicodec",
+			wantErr:         "unsupported_multicodec",
+			wantUnsupported: true,
+		},
+		{
+			name: "X25519 key agreement key",
+			setup: func(t *testing.T) string {
+				return encodeMultibaseKey(multicodecX25519Pub, make([]byte, 32))
+			},
+			wantErr:         "unsupported_multicodec",
+			wantUnsupported: true,
 		},
 		{
 			name: "truncated Ed25519 key data",
@@ -116,7 +137,8 @@ func TestDecodeMultibaseKey(t *testing.T) {
 			setup: func(t *testing.T) string {
 				return encodeMultibaseKey(MulticodecSecp256k1Pub, make([]byte, 33))
 			},
-			wantErr: "unsupported multicodec",
+			wantErr:         "unsupported_multicodec",
+			wantUnsupported: true,
 		},
 	}
 
@@ -128,6 +150,7 @@ func TestDecodeMultibaseKey(t *testing.T) {
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.Equal(t, tc.wantUnsupported, errors.Is(err, ErrorUnsupportedMulticodec))
 				assert.Nil(t, key)
 				return
 			}
@@ -194,7 +217,7 @@ func TestMulticodecToJWK(t *testing.T) {
 			rawKey: func(t *testing.T) []byte {
 				return make([]byte, 32)
 			},
-			wantErr: "unsupported multicodec: 0xabcd",
+			wantErr: "unsupported_multicodec: 0xabcd",
 		},
 	}
 
@@ -206,6 +229,7 @@ func TestMulticodecToJWK(t *testing.T) {
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.ErrorIs(t, err, ErrorUnsupportedMulticodec)
 				assert.Nil(t, key)
 				return
 			}
