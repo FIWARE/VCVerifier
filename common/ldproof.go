@@ -65,6 +65,7 @@ const ContextSecuritySuiteJWS2020 = "https://w3id.org/security/suites/jws-2020/v
 // because the coverage check compares parsed predicates rather than raw text.
 const (
 	IRIProofCreated            = "http://purl.org/dc/terms/created"
+	IRIProofExpires            = "https://w3id.org/security#expiration"
 	IRIProofVerificationMethod = "https://w3id.org/security#verificationMethod"
 	IRIProofPurpose            = "https://w3id.org/security#proofPurpose"
 	IRIProofChallenge          = "https://w3id.org/security#challenge"
@@ -573,6 +574,11 @@ func assertProofOptionsCovered(canonicalProofOptions string, proof *LDProof) err
 		expectedObject string
 	}{
 		{IRIProofCreated, LDProofKeyCreated, proof.Created, proof.Created},
+		// expires is enforced by LDProofChecker.assertProofNotExpired, which
+		// is only sound while the timestamp is signed - so assert it the same
+		// way created is, rather than trusting a value the holder could have
+		// written after the fact.
+		{IRIProofExpires, LDProofKeyExpires, proof.Expires, proof.Expires},
 		{IRIProofVerificationMethod, LDProofKeyVerificationMethod, proof.VerificationMethod, proof.VerificationMethod},
 		// proofPurpose is declared as @type: @id, so "authentication" is
 		// expanded to a context-defined IRI. Only its presence can be

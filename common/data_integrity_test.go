@@ -830,3 +830,115 @@ func TestAssertProofOptionsCovered_CryptosuiteEmpty(t *testing.T) {
 	err = assertProofOptionsCovered(canonProof.(string), proof)
 	assert.NoError(t, err, "empty cryptosuite should not trigger a coverage check")
 }
+
+// contextWithoutExpires defines every proof term assertProofOptionsCovered
+// checks except `expires`, so that a proof carrying an expiry canonicalizes
+// with the expiry - and only the expiry - silently dropped.
+func contextWithoutExpires() map[string]interface{} {
+	return map[string]interface{}{
+		// @vocab resolves the proofPurpose value, which is a term rather than
+		// an absolute IRI. It also gives `expires` a predicate - a different
+		// one from the security vocabulary's #expiration, which is the point:
+		// the term expands, just not to the IRI the guard looks for.
+		"@vocab": "https://w3id.org/security#",
+		LDProofKeyCreated: map[string]interface{}{
+			"@id":   IRIProofCreated,
+			"@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+		},
+		LDProofKeyVerificationMethod: map[string]interface{}{
+			"@id":   IRIProofVerificationMethod,
+			"@type": "@id",
+		},
+		LDProofKeyProofPurpose: map[string]interface{}{
+			"@id": IRIProofPurpose,
+			// @vocab, as the VCDM contexts declare it: the value is a term
+			// ("assertionMethod"), not an absolute IRI.
+			"@type": "@vocab",
+		},
+		LDProofKeyCryptosuite: IRIProofCryptosuite,
+		LDProofKeyChallenge:   IRIProofChallenge,
+		LDProofKeyDomain:      IRIProofDomain,
+	}
+}
+
+// canonicalizeProofOptionsForTest canonicalizes a proof-options map the way
+// the verification path does.
+func canonicalizeProofOptionsForTest(t *testing.T, proofOptions map[string]interface{}) string {
+	t.Helper()
+
+	proc := ld.NewJsonLdProcessor()
+	ldOpts := ld.NewJsonLdOptions("")
+	ldOpts.Format = LDNormFormatNQuads
+	ldOpts.Algorithm = LDNormAlgorithmURDNA
+	ldOpts.DocumentLoader = newTestDocumentLoader()
+
+	canonical, err := proc.Normalize(proofOptions, ldOpts)
+	require.NoError(t, err)
+	return canonical.(string)
+}
+
+// TestAssertProofOptionsCovered_Expires covers the `expires` timestamp, which
+// LDProofChecker.assertProofNotExpired rejects a proof by. Enforcing an expiry
+// the signature does not cover would let a holder rewrite it, so a context
+// that drops the term has to fail here.
+func TestAssertProofOptionsCovered_Expires(t *testing.T) {
+	const expires = "2024-06-01T00:00:00Z"
+
+	tests := []struct {
+		name          string
+		context       interface{}
+		expires       string
+		expectedError error
+	}{
+		{
+			name:          "expires covered under the VCDM 2.0 context",
+			context:       []interface{}{ContextCredentialsV2},
+			expires:       expires,
+			expectedError: nil,
+		},
+		{
+			name:          "expires dropped by a context that does not define it",
+			context:       []interface{}{contextWithoutExpires()},
+			expires:       expires,
+			expectedError: ErrorLDProofOptionsNotCovered,
+		},
+		{
+			name:          "no expires to cover",
+			context:       []interface{}{contextWithoutExpires()},
+			expires:       "",
+			expectedError: nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proof := &LDProof{
+				Type:               ProofTypeDataIntegrityProof,
+				Cryptosuite:        CryptosuiteEcdsaRdfc2019,
+				Created:            "2024-01-01T00:00:00Z",
+				Expires:            test.expires,
+				VerificationMethod: "did:web:example.com#key-1",
+				ProofPurpose:       ProofPurposeAssertionMethod,
+			}
+			proofOptions := map[string]interface{}{
+				JSONLDKeyContext:             test.context,
+				JSONLDKeyType:                proof.Type,
+				LDProofKeyCryptosuite:        proof.Cryptosuite,
+				LDProofKeyCreated:            proof.Created,
+				LDProofKeyVerificationMethod: proof.VerificationMethod,
+				LDProofKeyProofPurpose:       proof.ProofPurpose,
+			}
+			if test.expires != "" {
+				proofOptions[LDProofKeyExpires] = test.expires
+			}
+
+			err := assertProofOptionsCovered(canonicalizeProofOptionsForTest(t, proofOptions), proof)
+
+			if test.expectedError == nil {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorIs(t, err, test.expectedError)
+		})
+	}
+}
