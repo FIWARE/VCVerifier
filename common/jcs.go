@@ -37,6 +37,12 @@ var (
 	// Unicode, such as a lone surrogate. RFC 8785 section 3.2.2.2 requires
 	// these to fail: they would otherwise canonicalize differently in
 	// different implementations and break the signature.
+	//
+	// It is unreachable from the Data Integrity verification path, where every
+	// string arrives through encoding/json, which substitutes U+FFFD for
+	// invalid UTF-8 and for unpaired surrogate escapes while unmarshalling.
+	// The check guards the exported CanonicalizeJSON against values built in
+	// Go, where nothing has made that substitution.
 	ErrorJCSInvalidString = errors.New("jcs_invalid_string")
 
 	// ErrorJCSUnsupportedType is returned for a value that has no JSON
@@ -245,13 +251,9 @@ func writeCanonicalString(builder *strings.Builder, value string) error {
 				builder.WriteByte(lowercaseHexDigits[codePoint&hexNibbleMask])
 				continue
 			}
-			if codePoint == utf8.RuneError {
-				// range over a string yields RuneError for invalid encoding,
-				// which ValidString has already ruled out - but also for a
-				// literal U+FFFD, which is fine to emit.
-				builder.WriteRune(codePoint)
-				continue
-			}
+			// A RuneError here is a literal U+FFFD and is written as itself:
+			// range over a string also yields it for invalid encoding, which
+			// ValidString has already ruled out.
 			builder.WriteRune(codePoint)
 		}
 	}

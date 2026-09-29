@@ -219,6 +219,38 @@ func TestCanonicalizeJSONRejectsInvalidUTF8(t *testing.T) {
 	assert.ErrorIs(t, err, ErrorJCSInvalidString)
 }
 
+// TestCanonicalizeJSONEmitsLiteralReplacementCharacter verifies that a
+// genuine U+FFFD is written as itself. Ranging over a string yields
+// utf8.RuneError both for a literal U+FFFD and for invalid encoding, and only
+// the second is an error - which the UTF-8 validation has already rejected by
+// the time any code point is written.
+func TestCanonicalizeJSONEmitsLiteralReplacementCharacter(t *testing.T) {
+	canonical, err := CanonicalizeJSON(map[string]interface{}{"name": "a\ufffdb"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "{\"name\":\"a\ufffdb\"}", canonical)
+}
+
+// TestCanonicalizeJSONSubstitutesOnUnmarshal documents why
+// ErrorJCSInvalidString is unreachable from the verification path: every
+// string there arrives through encoding/json, which replaces invalid UTF-8
+// and unpaired surrogate escapes with U+FFFD before canonicalization sees
+// them.
+func TestCanonicalizeJSONSubstitutesOnUnmarshal(t *testing.T) {
+	tests := map[string]string{
+		"lone surrogate escape": `{"name":"a\ud800b"}`,
+		"invalid utf-8 byte":    "{\"name\":\"a\xffb\"}",
+	}
+	for name, document := range tests {
+		t.Run(name, func(t *testing.T) {
+			canonical, err := CanonicalizeJSONDocument([]byte(document))
+
+			require.NoError(t, err)
+			assert.Equal(t, "{\"name\":\"a\ufffdb\"}", canonical)
+		})
+	}
+}
+
 // TestCanonicalizeJSONNestedStructures verifies that objects nested in arrays
 // have their properties sorted while array order itself is preserved.
 func TestCanonicalizeJSONNestedStructures(t *testing.T) {
