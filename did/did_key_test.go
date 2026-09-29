@@ -58,7 +58,7 @@ func TestKeyVDR_Read_P256(t *testing.T) {
 		t.Fatalf("Failed to generate key: %v", err)
 	}
 
-	didStr := ecdsaToDIDKey(elliptic.P256(), &privKey.PublicKey, multicodecP256Pub)
+	didStr := ecdsaToDIDKey(elliptic.P256(), &privKey.PublicKey, MulticodecP256Pub)
 	vdr := NewKeyVDR()
 	res, err := vdr.Read(didStr)
 	if err != nil {
@@ -84,7 +84,7 @@ func TestKeyVDR_Read_P384(t *testing.T) {
 		t.Fatalf("Failed to generate key: %v", err)
 	}
 
-	didStr := ecdsaToDIDKey(elliptic.P384(), &privKey.PublicKey, multicodecP384Pub)
+	didStr := ecdsaToDIDKey(elliptic.P384(), &privKey.PublicKey, MulticodecP384Pub)
 	vdr := NewKeyVDR()
 	res, err := vdr.Read(didStr)
 	if err != nil {
