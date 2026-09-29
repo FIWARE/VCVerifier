@@ -264,6 +264,17 @@ another's — not even between the RDFC and JCS variants of the same algorithm.
    the proof configuration exactly as it stands — including the `@context` the
    proof itself carries, which a conforming issuer copies from the document
    before signing (VC-DI-ECDSA §3.3.5).
+
+   That context is not inert. VC-DI-ECDSA §3.3.2 step 4 (identically
+   VC-DI-EDDSA §3.3.2) binds the document to it: the presented document's
+   `@context` must *start with* every entry of the proof's, in the same order,
+   and the document is then canonicalized under the proof's context rather
+   than its own. So a document whose context was extended after issuance still
+   verifies, while a reordered or replaced entry is rejected with
+   `ErrorLDProofContextMismatch`. The prefix rule is what bounds the
+   rebinding: entries may only be appended, so the base context entry
+   `common.DetectVCDataModelVersion` reads cannot be swapped out. A proof that
+   carries no `@context` at all leaves the document's own in place.
 2. **Hash**: `hashData = hash(canonical proof options) || hash(canonical
    document)`, where the hash is SHA-256 (P-256 / Ed25519) or SHA-384
    (P-384).

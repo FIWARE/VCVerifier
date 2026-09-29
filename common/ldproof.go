@@ -135,6 +135,13 @@ var (
 	// fields would not be covered by the signature.
 	ErrorLDProofOptionsNotCovered = errors.New("ld_proof_options_not_covered_by_signature")
 
+	// ErrorLDProofContextMismatch is returned when a JCS-canonicalized proof
+	// carries an @context that is not a prefix of the document's. VC-DI-ECDSA
+	// 3.3.2 / VC-DI-EDDSA 3.3.2 step 4.1 make that a verification failure: the
+	// document may only extend the context it was signed under, never reorder
+	// or replace it.
+	ErrorLDProofContextMismatch = errors.New("ld_proof_context_mismatch")
+
 	// ErrorLDProofCurveMismatch is returned when the JWS algorithm requires a
 	// specific elliptic curve that the supplied key does not use.
 	ErrorLDProofCurveMismatch = errors.New("ld_proof_algorithm_curve_mismatch")
@@ -530,9 +537,8 @@ func buildVerificationProofOptions(documentContext interface{}, proof *LDProof) 
 	}
 	// A JCS proof configuration is a plain clone of the proof (VC-DI-ECDSA
 	// 3.3.5): whatever @context it carries is part of it, and none is added.
-	// JCS never expands anything, so the context is data here rather than a
-	// term definition, and a conforming issuer copied the document's into the
-	// proof before signing.
+	// It is not inert data either - canonicalizeForDataIntegrity binds the
+	// document to it, per VC-DI-ECDSA 3.3.2 step 4.
 	if usesJCSCanonicalization(proof.Cryptosuite) {
 		return proofOptions
 	}
@@ -1020,6 +1026,24 @@ func VerifyDataIntegrityProof(documentJSON []byte, proof *LDProof, publicKey jwk
 // construction, so there is nothing to assert.
 func canonicalizeForDataIntegrity(suite dataIntegritySuite, docMap JSONObject, proofOptions JSONObject, proof *LDProof, documentLoader ld.DocumentLoader) (canonicalProof string, canonicalDoc string, err error) {
 	if suite.canonicalization == canonicalizationJCS {
+		// VC-DI-ECDSA 3.3.2 step 4 (and VC-DI-EDDSA 3.3.2 step 4): a proof
+		// configuration that carries an @context governs the document too.
+		// The document's own context may only extend it, and the document is
+		// hashed under the proof's. Without this a conformant credential
+		// whose context was extended after signing would be rejected, and the
+		// context the proof carries would bind nothing about the document it
+		// secures.
+		//
+		// The prefix check is what bounds the rebinding: entries may be
+		// appended, never reordered or replaced, so the base context entry
+		// that DetectVCDataModelVersion reads cannot be swapped out.
+		if proofContext, carried := proofOptions[JSONLDKeyContext]; carried {
+			if err := assertContextPrefix(docMap[JSONLDKeyContext], proofContext); err != nil {
+				return "", "", err
+			}
+			docMap = withContext(docMap, proofContext)
+		}
+
 		canonicalProof, err = CanonicalizeJSON(proofOptions)
 		if err != nil {
 			logging.Log().Warnf("VerifyDataIntegrityProof: failed to JCS-canonicalize proof options: %v", err)
@@ -1064,6 +1088,77 @@ func canonicalizeForDataIntegrity(suite dataIntegritySuite, docMap JSONObject, p
 		return "", "", err
 	}
 	return canonicalProof, canonicalDoc, nil
+}
+
+// assertContextPrefix checks that documentContext starts with every entry of
+// proofContext, in the same order (VC-DI-ECDSA 3.3.2 step 4.1).
+//
+// Entries are compared structurally rather than as raw values: an @context
+// entry is usually a string, but an inline context object is just as legal,
+// and two equal objects must compare equal however their members happen to be
+// ordered in the JSON.
+func assertContextPrefix(documentContext interface{}, proofContext interface{}) error {
+	documentEntries := contextEntries(documentContext)
+	proofEntries := contextEntries(proofContext)
+	if len(proofEntries) > len(documentEntries) {
+		logging.Log().Warnf("Document declares %d @context entries, the proof was created under %d", len(documentEntries), len(proofEntries))
+		return fmt.Errorf("%w: the document declares fewer @context entries than the proof", ErrorLDProofContextMismatch)
+	}
+	for i, proofEntry := range proofEntries {
+		equal, err := sameContextEntry(proofEntry, documentEntries[i])
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrorLDProofContextMismatch, err)
+		}
+		if !equal {
+			logging.Log().Warnf("Document @context entry %d does not match the one the proof was created under", i)
+			return fmt.Errorf("%w: @context entry %d differs from the signed one", ErrorLDProofContextMismatch, i)
+		}
+	}
+	return nil
+}
+
+// contextEntries normalizes an @context value to the list of its entries. A
+// single string or object is a one-entry context; an absent one is empty.
+func contextEntries(context interface{}) []interface{} {
+	switch typed := context.(type) {
+	case nil:
+		return nil
+	case []interface{}:
+		return typed
+	default:
+		return []interface{}{typed}
+	}
+}
+
+// sameContextEntry compares two @context entries. Strings are compared
+// directly; anything else through its canonical JSON, so that member order
+// inside an inline context object does not decide the outcome.
+func sameContextEntry(left interface{}, right interface{}) (bool, error) {
+	leftString, leftIsString := left.(string)
+	rightString, rightIsString := right.(string)
+	if leftIsString || rightIsString {
+		return leftIsString && rightIsString && leftString == rightString, nil
+	}
+	canonicalLeft, err := CanonicalizeJSON(left)
+	if err != nil {
+		return false, err
+	}
+	canonicalRight, err := CanonicalizeJSON(right)
+	if err != nil {
+		return false, err
+	}
+	return canonicalLeft == canonicalRight, nil
+}
+
+// withContext returns a shallow copy of document with its @context replaced,
+// leaving the caller's map untouched.
+func withContext(document JSONObject, context interface{}) JSONObject {
+	rebound := make(JSONObject, len(document))
+	for key, value := range document {
+		rebound[key] = value
+	}
+	rebound[JSONLDKeyContext] = context
+	return rebound
 }
 
 // canonicalNQuads converts the result of ld.JsonLdProcessor.Normalize into the
