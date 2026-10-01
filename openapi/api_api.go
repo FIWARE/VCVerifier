@@ -795,13 +795,16 @@ func handleAuthenticationResponse(c *gin.Context, state string, presentation *co
 	}
 	if response != (verifier.Response{}) && response.FlowVersion == verifier.SAME_DEVICE {
 		if response.Nonce != "" {
-			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s&nonce=%s", response.RedirectTarget, response.SessionId, response.Code, response.Nonce))
+			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s&nonce=%s", response.RedirectTarget, response.ExternalState, response.Code, response.Nonce))
 		} else {
-			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s", response.RedirectTarget, response.SessionId, response.Code))
+			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s", response.RedirectTarget, response.ExternalState, response.Code))
 		}
 		return
 	} else if response != (verifier.Response{}) && response.FlowVersion == verifier.CROSS_DEVICE_V2 {
-		sendRedirect(c, response.SessionId, response.Code, response.RedirectTarget)
+		// state here is the verifier's own internal session id (what the wallet echoed
+		// back), used to find the right WebSocket connection; response.ExternalState is
+		// the external OIDC client's original value, only used in the redirect it receives.
+		sendRedirect(c, state, response.ExternalState, response.Code, response.RedirectTarget)
 	}
 	logging.Log().Debugf("Successfully authenticated %s.", state)
 	c.JSON(http.StatusOK, gin.H{})

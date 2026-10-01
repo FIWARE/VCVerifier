@@ -385,8 +385,8 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 	}
 
 	tests := []test{
-		{"If a same-device flow is authenticated, a valid redirect should be returned.", true, "my-state", getValidVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
-		{"If a same-device flow is authenticated with an SdJwt, a valid redirect should be returned.", true, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
+		{"If a same-device flow is authenticated, a valid redirect should be returned.", true, "my-state", getValidVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", ExternalState: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
+		{"If a same-device flow is authenticated with an SdJwt, a valid redirect should be returned.", true, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", ExternalState: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
 		{"If a cross-device flow is authenticated, a simple ok should be returned.", false, "my-state", getValidVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 200, "", ErrorMessage{}},
 		{"If a cross-device flow is authenticated with an SdJwt, a simple ok should be returned.", false, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 200, "", ErrorMessage{}},
 		{"If the same-device flow responds an error, a 400 should be returend", true, "my-state", getValidVPTokenJWT(), errors.New("verification_error"), verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessage{Summary: "verification_error"}},
@@ -562,11 +562,11 @@ func buildFakeVCJWT() string {
 		"nbf": 1707984310,
 		"jti": "urn:uuid:cb5f9f1c-017b-4d44-8461-72d323da84cf",
 		"vc": map[string]interface{}{
-			"type":           []string{"VerifiableCredential"},
-			"issuer":         "did:key:test",
-			"issuanceDate":   1707984310812,
-			"@context":       []string{"https://www.w3.org/2018/credentials/v1"},
-			"id":             "urn:uuid:cb5f9f1c-017b-4d44-8461-72d323da84cf",
+			"type":         []string{"VerifiableCredential"},
+			"issuer":       "did:key:test",
+			"issuanceDate": 1707984310812,
+			"@context":     []string{"https://www.w3.org/2018/credentials/v1"},
+			"id":           "urn:uuid:cb5f9f1c-017b-4d44-8461-72d323da84cf",
 			"credentialSubject": map[string]interface{}{
 				"firstName":  "HappyPets",
 				"familyName": "Prime",
@@ -905,9 +905,9 @@ func TestDecodeVpString(t *testing.T) {
 func getNoHolderVPTokenJWT() string {
 	return buildJWTVPToken(map[string]interface{}{
 		"vp": map[string]interface{}{
-			"@context": []string{"https://www.w3.org/2018/credentials/v1"},
-			"type":     []string{"VerifiablePresentation"},
-			"holder":   map[string]interface{}{"nota": "holder"},
+			"@context":             []string{"https://www.w3.org/2018/credentials/v1"},
+			"type":                 []string{"VerifiablePresentation"},
+			"holder":               map[string]interface{}{"nota": "holder"},
 			"verifiableCredential": []interface{}{buildFakeVCJWT()},
 		},
 	})
