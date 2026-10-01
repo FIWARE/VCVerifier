@@ -178,8 +178,12 @@ func TestFrontendV2ByReference(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 8: Open WebSocket connection BEFORE posting the authentication response
+	// The verifier only accepts WebSocket upgrades whose Origin matches its configured
+	// host (see openapi.checkWebSocketOrigin) - a real browser tab loading the login page
+	// sends this automatically, so the test replicates it explicitly.
 	wsURL := fmt.Sprintf("ws://localhost:%d/ws?state=%s", fixture.verifier.Port, stateClaim)
-	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	wsHeader := http.Header{"Origin": {fmt.Sprintf("http://localhost:%d", fixture.verifier.Port)}}
+	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, wsHeader)
 	require.NoError(t, err, "WebSocket connection should succeed")
 	defer wsConn.Close()
 
@@ -294,8 +298,11 @@ func TestFrontendV2ByValue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 5: Open WebSocket connection
+	// See the matching comment in the other test in this file: Origin must match the
+	// verifier's configured host, same as a real browser tab would send.
 	wsURL := fmt.Sprintf("ws://localhost:%d/ws?state=%s", fixture.verifier.Port, stateClaim)
-	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	wsHeader := http.Header{"Origin": {fmt.Sprintf("http://localhost:%d", fixture.verifier.Port)}}
+	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, wsHeader)
 	require.NoError(t, err, "WebSocket connection should succeed")
 	defer wsConn.Close()
 

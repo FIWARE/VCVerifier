@@ -55,6 +55,7 @@ type mockVerifier struct {
 	mockExchangeError       error
 	mockPathPrefix          string
 	mockRequestMode         string
+	mockHost                string
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
@@ -90,7 +91,7 @@ func (mV *mockVerifier) GetOpenIDConfiguration(serviceIdentifier string) (metada
 	return mV.mockOpenIDConfig, err
 }
 func (mV *mockVerifier) GetHost() string {
-	return ""
+	return mV.mockHost
 }
 
 func (mV *mockVerifier) GetPathPrefix() string {
@@ -562,11 +563,11 @@ func buildFakeVCJWT() string {
 		"nbf": 1707984310,
 		"jti": "urn:uuid:cb5f9f1c-017b-4d44-8461-72d323da84cf",
 		"vc": map[string]interface{}{
-			"type":           []string{"VerifiableCredential"},
-			"issuer":         "did:key:test",
-			"issuanceDate":   1707984310812,
-			"@context":       []string{"https://www.w3.org/2018/credentials/v1"},
-			"id":             "urn:uuid:cb5f9f1c-017b-4d44-8461-72d323da84cf",
+			"type":         []string{"VerifiableCredential"},
+			"issuer":       "did:key:test",
+			"issuanceDate": 1707984310812,
+			"@context":     []string{"https://www.w3.org/2018/credentials/v1"},
+			"id":           "urn:uuid:cb5f9f1c-017b-4d44-8461-72d323da84cf",
 			"credentialSubject": map[string]interface{}{
 				"firstName":  "HappyPets",
 				"familyName": "Prime",
@@ -905,9 +906,9 @@ func TestDecodeVpString(t *testing.T) {
 func getNoHolderVPTokenJWT() string {
 	return buildJWTVPToken(map[string]interface{}{
 		"vp": map[string]interface{}{
-			"@context": []string{"https://www.w3.org/2018/credentials/v1"},
-			"type":     []string{"VerifiablePresentation"},
-			"holder":   map[string]interface{}{"nota": "holder"},
+			"@context":             []string{"https://www.w3.org/2018/credentials/v1"},
+			"type":                 []string{"VerifiablePresentation"},
+			"holder":               map[string]interface{}{"nota": "holder"},
 			"verifiableCredential": []interface{}{buildFakeVCJWT()},
 		},
 	})
