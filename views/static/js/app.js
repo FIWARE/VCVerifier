@@ -86,6 +86,12 @@ class AppManager {
     this.config = new ConfigManager();
     this.i18n = new LocaleManager();
     this.socket = null;
+    // set once the page is done with the socket (redirected, expired or failed), so a closing
+    // socket is not reconnected
+    this.socketFinished = false;
+    this.socketEverConnected = false;
+    this.reconnectAttempts = 0;
+    this.reconnectTimer = null;
     this.theme = new ThemeManager(this.config.get('defaultTheme'));
 
     this.#initTheme();
@@ -171,33 +177,68 @@ class AppManager {
   #handleExpiration() {
     document.getElementById('qrcode')?.classList.add('blur-lg', 'grayscale', 'opacity-50');
     document.getElementById('expired-overlay')?.classList.remove('hidden');
-    if (this.socket) this.socket.close();
+    this.#finishWebSocket();
+  }
+
+  // Stops using the socket for good: no reconnect after this.
+  #finishWebSocket() {
+    this.socketFinished = true;
+    clearTimeout(this.reconnectTimer);
+    if (this.socket) this.socket.close(1000);
+  }
+
+  #showWebSocketError() {
+    document.getElementById('ws-connecting')?.classList.add('hidden');
+    document.getElementById('qrcode')?.classList.add('hidden');
+    document.getElementById('timer-section')?.classList.add('hidden');
+    const wsError = document.getElementById('ws-error');
+    if (wsError) {
+      wsError.classList.remove('hidden');
+      wsError.classList.add('flex');
+    }
+  }
+
+  // Delay before the given reconnect attempt: 1s, 2s, 4s, 8s, then 10s.
+  static #reconnectDelay(attempt) {
+    return Math.min(1000 * 2 ** attempt, 10000);
   }
 
   #connectWebSocket(url) {
-    this.socket = new WebSocket(url);
-    this.socket.onopen = () => {
+    // The socket can drop while the QR is shown (a proxy closing it, a network change). The login
+    // only completes over it, so reconnect to the same session until the QR expires; the server
+    // replaces the old connection. A page that never got connected gives up sooner, since the
+    // QR is not shown before the first connection.
+    const socket = new WebSocket(url);
+    this.socket = socket;
+
+    socket.onopen = () => {
       console.log('WebSocket connected');
+      this.socketEverConnected = true;
+      this.reconnectAttempts = 0;
       document.getElementById('ws-connecting')?.classList.add('hidden');
       document.getElementById('qrcode')?.classList.remove('hidden');
       document.getElementById('timer-section')?.classList.remove('hidden');
     }
-    this.socket.onerror = (err) => {
+    socket.onerror = (err) => {
+      // always followed by onclose, which decides whether to reconnect
       console.error('WebSocket error:', err);
-      document.getElementById('ws-connecting')?.classList.add('hidden');
-      const wsError = document.getElementById('ws-error');
-      if (wsError) {
-        wsError.classList.remove('hidden');
-        wsError.classList.add('flex');
-      }
     }
 
-    this.socket.onclose = (e) => {
-      if (e.code !== 1000) {
-        console.log(e.code)
+    socket.onclose = (e) => {
+      if (this.socketFinished || socket !== this.socket) return;
+      const maxReconnectAttempts = this.socketEverConnected ? 6 : 2;
+      if (this.reconnectAttempts >= maxReconnectAttempts) {
+        console.error(`WebSocket closed (code ${e.code}), giving up after ${this.reconnectAttempts} reconnect attempts`);
+        this.socketFinished = true;
+        this.#showWebSocketError();
+        return;
       }
+      const delay = AppManager.#reconnectDelay(this.reconnectAttempts);
+      this.reconnectAttempts++;
+      console.log(`WebSocket closed (code ${e.code}), reconnecting in ${delay}ms`);
+      this.reconnectTimer = setTimeout(() => this.#connectWebSocket(url), delay);
     }
-    this.socket.onmessage = (event) => {
+    socket.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data)
 
@@ -207,12 +248,13 @@ class AppManager {
             break
           case "authenticated":
             console.log("Redirect initiated " + message.redirectUrl)
+            this.#finishWebSocket();
             window.location.href = message.redirectUrl;
             break
 
           case "error":
             console.log("error")
-            socket.close()
+            this.#finishWebSocket();
             break
         }
       } catch (err) {

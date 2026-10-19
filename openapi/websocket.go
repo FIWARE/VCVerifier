@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fiware/VCVerifier/logging"
 	"github.com/gin-gonic/gin"
@@ -18,7 +19,7 @@ var (
 	wsUpgrader = websocket.Upgrader{
 		CheckOrigin: checkWebSocketOrigin,
 	}
-	sessions = sync.Map{} // map[string]*websocket.Conn
+	sessions = sync.Map{} // map[string]*wsClient
 	// additionalWebSocketOrigins holds the normalized server.webSocketAllowedOrigins. It is set
 	// once at startup, before the server accepts connections.
 	additionalWebSocketOrigins = map[string]struct{}{}
@@ -115,6 +116,61 @@ func normalizeOrigin(u *url.URL) string {
 
 var defaultPorts = map[string]string{"http": "80", "https": "443"}
 
+// Keepalive timing for the login WebSocket. The browser sends nothing on this channel, so
+// without pings a proxy or ingress closes it as idle (nginx after 60s by default) while the user
+// is still getting their phone out, and a dead peer is never noticed. The ping period must stay
+// below the shortest idle timeout of anything in between; a peer that answers no ping within
+// wsPongWait is considered gone. Variables only so tests can shorten them.
+var (
+	wsPingPeriod = 25 * time.Second
+	wsPongWait   = 60 * time.Second
+	wsWriteWait  = 10 * time.Second
+)
+
+// wsMaxMessageSize bounds what a client may send - the frontend sends nothing but pongs.
+const wsMaxMessageSize = 512
+
+// wsClient is a login WebSocket connection. gorilla/websocket allows a single concurrent writer
+// (control frames excepted), and the initial session message and the login notification are
+// written from different goroutines, so data writes go through writeJSON. The timing is fixed
+// per connection when it is opened.
+type wsClient struct {
+	conn       *websocket.Conn
+	writeMu    sync.Mutex
+	pingPeriod time.Duration
+	pongWait   time.Duration
+	writeWait  time.Duration
+	// closed once the connection is closed, unregistered and its goroutines have finished
+	closed chan struct{}
+}
+
+func (c *wsClient) writeJSON(message interface{}) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeWait)); err != nil {
+		return err
+	}
+	return c.conn.WriteJSON(message)
+}
+
+// keepAlive pings the client until done is closed or a ping cannot be written. WriteControl may
+// be called concurrently with the other write methods, so it needs no lock.
+func (c *wsClient) keepAlive(sessionId string, done <-chan struct{}) {
+	ticker := time.NewTicker(c.pingPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			if err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(c.writeWait)); err != nil {
+				logging.Log().Debugf("Stopped pinging the WebSocket of session %s: %v", sessionId, err)
+				return
+			}
+		}
+	}
+}
+
 // sendRedirect notifies the browser waiting on the WebSocket that the login completed.
 // sessionId is the verifier's own internal session id - it's what the WS connection was
 // registered under (see WsHandler) and has nothing to do with the external OIDC client.
@@ -127,24 +183,15 @@ func sendRedirect(c *gin.Context, sessionId string, externalState string, code s
 		c.Copy().AbortWithStatusJSON(500, ErrorMessageNoWebsocketConnection)
 		return
 	}
-	wsConnection := connection.(*websocket.Conn)
 
-	err := wsConnection.WriteJSON(gin.H{"type": "authenticated", "redirectUrl": redirectUrl + "?state=" + externalState + "&code=" + code})
+	// The connection is closed and unregistered by WsHandler's reader once the browser leaves the
+	// page, so nothing else is to be done here - in particular no second reader on it.
+	err := connection.(*wsClient).writeJSON(gin.H{"type": "authenticated", "redirectUrl": redirectUrl + "?state=" + externalState + "&code=" + code})
 	if err != nil {
 		logging.Log().Warnf("Was not able to notify the frontend for session %s. Err: %v", sessionId, err)
 	} else {
 		logging.Log().Infof("Notified session %s of successful authentication.", sessionId)
 	}
-	go func() {
-		defer func() { _ = wsConnection.Close() }()
-		for {
-			_, _, err := wsConnection.ReadMessage()
-			if err != nil {
-				sessions.Delete(sessionId)
-				break
-			}
-		}
-	}()
 }
 
 func WsHandler(c *gin.Context) {
@@ -160,20 +207,48 @@ func WsHandler(c *gin.Context) {
 		_ = c.AbortWithError(http.StatusBadRequest, err)
 		return
 	}
-	sessions.Store(state, connection)
-	logging.Log().Infof("WebSocket connected for session %s.", state)
-	if err := connection.WriteJSON(gin.H{"type": "session"}); err != nil {
-		logging.Log().Warnf("Was not able to send session message for session %s. Err: %v", state, err)
-	}
+	client := &wsClient{conn: connection, pingPeriod: wsPingPeriod, pongWait: wsPongWait, writeWait: wsWriteWait, closed: make(chan struct{})}
 
+	// A reconnecting browser replaces its earlier connection for the session.
+	sessions.Store(state, client)
+	logging.Log().Infof("WebSocket connected for session %s.", state)
+
+	connection.SetReadLimit(wsMaxMessageSize)
+	_ = connection.SetReadDeadline(time.Now().Add(client.pongWait))
+	connection.SetPongHandler(func(string) error {
+		return connection.SetReadDeadline(time.Now().Add(client.pongWait))
+	})
+
+	done := make(chan struct{})
+	keepAliveStopped := make(chan struct{})
 	go func() {
-		defer func() { _ = connection.Close() }()
+		defer close(keepAliveStopped)
+		client.keepAlive(state, done)
+	}()
+	go func() {
+		defer func() {
+			close(done)
+			_ = connection.Close()
+			<-keepAliveStopped
+			// only unregister this connection - after a reconnect the entry is a newer one
+			sessions.CompareAndDelete(state, client)
+			close(client.closed)
+		}()
 		for {
-			_, _, err := connection.ReadMessage()
-			if err != nil {
-				sessions.Delete(state)
-				break
+			if _, _, err := connection.ReadMessage(); err != nil {
+				// the browser closing or leaving the page is routine; anything else - a missed
+				// pong, a dropped connection - means it will have to reconnect
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
+					logging.Log().Debugf("WebSocket for session %s was closed: %v", state, err)
+				} else {
+					logging.Log().Infof("WebSocket for session %s was lost: %v", state, err)
+				}
+				return
 			}
 		}
 	}()
+
+	if err := client.writeJSON(gin.H{"type": "session"}); err != nil {
+		logging.Log().Warnf("Was not able to send session message for session %s. Err: %v", state, err)
+	}
 }
