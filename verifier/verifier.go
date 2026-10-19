@@ -177,6 +177,9 @@ type CredentialVerifier struct {
 	sessionRedeemMutex sync.Mutex
 	// cache to be used for jwt retrieval
 	tokenCache common.Cache
+	// authorization codes that were exchanged for a token, so a failed v1 callback can tell a
+	// requestor that redeemed the code from one whose exchange failed. Optional: nil records nothing.
+	redeemedCodes common.Cache
 	// nonce generator
 	nonceGenerator NonceGenerator
 	// provides the current time
@@ -384,6 +387,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 
 	sessionCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 	tokenCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
+	redeemedCodes := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 
 	clock := common.RealClock{}
 
@@ -533,6 +537,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		signingKey:        key,
 		sessionCache:      sessionCache,
 		tokenCache:        tokenCache,
+		redeemedCodes:     redeemedCodes,
 		nonceGenerator:    &randomGenerator{},
 		clock:             clock,
 		tokenSigner:       common.JwtTokenSigner{},
@@ -741,7 +746,19 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 		}
 	}
 
+	if v.redeemedCodes != nil {
+		v.redeemedCodes.Set(authorizationCode, true, cache.DefaultExpiration)
+	}
 	return jwtString, expiration, refreshToken, nil
+}
+
+// wasCodeRedeemed reports whether the authorization code was exchanged for a token.
+func (v *CredentialVerifier) wasCodeRedeemed(authorizationCode string) bool {
+	if v.redeemedCodes == nil {
+		return false
+	}
+	_, redeemed := v.redeemedCodes.Get(authorizationCode)
+	return redeemed
 }
 
 /**
@@ -1208,8 +1225,9 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		if err := callbackToRequester(loginSession, authorizationCode); err != nil {
 			// A requestor commonly exchanges the code while handling the callback and may still
 			// answer with an error status (e.g. no browser session on a server-to-server call). A
-			// code that is gone from the cache was redeemed, so the login did complete.
-			if _, pending := v.tokenCache.Get(authorizationCode); !pending {
+			// code that was exchanged for a token means the login did complete. A failed exchange
+			// (e.g. a mismatching redirect_uri) also removes the code, but does not count.
+			if v.wasCodeRedeemed(authorizationCode) {
 				logging.Log().Infof("Requestor %s reported a failed callback for session %s but redeemed the code, the login is complete.", loginSession.callback, state)
 				return sameDevice, nil
 			}

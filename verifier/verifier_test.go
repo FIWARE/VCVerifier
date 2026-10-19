@@ -1372,47 +1372,69 @@ func TestCallbackToRequester_RedirectCountsAsDelivered(t *testing.T) {
 	}
 }
 
-// TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus checks that a requestor that
-// exchanges the code while handling the callback, but answers with an error status, still counts
-// as a delivered login: the wallet gets no error and the session is not restored for a second code.
+// TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus checks how a failed v1 callback
+// is judged when the requestor tried to exchange the code while handling it: a code exchanged for
+// a token is a delivered login whatever the callback answered, while a failed exchange is not.
 func TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
-	trueOption := true
-	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	testKey, _ := jwk.Import(ecdsaKey)
-	_ = jwk.AssignKeyID(testKey)
-
-	sessionCache := cache.New(time.Minute, time.Minute)
-	sessionCache.SetDefault("session-id", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
-	tokenCache := cache.New(time.Minute, time.Minute)
-
-	verifier := &CredentialVerifier{
-		did:                  "did:key:verifier",
-		signingKey:           testKey,
-		tokenCache:           tokenCache,
-		sessionCache:         sessionCache,
-		nonceGenerator:       &countingNonceGenerator{},
-		validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true}, nil}},
-		clock:                mockClock{},
-		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
-		credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
-			Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
-		}}}},
+	tests := []struct {
+		testName        string
+		exchangeWith    string
+		expectedError   error
+		sessionRestored bool
+	}{
+		{"the requestor exchanges the code, then answers 403", "https://myhost.org/callback", nil, false},
+		{"the requestor's exchange fails on the redirect_uri, then it answers 403", "https://other.org/callback", ErrorCallbackRejected, true},
 	}
 
-	// the requestor redeems the code (as the token endpoint would), then answers 403
-	httpClient = mockHttpClient{callbackStatus: http.StatusForbidden, onCallback: func(req *http.Request) {
-		tokenCache.Delete(req.URL.Query().Get("code"))
-	}}
-	t.Cleanup(func() { httpClient = mockHttpClient{} })
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			trueOption := true
+			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			testKey, _ := jwk.Import(ecdsaKey)
+			_ = jwk.AssignKeyID(testKey)
 
-	vp := getVP([]string{"vc"})
-	_, err := verifier.AuthenticationResponse("session-id", &vp)
-	assert.NoError(t, err, "a redeemed code means the login completed, whatever the callback answered")
+			sessionCache := cache.New(time.Minute, time.Minute)
+			sessionCache.SetDefault("session-id", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
+			tokenCache := cache.New(time.Minute, time.Minute)
 
-	_, found := sessionCache.Get("session-id")
-	assert.False(t, found, "the session must not be restored once its code was redeemed")
+			verifier := &CredentialVerifier{
+				did:                  "did:key:verifier",
+				signingKey:           testKey,
+				signingAlgorithm:     "ES256",
+				tokenSigner:          mockTokenSigner{},
+				tokenCache:           tokenCache,
+				redeemedCodes:        cache.New(time.Minute, time.Minute),
+				sessionCache:         sessionCache,
+				nonceGenerator:       &countingNonceGenerator{},
+				validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true}, nil}},
+				clock:                mockClock{},
+				jwtExpiration:        time.Minute,
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+				credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
+					Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
+				}}}},
+			}
+
+			// the requestor exchanges the code at the token endpoint, then answers 403
+			var exchangeErr error
+			httpClient = mockHttpClient{callbackStatus: http.StatusForbidden, onCallback: func(req *http.Request) {
+				_, _, _, exchangeErr = verifier.GetToken(req.URL.Query().Get("code"), tc.exchangeWith, false)
+			}}
+			t.Cleanup(func() { httpClient = mockHttpClient{} })
+
+			vp := getVP([]string{"vc"})
+			_, err := verifier.AuthenticationResponse("session-id", &vp)
+			assert.Equal(t, tc.expectedError, err)
+			if !tc.sessionRestored {
+				assert.NoError(t, exchangeErr, "precondition: the exchange must have succeeded")
+			}
+
+			_, found := sessionCache.Get("session-id")
+			assert.Equal(t, tc.sessionRestored, found, "the session is restored only if no token was issued for its code")
+		})
+	}
 }
 
 func verifySameDevice(t *testing.T, sdr Response, tokenCache mockTokenCache, tc authTest) {
