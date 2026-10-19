@@ -82,6 +82,7 @@ var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorCallbackRejected = errors.New("callback_rejected_by_requestor")
+var ErrorInvalidClientCallbackTimeout = errors.New("invalid_client_callback_timeout")
 var ErrorWrongGrantType = errors.New("wrong_grant_type")
 var ErrorNoSuchCode = errors.New("no_such_code")
 var ErrorRedirectUriMismatch = errors.New("redirect_uri_does_not_match")
@@ -220,8 +221,12 @@ type CredentialVerifier struct {
 // allow singleton access to the verifier
 var verifier Verifier
 
-// http client to be used
+// http client used to call the requestor's client_callback; InitVerifier gives it the configured
+// verifier.clientCallbackTimeout
 var httpClient = client.HttpClient()
+
+// defaultClientCallbackTimeout applies when verifier.clientCallbackTimeout is not set
+const defaultClientCallbackTimeout = 20
 
 // file accessor to be used
 var localFileAccessor common.FileAccessor = common.DiskFileAccessor{}
@@ -367,6 +372,10 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		return
 	}
 	verifierConfig := &config.Verifier
+
+	callbackTimeout := time.Duration(verifierConfig.ClientCallbackTimeout) * time.Second
+	httpClient = &http.Client{Timeout: callbackTimeout}
+	logging.Log().Infof("Requestor callbacks (cross-device v1 flow) time out after %v.", callbackTimeout)
 
 	sessionCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 	tokenCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
@@ -2001,6 +2010,13 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	}
 	if !slices.Contains(verifierConfig.SupportedModes, verifierConfig.RequestMode) { //nolint:govet
 		return ErrorRequestModeNotSupported
+	}
+	// as above, a config built directly gets the zero value instead of the "default:" tag
+	if verifierConfig.ClientCallbackTimeout == 0 {
+		verifierConfig.ClientCallbackTimeout = defaultClientCallbackTimeout
+	}
+	if verifierConfig.ClientCallbackTimeout < 0 {
+		return ErrorInvalidClientCallbackTimeout
 	}
 
 	// Default to accepting all recognized VC Data Model versions when the

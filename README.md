@@ -154,6 +154,11 @@ verifier:
     tirAddress:
     # Expiry(in seconds) of an authentication session. After that, a new flow needs to be initiated.
     sessionExpiry: 30
+    # Time(in seconds) the verifier waits for the client_callback of the cross-device v1 flow (/api/v1/loginQR) to answer
+    # when delivering the authorization code. While it waits, the wallet's request is held open. If the callback fails
+    # and the requestor did not redeem the code, the login session is restored so that the wallet can retry.
+    # Must not be negative; 0 or unset means the default.
+    clientCallbackTimeout: 20
     # scope(e.g. type of credential) to be requested from the wallet. if not configured, not specific scope will be requested.
     requestScope:
     # Validation mode for credential content validation. This controls structural

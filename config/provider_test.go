@@ -35,11 +35,12 @@ func Test_ReadConfig(t *testing.T) {
 					WebSocketPongTimeout:  40,
 				},
 				Verifier: Verifier{
-					Did:            "did:key:somekey",
-					TirAddress:     "https://test.dev/trusted_issuer/v3/issuers/",
-					TirCacheExpiry: 30,
-					TilCacheExpiry: 30,
-					SessionExpiry:  30,
+					Did:                   "did:key:somekey",
+					TirAddress:            "https://test.dev/trusted_issuer/v3/issuers/",
+					TirCacheExpiry:        30,
+					TilCacheExpiry:        30,
+					SessionExpiry:         30,
+					ClientCallbackTimeout: 20,
 					PolicyConfig: Policies{
 						DefaultPolicies: PolicyMap{
 							"SignaturePolicy": {},
@@ -154,6 +155,7 @@ func Test_ReadConfig(t *testing.T) {
 					TirCacheExpiry:        30,
 					TilCacheExpiry:        30,
 					SessionExpiry:         30,
+					ClientCallbackTimeout: 20,
 					ValidationMode:        "none",
 					KeyAlgorithm:          "RS256",
 					GenerateKey:           true,
@@ -218,6 +220,7 @@ func Test_ReadConfig(t *testing.T) {
 					TirCacheExpiry:        30,
 					TilCacheExpiry:        30,
 					SessionExpiry:         30,
+					ClientCallbackTimeout: 20,
 					ValidationMode:        "none",
 					KeyAlgorithm:          "RS256",
 					GenerateKey:           true,

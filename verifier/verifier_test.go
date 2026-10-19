@@ -1486,6 +1486,7 @@ func TestInitVerifier(t *testing.T) {
 		{"Without a validationMode, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "blub", SessionExpiry: 30, KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, ErrorUnsupportedValidationMode},
 		{"Without a valid key algorithm, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "SomethingWeird", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}}, ErrorInvalidKeyConfig},
 		{"Without supported modes, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256"}}, ErrorSupportedModesNotSet},
+		{"With a negative callback timeout, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", ClientCallbackTimeout: -1}}, ErrorInvalidClientCallbackTimeout},
 		{"KID should be added if the key does not contain it and a KID value is configured", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Kid: "random-kid"}}}, nil},
 		{"ClientID should be added to the key when KID value and config are missing", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Id: "client-id-value"}}}, nil},
 	}
@@ -2641,6 +2642,35 @@ const (
 // that (a) the service was constructed, (b) its ValidateVC call is a no-op
 // when no credential opts in, and (c) the context's PerType map contains the
 // expected per-type Enabled flag for the provided credential type.
+func TestInitVerifier_ClientCallbackTimeout(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	t.Cleanup(func() { httpClient = mockHttpClient{} })
+
+	tests := []struct {
+		testName        string
+		configured      int
+		expectedTimeout time.Duration
+	}{
+		{"an unset timeout uses the default", 0, defaultClientCallbackTimeout * time.Second},
+		{"a configured timeout is applied", 7, 7 * time.Second},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			verifier = nil
+			cfg := configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", ClientCallbackTimeout: tc.configured}}
+			if err := InitVerifier(&cfg, nil); err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			client, ok := httpClient.(*http.Client)
+			if !ok {
+				t.Fatalf("Expected the callback client to be an *http.Client, got %T", httpClient)
+			}
+			assert.Equal(t, tc.expectedTimeout, client.Timeout)
+		})
+	}
+}
+
 func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 

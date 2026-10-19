@@ -200,6 +200,10 @@ type Verifier struct {
 	TilCacheExpiry int `mapstructure:"tilCacheExpiry" default:"30"`
 	// expiry of auth sessions
 	SessionExpiry int `mapstructure:"sessionExpiry" default:"30"`
+	// ClientCallbackTimeout is the time, in seconds, the verifier waits for the requestor's
+	// client_callback (cross-device v1 flow) to answer when delivering the authorization code.
+	// While it waits, the login session is redeemed and the wallet's request is held open.
+	ClientCallbackTimeout int `mapstructure:"clientCallbackTimeout" default:"20"`
 	// policies that shall be checked
 	PolicyConfig Policies `mapstructure:"policies"`
 	// path of the authorizationEndpoint to be provided in the .well-known/openid-configuration
