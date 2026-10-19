@@ -12,6 +12,7 @@ package openapi
 import (
 	"html/template"
 	"net/http"
+	"net/url"
 	"slices"
 
 	"github.com/fiware/VCVerifier/logging"
@@ -149,7 +150,7 @@ func VerifierLoginQr(c *gin.Context) {
 
 	c.HTML(http.StatusOK, "verifier_present_qr_v2", gin.H{
 		"qrcode":      template.URL(qrInfo.QR),
-		"wsUrl":       getFrontendVerifier().GetHost() + "/ws?state=" + state,
+		"wsUrl":       getFrontendVerifier().GetHost() + "/ws?state=" + url.QueryEscape(qrInfo.SessionId),
 		"qrExpireAt":  qrInfo.ExpireAt.UnixMilli(),
 		"qrDuration":  qrInfo.TotalDuration,
 		"authRequest": template.URL(qrInfo.AuthenticationRequest),
