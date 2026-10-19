@@ -467,7 +467,7 @@ The login page of the cross-device flow (`/api/v2/loginQR`) learns about a compl
 * the page must be served from `server.host` - the WebSocket only accepts that origin, plus the ones listed in `server.webSocketAllowedOrigins`;
 * the verifier pings every `server.webSocketPingInterval` seconds (default 25) so the connection is not closed as idle. Keep that interval below the proxy's idle timeout (nginx and ingress-nginx: 60s, `proxy-read-timeout`). A browser that answers no ping within `server.webSocketPongTimeout` seconds (default 60) is disconnected.
 
-If the connection drops anyway (a network change, a proxy restart), the page reconnects to the same login session while the QR code is valid.
+If the connection drops anyway (a network change, a proxy restart), the page reconnects to the same login session while the QR code is valid. A connection to a session that no longer exists - expired, or already completed - is answered with an `error` message and closed with code `4403`; the page then stops reconnecting and offers to start the login again.
 
 ### REST-Example
 

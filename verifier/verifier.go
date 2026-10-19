@@ -128,6 +128,8 @@ type Verifier interface {
 	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error)
 	GetJWKS() jwk.Set
 	AuthenticationResponse(state string, verifiablePresentation *common.Presentation) (sameDevice Response, err error)
+	// HasLoginSession reports whether a login session is still open - not expired, not completed
+	HasLoginSession(sessionId string) bool
 	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *common.Presentation) (int64, string, error)
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
 	GetRequestObject(state string) (jwt string, err error)
@@ -1514,6 +1516,13 @@ func verifyChain(vcs []*common.Credential) (bool, error) {
 		return false, fmt.Errorf("natural participent credential was not issued by the presented legal entity. Legal Participant VC id %s, natural VC issuer %s", legalEntitySubjectID, naturalEntity.Contents().Issuer.ID)
 	}
 	return true, nil
+}
+
+// HasLoginSession reports whether a login session is still open, i.e. neither expired nor
+// redeemed by a successful authentication response.
+func (v *CredentialVerifier) HasLoginSession(sessionId string) bool {
+	_, found := v.sessionCache.Get(sessionId)
+	return found
 }
 
 // redeemSession removes the login session if it still exists and reports whether this call was

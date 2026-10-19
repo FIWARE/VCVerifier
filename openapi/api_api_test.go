@@ -56,6 +56,12 @@ type mockVerifier struct {
 	mockPathPrefix          string
 	mockRequestMode         string
 	mockHost                string
+	// sessions HasLoginSession reports as gone; every other session exists
+	mockMissingSessions map[string]bool
+}
+
+func (mV *mockVerifier) HasLoginSession(sessionId string) bool {
+	return !mV.mockMissingSessions[sessionId]
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestType string) (qr string, err error) {

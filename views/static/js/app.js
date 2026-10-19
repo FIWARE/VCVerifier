@@ -187,15 +187,22 @@ class AppManager {
     if (this.socket) this.socket.close(1000);
   }
 
-  #showWebSocketError() {
+  // Replaces the QR code with one of the error panels: 'ws-error' (cannot connect) or
+  // 'session-invalid' (the login session expired or was already used).
+  #showWebSocketError(panelId = 'ws-error') {
     document.getElementById('ws-connecting')?.classList.add('hidden');
     document.getElementById('qrcode')?.classList.add('hidden');
     document.getElementById('timer-section')?.classList.add('hidden');
-    const wsError = document.getElementById('ws-error');
-    if (wsError) {
-      wsError.classList.remove('hidden');
-      wsError.classList.add('flex');
+    const panel = document.getElementById(panelId);
+    if (panel) {
+      panel.classList.remove('hidden');
+      panel.classList.add('flex');
     }
+  }
+
+  #handleSessionInvalid() {
+    this.#finishWebSocket();
+    this.#showWebSocketError('session-invalid');
   }
 
   // Delay before the given reconnect attempt: 1s, 2s, 4s, 8s, then 10s.
@@ -226,6 +233,11 @@ class AppManager {
 
     socket.onclose = (e) => {
       if (this.socketFinished || socket !== this.socket) return;
+      // the server closes with 4403 when the session no longer exists; no reconnect can succeed
+      if (e.code === 4403) {
+        this.#handleSessionInvalid();
+        return;
+      }
       const maxReconnectAttempts = this.socketEverConnected ? 6 : 2;
       if (this.reconnectAttempts >= maxReconnectAttempts) {
         console.error(`WebSocket closed (code ${e.code}), giving up after ${this.reconnectAttempts} reconnect attempts`);
@@ -253,8 +265,8 @@ class AppManager {
             break
 
           case "error":
-            console.log("error")
-            this.#finishWebSocket();
+            console.log("Session error: " + message.reason)
+            this.#handleSessionInvalid();
             break
         }
       } catch (err) {

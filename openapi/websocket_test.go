@@ -377,3 +377,39 @@ func TestSetWebSocketKeepAlive(t *testing.T) {
 		})
 	}
 }
+
+func TestWsHandler_RejectsUnknownSession(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/ws", WsHandler)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	frontendVerifier = &mockVerifier{mockHost: server.URL, mockMissingSessions: map[string]bool{"gone-session": true}}
+	t.Cleanup(func() { frontendVerifier = nil })
+
+	wsURL := "ws" + server.URL[len("http"):] + "/ws?state=gone-session"
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {server.URL}})
+	if err != nil {
+		t.Fatalf("Expected the upgrade to succeed so the page can be told why, got %v (status %v)", err, statusOf(resp))
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil {
+		t.Fatalf("Expected an error message, got err %v", err)
+	}
+	if message["type"] != "error" || message["reason"] != "session_not_found" {
+		t.Errorf("Unexpected message %v", message)
+	}
+
+	_, _, err = conn.ReadMessage()
+	if !websocket.IsCloseError(err, wsCloseSessionInvalid) {
+		t.Errorf("Expected the connection to be closed with %d, got %v", wsCloseSessionInvalid, err)
+	}
+	if registeredClient("gone-session") != nil {
+		t.Errorf("A connection to an unknown session must not be registered.")
+	}
+}

@@ -147,6 +147,10 @@ func SetWebSocketKeepAlive(pingInterval time.Duration, pongTimeout time.Duration
 // wsMaxMessageSize bounds what a client may send - the frontend sends nothing but pongs.
 const wsMaxMessageSize = 512
 
+// wsCloseSessionInvalid is the close code for a connection to a login session that no longer
+// exists - expired or already completed. The page must not reconnect, as no reconnect can succeed.
+const wsCloseSessionInvalid = 4403
+
 // wsClient is a login WebSocket connection. gorilla/websocket allows a single concurrent writer
 // (control frames excepted), and the initial session message and the login notification are
 // written from different goroutines, so data writes go through writeJSON. The timing is fixed
@@ -211,6 +215,21 @@ func sendRedirect(c *gin.Context, sessionId string, externalState string, code s
 	}
 }
 
+// rejectWebSocket tells the page that its login session no longer exists and closes the
+// connection without registering it.
+func rejectWebSocket(connection *websocket.Conn, sessionId string) {
+	logging.Log().Infof("Rejected WebSocket for session %s: the session does not exist (expired, completed or never created).", sessionId)
+	defer func() { _ = connection.Close() }()
+
+	_ = connection.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	if err := connection.WriteJSON(gin.H{"type": "error", "reason": "session_not_found"}); err != nil {
+		logging.Log().Debugf("Was not able to tell the page of session %s that the session is gone: %v", sessionId, err)
+		return
+	}
+	closeMessage := websocket.FormatCloseMessage(wsCloseSessionInvalid, "session_not_found")
+	_ = connection.WriteControl(websocket.CloseMessage, closeMessage, time.Now().Add(wsWriteWait))
+}
+
 func WsHandler(c *gin.Context) {
 	state, stateExists := c.GetQuery("state")
 	if !stateExists {
@@ -224,6 +243,13 @@ func WsHandler(c *gin.Context) {
 		_ = c.AbortWithError(http.StatusBadRequest, err)
 		return
 	}
+	// A page reconnecting after its session was completed (with the notification lost) or has
+	// expired would otherwise keep showing a QR code that can only yield no_such_session.
+	if !getFrontendVerifier().HasLoginSession(state) {
+		rejectWebSocket(connection, state)
+		return
+	}
+
 	client := &wsClient{conn: connection, pingPeriod: wsPingPeriod, pongWait: wsPongWait, writeWait: wsWriteWait, closed: make(chan struct{})}
 
 	// A reconnecting browser replaces its earlier connection for the session.

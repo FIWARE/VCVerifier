@@ -175,6 +175,7 @@ The cross-device v2 login page waits for the result on `/ws?state=<session id>` 
 
 - The upgrade is only accepted from `server.host` plus `server.webSocketAllowedOrigins` (`checkWebSocketOrigin`); origins are compared as normalized `scheme://host:port`. This only stops browser-based cross-site use - binding the connection to the browser that started the login is issue #130.
 - The server pings every `server.webSocketPingInterval` (default 25s) and drops a peer that answers none within `server.webSocketPongTimeout` (default 60s); `SetWebSocketKeepAlive` validates them at startup. Data writes per connection go through `wsClient.writeJSON` (gorilla allows one writer); pings use `WriteControl`.
+- A connection for a session that no longer exists (`Verifier.HasLoginSession`: expired or redeemed) gets `{"type":"error","reason":"session_not_found"}` and close code `4403` (`wsCloseSessionInvalid`), and is never registered; the page shows its "session no longer valid" panel and stops reconnecting.
 - The page reconnects to the same session id with backoff while the QR is valid. A reconnect replaces the registered connection, and a closing connection unregisters itself only via `sessions.CompareAndDelete`, so an old connection going away cannot remove its replacement.
 - A login session is single-use: `AuthenticationResponse` verifies concurrently and the first response to pass removes the session in `redeemSession`; others discard their code and get `no_such_session`.
 
