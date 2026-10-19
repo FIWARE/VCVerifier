@@ -118,6 +118,10 @@ type Server struct {
 	StaticDir string `mapstructure:"staticDir" default:"views/static/"`
 	// PathPrefix is prepended to all routes and static assets except /health and /metrics
 	PathPrefix string `mapstructure:"pathPrefix" default:""`
+	// WebSocketAllowedOrigins lists further origins (scheme://host[:port]) whose pages may open
+	// the login WebSocket, in addition to Host. Needed when the login page is also reachable
+	// through an alias or a second ingress host. A wildcard is not accepted.
+	WebSocketAllowedOrigins []string `mapstructure:"webSocketAllowedOrigins"`
 
 	// ReadTimeout is the maximum duration for reading the entire request, including the body.
 	ReadTimeout int `mapstructure:"readTimeout" default:"5"`
