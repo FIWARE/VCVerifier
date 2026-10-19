@@ -978,6 +978,8 @@ type mockHttpClient struct {
 	callbackError error
 	// status the requestor answers the callback with; 0 means 200
 	callbackStatus int
+	// runs when the callback arrives, before answering - e.g. a requestor exchanging the code
+	onCallback func(req *http.Request)
 }
 
 var lastRequest *url.URL
@@ -988,6 +990,9 @@ func (mhc mockHttpClient) Do(req *http.Request) (r *http.Response, err error) {
 	}
 
 	lastRequest = req.URL
+	if mhc.onCallback != nil {
+		mhc.onCallback(req)
+	}
 	status := mhc.callbackStatus
 	if status == 0 {
 		status = http.StatusOK
@@ -1351,6 +1356,49 @@ func TestAuthenticationResponse_FailedCallbackRestoresSession(t *testing.T) {
 			assert.False(t, found, "a delivered code consumes the session")
 		})
 	}
+}
+
+// TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus checks that a requestor that
+// exchanges the code while handling the callback, but answers with an error status, still counts
+// as a delivered login: the wallet gets no error and the session is not restored for a second code.
+func TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	trueOption := true
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	testKey, _ := jwk.Import(ecdsaKey)
+	_ = jwk.AssignKeyID(testKey)
+
+	sessionCache := cache.New(time.Minute, time.Minute)
+	sessionCache.SetDefault("session-id", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
+	tokenCache := cache.New(time.Minute, time.Minute)
+
+	verifier := &CredentialVerifier{
+		did:                  "did:key:verifier",
+		signingKey:           testKey,
+		tokenCache:           tokenCache,
+		sessionCache:         sessionCache,
+		nonceGenerator:       &countingNonceGenerator{},
+		validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true}, nil}},
+		clock:                mockClock{},
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+		credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
+			Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
+		}}}},
+	}
+
+	// the requestor redeems the code (as the token endpoint would), then answers 403
+	httpClient = mockHttpClient{callbackStatus: http.StatusForbidden, onCallback: func(req *http.Request) {
+		tokenCache.Delete(req.URL.Query().Get("code"))
+	}}
+	t.Cleanup(func() { httpClient = mockHttpClient{} })
+
+	vp := getVP([]string{"vc"})
+	_, err := verifier.AuthenticationResponse("session-id", &vp)
+	assert.NoError(t, err, "a redeemed code means the login completed, whatever the callback answered")
+
+	_, found := sessionCache.Get("session-id")
+	assert.False(t, found, "the session must not be restored once its code was redeemed")
 }
 
 func verifySameDevice(t *testing.T, sdr Response, tokenCache mockTokenCache, tc authTest) {

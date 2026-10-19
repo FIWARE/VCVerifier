@@ -1192,7 +1192,14 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		return Response{FlowVersion: SAME_DEVICE, RedirectTarget: loginSession.callback, Code: authorizationCode, ExternalState: loginSession.externalState, Nonce: loginSession.nonce}, err
 	case CROSS_DEVICE_V1:
 		if err := callbackToRequester(loginSession, authorizationCode); err != nil {
-			// the code never reached the requestor, so undo the redemption and let the wallet retry
+			// A requestor commonly exchanges the code while handling the callback and may still
+			// answer with an error status (e.g. no browser session on a server-to-server call). A
+			// code that is gone from the cache was redeemed, so the login did complete.
+			if _, pending := v.tokenCache.Get(authorizationCode); !pending {
+				logging.Log().Infof("Requestor %s reported a failed callback for session %s but redeemed the code, the login is complete.", loginSession.callback, state)
+				return sameDevice, nil
+			}
+			// the code was not used, so undo the redemption and let the wallet retry
 			v.restoreSession(state, loginSession, sessionExpiresAt, authorizationCode)
 			return sameDevice, err
 		}
