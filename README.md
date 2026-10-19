@@ -107,6 +107,13 @@ server:
     # under other hosts (an alias, a second ingress), list their origins here, e.g.
     # ["https://login.example.org"]. Entries must be plain origins (scheme://host[:port]); "*" is rejected.
     webSocketAllowedOrigins: []
+    # interval in seconds between keepalive pings on the login WebSocket. Must be below the shortest
+    # idle timeout of any proxy or load balancer in front of the verifier (nginx: 60s by default),
+    # otherwise the connection is closed while the QR code is shown.
+    webSocketPingInterval: 25
+    # time in seconds a browser has to answer a ping before its login WebSocket is considered gone.
+    # Must be greater than webSocketPingInterval.
+    webSocketPongTimeout: 60
 # logging configuration
 logging:
     # the log level, accepted options are DEBUG, INFO, WARN and ERROR
@@ -451,6 +458,16 @@ The VCVerifier provides support for integration in frontend-applications(e.g. ty
 ### Frontend-Integration
 
 In order to ease the integration into frontends, VCVerifier offers a login-page at ```/api/v1/loginQR```. The loginQr-endpoint expects a ```state```(that will be used on the callback, so that the calling frontend-application can identify the user-session) and a ```client_callback``` url, which will be contacted by the verifier after successfull verfication via ```GET``` with the query-parameters ```state```(the originally send state) and ```code```(which is the authorization_code to be provided at the token endpoint for retrieving the actual JWT).
+
+#### Login WebSocket and reverse proxies
+
+The login page of the cross-device flow (`/api/v2/loginQR`) learns about a completed login over a WebSocket (`/ws`). When the verifier runs behind a reverse proxy, ingress or load balancer:
+
+* the proxy has to forward WebSocket upgrades on `/ws` (with a path prefix, `<pathPrefix>/ws`);
+* the page must be served from `server.host` - the WebSocket only accepts that origin, plus the ones listed in `server.webSocketAllowedOrigins`;
+* the verifier pings every `server.webSocketPingInterval` seconds (default 25) so the connection is not closed as idle. Keep that interval below the proxy's idle timeout (nginx and ingress-nginx: 60s, `proxy-read-timeout`). A browser that answers no ping within `server.webSocketPongTimeout` seconds (default 60) is disconnected.
+
+If the connection drops anyway (a network change, a proxy restart), the page reconnects to the same login session while the QR code is valid.
 
 ### REST-Example
 

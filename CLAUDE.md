@@ -169,6 +169,15 @@ Credential issuers may be identified by an HTTPS URL instead of a DID — see `d
 - `vc`/`vp` claims are rejected outright (§1.1.2.1), and both a `vc+jwt` (§3.1.1) and a `vp+jwt` (§3.1.2) must carry the VCDM 2.0 base context regardless of `verifier.vcDataModelVersions` — that setting says which data models are acceptable, not what a `vc+jwt` is. `assertDataModel2Context` is the shared check; on the presentation it runs before the credentials are parsed.
 - `vc+jwt` status lists go through `VerifyStatusListJWTForIssuer` and have **no** fallback. The `x5c` fallback on `VerifyStatusListJWT` takes a key from the token's own certificate without validating a chain; it stays only for the IETF Token Status List path, which deliberately accepts issuerless lists.
 
+## Login WebSocket
+
+The cross-device v2 login page waits for the result on `/ws?state=<session id>` (`openapi/websocket.go`, `views/static/js/app.js`):
+
+- The upgrade is only accepted from `server.host` plus `server.webSocketAllowedOrigins` (`checkWebSocketOrigin`); origins are compared as normalized `scheme://host:port`. This only stops browser-based cross-site use - binding the connection to the browser that started the login is issue #130.
+- The server pings every `server.webSocketPingInterval` (default 25s) and drops a peer that answers none within `server.webSocketPongTimeout` (default 60s); `SetWebSocketKeepAlive` validates them at startup. Data writes per connection go through `wsClient.writeJSON` (gorilla allows one writer); pings use `WriteControl`.
+- The page reconnects to the same session id with backoff while the QR is valid. A reconnect replaces the registered connection, and a closing connection unregisters itself only via `sessions.CompareAndDelete`, so an old connection going away cannot remove its replacement.
+- A login session is single-use: `AuthenticationResponse` verifies concurrently and the first response to pass removes the session in `redeemSession`; others discard their code and get `no_such_session`.
+
 ## VC Data Model Versions
 
 Credentials on both the v1.1 and v2.0 data models are accepted — see `docs/vc-data-model-versions.md`. In short:

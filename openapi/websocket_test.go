@@ -341,3 +341,39 @@ func TestSendRedirect_DeliversWhileKeepAliveRuns(t *testing.T) {
 		t.Errorf("Unexpected notification %v", message)
 	}
 }
+
+func TestSetWebSocketKeepAlive(t *testing.T) {
+	tests := []struct {
+		testName     string
+		pingInterval time.Duration
+		pongTimeout  time.Duration
+		expectError  bool
+	}{
+		{"the defaults are accepted", 25 * time.Second, 60 * time.Second, false},
+		{"a short interval for a strict proxy is accepted", 10 * time.Second, 20 * time.Second, false},
+		{"a zero ping interval is rejected", 0, 60 * time.Second, true},
+		{"a zero pong timeout is rejected", 25 * time.Second, 0, true},
+		{"a negative value is rejected", -1 * time.Second, 60 * time.Second, true},
+		{"a pong timeout equal to the interval is rejected", 30 * time.Second, 30 * time.Second, true},
+		{"a pong timeout below the interval is rejected", 60 * time.Second, 25 * time.Second, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			withWsTiming(t, wsPingPeriod, wsPongWait)
+			err := SetWebSocketKeepAlive(tc.pingInterval, tc.pongTimeout)
+			if tc.expectError {
+				if err == nil {
+					t.Fatalf("Expected an error for interval %v and timeout %v.", tc.pingInterval, tc.pongTimeout)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			if wsPingPeriod != tc.pingInterval || wsPongWait != tc.pongTimeout {
+				t.Errorf("Expected interval %v and timeout %v to be applied, got %v and %v.", tc.pingInterval, tc.pongTimeout, wsPingPeriod, wsPongWait)
+			}
+		})
+	}
+}

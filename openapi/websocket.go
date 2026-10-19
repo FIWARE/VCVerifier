@@ -120,12 +120,29 @@ var defaultPorts = map[string]string{"http": "80", "https": "443"}
 // without pings a proxy or ingress closes it as idle (nginx after 60s by default) while the user
 // is still getting their phone out, and a dead peer is never noticed. The ping period must stay
 // below the shortest idle timeout of anything in between; a peer that answers no ping within
-// wsPongWait is considered gone. Variables only so tests can shorten them.
+// wsPongWait is considered gone. Ping period and pong wait are set at startup from
+// server.webSocketPingInterval / server.webSocketPongTimeout via SetWebSocketKeepAlive.
 var (
 	wsPingPeriod = 25 * time.Second
 	wsPongWait   = 60 * time.Second
 	wsWriteWait  = 10 * time.Second
 )
+
+// SetWebSocketKeepAlive configures the keepalive timing of the login WebSocket. Both values must
+// be positive and the pong timeout must exceed the ping interval, otherwise a healthy connection
+// would be dropped before its next ping could be answered. It must be called before the server
+// accepts connections.
+func SetWebSocketKeepAlive(pingInterval time.Duration, pongTimeout time.Duration) error {
+	if pingInterval <= 0 || pongTimeout <= 0 {
+		return fmt.Errorf("invalid WebSocket keepalive: server.webSocketPingInterval (%v) and server.webSocketPongTimeout (%v) must be positive", pingInterval, pongTimeout)
+	}
+	if pongTimeout <= pingInterval {
+		return fmt.Errorf("invalid WebSocket keepalive: server.webSocketPongTimeout (%v) must be greater than server.webSocketPingInterval (%v)", pongTimeout, pingInterval)
+	}
+	wsPingPeriod = pingInterval
+	wsPongWait = pongTimeout
+	return nil
+}
 
 // wsMaxMessageSize bounds what a client may send - the frontend sends nothing but pongs.
 const wsMaxMessageSize = 512

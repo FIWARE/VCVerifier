@@ -1,5 +1,10 @@
 server:
     port: 8080
+    # Keepalive of the login WebSocket that delivers the result of a QR login to the browser.
+    # The ping interval (seconds) must stay below the shortest idle timeout of any proxy or load
+    # balancer in front of the verifier; the pong timeout must be greater than the interval.
+    # webSocketPingInterval: 25
+    # webSocketPongTimeout: 60
 
 logging:
     jsonLogging: true

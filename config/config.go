@@ -122,6 +122,13 @@ type Server struct {
 	// the login WebSocket, in addition to Host. Needed when the login page is also reachable
 	// through an alias or a second ingress host. A wildcard is not accepted.
 	WebSocketAllowedOrigins []string `mapstructure:"webSocketAllowedOrigins"`
+	// WebSocketPingInterval is the interval, in seconds, between keepalive pings on the login
+	// WebSocket. It must be below the shortest idle timeout of any proxy or load balancer in
+	// front of the verifier, or the connection is closed while the QR code is shown.
+	WebSocketPingInterval int `mapstructure:"webSocketPingInterval" default:"25"`
+	// WebSocketPongTimeout is the time, in seconds, a browser has to answer a ping before its
+	// login WebSocket is considered gone. Must be greater than WebSocketPingInterval.
+	WebSocketPongTimeout int `mapstructure:"webSocketPongTimeout" default:"60"`
 
 	// ReadTimeout is the maximum duration for reading the entire request, including the body.
 	ReadTimeout int `mapstructure:"readTimeout" default:"5"`

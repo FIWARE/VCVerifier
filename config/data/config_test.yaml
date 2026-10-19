@@ -6,6 +6,8 @@ server:
   WriteTimeout: 200
   IdleTimeout: 300
   ShutdownTimeout:  400
+  webSocketPingInterval: 15
+  webSocketPongTimeout: 40
 logging:
   level: "DEBUG"
   jsonLogging: true
