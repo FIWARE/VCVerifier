@@ -24,6 +24,13 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 		{"unparseable Origin is rejected", "https://verifier.dev.seamware.io", "not a url\x7f", false},
 		{"unparseable configured host is rejected", "not a url\x7f", "https://verifier.dev.seamware.io", false},
 		{"a configured host with a path prefix still matches on scheme+host", "https://verifier.dev.seamware.io/myservice", "https://verifier.dev.seamware.io", true},
+		{"a configured default https port matches an Origin without it", "https://verifier.dev.seamware.io:443", "https://verifier.dev.seamware.io", true},
+		{"a configured default http port matches an Origin without it", "http://verifier.dev.seamware.io:80", "http://verifier.dev.seamware.io", true},
+		{"an explicit default port in the Origin matches a configured host without it", "https://verifier.dev.seamware.io", "https://verifier.dev.seamware.io:443", true},
+		{"a matching non-default port is allowed", "https://verifier.dev.seamware.io:8443", "https://verifier.dev.seamware.io:8443", true},
+		{"a different port is rejected", "https://verifier.dev.seamware.io:8443", "https://verifier.dev.seamware.io", false},
+		{"the http default port does not carry over to https", "https://verifier.dev.seamware.io:80", "https://verifier.dev.seamware.io", false},
+		{"an IPv6 host with a default port matches", "https://[::1]:443", "https://[::1]", true},
 	}
 
 	for _, tc := range tests {

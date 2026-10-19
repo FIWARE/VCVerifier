@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,12 +45,27 @@ func checkWebSocketOrigin(r *http.Request) bool {
 		return false
 	}
 
-	allowed := strings.EqualFold(originURL.Scheme, allowedURL.Scheme) && strings.EqualFold(originURL.Host, allowedURL.Host)
+	allowedOrigin := normalizeOrigin(allowedURL)
+	allowed := normalizeOrigin(originURL) == allowedOrigin
 	if !allowed {
-		logging.Log().Warnf("Rejected WebSocket upgrade for %s: origin %q does not match the configured verifier host %q.", r.URL.RequestURI(), origin, allowedURL.Scheme+"://"+allowedURL.Host)
+		logging.Log().Warnf("Rejected WebSocket upgrade for %s: origin %q does not match the configured verifier host %q.", r.URL.RequestURI(), origin, allowedOrigin)
 	}
 	return allowed
 }
+
+// normalizeOrigin reduces a URL to the scheme://host:port triple that identifies a web origin.
+// Scheme and host are lowercased and the port is made explicit, since browsers omit a default
+// port in the Origin header while an operator may well configure it (https://verifier:443).
+func normalizeOrigin(u *url.URL) string {
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	if port == "" {
+		port = defaultPorts[scheme]
+	}
+	return scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
+}
+
+var defaultPorts = map[string]string{"http": "80", "https": "443"}
 
 func sendRedirect(c *gin.Context, state string, code string, redirectUrl string) {
 	connection, exists := sessions.Load(state)
