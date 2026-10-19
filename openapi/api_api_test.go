@@ -58,10 +58,10 @@ type mockVerifier struct {
 	mockHost                string
 }
 
-func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (qr string, err error) {
+func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestType string) (qr string, err error) {
 	return mV.mockQR, mV.mockError
 }
-func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qrInfo verifier.QRLoginInfo, err error) {
+func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string) (qrInfo verifier.QRLoginInfo, err error) {
 	return verifier.QRLoginInfo{QR: mV.mockQR}, mV.mockError
 }
 func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (connectionString string, err error) {
@@ -386,8 +386,8 @@ func TestVerifierAPIAuthenticationResponse(t *testing.T) {
 	}
 
 	tests := []test{
-		{"If a same-device flow is authenticated, a valid redirect should be returned.", true, "my-state", getValidVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
-		{"If a same-device flow is authenticated with an SdJwt, a valid redirect should be returned.", true, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", SessionId: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
+		{"If a same-device flow is authenticated, a valid redirect should be returned.", true, "my-state", getValidVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", ExternalState: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
+		{"If a same-device flow is authenticated with an SdJwt, a valid redirect should be returned.", true, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE, RedirectTarget: "http://my-verifier.org", Code: "my-code", ExternalState: "my-session-id"}, 302, "http://my-verifier.org?state=my-session-id&code=my-code", ErrorMessage{}},
 		{"If a cross-device flow is authenticated, a simple ok should be returned.", false, "my-state", getValidVPTokenJWT(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 200, "", ErrorMessage{}},
 		{"If a cross-device flow is authenticated with an SdJwt, a simple ok should be returned.", false, "my-state", getValidSDJwtToken(), nil, verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 200, "", ErrorMessage{}},
 		{"If the same-device flow responds an error, a 400 should be returend", true, "my-state", getValidVPTokenJWT(), errors.New("verification_error"), verifier.Response{FlowVersion: verifier.SAME_DEVICE}, 400, "", ErrorMessage{Summary: "verification_error"}},
