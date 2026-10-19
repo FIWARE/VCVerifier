@@ -81,6 +81,7 @@ var ErrorNoSigningKey = errors.New("no_signing_key_available")
 var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
+var ErrorCallbackRejected = errors.New("callback_rejected_by_requestor")
 var ErrorWrongGrantType = errors.New("wrong_grant_type")
 var ErrorNoSuchCode = errors.New("no_such_code")
 var ErrorRedirectUriMismatch = errors.New("redirect_uri_does_not_match")
@@ -1079,7 +1080,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 
 	logging.Log().Debugf("Authenticate presentation %v for session %s", logging.PrettyPrintObject(verifiablePresentation), state)
 
-	loginSessionInterface, hit := v.sessionCache.Get(state)
+	loginSessionInterface, sessionExpiresAt, hit := v.sessionCache.GetWithExpiration(state)
 	if !hit {
 		logging.Log().Infof("Session %s is either expired or did never exist.", state)
 		return sameDevice, ErrorNoSuchSession
@@ -1188,7 +1189,12 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	case SAME_DEVICE:
 		return Response{FlowVersion: SAME_DEVICE, RedirectTarget: loginSession.callback, Code: authorizationCode, ExternalState: loginSession.externalState, Nonce: loginSession.nonce}, err
 	case CROSS_DEVICE_V1:
-		return sameDevice, callbackToRequester(loginSession, authorizationCode)
+		if err := callbackToRequester(loginSession, authorizationCode); err != nil {
+			// the code never reached the requestor, so undo the redemption and let the wallet retry
+			v.restoreSession(state, loginSession, sessionExpiresAt, authorizationCode)
+			return sameDevice, err
+		}
+		return sameDevice, nil
 	default:
 		return Response{FlowVersion: CROSS_DEVICE_V2, RedirectTarget: loginSession.callback, Code: authorizationCode, ExternalState: loginSession.externalState, Nonce: loginSession.nonce}, err
 	}
@@ -1521,6 +1527,24 @@ func (v *CredentialVerifier) redeemSession(sessionId string) bool {
 	}
 	v.sessionCache.Delete(sessionId)
 	return true
+}
+
+// restoreSession undoes redeemSession when the issued code could not be delivered: the code is
+// discarded and the session is put back for the rest of its lifetime, so a retry by the wallet can
+// complete the login. Only one code for the session is ever valid at a time.
+func (v *CredentialVerifier) restoreSession(sessionId string, session loginSession, expiresAt time.Time, authorizationCode string) {
+	v.tokenCache.Delete(authorizationCode)
+
+	ttl := cache.DefaultExpiration
+	if !expiresAt.IsZero() {
+		ttl = time.Until(expiresAt)
+		if ttl <= 0 {
+			logging.Log().Infof("Did not restore session %s after the failed delivery: it has expired meanwhile.", sessionId)
+			return
+		}
+	}
+	v.sessionCache.Set(sessionId, session, ttl)
+	logging.Log().Infof("Restored session %s after its code could not be delivered, so the wallet can retry.", sessionId)
 }
 
 // intialize the OID4VP cross device flow
@@ -1865,10 +1889,15 @@ func callbackToRequester(loginSession loginSession, authorizationCode string) er
 	q.Add("code", authorizationCode)
 	callbackRequest.URL.RawQuery = q.Encode()
 
-	_, err = httpClient.Do(callbackRequest)
+	response, err := httpClient.Do(callbackRequest)
 	if err != nil {
 		logging.Log().Warnf("Was not able to notify requestor %s. Err: %v", loginSession.callback, err)
 		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		logging.Log().Warnf("Requestor %s did not accept the callback, it answered with status %d.", loginSession.callback, response.StatusCode)
+		return ErrorCallbackRejected
 	}
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"io"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -975,7 +976,8 @@ func (msk *mockExternalSsiKit) ValidateVC(verifiableCredential *common.Credentia
 
 type mockHttpClient struct {
 	callbackError error
-	lastRequest   *url.URL
+	// status the requestor answers the callback with; 0 means 200
+	callbackStatus int
 }
 
 var lastRequest *url.URL
@@ -986,7 +988,11 @@ func (mhc mockHttpClient) Do(req *http.Request) (r *http.Response, err error) {
 	}
 
 	lastRequest = req.URL
-	return
+	status := mhc.callbackStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(""))}, nil
 }
 
 func (mhc mockHttpClient) PostForm(url string, data url.Values) (r *http.Response, err error) {
@@ -1079,7 +1085,7 @@ func TestAuthenticationResponse(t *testing.T) {
 
 			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}, errorToThrow: tc.tokenCacheError}
 
-			httpClient = mockHttpClient{tc.callbackError, nil}
+			httpClient = mockHttpClient{callbackError: tc.callbackError}
 			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			testKey, _ := jwk.Import(ecdsaKey)
 			_ = jwk.AssignKeyID(testKey)
@@ -1117,9 +1123,9 @@ func TestAuthenticationResponse(t *testing.T) {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
 			}
 			if tc.testSession != (loginSession{}) && tc.requestedState == tc.testState {
-				// the session is single-use once a code was issued for it (a failing requestor
-				// callback happens after that); a failed verification keeps it for a retry
-				codeIssued := tc.expectedError == nil || (tc.callbackError != nil && tc.expectedError == tc.callbackError)
+				// the session is single-use once a code was delivered for it; a failed verification
+				// or a failed requestor callback keeps it for a retry
+				codeIssued := tc.expectedError == nil
 				_, stillPresent := sessionCache.sessions[tc.testState]
 				if codeIssued == stillPresent {
 					t.Errorf("%s - Expected the session to be removed: %v, but it is still present: %v.", tc.testName, codeIssued, stillPresent)
@@ -1277,6 +1283,73 @@ func TestAuthenticationResponse_FailedResponseKeepsSession(t *testing.T) {
 		assert.Equal(t, ErrorInvalidVC, err, "attempt %d must be judged on its presentation", attempt)
 		_, found := sessionCache.sessions["session-id"]
 		assert.True(t, found, "a rejected presentation must not consume the session")
+	}
+}
+
+// TestAuthenticationResponse_FailedCallbackRestoresSession checks that, in the cross-device v1
+// flow, a code that could not be delivered to the requestor does not consume the session: the
+// code is discarded, the session keeps its remaining lifetime and a retry completes the login.
+func TestAuthenticationResponse_FailedCallbackRestoresSession(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	tests := []struct {
+		testName      string
+		failure       mockHttpClient
+		expectedError error
+	}{
+		{"the requestor cannot be reached", mockHttpClient{callbackError: errors.New("connection refused")}, nil},
+		{"the requestor answers with an error status", mockHttpClient{callbackStatus: http.StatusInternalServerError}, ErrorCallbackRejected},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			trueOption := true
+			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			testKey, _ := jwk.Import(ecdsaKey)
+			_ = jwk.AssignKeyID(testKey)
+
+			sessionCache := cache.New(time.Minute, time.Minute)
+			sessionCache.SetDefault("session-id", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
+			_, expiresBefore, _ := sessionCache.GetWithExpiration("session-id")
+			tokenCache := cache.New(time.Minute, time.Minute)
+
+			verifier := &CredentialVerifier{
+				did:                  "did:key:verifier",
+				signingKey:           testKey,
+				tokenCache:           tokenCache,
+				sessionCache:         sessionCache,
+				nonceGenerator:       &countingNonceGenerator{},
+				validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true, true}, nil}},
+				clock:                mockClock{},
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+				credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
+					Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
+				}}}},
+			}
+
+			httpClient = tc.failure
+			vp := getVP([]string{"vc"})
+			_, err := verifier.AuthenticationResponse("session-id", &vp)
+			if tc.expectedError != nil {
+				assert.Equal(t, tc.expectedError, err)
+			} else {
+				assert.Equal(t, tc.failure.callbackError, err)
+			}
+
+			_, expiresAfter, found := sessionCache.GetWithExpiration("session-id")
+			assert.True(t, found, "a code that was not delivered must not consume the session")
+			assert.WithinDuration(t, expiresBefore, expiresAfter, time.Second, "the restored session must keep its remaining lifetime")
+			assert.Equal(t, 0, tokenCache.ItemCount(), "the undelivered code must be discarded")
+
+			httpClient = mockHttpClient{}
+			_, err = verifier.AuthenticationResponse("session-id", &vp)
+			assert.NoError(t, err, "the wallet's retry must complete the login")
+			assert.Equal(t, "code-2", lastRequest.Query().Get("code"), "the retry must deliver a new code")
+			assert.Equal(t, "external-state", lastRequest.Query().Get("state"))
+			assert.Equal(t, 1, tokenCache.ItemCount())
+			_, found = sessionCache.Get("session-id")
+			assert.False(t, found, "a delivered code consumes the session")
+		})
 	}
 }
 
@@ -2964,7 +3037,7 @@ func TestAuthenticationResponse_V5ValidationServices(t *testing.T) {
 				sessionCache.sessions[tc.testState] = tc.testSession
 			}
 			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}, errorToThrow: tc.tokenCacheError}
-			httpClient = mockHttpClient{tc.callbackError, nil}
+			httpClient = mockHttpClient{callbackError: tc.callbackError}
 			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			testKey, _ := jwk.Import(ecdsaKey)
 			_ = jwk.AssignKeyID(testKey)
@@ -3416,7 +3489,7 @@ func TestAuthenticationResponseHttpsIssuerCrossDevice(t *testing.T) {
 
 	trueOption := true
 	tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
-	httpClient = mockHttpClient{nil, nil}
+	httpClient = mockHttpClient{}
 
 	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	testKey, _ := jwk.Import(ecdsaKey)
