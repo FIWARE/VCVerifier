@@ -1304,6 +1304,7 @@ func TestAuthenticationResponse_FailedCallbackRestoresSession(t *testing.T) {
 	}{
 		{"the requestor cannot be reached", mockHttpClient{callbackError: errors.New("connection refused")}, nil},
 		{"the requestor answers with an error status", mockHttpClient{callbackStatus: http.StatusInternalServerError}, ErrorCallbackRejected},
+		{"the requestor answers with a client error status", mockHttpClient{callbackStatus: http.StatusNotFound}, ErrorCallbackRejected},
 	}
 
 	for _, tc := range tests {
@@ -1355,6 +1356,19 @@ func TestAuthenticationResponse_FailedCallbackRestoresSession(t *testing.T) {
 			_, found = sessionCache.Get("session-id")
 			assert.False(t, found, "a delivered code consumes the session")
 		})
+	}
+}
+
+// TestCallbackToRequester_RedirectCountsAsDelivered checks that a requestor answering the
+// callback with a redirect has accepted it - the redirect target is not judged.
+func TestCallbackToRequester_RedirectCountsAsDelivered(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	t.Cleanup(func() { httpClient = mockHttpClient{} })
+
+	for _, status := range []int{http.StatusOK, http.StatusNoContent, http.StatusFound, http.StatusSeeOther} {
+		httpClient = mockHttpClient{callbackStatus: status}
+		err := callbackToRequester(loginSession{callback: "https://myhost.org/callback", externalState: "external-state"}, "the-code")
+		assert.NoError(t, err, "status %d must count as a delivered callback", status)
 	}
 }
 
@@ -2667,6 +2681,9 @@ func TestInitVerifier_ClientCallbackTimeout(t *testing.T) {
 				t.Fatalf("Expected the callback client to be an *http.Client, got %T", httpClient)
 			}
 			assert.Equal(t, tc.expectedTimeout, client.Timeout)
+			if assert.NotNil(t, client.CheckRedirect, "the callback client must not follow redirects") {
+				assert.Equal(t, http.ErrUseLastResponse, client.CheckRedirect(nil, nil))
+			}
 		})
 	}
 }

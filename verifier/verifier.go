@@ -374,7 +374,12 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	verifierConfig := &config.Verifier
 
 	callbackTimeout := time.Duration(verifierConfig.ClientCallbackTimeout) * time.Second
-	httpClient = &http.Client{Timeout: callbackTimeout}
+	httpClient = &http.Client{
+		Timeout: callbackTimeout,
+		// A redirect answer means the requestor accepted the callback; following it would judge
+		// the delivery by whatever page it leads to, fetched without the user's browser session.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	logging.Log().Infof("Requestor callbacks (cross-device v1 flow) time out after %v.", callbackTimeout)
 
 	sessionCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
@@ -1920,7 +1925,8 @@ func callbackToRequester(loginSession loginSession, authorizationCode string) er
 		return err
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	// 2xx and 3xx accept the callback - a redirect is not followed, see InitVerifier
+	if response.StatusCode < 200 || response.StatusCode >= 400 {
 		logging.Log().Warnf("Requestor %s did not accept the callback, it answered with status %d.", loginSession.callback, response.StatusCode)
 		return ErrorCallbackRejected
 	}
