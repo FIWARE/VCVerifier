@@ -131,6 +131,13 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	wsOrigins, err := api.SetAdditionalWebSocketOrigins(configuration.Server.WebSocketAllowedOrigins)
+	if err != nil {
+		logger.Errorf("Invalid WebSocket origin configuration: %v", err)
+		panic(err)
+	}
+	logger.Infof("WebSocket upgrades accepted from the verifier host %q and the additional origins %v", configuration.Server.Host, wsOrigins)
+
 	//new template engine
 	router.HTMLRender = ginview.Default()
 	// static files for the frontend

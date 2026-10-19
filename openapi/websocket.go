@@ -1,6 +1,8 @@
 package openapi
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,9 +19,51 @@ var (
 		CheckOrigin: checkWebSocketOrigin,
 	}
 	sessions = sync.Map{} // map[string]*websocket.Conn
+	// additionalWebSocketOrigins holds the normalized server.webSocketAllowedOrigins. It is set
+	// once at startup, before the server accepts connections.
+	additionalWebSocketOrigins = map[string]struct{}{}
 )
 
-// checkWebSocketOrigin restricts WebSocket upgrades to the verifier's own configured host.
+// SetAdditionalWebSocketOrigins configures the origins accepted for WebSocket upgrades on top
+// of the verifier's own host. Every entry must be a bare http(s) origin; anything else, the
+// "*" wildcard included, is a configuration error, since this channel must never be open.
+// It returns the normalized origins, for logging.
+func SetAdditionalWebSocketOrigins(origins []string) ([]string, error) {
+	normalized := map[string]struct{}{}
+	var accepted []string
+	for _, origin := range origins {
+		key, err := parseConfiguredOrigin(origin)
+		if err != nil {
+			return nil, err
+		}
+		if _, seen := normalized[key]; !seen {
+			normalized[key] = struct{}{}
+			accepted = append(accepted, key)
+		}
+	}
+	additionalWebSocketOrigins = normalized
+	return accepted, nil
+}
+
+func parseConfiguredOrigin(origin string) (string, error) {
+	origin = strings.TrimSpace(origin)
+	if origin == "*" {
+		return "", errors.New("invalid server.webSocketAllowedOrigins entry \"*\": a wildcard is not allowed, list each origin explicitly")
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return "", fmt.Errorf("invalid server.webSocketAllowedOrigins entry %q: %w", origin, err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if (scheme != "http" && scheme != "https") || u.Hostname() == "" || u.User != nil ||
+		strings.TrimSuffix(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("invalid server.webSocketAllowedOrigins entry %q: expected an origin of the form http(s)://host[:port]", origin)
+	}
+	return normalizeOrigin(u), nil
+}
+
+// checkWebSocketOrigin restricts WebSocket upgrades to the verifier's own configured host,
+// plus any origin explicitly listed in server.webSocketAllowedOrigins.
 // Unlike the general CORS policy (ResolveAllowedOrigins in main.go), which defaults to "*"
 // for API compatibility, this channel eventually hands over the authorization code needed
 // to complete a login - it must never default to open. The only legitimate opener of this
@@ -46,11 +90,15 @@ func checkWebSocketOrigin(r *http.Request) bool {
 	}
 
 	allowedOrigin := normalizeOrigin(allowedURL)
-	allowed := normalizeOrigin(originURL) == allowedOrigin
-	if !allowed {
-		logging.Log().Warnf("Rejected WebSocket upgrade for %s: origin %q does not match the configured verifier host %q.", r.URL.RequestURI(), origin, allowedOrigin)
+	requestOrigin := normalizeOrigin(originURL)
+	if requestOrigin == allowedOrigin {
+		return true
 	}
-	return allowed
+	if _, listed := additionalWebSocketOrigins[requestOrigin]; listed {
+		return true
+	}
+	logging.Log().Warnf("Rejected WebSocket upgrade for %s: origin %q is neither the configured verifier host %q nor listed in server.webSocketAllowedOrigins.", r.URL.RequestURI(), origin, allowedOrigin)
+	return false
 }
 
 // normalizeOrigin reduces a URL to the scheme://host:port triple that identifies a web origin.

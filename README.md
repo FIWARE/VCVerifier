@@ -102,6 +102,11 @@ server:
     templateDir: "views/"
     # directory to load static content from
     staticDir: "views/static/"
+    # The login page's WebSocket (used to hand the authorization code back to the browser) only
+    # accepts connections opened from the verifier's own `host`. If the login page is also served
+    # under other hosts (an alias, a second ingress), list their origins here, e.g.
+    # ["https://login.example.org"]. Entries must be plain origins (scheme://host[:port]); "*" is rejected.
+    webSocketAllowedOrigins: []
 # logging configuration
 logging:
     # the log level, accepted options are DEBUG, INFO, WARN and ERROR
