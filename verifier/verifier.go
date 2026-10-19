@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/exp/slices"
@@ -168,6 +169,8 @@ type CredentialVerifier struct {
 	signingKey jwk.Key
 	// cache to be used for in-progress authentication sessions
 	sessionCache common.Cache
+	// makes redeeming a login session (check that it still exists, then remove it) atomic
+	sessionRedeemMutex sync.Mutex
 	// cache to be used for jwt retrieval
 	tokenCache common.Cache
 	// nonce generator
@@ -1093,7 +1096,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		}
 	}
 
-	credentialsByType, _ := extractCredentialTypes(verifiablePresentation)
+	credentialsByType, credentialTypes := extractCredentialTypes(verifiablePresentation)
 	trustedChain, _ := verifyChain(verifiablePresentation.Credentials())
 	var credentialsToBeIncluded []map[string]interface{}
 
@@ -1170,6 +1173,17 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		logging.Log().Warnf("Was not able to store the token %s in cache.", logging.PrettyPrintObject(tokenStore))
 		return sameDevice, err
 	}
+	// A session is single-use. Responses are verified concurrently and the first one to get here
+	// redeems the session; any other that passed verification in the meantime finds it gone and
+	// discards its code. Nothing is locked during verification, so a slow or malicious response
+	// cannot hold up the legitimate one, and a rejected presentation never consumes the session.
+	if !v.redeemSession(state) {
+		v.tokenCache.Delete(authorizationCode)
+		logging.Log().Warnf("Discarded the code issued for session %s: the session was already redeemed by a concurrent response.", state)
+		return sameDevice, ErrorNoSuchSession
+	}
+	logging.Log().Infof("Completed login session %s for client %s, scope %s, credential types %v.", state, loginSession.clientId, loginSession.scope, credentialTypes)
+
 	switch loginSession.version {
 	case SAME_DEVICE:
 		return Response{FlowVersion: SAME_DEVICE, RedirectTarget: loginSession.callback, Code: authorizationCode, ExternalState: loginSession.externalState, Nonce: loginSession.nonce}, err
@@ -1494,6 +1508,19 @@ func verifyChain(vcs []*common.Credential) (bool, error) {
 		return false, fmt.Errorf("natural participent credential was not issued by the presented legal entity. Legal Participant VC id %s, natural VC issuer %s", legalEntitySubjectID, naturalEntity.Contents().Issuer.ID)
 	}
 	return true, nil
+}
+
+// redeemSession removes the login session if it still exists and reports whether this call was
+// the one that removed it. Like sessionCache itself, the guarantee holds within one process.
+func (v *CredentialVerifier) redeemSession(sessionId string) bool {
+	v.sessionRedeemMutex.Lock()
+	defer v.sessionRedeemMutex.Unlock()
+
+	if _, exists := v.sessionCache.Get(sessionId); !exists {
+		return false
+	}
+	v.sessionCache.Delete(sessionId)
+	return true
 }
 
 // intialize the OID4VP cross device flow

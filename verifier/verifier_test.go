@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"image/png"
 	"math/big"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1114,6 +1116,15 @@ func TestAuthenticationResponse(t *testing.T) {
 			if err != tc.expectedError {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
 			}
+			if tc.testSession != (loginSession{}) && tc.requestedState == tc.testState {
+				// the session is single-use once a code was issued for it (a failing requestor
+				// callback happens after that); a failed verification keeps it for a retry
+				codeIssued := tc.expectedError == nil || (tc.callbackError != nil && tc.expectedError == tc.callbackError)
+				_, stillPresent := sessionCache.sessions[tc.testState]
+				if codeIssued == stillPresent {
+					t.Errorf("%s - Expected the session to be removed: %v, but it is still present: %v.", tc.testName, codeIssued, stillPresent)
+				}
+			}
 			if tc.expectedError != nil {
 				return
 			}
@@ -1131,6 +1142,141 @@ func TestAuthenticationResponse(t *testing.T) {
 			}
 		})
 
+	}
+}
+
+// gatedValidationService accepts every credential, but holds each validation until released,
+// so a test can get several responses past verification at the same time.
+type gatedValidationService struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (gvs *gatedValidationService) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (bool, error) {
+	gvs.entered <- struct{}{}
+	<-gvs.release
+	return true, nil
+}
+
+// countingNonceGenerator hands out distinct values and is safe for concurrent use.
+type countingNonceGenerator struct {
+	counter atomic.Int64
+}
+
+func (cng *countingNonceGenerator) GenerateNonce() string {
+	return fmt.Sprintf("code-%d", cng.counter.Add(1))
+}
+
+// TestAuthenticationResponse_SessionIsSingleUse checks that a login session can only be redeemed
+// for one authorization code: of two responses verified at the same time exactly one gets a
+// code, and a later response for the redeemed session gets none.
+func TestAuthenticationResponse_SessionIsSingleUse(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const concurrentResponses = 2
+	const timeout = 5 * time.Second
+
+	trueOption := true
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	testKey, _ := jwk.Import(ecdsaKey)
+	_ = jwk.AssignKeyID(testKey)
+
+	sessionCache := cache.New(time.Minute, time.Minute)
+	sessionCache.SetDefault("session-id", loginSession{version: CROSS_DEVICE_V2, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
+	tokenCache := cache.New(time.Minute, time.Minute)
+	validationService := &gatedValidationService{entered: make(chan struct{}, concurrentResponses+1), release: make(chan struct{})}
+
+	verifier := &CredentialVerifier{
+		did:                  "did:key:verifier",
+		signingKey:           testKey,
+		tokenCache:           tokenCache,
+		sessionCache:         sessionCache,
+		nonceGenerator:       &countingNonceGenerator{},
+		validationServices:   []ValidationService{validationService},
+		clock:                mockClock{},
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+		credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
+			Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
+		}}}},
+	}
+
+	type result struct {
+		response Response
+		err      error
+	}
+	results := make(chan result, concurrentResponses)
+	for i := 0; i < concurrentResponses; i++ {
+		go func() {
+			vp := getVP([]string{"vc"})
+			response, err := verifier.AuthenticationResponse("session-id", &vp)
+			results <- result{response, err}
+		}()
+	}
+
+	// only release once every response is inside verification, so they all race to redeem
+	for i := 0; i < concurrentResponses; i++ {
+		select {
+		case <-validationService.entered:
+		case <-time.After(timeout):
+			t.Fatalf("Only %d of %d responses reached verification.", i, concurrentResponses)
+		}
+	}
+	close(validationService.release)
+
+	var succeeded []Response
+	for i := 0; i < concurrentResponses; i++ {
+		select {
+		case r := <-results:
+			if r.err == nil {
+				succeeded = append(succeeded, r.response)
+			} else {
+				assert.Equal(t, ErrorNoSuchSession, r.err, "a response that lost the race must find the session gone")
+			}
+		case <-time.After(timeout):
+			t.Fatalf("Only %d of %d responses returned.", i, concurrentResponses)
+		}
+	}
+
+	if assert.Len(t, succeeded, 1, "exactly one response may redeem the session") {
+		assert.Equal(t, "external-state", succeeded[0].ExternalState)
+		_, codeStored := tokenCache.Get(succeeded[0].Code)
+		assert.True(t, codeStored, "the winner's code must be redeemable")
+	}
+	assert.Equal(t, 1, tokenCache.ItemCount(), "the code of a response that lost the race must be discarded")
+
+	_, found := sessionCache.Get("session-id")
+	assert.False(t, found, "the session must be removed once a code was issued for it")
+
+	vp := getVP([]string{"vc"})
+	_, err := verifier.AuthenticationResponse("session-id", &vp)
+	assert.Equal(t, ErrorNoSuchSession, err, "a later response for a redeemed session must be rejected")
+}
+
+// TestAuthenticationResponse_FailedResponseKeepsSession checks that a rejected presentation does
+// not consume the session, so the holder can retry with another one.
+func TestAuthenticationResponse_FailedResponseKeepsSession(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{
+		"session-id": {version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"},
+	}}
+	verifier := &CredentialVerifier{
+		did:                  "did:key:verifier",
+		sessionCache:         &sessionCache,
+		tokenCache:           &mockTokenCache{tokens: map[string]tokenStore{}},
+		nonceGenerator:       &mockNonceGenerator{staticValues: []string{"authCode"}},
+		validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{false, false}, nil}},
+		clock:                mockClock{},
+		credentialsConfig:    mockCredentialConfig{mockScopes: createMockCredentials("clientId", "", "VerifiableCredential", "", "", false)},
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		vp := getVP([]string{"vc"})
+		_, err := verifier.AuthenticationResponse("session-id", &vp)
+		assert.Equal(t, ErrorInvalidVC, err, "attempt %d must be judged on its presentation", attempt)
+		_, found := sessionCache.sessions["session-id"]
+		assert.True(t, found, "a rejected presentation must not consume the session")
 	}
 }
 
