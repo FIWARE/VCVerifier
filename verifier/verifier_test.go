@@ -32,6 +32,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jwt"
+	"github.com/patrickmn/go-cache"
 	"golang.org/x/exp/maps"
 )
 
@@ -716,6 +717,38 @@ func TestReturnLoginQRV2_ScalesWithContent(t *testing.T) {
 	}
 }
 
+// TestReturnLoginQRV2_UsesGeneratedSessionId guards the v2 QR page against addressing the
+// session by the external client's state: the frontend registers its WebSocket under
+// SessionId and shows a countdown from ExpireAt, so both must refer to the generated session.
+func TestReturnLoginQRV2_UsesGeneratedSessionId(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	sessionCache := cache.New(time.Minute, time.Minute)
+	verifier := CredentialVerifier{
+		host:                  "verifier.org",
+		did:                   "did:key:verifier",
+		sessionCache:          sessionCache,
+		sessionDuration:       time.Minute,
+		nonceGenerator:        &mockNonceGenerator{staticValues: []string{"generated-session-id"}},
+		tokenSigner:           mockTokenSigner{},
+		clock:                 mockClock{},
+		credentialsConfig:     mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
+		supportedRequestModes: []string{REQUEST_MODE_URL_ENCODED},
+		clientIdentification:  configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
+	}
+
+	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	assert.NoError(t, err)
+	assert.Equal(t, "generated-session-id", qrInfo.SessionId, "the QR info must carry the generated session id, not the external state")
+	assert.False(t, qrInfo.ExpireAt.IsZero(), "the expiry must be read from the generated session, otherwise the QR shows as expired immediately")
+
+	stored, found := sessionCache.Get(qrInfo.SessionId)
+	assert.True(t, found)
+	assert.Equal(t, "external-state", stored.(loginSession).externalState)
+	_, found = sessionCache.Get("external-state")
+	assert.False(t, found, "the external state must not be a session key")
+}
+
 func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
@@ -917,7 +950,7 @@ func TestInitOid4VPCrossDevice_ResponseUriIncludesPathPrefix(t *testing.T) {
 	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE)
+	_, authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE)
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }

@@ -108,6 +108,9 @@ const refreshTokenByteLength = 32
 
 // Verifier QR Information
 type QRLoginInfo struct {
+	// SessionId is the verifier's own id for the login session the QR belongs to - the key
+	// the frontend's WebSocket has to register under. Never the external client's state.
+	SessionId             string
 	QR                    string
 	ExpireAt              time.Time
 	TotalDuration         int
@@ -116,8 +119,8 @@ type QRLoginInfo struct {
 
 // verifier interface
 type Verifier interface {
-	ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (qr string, err error)
-	ReturnLoginQRV2(host string, protocol string, callback string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qrLoginInfo QRLoginInfo, err error)
+	ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (qr string, err error)
+	ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string) (qrLoginInfo QRLoginInfo, err error)
 	StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error)
 	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
 	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error)
@@ -559,7 +562,7 @@ func SetRefreshTokenRepo(repo database.RefreshTokenRepository) {
 /**
 *   Initializes the cross-device login flow and returns all neccessary information as a qr-code
 **/
-func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestMode string) (qr string, err error) {
+func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (qr string, err error) {
 
 	for _, v := range v.supportedRequestModes {
 		logging.Log().Warnf("Supported: %s", v)
@@ -571,7 +574,7 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 	}
 
 	logging.Log().Debugf("Generate a login qr for %s.", callback)
-	authenticationRequest, err := v.initSiopFlow(host, protocol, callback, sessionId, clientId, nonce, requestMode)
+	authenticationRequest, err := v.initSiopFlow(host, protocol, callback, state, clientId, nonce, requestMode)
 
 	if err != nil {
 		return qr, err
@@ -592,7 +595,7 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 /**
 *   Initializes the cross-device login flow and returns all neccessary information as a qr-code
 **/
-func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redircetUri string, sessionId string, clientId string, scope string, nonce string, requestMode string) (qrInfo QRLoginInfo, err error) {
+func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redircetUri string, state string, clientId string, scope string, nonce string, requestMode string) (qrInfo QRLoginInfo, err error) {
 
 	for _, v := range v.supportedRequestModes {
 		logging.Log().Warnf("Supported: %s", v)
@@ -604,7 +607,7 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 	}
 
 	logging.Log().Debugf("Generate a login qr for %s.", redircetUri)
-	authenticationRequest, err := v.initOid4VPCrossDevice(host, protocol, redircetUri, sessionId, clientId, scope, nonce, requestMode)
+	sessionId, authenticationRequest, err := v.initOid4VPCrossDevice(host, protocol, redircetUri, state, clientId, scope, nonce, requestMode)
 
 	if err != nil {
 		return qrInfo, err
@@ -621,6 +624,7 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 
 	_, expireAt, _ := v.sessionCache.GetWithExpiration(sessionId)
 	qrInfo = QRLoginInfo{
+		SessionId:             sessionId,
 		QR:                    base64Img,
 		ExpireAt:              expireAt,
 		TotalDuration:         int(v.sessionDuration),
@@ -1493,20 +1497,23 @@ func verifyChain(vcs []*common.Credential) (bool, error) {
 }
 
 // intialize the OID4VP cross device flow
-func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string, redirectUri string, state string, clientId string, scope string, nonce string, requestMode string) (authenticationRequest string, err error) {
+// It returns the generated session id alongside the request, since the frontend needs it to
+// address the session (WebSocket, expiry) - the external state is not a lookup key.
+func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string, redirectUri string, state string, clientId string, scope string, nonce string, requestMode string) (sessionId string, authenticationRequest string, err error) {
 
-	sessionId := v.nonceGenerator.GenerateNonce()
+	sessionId = v.nonceGenerator.GenerateNonce()
 	loginSession := loginSession{callback: redirectUri, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V2, scope: scope}
 	err = v.sessionCache.Add(sessionId, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the login session %s in cache.", logging.PrettyPrintObject(loginSession))
-		return authenticationRequest, err
+		return sessionId, authenticationRequest, err
 	}
 	logging.Log().Infof("Started cross-device (v2) login session %s for client %s, scope %s.", sessionId, clientId, scope)
 	authResponseUri := fmt.Sprintf("%s://%s%s/api/v1/authentication_response", protocol, host, v.pathPrefix)
 
-	return v.generateAuthenticationRequest("openid4vp://", clientId, scope, authResponseUri, sessionId, nonce, loginSession, requestMode)
+	authenticationRequest, err = v.generateAuthenticationRequest("openid4vp://", clientId, scope, authResponseUri, sessionId, nonce, loginSession, requestMode)
+	return sessionId, authenticationRequest, err
 }
 
 // initializes the cross-device siop flow

@@ -177,11 +177,12 @@ func TestFrontendV2ByReference(t *testing.T) {
 	vpToken, err := helpers.CreateDCQLResponse(map[string]string{"cred-1": vpJWT})
 	require.NoError(t, err)
 
-	// Step 8: Open WebSocket connection BEFORE posting the authentication response
+	// Step 8: Open WebSocket connection BEFORE posting the authentication response, using the
+	// URL the page itself renders - the browser never sees the request object's state.
 	// The verifier only accepts WebSocket upgrades whose Origin matches its configured
 	// host (see openapi.checkWebSocketOrigin) - a real browser tab loading the login page
 	// sends this automatically, so the test replicates it explicitly.
-	wsURL := fmt.Sprintf("ws://localhost:%d/ws?state=%s", fixture.verifier.Port, stateClaim)
+	wsURL := extractWebSocketURL(t, htmlStr, stateClaim)
 	wsHeader := http.Header{"Origin": {fmt.Sprintf("http://localhost:%d", fixture.verifier.Port)}}
 	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, wsHeader)
 	require.NoError(t, err, "WebSocket connection should succeed")
@@ -298,9 +299,9 @@ func TestFrontendV2ByValue(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 5: Open WebSocket connection
-	// See the matching comment in the other test in this file: Origin must match the
-	// verifier's configured host, same as a real browser tab would send.
-	wsURL := fmt.Sprintf("ws://localhost:%d/ws?state=%s", fixture.verifier.Port, stateClaim)
+	// See the matching comment in the other test in this file: the URL comes from the page,
+	// and Origin must match the verifier's configured host, same as a real browser tab would send.
+	wsURL := extractWebSocketURL(t, string(htmlBody), stateClaim)
 	wsHeader := http.Header{"Origin": {fmt.Sprintf("http://localhost:%d", fixture.verifier.Port)}}
 	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, wsHeader)
 	require.NoError(t, err, "WebSocket connection should succeed")
@@ -369,6 +370,26 @@ func extractOpenID4VPURL(t *testing.T, html string) string {
 		return ""
 	}
 	return matches[1]
+}
+
+// wsURLMetaPattern matches the WebSocket URL the loginQR v2 page hands to its script.
+var wsURLMetaPattern = regexp.MustCompile(`<meta name="wsUrl" content="([^"]+)">`)
+
+// extractWebSocketURL returns the WebSocket URL rendered into the loginQR v2 page, as a ws://
+// URL. It asserts the page addresses the session by the same id the wallet receives as state,
+// which is the id the verifier notifies on - never the external client's state.
+func extractWebSocketURL(t *testing.T, html string, walletState string) string {
+	t.Helper()
+	matches := wsURLMetaPattern.FindStringSubmatch(html)
+	require.Len(t, matches, 2, "wsUrl meta tag must be present in the loginQR page")
+
+	wsURL, err := url.Parse(strings.ReplaceAll(matches[1], "&amp;", "&"))
+	require.NoError(t, err)
+	assert.Equal(t, walletState, wsURL.Query().Get("state"), "the page must register its WebSocket under the session id sent to the wallet")
+	assert.NotEqual(t, testState, wsURL.Query().Get("state"), "the page must not use the external client's state as the WebSocket key")
+
+	wsURL.Scheme = strings.Replace(wsURL.Scheme, "http", "ws", 1)
+	return wsURL.String()
 }
 
 // getStringClaim extracts a string claim from a JWT token.
