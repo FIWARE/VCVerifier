@@ -483,3 +483,83 @@ func TestHandleAuthenticationResponse_DeliveredCodeIsKept(t *testing.T) {
 		t.Errorf("Expected the authenticated message, got %v (err %v)", message, err)
 	}
 }
+
+// TestWsHandler_SessionCompletingDuringCheck covers a login completing while the page connects:
+// the connection is registered before the session is checked, and a result racing the rejection
+// fails instead of reaching a page that was told its session is gone.
+func TestWsHandler_SessionCompletingDuringCheck(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	// not startWsTestServer: its dialer waits for a registration, which a rejected connection
+	// only has briefly
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/ws", WsHandler)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { frontendVerifier = nil })
+
+	delivery := make(chan error, 1)
+	frontendVerifier = &mockVerifier{
+		mockHost:            server.URL,
+		mockMissingSessions: map[string]bool{"racing-session": true},
+		mockOnHasLoginSession: func(sessionId string) {
+			client := registeredClient(sessionId)
+			if client == nil {
+				t.Errorf("The connection must be registered before the session is checked.")
+				delivery <- errNoWebSocketConnection
+				return
+			}
+			// the wallet's response completed the session, and sendRedirect found this
+			// connection; its write waits for the check
+			go func() {
+				delivery <- client.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": "https://rp.example/callback?state=external-state&code=the-code"})
+			}()
+		},
+	}
+
+	wsURL := "ws" + server.URL[len("http"):] + "/ws?state=racing-session"
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {server.URL}})
+	if err != nil {
+		t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "error" {
+		t.Fatalf("Expected the session_not_found error, got %v (err %v)", message, err)
+	}
+	if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, wsCloseSessionInvalid) {
+		t.Errorf("Expected the connection to be closed with %d, got %v", wsCloseSessionInvalid, err)
+	}
+	select {
+	case err := <-delivery:
+		if !errors.Is(err, errWebSocketRejected) {
+			t.Errorf("Expected the racing result to fail with %v, got %v", errWebSocketRejected, err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("The racing result was never answered.")
+	}
+	waitFor(t, func() bool { return registeredClient("racing-session") == nil }, "the rejected connection was unregistered")
+}
+
+// TestWsClient_NotRejectedAfterDelivery checks that a connection that got the login result is not
+// told afterwards that its session is gone - the session is gone because the login completed.
+func TestWsClient_NotRejectedAfterDelivery(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+	conn := dial("delivered-first")
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message first, got %v (err %v)", message, err)
+	}
+
+	if err := sendRedirect("delivered-first", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the notification to be delivered, got %v", err)
+	}
+	frontendVerifier.(*mockVerifier).mockMissingSessions = map[string]bool{"delivered-first": true}
+
+	if registeredClient("delivered-first").rejectIfSessionGone("delivered-first") {
+		t.Errorf("A connection that got the login result must not be rejected.")
+	}
+}

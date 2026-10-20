@@ -163,7 +163,15 @@ type wsClient struct {
 	writeWait  time.Duration
 	// closed once the connection is closed, unregistered and its goroutines have finished
 	closed chan struct{}
+	// guarded by writeMu: the login result was written to the page, or the page was told that
+	// its session is gone. Never both, so the page does not get contradicting answers.
+	notified bool
+	rejected bool
 }
+
+// errWebSocketRejected is returned for a login result that reaches a connection which was already
+// told that its session is gone.
+var errWebSocketRejected = errors.New("the WebSocket was rejected, its session no longer exists")
 
 // errNoWebSocketConnection is returned when no page waits for the result of the session.
 var errNoWebSocketConnection = errors.New("no WebSocket connection for the session")
@@ -171,10 +179,43 @@ var errNoWebSocketConnection = errors.New("no WebSocket connection for the sessi
 func (c *wsClient) writeJSON(message interface{}) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	return c.writeJSONLocked(message)
+}
+
+func (c *wsClient) writeJSONLocked(message interface{}) error {
 	if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeWait)); err != nil {
 		return err
 	}
 	return c.conn.WriteJSON(message)
+}
+
+// deliverLogin writes the login result to the page, unless the page was rejected meanwhile.
+func (c *wsClient) deliverLogin(message interface{}) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.rejected {
+		return errWebSocketRejected
+	}
+	if err := c.writeJSONLocked(message); err != nil {
+		return err
+	}
+	c.notified = true
+	return nil
+}
+
+// rejectIfSessionGone rejects the connection if its login session no longer exists and no login
+// result was delivered to it, and reports whether it did. The check runs under writeMu, so a
+// result is either delivered before it - and the session being gone is expected - or fails after
+// it, which releases the code again (see handleAuthenticationResponse).
+func (c *wsClient) rejectIfSessionGone(sessionId string) bool {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.notified || getFrontendVerifier().HasLoginSession(sessionId) {
+		return false
+	}
+	c.rejected = true
+	rejectWebSocket(c.conn, sessionId)
+	return true
 }
 
 // keepAlive pings the client until done is closed or a ping cannot be written. WriteControl may
@@ -210,7 +251,7 @@ func sendRedirect(sessionId string, externalState string, code string, redirectU
 
 	// The connection is closed and unregistered by WsHandler's reader once the browser leaves the
 	// page, so nothing else is to be done here - in particular no second reader on it.
-	err := connection.(*wsClient).writeJSON(gin.H{"type": "authenticated", "redirectUrl": redirectUrl + "?state=" + externalState + "&code=" + code})
+	err := connection.(*wsClient).deliverLogin(gin.H{"type": "authenticated", "redirectUrl": redirectUrl + "?state=" + externalState + "&code=" + code})
 	if err != nil {
 		logging.Log().Warnf("Was not able to notify the frontend for session %s. Err: %v", sessionId, err)
 		return err
@@ -247,17 +288,19 @@ func WsHandler(c *gin.Context) {
 		_ = c.AbortWithError(http.StatusBadRequest, err)
 		return
 	}
-	// A page reconnecting after its session was completed (with the notification lost) or has
-	// expired would otherwise keep showing a QR code that can only yield no_such_session.
-	if !getFrontendVerifier().HasLoginSession(state) {
-		rejectWebSocket(connection, state)
-		return
-	}
-
 	client := &wsClient{conn: connection, pingPeriod: wsPingPeriod, pongWait: wsPongWait, writeWait: wsWriteWait, closed: make(chan struct{})}
 
 	// A reconnecting browser replaces its earlier connection for the session.
 	sessions.Store(state, client)
+
+	// A page reconnecting after its session was completed (with the notification lost) or has
+	// expired would otherwise keep showing a QR code that can only yield no_such_session. This is
+	// checked only once the connection is registered: a login completing before the check finds
+	// no session left, one completing after it finds this connection.
+	if client.rejectIfSessionGone(state) {
+		sessions.CompareAndDelete(state, client)
+		return
+	}
 	logging.Log().Infof("WebSocket connected for session %s.", state)
 
 	connection.SetReadLimit(wsMaxMessageSize)

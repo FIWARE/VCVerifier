@@ -58,11 +58,16 @@ type mockVerifier struct {
 	mockHost                string
 	// sessions HasLoginSession reports as gone; every other session exists
 	mockMissingSessions map[string]bool
+	// called by HasLoginSession before it answers
+	mockOnHasLoginSession func(sessionId string)
 	// codes passed to ReleaseUndeliveredCode, by session id
 	releasedCodes map[string]string
 }
 
 func (mV *mockVerifier) HasLoginSession(sessionId string) bool {
+	if mV.mockOnHasLoginSession != nil {
+		mV.mockOnHasLoginSession(sessionId)
+	}
 	return !mV.mockMissingSessions[sessionId]
 }
 
