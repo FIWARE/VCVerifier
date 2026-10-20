@@ -178,9 +178,14 @@ type CredentialVerifier struct {
 	sessionRedeemMutex sync.Mutex
 	// cache to be used for jwt retrieval
 	tokenCache common.Cache
-	// authorization codes that were exchanged for a token, so a failed v1 callback can tell a
-	// requestor that redeemed the code from one whose exchange failed. Optional: nil records nothing.
+	// authorization codes claimed at the token endpoint (see GetToken), so an undelivered code can
+	// tell a requestor that redeemed it from one whose exchange failed. Without it, nothing can be
+	// told apart and a login session whose code was not delivered is never restored.
 	redeemedCodes common.Cache
+	// makes claiming a code at the token endpoint and releasing an undelivered one mutually
+	// exclusive, so a session is never restored for a code that is being exchanged. Never held
+	// together with sessionRedeemMutex.
+	codeMutex sync.Mutex
 	// nonce generator
 	nonceGenerator NonceGenerator
 	// provides the current time
@@ -708,18 +713,9 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 // returned alongside the access token; otherwise refreshToken is empty.
 func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
 
-	tokenSessionInterface, hit := v.tokenCache.Get(authorizationCode)
-	if !hit {
-		logging.Log().Infof("No such authorization code cached: %s.", authorizationCode)
-		return jwtString, expiration, "", ErrorNoSuchCode
-	}
-	// we do only allow retrieval once.
-	v.tokenCache.Delete(authorizationCode)
-
-	tokenSession := tokenSessionInterface.(tokenStore)
-	if !validated && tokenSession.redirect_uri != redirectUri {
-		logging.Log().Infof("Redirect uri does not match for authorization %s. Was %s but is expected %s.", authorizationCode, redirectUri, tokenSession.redirect_uri)
-		return jwtString, expiration, "", ErrorRedirectUriMismatch
+	tokenSession, err := v.claimCode(authorizationCode, redirectUri, validated)
+	if err != nil {
+		return jwtString, expiration, "", err
 	}
 
 	var signatureAlgorithm jwa.SignatureAlgorithm
@@ -755,17 +751,40 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 		}
 	}
 
-	if v.redeemedCodes != nil {
-		v.redeemedCodes.Set(authorizationCode, true, cache.DefaultExpiration)
-	}
 	return jwtString, expiration, refreshToken, nil
 }
 
-// wasCodeRedeemed reports whether the authorization code was exchanged for a token.
-func (v *CredentialVerifier) wasCodeRedeemed(authorizationCode string) bool {
-	if v.redeemedCodes == nil {
-		return false
+// claimCode takes the authorization code out of the cache, so it is retrieved only once, and
+// records it as redeemed once its redirect_uri matched. Both happen under codeMutex: a code
+// claimed here can no longer be released by ReleaseUndeliveredCode, and one released there is
+// gone here. A failed exchange removes the code without recording it, as it did not complete the
+// login. Signing happens afterwards, so a failure there still counts as a redeemed code.
+func (v *CredentialVerifier) claimCode(authorizationCode string, redirectUri string, validated bool) (tokenSession tokenStore, err error) {
+	v.codeMutex.Lock()
+	defer v.codeMutex.Unlock()
+
+	tokenSessionInterface, hit := v.tokenCache.Get(authorizationCode)
+	if !hit {
+		logging.Log().Infof("No such authorization code cached: %s.", authorizationCode)
+		return tokenSession, ErrorNoSuchCode
 	}
+	// we do only allow retrieval once.
+	v.tokenCache.Delete(authorizationCode)
+
+	tokenSession = tokenSessionInterface.(tokenStore)
+	if !validated && tokenSession.redirect_uri != redirectUri {
+		logging.Log().Infof("Redirect uri does not match for authorization %s. Was %s but is expected %s.", authorizationCode, redirectUri, tokenSession.redirect_uri)
+		return tokenSession, ErrorRedirectUriMismatch
+	}
+	if v.redeemedCodes != nil {
+		v.redeemedCodes.Set(authorizationCode, true, cache.DefaultExpiration)
+	}
+	return tokenSession, nil
+}
+
+// wasCodeRedeemed reports whether the authorization code was claimed at the token endpoint.
+// Callers hold codeMutex.
+func (v *CredentialVerifier) wasCodeRedeemed(authorizationCode string) bool {
 	_, redeemed := v.redeemedCodes.Get(authorizationCode)
 	return redeemed
 }
@@ -1236,12 +1255,10 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			// answer with an error status (e.g. no browser session on a server-to-server call). A
 			// code that was exchanged for a token means the login did complete. A failed exchange
 			// (e.g. a mismatching redirect_uri) also removes the code, but does not count.
-			if v.wasCodeRedeemed(authorizationCode) {
+			if v.releaseCode(state, loginSession, sessionExpiresAt, authorizationCode) == codeRedeemed {
 				logging.Log().Infof("Requestor %s reported a failed callback for session %s but redeemed the code, the login is complete.", loginSession.callback, state)
 				return sameDevice, nil
 			}
-			// the code was not used, so undo the redemption and let the wallet retry
-			v.restoreSession(state, loginSession, sessionExpiresAt, authorizationCode)
 			return sameDevice, err
 		}
 		return sameDevice, nil
@@ -1586,10 +1603,36 @@ func (v *CredentialVerifier) redeemSession(sessionId string) bool {
 	return true
 }
 
-// restoreSession undoes redeemSession when the issued code could not be delivered: the code is
+// codeRelease is the outcome of releasing a code that could not be delivered.
+type codeRelease int
+
+const (
+	// the session was put back, so the wallet can retry
+	sessionRestored codeRelease = iota
+	// the requestor claimed the code at the token endpoint: the login did complete
+	codeRedeemed
+	// the session stays redeemed: it has expired meanwhile, or redemptions are not recorded
+	sessionNotRestored
+)
+
+// releaseCode undoes redeemSession when the issued code could not be delivered: the code is
 // discarded and the session is put back for the rest of its lifetime, so a retry by the wallet can
-// complete the login. Only one code for the session is ever valid at a time.
-func (v *CredentialVerifier) restoreSession(sessionId string, session loginSession, expiresAt time.Time, authorizationCode string) {
+// complete the login. Only one code for the session is ever valid at a time. A code already
+// claimed at the token endpoint completed the login and is left alone; see claimCode for why
+// both run under codeMutex.
+func (v *CredentialVerifier) releaseCode(sessionId string, session loginSession, expiresAt time.Time, authorizationCode string) codeRelease {
+	v.codeMutex.Lock()
+	defer v.codeMutex.Unlock()
+
+	if v.redeemedCodes == nil {
+		// a claimed code cannot be told from an unused one, and restoring the session for a
+		// claimed code would let it be redeemed twice
+		logging.Log().Warnf("Did not restore session %s after the failed delivery: redeemed codes are not recorded.", sessionId)
+		return sessionNotRestored
+	}
+	if v.wasCodeRedeemed(authorizationCode) {
+		return codeRedeemed
+	}
 	v.tokenCache.Delete(authorizationCode)
 
 	ttl := cache.DefaultExpiration
@@ -1597,11 +1640,12 @@ func (v *CredentialVerifier) restoreSession(sessionId string, session loginSessi
 		ttl = time.Until(expiresAt)
 		if ttl <= 0 {
 			logging.Log().Infof("Did not restore session %s after the failed delivery: it has expired meanwhile.", sessionId)
-			return
+			return sessionNotRestored
 		}
 	}
 	v.sessionCache.Set(sessionId, session, ttl)
 	logging.Log().Infof("Restored session %s after its code could not be delivered, so the wallet can retry.", sessionId)
+	return sessionRestored
 }
 
 // intialize the OID4VP cross device flow

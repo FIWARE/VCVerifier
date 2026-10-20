@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1121,7 +1122,7 @@ func TestAuthenticationResponse(t *testing.T) {
 				}
 				validationServices[i] = &mockExternalSsiKit{results, tc.verificationError}
 			}
-			verifier := CredentialVerifier{did: "did:key:verifier", signingKey: testKey, tokenCache: &tokenCache, sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, validationServices: validationServices, clock: mockClock{}, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"}}
+			verifier := CredentialVerifier{did: "did:key:verifier", signingKey: testKey, tokenCache: &tokenCache, redeemedCodes: cache.New(time.Minute, time.Minute), sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, validationServices: validationServices, clock: mockClock{}, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"}}
 
 			sameDeviceResponse, err := verifier.AuthenticationResponse(tc.requestedState, &tc.testVP)
 			if err != tc.expectedError {
@@ -1323,6 +1324,7 @@ func TestAuthenticationResponse_FailedCallbackRestoresSession(t *testing.T) {
 				did:                  "did:key:verifier",
 				signingKey:           testKey,
 				tokenCache:           tokenCache,
+				redeemedCodes:        cache.New(time.Minute, time.Minute),
 				sessionCache:         sessionCache,
 				nonceGenerator:       &countingNonceGenerator{},
 				validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true, true}, nil}},
@@ -1435,6 +1437,161 @@ func TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus(t *testing.T)
 			assert.Equal(t, tc.sessionRestored, found, "the session is restored only if no token was issued for its code")
 		})
 	}
+}
+
+// blockingTokenSigner holds Sign until release is closed, after reporting on entered that it
+// was reached, so a test can act while a code is being exchanged.
+type blockingTokenSigner struct {
+	entered chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (bts blockingTokenSigner) Sign(t jwt.Token, options ...jwt.SignOption) ([]byte, error) {
+	close(bts.entered)
+	<-bts.release
+	if bts.err != nil {
+		return nil, bts.err
+	}
+	return jwt.Sign(t, options...)
+}
+
+func newCodeTestVerifier(t *testing.T, signer common.TokenSigner, version int) (*CredentialVerifier, *cache.Cache, *cache.Cache) {
+	t.Helper()
+	trueOption := true
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	testKey, _ := jwk.Import(ecdsaKey)
+	_ = jwk.AssignKeyID(testKey)
+
+	sessionCache := cache.New(time.Minute, time.Minute)
+	sessionCache.SetDefault("session-id", loginSession{version: version, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
+	tokenCache := cache.New(time.Minute, time.Minute)
+
+	return &CredentialVerifier{
+		did:                  "did:key:verifier",
+		signingKey:           testKey,
+		signingAlgorithm:     "ES256",
+		tokenSigner:          signer,
+		tokenCache:           tokenCache,
+		redeemedCodes:        cache.New(time.Minute, time.Minute),
+		sessionCache:         sessionCache,
+		nonceGenerator:       &countingNonceGenerator{},
+		validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true}, nil}},
+		clock:                mockClock{},
+		jwtExpiration:        time.Minute,
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+		credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
+			Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
+		}}}},
+	}, sessionCache, tokenCache
+}
+
+// TestAuthenticationResponse_CallbackFailsWhileCodeIsExchanged covers a v1 callback failing (e.g.
+// timing out) while the requestor is still exchanging the code: the exchange has claimed the code,
+// so the login is complete and the session must not be restored - restoring it would let the
+// wallet redeem the session a second time.
+func TestAuthenticationResponse_CallbackFailsWhileCodeIsExchanged(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	signer := blockingTokenSigner{entered: make(chan struct{}), release: make(chan struct{})}
+	verifier, sessionCache, _ := newCodeTestVerifier(t, signer, CROSS_DEVICE_V1)
+
+	exchanged := make(chan error, 1)
+	httpClient = mockHttpClient{callbackStatus: http.StatusGatewayTimeout, onCallback: func(req *http.Request) {
+		go func() {
+			_, _, _, err := verifier.GetToken(req.URL.Query().Get("code"), "https://myhost.org/callback", false)
+			exchanged <- err
+		}()
+		// answer only once the exchange is under way, but not finished
+		<-signer.entered
+	}}
+	t.Cleanup(func() { httpClient = mockHttpClient{} })
+
+	vp := getVP([]string{"vc"})
+	_, err := verifier.AuthenticationResponse("session-id", &vp)
+	assert.NoError(t, err, "a code claimed at the token endpoint completes the login")
+	_, found := sessionCache.Get("session-id")
+	assert.False(t, found, "the session of a code being exchanged must not be restored")
+
+	close(signer.release)
+	assert.NoError(t, <-exchanged, "the exchange must still succeed")
+}
+
+// TestReleaseCode_BeforeExchange checks the other order: a code released first is gone for the
+// token endpoint, so only the retry's code can complete the login.
+func TestReleaseCode_BeforeExchange(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V1)
+	session, expiresAt, _ := sessionCache.GetWithExpiration("session-id")
+	sessionCache.Delete("session-id")
+	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
+
+	assert.Equal(t, sessionRestored, verifier.releaseCode("session-id", session.(loginSession), expiresAt, "the-code"))
+	_, found := sessionCache.Get("session-id")
+	assert.True(t, found)
+
+	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+	assert.Equal(t, ErrorNoSuchCode, err, "a released code must not be exchangeable")
+}
+
+// TestReleaseCode_SigningFailureCountsAsRedeemed: a code is redeemed once it was claimed with a
+// matching redirect_uri; a server-side failure afterwards does not make it reusable.
+func TestReleaseCode_SigningFailureCountsAsRedeemed(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{signingError: errors.New("signing failed")}, CROSS_DEVICE_V1)
+	session, expiresAt, _ := sessionCache.GetWithExpiration("session-id")
+	sessionCache.Delete("session-id")
+	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
+
+	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+	assert.Error(t, err)
+
+	assert.Equal(t, codeRedeemed, verifier.releaseCode("session-id", session.(loginSession), expiresAt, "the-code"))
+	_, found := sessionCache.Get("session-id")
+	assert.False(t, found)
+}
+
+// TestReleaseCode_WithoutRedeemedCodes checks that a verifier that does not record redeemed codes
+// never restores a session, as it cannot tell whether the code was exchanged.
+func TestReleaseCode_WithoutRedeemedCodes(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V1)
+	verifier.redeemedCodes = nil
+	session, expiresAt, _ := sessionCache.GetWithExpiration("session-id")
+	sessionCache.Delete("session-id")
+	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
+
+	assert.Equal(t, sessionNotRestored, verifier.releaseCode("session-id", session.(loginSession), expiresAt, "the-code"))
+	_, found := sessionCache.Get("session-id")
+	assert.False(t, found)
+	_, found = tokenCache.Get("the-code")
+	assert.True(t, found, "the code is left for the requestor, which may still exchange it")
+}
+
+// TestGetToken_ConcurrentExchangesOfOneCode checks that a code is exchanged only once, however many
+// requests present it at the same time.
+func TestGetToken_ConcurrentExchangesOfOneCode(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, _, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V1)
+	verifier.signingKey = getECDSAKey()
+	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
+
+	const requests = 20
+	var successes atomic.Int64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false); err == nil {
+				successes.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	assert.Equal(t, int64(1), successes.Load())
 }
 
 func verifySameDevice(t *testing.T, sdr Response, tokenCache mockTokenCache, tc authTest) {
