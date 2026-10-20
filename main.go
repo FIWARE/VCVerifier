@@ -138,6 +138,14 @@ func main() {
 	}
 	logger.Infof("WebSocket upgrades accepted from the verifier host %q and the additional origins %v", configuration.Server.Host, wsOrigins)
 
+	wsPingInterval := time.Duration(configuration.Server.WebSocketPingInterval) * time.Second
+	wsPongTimeout := time.Duration(configuration.Server.WebSocketPongTimeout) * time.Second
+	if err := api.SetWebSocketKeepAlive(wsPingInterval, wsPongTimeout); err != nil {
+		logger.Errorf("Invalid WebSocket keepalive configuration: %v", err)
+		panic(err)
+	}
+	logger.Infof("Login WebSocket keepalive: ping every %v, connection dropped after %v without a pong", wsPingInterval, wsPongTimeout)
+
 	//new template engine
 	router.HTMLRender = ginview.Default()
 	// static files for the frontend

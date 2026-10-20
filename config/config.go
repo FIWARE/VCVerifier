@@ -122,11 +122,21 @@ type Server struct {
 	// the login WebSocket, in addition to Host. Needed when the login page is also reachable
 	// through an alias or a second ingress host. A wildcard is not accepted.
 	WebSocketAllowedOrigins []string `mapstructure:"webSocketAllowedOrigins"`
+	// WebSocketPingInterval is the interval, in seconds, between keepalive pings on the login
+	// WebSocket. It must be below the shortest idle timeout of any proxy or load balancer in
+	// front of the verifier, or the connection is closed while the QR code is shown.
+	WebSocketPingInterval int `mapstructure:"webSocketPingInterval" default:"25"`
+	// WebSocketPongTimeout is the time, in seconds, a browser has to answer a ping before its
+	// login WebSocket is considered gone. Must be greater than WebSocketPingInterval.
+	WebSocketPongTimeout int `mapstructure:"webSocketPongTimeout" default:"60"`
 
 	// ReadTimeout is the maximum duration for reading the entire request, including the body.
 	ReadTimeout int `mapstructure:"readTimeout" default:"5"`
-	// WriteTimeout is the maximum duration before timing out writes of the response.
-	WriteTimeout int `mapstructure:"writeTimeout" default:"10"`
+	// WriteTimeout is the maximum duration, in seconds, before timing out writes of the response.
+	// The wallet's authentication response is answered only after its presentation was verified
+	// and, in the cross-device v1 flow, the requestor's callback returned, so it has to cover both
+	// (see verifier.clientCallbackTimeout, which must be lower).
+	WriteTimeout int `mapstructure:"writeTimeout" default:"60"`
 	// IdleTimeout is the maximum amount of time to wait for the next request when keep-alives are enabled.
 	IdleTimeout int `mapstructure:"idleTimeout" default:"120"`
 	// ShutdownTimeout is the time allowed for active requests to finish during shutdown.
@@ -193,6 +203,10 @@ type Verifier struct {
 	TilCacheExpiry int `mapstructure:"tilCacheExpiry" default:"30"`
 	// expiry of auth sessions
 	SessionExpiry int `mapstructure:"sessionExpiry" default:"30"`
+	// ClientCallbackTimeout is the time, in seconds, the verifier waits for the requestor's
+	// client_callback (cross-device v1 flow) to answer when delivering the authorization code.
+	// While it waits, the login session is redeemed and the wallet's request is held open.
+	ClientCallbackTimeout int `mapstructure:"clientCallbackTimeout" default:"20"`
 	// policies that shall be checked
 	PolicyConfig Policies `mapstructure:"policies"`
 	// path of the authorizationEndpoint to be provided in the .well-known/openid-configuration

@@ -1,10 +1,17 @@
 package openapi
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/fiware/VCVerifier/common"
+	"github.com/fiware/VCVerifier/logging"
+	"github.com/fiware/VCVerifier/verifier"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -187,5 +194,372 @@ func TestSetAdditionalWebSocketOrigins(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// startWsTestServer serves WsHandler on a real HTTP server, with the verifier host set to the
+// server itself so the origin check passes, and returns a dialer for a given session id.
+func startWsTestServer(t *testing.T) func(sessionId string) *websocket.Conn {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/ws", WsHandler)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	frontendVerifier = &mockVerifier{mockHost: server.URL}
+	t.Cleanup(func() { frontendVerifier = nil })
+
+	return func(sessionId string) *websocket.Conn {
+		t.Helper()
+		previous := registeredClient(sessionId)
+		wsURL := "ws" + server.URL[len("http"):] + "/ws?state=" + sessionId
+		conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {server.URL}})
+		if err != nil {
+			t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+		}
+		waitFor(t, func() bool { c := registeredClient(sessionId); return c != nil && c != previous }, "the connection was registered")
+		client := registeredClient(sessionId)
+		// the server-side goroutines outlive the client; let them finish before the next test
+		// reconfigures shared state such as the logger
+		t.Cleanup(func() {
+			_ = conn.Close()
+			select {
+			case <-client.closed:
+			case <-time.After(3 * time.Second):
+				t.Errorf("The server side of session %s did not shut down.", sessionId)
+			}
+		})
+		return conn
+	}
+}
+
+// withWsTiming shortens the keepalive timing for the duration of a test.
+func withWsTiming(t *testing.T, pingPeriod, pongWait time.Duration) {
+	t.Helper()
+	oldPing, oldPong := wsPingPeriod, wsPongWait
+	wsPingPeriod, wsPongWait = pingPeriod, pongWait
+	t.Cleanup(func() { wsPingPeriod, wsPongWait = oldPing, oldPong })
+}
+
+// registeredClient returns the connection registered for a session, or nil.
+func registeredClient(sessionId string) *wsClient {
+	client, found := sessions.Load(sessionId)
+	if !found {
+		return nil
+	}
+	return client.(*wsClient)
+}
+
+func waitFor(t *testing.T, condition func() bool, description string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatalf("Timed out waiting until %s.", description)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestWsHandler_PingsClient(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	withWsTiming(t, 20*time.Millisecond, time.Second)
+	dial := startWsTestServer(t)
+
+	conn := dial("ping-session")
+	var pings atomic.Int32
+	conn.SetPingHandler(func(appData string) error {
+		pings.Add(1)
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(time.Second))
+	})
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	waitFor(t, func() bool { return pings.Load() >= 3 }, "the server pinged the client repeatedly")
+	if registeredClient("ping-session") == nil {
+		t.Errorf("A client answering pings must stay registered.")
+	}
+}
+
+func TestWsHandler_DropsUnresponsivePeer(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	withWsTiming(t, 20*time.Millisecond, 100*time.Millisecond)
+	dial := startWsTestServer(t)
+
+	// never reading means never answering a ping, like a peer whose network went away
+	dial("silent-session")
+
+	waitFor(t, func() bool { return registeredClient("silent-session") == nil }, "the unresponsive connection was unregistered")
+}
+
+func TestWsHandler_ReconnectKeepsNewerConnection(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+
+	first := dial("reconnect-session")
+	firstClient := registeredClient("reconnect-session")
+
+	second := dial("reconnect-session")
+	secondClient := registeredClient("reconnect-session")
+	if secondClient == firstClient {
+		t.Fatalf("The reconnect did not replace the first connection.")
+	}
+
+	// the old connection going away must not unregister the newer one
+	_ = first.Close()
+	<-firstClient.closed
+	if registeredClient("reconnect-session") != secondClient {
+		t.Fatalf("Closing the replaced connection unregistered the current one.")
+	}
+
+	_ = second.Close()
+	waitFor(t, func() bool { return registeredClient("reconnect-session") == nil }, "the current connection was unregistered after closing")
+}
+
+func TestSendRedirect_DeliversWhileKeepAliveRuns(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	// ping as fast as possible, so the notification is written while pings are in flight
+	withWsTiming(t, time.Millisecond, time.Second)
+	dial := startWsTestServer(t)
+
+	conn := dial("redirect-session")
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message first, got %v (err %v)", message, err)
+	}
+
+	if err := sendRedirect("redirect-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the notification to be delivered, got %v", err)
+	}
+
+	if err := conn.ReadJSON(&message); err != nil {
+		t.Fatalf("Expected the authenticated message, got err %v", err)
+	}
+	if message["type"] != "authenticated" || message["redirectUrl"] != "https://rp.example/callback?state=external-state&code=the-code" {
+		t.Errorf("Unexpected notification %v", message)
+	}
+}
+
+func TestSetWebSocketKeepAlive(t *testing.T) {
+	tests := []struct {
+		testName     string
+		pingInterval time.Duration
+		pongTimeout  time.Duration
+		expectError  bool
+	}{
+		{"the defaults are accepted", 25 * time.Second, 60 * time.Second, false},
+		{"a short interval for a strict proxy is accepted", 10 * time.Second, 20 * time.Second, false},
+		{"a zero ping interval is rejected", 0, 60 * time.Second, true},
+		{"a zero pong timeout is rejected", 25 * time.Second, 0, true},
+		{"a negative value is rejected", -1 * time.Second, 60 * time.Second, true},
+		{"a pong timeout equal to the interval is rejected", 30 * time.Second, 30 * time.Second, true},
+		{"a pong timeout below the interval is rejected", 60 * time.Second, 25 * time.Second, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			withWsTiming(t, wsPingPeriod, wsPongWait)
+			err := SetWebSocketKeepAlive(tc.pingInterval, tc.pongTimeout)
+			if tc.expectError {
+				if err == nil {
+					t.Fatalf("Expected an error for interval %v and timeout %v.", tc.pingInterval, tc.pongTimeout)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			if wsPingPeriod != tc.pingInterval || wsPongWait != tc.pongTimeout {
+				t.Errorf("Expected interval %v and timeout %v to be applied, got %v and %v.", tc.pingInterval, tc.pongTimeout, wsPingPeriod, wsPongWait)
+			}
+		})
+	}
+}
+
+func TestWsHandler_RejectsUnknownSession(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/ws", WsHandler)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	frontendVerifier = &mockVerifier{mockHost: server.URL, mockMissingSessions: map[string]bool{"gone-session": true}}
+	t.Cleanup(func() { frontendVerifier = nil })
+
+	wsURL := "ws" + server.URL[len("http"):] + "/ws?state=gone-session"
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {server.URL}})
+	if err != nil {
+		t.Fatalf("Expected the upgrade to succeed so the page can be told why, got %v (status %v)", err, statusOf(resp))
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil {
+		t.Fatalf("Expected an error message, got err %v", err)
+	}
+	if message["type"] != "error" || message["reason"] != "session_not_found" {
+		t.Errorf("Unexpected message %v", message)
+	}
+
+	_, _, err = conn.ReadMessage()
+	if !websocket.IsCloseError(err, wsCloseSessionInvalid) {
+		t.Errorf("Expected the connection to be closed with %d, got %v", wsCloseSessionInvalid, err)
+	}
+	if registeredClient("gone-session") != nil {
+		t.Errorf("A connection to an unknown session must not be registered.")
+	}
+}
+
+func TestSendRedirect_NoConnection(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	err := sendRedirect("no-such-session", "external-state", "the-code", "https://rp.example/callback")
+	if !errors.Is(err, errNoWebSocketConnection) {
+		t.Errorf("Expected %v, got %v", errNoWebSocketConnection, err)
+	}
+}
+
+// TestHandleAuthenticationResponse_UndeliveredCodeIsReleased checks that a cross-device v2 login
+// whose result cannot be handed to the browser releases the code - so the session is restored and
+// the wallet can retry - and answers with an error rather than a success.
+func TestHandleAuthenticationResponse_UndeliveredCodeIsReleased(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	gin.SetMode(gin.TestMode)
+
+	mock := &mockVerifier{mockSameDevice: verifier.Response{FlowVersion: verifier.CROSS_DEVICE_V2, RedirectTarget: "https://rp.example/callback", Code: "the-code", ExternalState: "external-state"}}
+	apiVerifier = mock
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", nil)
+	handleAuthenticationResponse(c, "unconnected-session", &common.Presentation{})
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500, got %d", recorder.Code)
+	}
+	var body ErrorMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Summary != ErrorMessageNoWebsocketConnection.Summary {
+		t.Errorf("Expected %v, got %s (err %v)", ErrorMessageNoWebsocketConnection, recorder.Body.String(), err)
+	}
+	if mock.releasedCodes["unconnected-session"] != "the-code" {
+		t.Errorf("Expected the undelivered code to be released, released %v", mock.releasedCodes)
+	}
+}
+
+func TestHandleAuthenticationResponse_DeliveredCodeIsKept(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+	conn := dial("delivered-session")
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message first, got %v (err %v)", message, err)
+	}
+
+	mock := &mockVerifier{mockSameDevice: verifier.Response{FlowVersion: verifier.CROSS_DEVICE_V2, RedirectTarget: "https://rp.example/callback", Code: "the-code", ExternalState: "external-state"}}
+	apiVerifier = mock
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", nil)
+	handleAuthenticationResponse(c, "delivered-session", &common.Presentation{})
+
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+	if len(mock.releasedCodes) != 0 {
+		t.Errorf("A delivered code must not be released, released %v", mock.releasedCodes)
+	}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+		t.Errorf("Expected the authenticated message, got %v (err %v)", message, err)
+	}
+}
+
+// TestWsHandler_SessionCompletingDuringCheck covers a login completing while the page connects:
+// the connection is registered before the session is checked, and a result racing the rejection
+// fails instead of reaching a page that was told its session is gone.
+func TestWsHandler_SessionCompletingDuringCheck(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	// not startWsTestServer: its dialer waits for a registration, which a rejected connection
+	// only has briefly
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/ws", WsHandler)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { frontendVerifier = nil })
+
+	delivery := make(chan error, 1)
+	frontendVerifier = &mockVerifier{
+		mockHost:            server.URL,
+		mockMissingSessions: map[string]bool{"racing-session": true},
+		mockOnHasLoginSession: func(sessionId string) {
+			client := registeredClient(sessionId)
+			if client == nil {
+				t.Errorf("The connection must be registered before the session is checked.")
+				delivery <- errNoWebSocketConnection
+				return
+			}
+			// the wallet's response completed the session, and sendRedirect found this
+			// connection; its write waits for the check
+			go func() {
+				delivery <- client.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": "https://rp.example/callback?state=external-state&code=the-code"})
+			}()
+		},
+	}
+
+	wsURL := "ws" + server.URL[len("http"):] + "/ws?state=racing-session"
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {server.URL}})
+	if err != nil {
+		t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "error" {
+		t.Fatalf("Expected the session_not_found error, got %v (err %v)", message, err)
+	}
+	if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, wsCloseSessionInvalid) {
+		t.Errorf("Expected the connection to be closed with %d, got %v", wsCloseSessionInvalid, err)
+	}
+	select {
+	case err := <-delivery:
+		if !errors.Is(err, errWebSocketRejected) {
+			t.Errorf("Expected the racing result to fail with %v, got %v", errWebSocketRejected, err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("The racing result was never answered.")
+	}
+	waitFor(t, func() bool { return registeredClient("racing-session") == nil }, "the rejected connection was unregistered")
+}
+
+// TestWsClient_NotRejectedAfterDelivery checks that a connection that got the login result is not
+// told afterwards that its session is gone - the session is gone because the login completed.
+func TestWsClient_NotRejectedAfterDelivery(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+	conn := dial("delivered-first")
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message first, got %v (err %v)", message, err)
+	}
+
+	if err := sendRedirect("delivered-first", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the notification to be delivered, got %v", err)
+	}
+	frontendVerifier.(*mockVerifier).mockMissingSessions = map[string]bool{"delivered-first": true}
+
+	if registeredClient("delivered-first").rejectIfSessionGone("delivered-first") {
+		t.Errorf("A connection that got the login result must not be rejected.")
 	}
 }

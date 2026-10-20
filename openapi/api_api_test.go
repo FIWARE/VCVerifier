@@ -56,6 +56,27 @@ type mockVerifier struct {
 	mockPathPrefix          string
 	mockRequestMode         string
 	mockHost                string
+	// sessions HasLoginSession reports as gone; every other session exists
+	mockMissingSessions map[string]bool
+	// called by HasLoginSession before it answers
+	mockOnHasLoginSession func(sessionId string)
+	// codes passed to ReleaseUndeliveredCode, by session id
+	releasedCodes map[string]string
+}
+
+func (mV *mockVerifier) HasLoginSession(sessionId string) bool {
+	if mV.mockOnHasLoginSession != nil {
+		mV.mockOnHasLoginSession(sessionId)
+	}
+	return !mV.mockMissingSessions[sessionId]
+}
+
+func (mV *mockVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {
+	if mV.releasedCodes == nil {
+		mV.releasedCodes = map[string]string{}
+	}
+	mV.releasedCodes[sessionId] = authorizationCode
+	return true
 }
 
 func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestType string) (qr string, err error) {

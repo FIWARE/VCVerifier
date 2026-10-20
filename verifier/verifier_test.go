@@ -9,7 +9,9 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"image/png"
+	"io"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -17,6 +19,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -973,7 +977,10 @@ func (msk *mockExternalSsiKit) ValidateVC(verifiableCredential *common.Credentia
 
 type mockHttpClient struct {
 	callbackError error
-	lastRequest   *url.URL
+	// status the requestor answers the callback with; 0 means 200
+	callbackStatus int
+	// runs when the callback arrives, before answering - e.g. a requestor exchanging the code
+	onCallback func(req *http.Request)
 }
 
 var lastRequest *url.URL
@@ -984,7 +991,14 @@ func (mhc mockHttpClient) Do(req *http.Request) (r *http.Response, err error) {
 	}
 
 	lastRequest = req.URL
-	return
+	if mhc.onCallback != nil {
+		mhc.onCallback(req)
+	}
+	status := mhc.callbackStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(""))}, nil
 }
 
 func (mhc mockHttpClient) PostForm(url string, data url.Values) (r *http.Response, err error) {
@@ -1077,7 +1091,7 @@ func TestAuthenticationResponse(t *testing.T) {
 
 			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}, errorToThrow: tc.tokenCacheError}
 
-			httpClient = mockHttpClient{tc.callbackError, nil}
+			httpClient = mockHttpClient{callbackError: tc.callbackError}
 			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			testKey, _ := jwk.Import(ecdsaKey)
 			_ = jwk.AssignKeyID(testKey)
@@ -1108,11 +1122,20 @@ func TestAuthenticationResponse(t *testing.T) {
 				}
 				validationServices[i] = &mockExternalSsiKit{results, tc.verificationError}
 			}
-			verifier := CredentialVerifier{did: "did:key:verifier", signingKey: testKey, tokenCache: &tokenCache, sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, validationServices: validationServices, clock: mockClock{}, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"}}
+			verifier := CredentialVerifier{did: "did:key:verifier", signingKey: testKey, tokenCache: &tokenCache, redeemedCodes: cache.New(time.Minute, time.Minute), sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, validationServices: validationServices, clock: mockClock{}, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"}}
 
 			sameDeviceResponse, err := verifier.AuthenticationResponse(tc.requestedState, &tc.testVP)
 			if err != tc.expectedError {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
+			}
+			if tc.testSession != (loginSession{}) && tc.requestedState == tc.testState {
+				// the session is single-use once a code was delivered for it; a failed verification
+				// or a failed requestor callback keeps it for a retry
+				codeIssued := tc.expectedError == nil
+				_, stillPresent := sessionCache.sessions[tc.testState]
+				if codeIssued == stillPresent {
+					t.Errorf("%s - Expected the session to be removed: %v, but it is still present: %v.", tc.testName, codeIssued, stillPresent)
+				}
 			}
 			if tc.expectedError != nil {
 				return
@@ -1131,6 +1154,486 @@ func TestAuthenticationResponse(t *testing.T) {
 			}
 		})
 
+	}
+}
+
+// gatedValidationService accepts every credential, but holds each validation until released,
+// so a test can get several responses past verification at the same time.
+type gatedValidationService struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (gvs *gatedValidationService) ValidateVC(verifiableCredential *common.Credential, verificationContext ValidationContext) (bool, error) {
+	gvs.entered <- struct{}{}
+	<-gvs.release
+	return true, nil
+}
+
+// countingNonceGenerator hands out distinct values and is safe for concurrent use.
+type countingNonceGenerator struct {
+	counter atomic.Int64
+}
+
+func (cng *countingNonceGenerator) GenerateNonce() string {
+	return fmt.Sprintf("code-%d", cng.counter.Add(1))
+}
+
+// TestAuthenticationResponse_SessionIsSingleUse checks that a login session can only be redeemed
+// for one authorization code: of two responses verified at the same time exactly one gets a
+// code, and a later response for the redeemed session gets none.
+func TestAuthenticationResponse_SessionIsSingleUse(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	const concurrentResponses = 2
+	const timeout = 5 * time.Second
+
+	trueOption := true
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	testKey, _ := jwk.Import(ecdsaKey)
+	_ = jwk.AssignKeyID(testKey)
+
+	sessionCache := cache.New(time.Minute, time.Minute)
+	sessionCache.SetDefault("session-id", loginSession{version: CROSS_DEVICE_V2, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
+	tokenCache := cache.New(time.Minute, time.Minute)
+	validationService := &gatedValidationService{entered: make(chan struct{}, concurrentResponses+1), release: make(chan struct{})}
+
+	verifier := &CredentialVerifier{
+		did:                  "did:key:verifier",
+		signingKey:           testKey,
+		tokenCache:           tokenCache,
+		sessionCache:         sessionCache,
+		nonceGenerator:       &countingNonceGenerator{},
+		validationServices:   []ValidationService{validationService},
+		clock:                mockClock{},
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+		credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
+			Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
+		}}}},
+	}
+
+	type result struct {
+		response Response
+		err      error
+	}
+	results := make(chan result, concurrentResponses)
+	for i := 0; i < concurrentResponses; i++ {
+		go func() {
+			vp := getVP([]string{"vc"})
+			response, err := verifier.AuthenticationResponse("session-id", &vp)
+			results <- result{response, err}
+		}()
+	}
+
+	// only release once every response is inside verification, so they all race to redeem
+	for i := 0; i < concurrentResponses; i++ {
+		select {
+		case <-validationService.entered:
+		case <-time.After(timeout):
+			t.Fatalf("Only %d of %d responses reached verification.", i, concurrentResponses)
+		}
+	}
+	close(validationService.release)
+
+	var succeeded []Response
+	for i := 0; i < concurrentResponses; i++ {
+		select {
+		case r := <-results:
+			if r.err == nil {
+				succeeded = append(succeeded, r.response)
+			} else {
+				assert.Equal(t, ErrorNoSuchSession, r.err, "a response that lost the race must find the session gone")
+			}
+		case <-time.After(timeout):
+			t.Fatalf("Only %d of %d responses returned.", i, concurrentResponses)
+		}
+	}
+
+	if assert.Len(t, succeeded, 1, "exactly one response may redeem the session") {
+		assert.Equal(t, "external-state", succeeded[0].ExternalState)
+		_, codeStored := tokenCache.Get(succeeded[0].Code)
+		assert.True(t, codeStored, "the winner's code must be redeemable")
+	}
+	assert.Equal(t, 1, tokenCache.ItemCount(), "the code of a response that lost the race must be discarded")
+
+	_, found := sessionCache.Get("session-id")
+	assert.False(t, found, "the session must be removed once a code was issued for it")
+
+	vp := getVP([]string{"vc"})
+	_, err := verifier.AuthenticationResponse("session-id", &vp)
+	assert.Equal(t, ErrorNoSuchSession, err, "a later response for a redeemed session must be rejected")
+}
+
+// TestAuthenticationResponse_FailedResponseKeepsSession checks that a rejected presentation does
+// not consume the session, so the holder can retry with another one.
+func TestAuthenticationResponse_FailedResponseKeepsSession(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{
+		"session-id": {version: SAME_DEVICE, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"},
+	}}
+	verifier := &CredentialVerifier{
+		did:                  "did:key:verifier",
+		sessionCache:         &sessionCache,
+		tokenCache:           &mockTokenCache{tokens: map[string]tokenStore{}},
+		nonceGenerator:       &mockNonceGenerator{staticValues: []string{"authCode"}},
+		validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{false, false}, nil}},
+		clock:                mockClock{},
+		credentialsConfig:    mockCredentialConfig{mockScopes: createMockCredentials("clientId", "", "VerifiableCredential", "", "", false)},
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		vp := getVP([]string{"vc"})
+		_, err := verifier.AuthenticationResponse("session-id", &vp)
+		assert.Equal(t, ErrorInvalidVC, err, "attempt %d must be judged on its presentation", attempt)
+		_, found := sessionCache.sessions["session-id"]
+		assert.True(t, found, "a rejected presentation must not consume the session")
+	}
+}
+
+// TestAuthenticationResponse_FailedCallbackRestoresSession checks that, in the cross-device v1
+// flow, a code that could not be delivered to the requestor does not consume the session: the
+// code is discarded, the session keeps its remaining lifetime and a retry completes the login.
+func TestAuthenticationResponse_FailedCallbackRestoresSession(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	tests := []struct {
+		testName      string
+		failure       mockHttpClient
+		expectedError error
+	}{
+		{"the requestor cannot be reached", mockHttpClient{callbackError: errors.New("connection refused")}, nil},
+		{"the requestor answers with an error status", mockHttpClient{callbackStatus: http.StatusInternalServerError}, ErrorCallbackRejected},
+		{"the requestor answers with a client error status", mockHttpClient{callbackStatus: http.StatusNotFound}, ErrorCallbackRejected},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			trueOption := true
+			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			testKey, _ := jwk.Import(ecdsaKey)
+			_ = jwk.AssignKeyID(testKey)
+
+			sessionCache := cache.New(time.Minute, time.Minute)
+			sessionCache.SetDefault("session-id", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
+			_, expiresBefore, _ := sessionCache.GetWithExpiration("session-id")
+			tokenCache := cache.New(time.Minute, time.Minute)
+
+			verifier := &CredentialVerifier{
+				did:                  "did:key:verifier",
+				signingKey:           testKey,
+				tokenCache:           tokenCache,
+				redeemedCodes:        cache.New(time.Minute, time.Minute),
+				sessionCache:         sessionCache,
+				nonceGenerator:       &countingNonceGenerator{},
+				validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true, true}, nil}},
+				clock:                mockClock{},
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+				credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
+					Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
+				}}}},
+			}
+
+			httpClient = tc.failure
+			vp := getVP([]string{"vc"})
+			_, err := verifier.AuthenticationResponse("session-id", &vp)
+			if tc.expectedError != nil {
+				assert.Equal(t, tc.expectedError, err)
+			} else {
+				assert.Equal(t, tc.failure.callbackError, err)
+			}
+
+			_, expiresAfter, found := sessionCache.GetWithExpiration("session-id")
+			assert.True(t, found, "a code that was not delivered must not consume the session")
+			assert.WithinDuration(t, expiresBefore, expiresAfter, time.Second, "the restored session must keep its remaining lifetime")
+			assert.Equal(t, 0, tokenCache.ItemCount(), "the undelivered code must be discarded")
+
+			httpClient = mockHttpClient{}
+			_, err = verifier.AuthenticationResponse("session-id", &vp)
+			assert.NoError(t, err, "the wallet's retry must complete the login")
+			assert.Equal(t, "code-2", lastRequest.Query().Get("code"), "the retry must deliver a new code")
+			assert.Equal(t, "external-state", lastRequest.Query().Get("state"))
+			assert.Equal(t, 1, tokenCache.ItemCount())
+			_, found = sessionCache.Get("session-id")
+			assert.False(t, found, "a delivered code consumes the session")
+		})
+	}
+}
+
+// TestCallbackToRequester_RedirectCountsAsDelivered checks that a requestor answering the
+// callback with a redirect has accepted it - the redirect target is not judged.
+func TestCallbackToRequester_RedirectCountsAsDelivered(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	t.Cleanup(func() { httpClient = mockHttpClient{} })
+
+	for _, status := range []int{http.StatusOK, http.StatusNoContent, http.StatusFound, http.StatusSeeOther} {
+		httpClient = mockHttpClient{callbackStatus: status}
+		err := callbackToRequester(loginSession{callback: "https://myhost.org/callback", externalState: "external-state"}, "the-code")
+		assert.NoError(t, err, "status %d must count as a delivered callback", status)
+	}
+}
+
+// TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus checks how a failed v1 callback
+// is judged when the requestor tried to exchange the code while handling it: a code exchanged for
+// a token is a delivered login whatever the callback answered, while a failed exchange is not.
+func TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	tests := []struct {
+		testName        string
+		exchangeWith    string
+		expectedError   error
+		sessionRestored bool
+	}{
+		{"the requestor exchanges the code, then answers 403", "https://myhost.org/callback", nil, false},
+		{"the requestor's exchange fails on the redirect_uri, then it answers 403", "https://other.org/callback", ErrorCallbackRejected, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			trueOption := true
+			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			testKey, _ := jwk.Import(ecdsaKey)
+			_ = jwk.AssignKeyID(testKey)
+
+			sessionCache := cache.New(time.Minute, time.Minute)
+			sessionCache.SetDefault("session-id", loginSession{version: CROSS_DEVICE_V1, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
+			tokenCache := cache.New(time.Minute, time.Minute)
+
+			verifier := &CredentialVerifier{
+				did:                  "did:key:verifier",
+				signingKey:           testKey,
+				signingAlgorithm:     "ES256",
+				tokenSigner:          mockTokenSigner{},
+				tokenCache:           tokenCache,
+				redeemedCodes:        cache.New(time.Minute, time.Minute),
+				sessionCache:         sessionCache,
+				nonceGenerator:       &countingNonceGenerator{},
+				validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true}, nil}},
+				clock:                mockClock{},
+				jwtExpiration:        time.Minute,
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+				credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
+					Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
+				}}}},
+			}
+
+			// the requestor exchanges the code at the token endpoint, then answers 403
+			var exchangeErr error
+			httpClient = mockHttpClient{callbackStatus: http.StatusForbidden, onCallback: func(req *http.Request) {
+				_, _, _, exchangeErr = verifier.GetToken(req.URL.Query().Get("code"), tc.exchangeWith, false)
+			}}
+			t.Cleanup(func() { httpClient = mockHttpClient{} })
+
+			vp := getVP([]string{"vc"})
+			_, err := verifier.AuthenticationResponse("session-id", &vp)
+			assert.Equal(t, tc.expectedError, err)
+			if !tc.sessionRestored {
+				assert.NoError(t, exchangeErr, "precondition: the exchange must have succeeded")
+			}
+
+			_, found := sessionCache.Get("session-id")
+			assert.Equal(t, tc.sessionRestored, found, "the session is restored only if no token was issued for its code")
+		})
+	}
+}
+
+// blockingTokenSigner holds Sign until release is closed, after reporting on entered that it
+// was reached, so a test can act while a code is being exchanged.
+type blockingTokenSigner struct {
+	entered chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (bts blockingTokenSigner) Sign(t jwt.Token, options ...jwt.SignOption) ([]byte, error) {
+	close(bts.entered)
+	<-bts.release
+	if bts.err != nil {
+		return nil, bts.err
+	}
+	return jwt.Sign(t, options...)
+}
+
+func newCodeTestVerifier(t *testing.T, signer common.TokenSigner, version int) (*CredentialVerifier, *cache.Cache, *cache.Cache) {
+	t.Helper()
+	trueOption := true
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	testKey, _ := jwk.Import(ecdsaKey)
+	_ = jwk.AssignKeyID(testKey)
+
+	sessionCache := cache.New(time.Minute, time.Minute)
+	sessionCache.SetDefault("session-id", loginSession{version: version, callback: "https://myhost.org/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"})
+	tokenCache := cache.New(time.Minute, time.Minute)
+
+	return &CredentialVerifier{
+		did:                  "did:key:verifier",
+		signingKey:           testKey,
+		signingAlgorithm:     "ES256",
+		tokenSigner:          signer,
+		tokenCache:           tokenCache,
+		redeemedCodes:        cache.New(time.Minute, time.Minute),
+		sessionCache:         sessionCache,
+		nonceGenerator:       &countingNonceGenerator{},
+		validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true}, nil}},
+		clock:                mockClock{},
+		jwtExpiration:        time.Minute,
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+		credentialsConfig: mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"clientId": {"": {
+			Credentials: []configModel.Credential{{Type: "VerifiableCredential", JwtInclusion: configModel.JwtInclusion{Enabled: &trueOption}}},
+		}}}},
+	}, sessionCache, tokenCache
+}
+
+// TestAuthenticationResponse_CallbackFailsWhileCodeIsExchanged covers a v1 callback failing (e.g.
+// timing out) while the requestor is still exchanging the code: the exchange has claimed the code,
+// so the login is complete and the session must not be restored - restoring it would let the
+// wallet redeem the session a second time.
+func TestAuthenticationResponse_CallbackFailsWhileCodeIsExchanged(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	signer := blockingTokenSigner{entered: make(chan struct{}), release: make(chan struct{})}
+	verifier, sessionCache, _ := newCodeTestVerifier(t, signer, CROSS_DEVICE_V1)
+
+	exchanged := make(chan error, 1)
+	httpClient = mockHttpClient{callbackStatus: http.StatusGatewayTimeout, onCallback: func(req *http.Request) {
+		go func() {
+			_, _, _, err := verifier.GetToken(req.URL.Query().Get("code"), "https://myhost.org/callback", false)
+			exchanged <- err
+		}()
+		// answer only once the exchange is under way, but not finished
+		<-signer.entered
+	}}
+	t.Cleanup(func() { httpClient = mockHttpClient{} })
+
+	vp := getVP([]string{"vc"})
+	_, err := verifier.AuthenticationResponse("session-id", &vp)
+	assert.NoError(t, err, "a code claimed at the token endpoint completes the login")
+	_, found := sessionCache.Get("session-id")
+	assert.False(t, found, "the session of a code being exchanged must not be restored")
+
+	close(signer.release)
+	assert.NoError(t, <-exchanged, "the exchange must still succeed")
+}
+
+// TestReleaseCode_BeforeExchange checks the other order: a code released first is gone for the
+// token endpoint, so only the retry's code can complete the login.
+func TestReleaseCode_BeforeExchange(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V1)
+	session, expiresAt, _ := sessionCache.GetWithExpiration("session-id")
+	sessionCache.Delete("session-id")
+	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
+
+	assert.Equal(t, sessionRestored, verifier.releaseCode("session-id", session.(loginSession), expiresAt, "the-code"))
+	_, found := sessionCache.Get("session-id")
+	assert.True(t, found)
+
+	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+	assert.Equal(t, ErrorNoSuchCode, err, "a released code must not be exchangeable")
+}
+
+// TestReleaseCode_SigningFailureCountsAsRedeemed: a code is redeemed once it was claimed with a
+// matching redirect_uri; a server-side failure afterwards does not make it reusable.
+func TestReleaseCode_SigningFailureCountsAsRedeemed(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{signingError: errors.New("signing failed")}, CROSS_DEVICE_V1)
+	session, expiresAt, _ := sessionCache.GetWithExpiration("session-id")
+	sessionCache.Delete("session-id")
+	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
+
+	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+	assert.Error(t, err)
+
+	assert.Equal(t, codeRedeemed, verifier.releaseCode("session-id", session.(loginSession), expiresAt, "the-code"))
+	_, found := sessionCache.Get("session-id")
+	assert.False(t, found)
+}
+
+// TestReleaseCode_WithoutRedeemedCodes checks that a verifier that does not record redeemed codes
+// never restores a session, as it cannot tell whether the code was exchanged.
+func TestReleaseCode_WithoutRedeemedCodes(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V1)
+	verifier.redeemedCodes = nil
+	session, expiresAt, _ := sessionCache.GetWithExpiration("session-id")
+	sessionCache.Delete("session-id")
+	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
+
+	assert.Equal(t, sessionNotRestored, verifier.releaseCode("session-id", session.(loginSession), expiresAt, "the-code"))
+	_, found := sessionCache.Get("session-id")
+	assert.False(t, found)
+	_, found = tokenCache.Get("the-code")
+	assert.True(t, found, "the code is left for the requestor, which may still exchange it")
+}
+
+// TestGetToken_ConcurrentExchangesOfOneCode checks that a code is exchanged only once, however many
+// requests present it at the same time.
+func TestGetToken_ConcurrentExchangesOfOneCode(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, _, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V1)
+	verifier.signingKey = getECDSAKey()
+	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
+
+	const requests = 20
+	var successes atomic.Int64
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false); err == nil {
+				successes.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	assert.Equal(t, int64(1), successes.Load())
+}
+
+func TestReleaseUndeliveredCode(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	tests := []struct {
+		testName       string
+		sessionId      string
+		code           string
+		claimFirst     bool
+		expectRestored bool
+		expectCodeKept bool
+	}{
+		{"an undelivered code restores its session", "session-id", "the-code", false, true, false},
+		{"a code of another session is left alone", "other-session", "the-code", false, false, true},
+		{"an unknown code restores nothing", "session-id", "unknown-code", false, false, true},
+		{"a claimed code restores nothing", "session-id", "the-code", true, false, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V2)
+			verifier.signingKey = getECDSAKey()
+			session, expiresAt, _ := sessionCache.GetWithExpiration("session-id")
+			sessionCache.Delete("session-id")
+			tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback",
+				sessionId: "session-id", session: session.(loginSession), sessionExpiresAt: expiresAt})
+			if tc.claimFirst {
+				_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+				assert.NoError(t, err)
+			}
+
+			assert.Equal(t, tc.expectRestored, verifier.ReleaseUndeliveredCode(tc.sessionId, tc.code))
+
+			_, expiresAfter, found := sessionCache.GetWithExpiration("session-id")
+			assert.Equal(t, tc.expectRestored, found)
+			if tc.expectRestored {
+				assert.WithinDuration(t, expiresAt, expiresAfter, time.Second, "the restored session must keep its remaining lifetime")
+			}
+			_, found = tokenCache.Get("the-code")
+			assert.Equal(t, tc.expectCodeKept, found)
+		})
 	}
 }
 
@@ -1219,6 +1722,10 @@ func TestInitVerifier(t *testing.T) {
 		{"Without a validationMode, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "blub", SessionExpiry: 30, KeyAlgorithm: "RS256", SupportedModes: []string{"urlEncoded"}}}, ErrorUnsupportedValidationMode},
 		{"Without a valid key algorithm, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "SomethingWeird", SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}}, ErrorInvalidKeyConfig},
 		{"Without supported modes, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256"}}, ErrorSupportedModesNotSet},
+		{"With a callback timeout not below the server write timeout, no verifier should be instantiated.", configModel.Configuration{Server: configModel.Server{WriteTimeout: 10}, Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", ClientCallbackTimeout: 10}}, ErrorClientCallbackTimeoutExceedsWriteTimeout},
+		{"With the default callback timeout and a short server write timeout, no verifier should be instantiated.", configModel.Configuration{Server: configModel.Server{WriteTimeout: 10}, Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded"}}, ErrorClientCallbackTimeoutExceedsWriteTimeout},
+		{"With a callback timeout below the server write timeout, a verifier should be instantiated.", configModel.Configuration{Server: configModel.Server{WriteTimeout: 60}, Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", ClientCallbackTimeout: 20}}, nil},
+		{"With a negative callback timeout, no verifier should be instantiated.", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", ClientCallbackTimeout: -1}}, ErrorInvalidClientCallbackTimeout},
 		{"KID should be added if the key does not contain it and a KID value is configured", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Kid: "random-kid"}}}, nil},
 		{"ClientID should be added to the key when KID value and config are missing", configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: false, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", KeyPath: keyPath, ClientIdentification: configModel.ClientIdentification{Id: "client-id-value"}}}, nil},
 	}
@@ -2374,6 +2881,38 @@ const (
 // that (a) the service was constructed, (b) its ValidateVC call is a no-op
 // when no credential opts in, and (c) the context's PerType map contains the
 // expected per-type Enabled flag for the provided credential type.
+func TestInitVerifier_ClientCallbackTimeout(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	t.Cleanup(func() { httpClient = mockHttpClient{} })
+
+	tests := []struct {
+		testName        string
+		configured      int
+		expectedTimeout time.Duration
+	}{
+		{"an unset timeout uses the default", 0, defaultClientCallbackTimeout * time.Second},
+		{"a configured timeout is applied", 7, 7 * time.Second},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			verifier = nil
+			cfg := configModel.Configuration{Verifier: configModel.Verifier{Did: "did:key:verifier", TirAddress: "https://tir.org", ValidationMode: "none", SessionExpiry: 30, KeyAlgorithm: "RS256", GenerateKey: true, SupportedModes: []string{"urlEncoded"}, RequestMode: "urlEncoded", ClientCallbackTimeout: tc.configured}}
+			if err := InitVerifier(&cfg, nil); err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			client, ok := httpClient.(*http.Client)
+			if !ok {
+				t.Fatalf("Expected the callback client to be an *http.Client, got %T", httpClient)
+			}
+			assert.Equal(t, tc.expectedTimeout, client.Timeout)
+			if assert.NotNil(t, client.CheckRedirect, "the callback client must not follow redirects") {
+				assert.Equal(t, http.ErrUseLastResponse, client.CheckRedirect(nil, nil))
+			}
+		})
+	}
+}
+
 func TestInitVerifier_CredentialStatusWiring(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
@@ -2818,7 +3357,7 @@ func TestAuthenticationResponse_V5ValidationServices(t *testing.T) {
 				sessionCache.sessions[tc.testState] = tc.testSession
 			}
 			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}, errorToThrow: tc.tokenCacheError}
-			httpClient = mockHttpClient{tc.callbackError, nil}
+			httpClient = mockHttpClient{callbackError: tc.callbackError}
 			ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			testKey, _ := jwk.Import(ecdsaKey)
 			_ = jwk.AssignKeyID(testKey)
@@ -3270,7 +3809,7 @@ func TestAuthenticationResponseHttpsIssuerCrossDevice(t *testing.T) {
 
 	trueOption := true
 	tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
-	httpClient = mockHttpClient{nil, nil}
+	httpClient = mockHttpClient{}
 
 	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	testKey, _ := jwk.Import(ecdsaKey)

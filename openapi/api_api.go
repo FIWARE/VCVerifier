@@ -804,7 +804,14 @@ func handleAuthenticationResponse(c *gin.Context, state string, presentation *co
 		// state here is the verifier's own internal session id (what the wallet echoed
 		// back), used to find the right WebSocket connection; response.ExternalState is
 		// the external OIDC client's original value, only used in the redirect it receives.
-		sendRedirect(c, state, response.ExternalState, response.Code, response.RedirectTarget)
+		if err := sendRedirect(state, response.ExternalState, response.Code, response.RedirectTarget); err != nil {
+			// Nobody can redeem a code the browser did not get. Releasing it restores the session,
+			// so the wallet can retry once the page has (re)connected, instead of leaving the user
+			// in front of a QR code that only yields no_such_session.
+			getApiVerifier().ReleaseUndeliveredCode(state, response.Code)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageNoWebsocketConnection)
+			return
+		}
 	}
 	logging.Log().Debugf("Successfully authenticated %s.", state)
 	c.JSON(http.StatusOK, gin.H{})
