@@ -5,5 +5,11 @@
     "expired_title": "QR Expired",
     "expired_desc": "For security, request a new code.",
     "expired_refresh": "Refresh",
-    "open_wallet": "Open in Wallet"
+    "open_wallet": "Open in Wallet",
+    "ws_error_title": "Connection Error",
+    "ws_error_desc": "Could not connect to the server.",
+    "ws_error_retry": "Retry",
+    "session_invalid_title": "Session no longer valid",
+    "session_invalid_desc": "This login has expired or was already used.",
+    "session_invalid_restart": "Start again"
 }

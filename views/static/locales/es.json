@@ -5,5 +5,11 @@
     "expired_title": "QR Expirado",
     "expired_desc": "Por seguridad, solicita un nuevo código.",
     "expired_refresh": "Actualizar",
-    "open_wallet": "Abrir en el Wallet"
+    "open_wallet": "Abrir en el Wallet",
+    "ws_error_title": "Error de conexión",
+    "ws_error_desc": "No se pudo conectar con el servidor.",
+    "ws_error_retry": "Reintentar",
+    "session_invalid_title": "La sesión ya no es válida",
+    "session_invalid_desc": "Este inicio de sesión ha caducado o ya se ha utilizado.",
+    "session_invalid_restart": "Empezar de nuevo"
 }

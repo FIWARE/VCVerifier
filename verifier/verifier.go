@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/exp/slices"
@@ -80,6 +81,9 @@ var ErrorNoSigningKey = errors.New("no_signing_key_available")
 var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
+var ErrorCallbackRejected = errors.New("callback_rejected_by_requestor")
+var ErrorInvalidClientCallbackTimeout = errors.New("invalid_client_callback_timeout")
+var ErrorClientCallbackTimeoutExceedsWriteTimeout = errors.New("client_callback_timeout_not_below_server_write_timeout")
 var ErrorWrongGrantType = errors.New("wrong_grant_type")
 var ErrorNoSuchCode = errors.New("no_such_code")
 var ErrorRedirectUriMismatch = errors.New("redirect_uri_does_not_match")
@@ -126,6 +130,11 @@ type Verifier interface {
 	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error)
 	GetJWKS() jwk.Set
 	AuthenticationResponse(state string, verifiablePresentation *common.Presentation) (sameDevice Response, err error)
+	// HasLoginSession reports whether a login session is still open - not expired, not completed
+	HasLoginSession(sessionId string) bool
+	// ReleaseUndeliveredCode restores the login session of a cross-device v2 login whose code
+	// could not be handed to the browser, unless the code was already redeemed
+	ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool
 	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *common.Presentation) (int64, string, error)
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
 	GetRequestObject(state string) (jwt string, err error)
@@ -168,8 +177,18 @@ type CredentialVerifier struct {
 	signingKey jwk.Key
 	// cache to be used for in-progress authentication sessions
 	sessionCache common.Cache
+	// makes redeeming a login session (check that it still exists, then remove it) atomic
+	sessionRedeemMutex sync.Mutex
 	// cache to be used for jwt retrieval
 	tokenCache common.Cache
+	// authorization codes claimed at the token endpoint (see GetToken), so an undelivered code can
+	// tell a requestor that redeemed it from one whose exchange failed. Without it, nothing can be
+	// told apart and a login session whose code was not delivered is never restored.
+	redeemedCodes common.Cache
+	// makes claiming a code at the token endpoint and releasing an undelivered one mutually
+	// exclusive, so a session is never restored for a code that is being exchanged. Never held
+	// together with sessionRedeemMutex.
+	codeMutex sync.Mutex
 	// nonce generator
 	nonceGenerator NonceGenerator
 	// provides the current time
@@ -214,8 +233,12 @@ type CredentialVerifier struct {
 // allow singleton access to the verifier
 var verifier Verifier
 
-// http client to be used
+// http client used to call the requestor's client_callback; InitVerifier gives it the configured
+// verifier.clientCallbackTimeout
 var httpClient = client.HttpClient()
+
+// defaultClientCallbackTimeout applies when verifier.clientCallbackTimeout is not set
+const defaultClientCallbackTimeout = 20
 
 // file accessor to be used
 var localFileAccessor common.FileAccessor = common.DiskFileAccessor{}
@@ -321,6 +344,11 @@ type tokenStore struct {
 	redirect_uri string
 	// clientId identifies the relying party for refresh token generation.
 	clientId string
+	// the redeemed login session the code was issued for and when it would have expired, so it can
+	// be restored if the code cannot be delivered (see ReleaseUndeliveredCode)
+	sessionId        string
+	session          loginSession
+	sessionExpiresAt time.Time
 }
 
 // Response structure for successful same-device authentications
@@ -362,8 +390,26 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	}
 	verifierConfig := &config.Verifier
 
+	// The wallet's authentication response waits for the v1 callback before it is answered, so a
+	// callback allowed to run as long as the response may be written would make the wallet see a
+	// dropped connection even when the login completed. 0 means no write timeout.
+	if writeTimeout := config.Server.WriteTimeout; writeTimeout > 0 && verifierConfig.ClientCallbackTimeout >= writeTimeout {
+		logging.Log().Errorf("verifier.clientCallbackTimeout (%ds) must be lower than server.writeTimeout (%ds): the wallet's authentication response waits for the callback and must still be written afterwards.", verifierConfig.ClientCallbackTimeout, writeTimeout)
+		return ErrorClientCallbackTimeoutExceedsWriteTimeout
+	}
+
+	callbackTimeout := time.Duration(verifierConfig.ClientCallbackTimeout) * time.Second
+	httpClient = &http.Client{
+		Timeout: callbackTimeout,
+		// A redirect answer means the requestor accepted the callback; following it would judge
+		// the delivery by whatever page it leads to, fetched without the user's browser session.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	logging.Log().Infof("Requestor callbacks (cross-device v1 flow) time out after %v.", callbackTimeout)
+
 	sessionCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 	tokenCache := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
+	redeemedCodes := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 
 	clock := common.RealClock{}
 
@@ -513,6 +559,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		signingKey:        key,
 		sessionCache:      sessionCache,
 		tokenCache:        tokenCache,
+		redeemedCodes:     redeemedCodes,
 		nonceGenerator:    &randomGenerator{},
 		clock:             clock,
 		tokenSigner:       common.JwtTokenSigner{},
@@ -674,18 +721,9 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 // returned alongside the access token; otherwise refreshToken is empty.
 func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
 
-	tokenSessionInterface, hit := v.tokenCache.Get(authorizationCode)
-	if !hit {
-		logging.Log().Infof("No such authorization code cached: %s.", authorizationCode)
-		return jwtString, expiration, "", ErrorNoSuchCode
-	}
-	// we do only allow retrieval once.
-	v.tokenCache.Delete(authorizationCode)
-
-	tokenSession := tokenSessionInterface.(tokenStore)
-	if !validated && tokenSession.redirect_uri != redirectUri {
-		logging.Log().Infof("Redirect uri does not match for authorization %s. Was %s but is expected %s.", authorizationCode, redirectUri, tokenSession.redirect_uri)
-		return jwtString, expiration, "", ErrorRedirectUriMismatch
+	tokenSession, err := v.claimCode(authorizationCode, redirectUri, validated)
+	if err != nil {
+		return jwtString, expiration, "", err
 	}
 
 	var signatureAlgorithm jwa.SignatureAlgorithm
@@ -722,6 +760,41 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 	}
 
 	return jwtString, expiration, refreshToken, nil
+}
+
+// claimCode takes the authorization code out of the cache, so it is retrieved only once, and
+// records it as redeemed once its redirect_uri matched. Both happen under codeMutex: a code
+// claimed here can no longer be released by ReleaseUndeliveredCode, and one released there is
+// gone here. A failed exchange removes the code without recording it, as it did not complete the
+// login. Signing happens afterwards, so a failure there still counts as a redeemed code.
+func (v *CredentialVerifier) claimCode(authorizationCode string, redirectUri string, validated bool) (tokenSession tokenStore, err error) {
+	v.codeMutex.Lock()
+	defer v.codeMutex.Unlock()
+
+	tokenSessionInterface, hit := v.tokenCache.Get(authorizationCode)
+	if !hit {
+		logging.Log().Infof("No such authorization code cached: %s.", authorizationCode)
+		return tokenSession, ErrorNoSuchCode
+	}
+	// we do only allow retrieval once.
+	v.tokenCache.Delete(authorizationCode)
+
+	tokenSession = tokenSessionInterface.(tokenStore)
+	if !validated && tokenSession.redirect_uri != redirectUri {
+		logging.Log().Infof("Redirect uri does not match for authorization %s. Was %s but is expected %s.", authorizationCode, redirectUri, tokenSession.redirect_uri)
+		return tokenSession, ErrorRedirectUriMismatch
+	}
+	if v.redeemedCodes != nil {
+		v.redeemedCodes.Set(authorizationCode, true, cache.DefaultExpiration)
+	}
+	return tokenSession, nil
+}
+
+// wasCodeRedeemed reports whether the authorization code was claimed at the token endpoint.
+// Callers hold codeMutex.
+func (v *CredentialVerifier) wasCodeRedeemed(authorizationCode string) bool {
+	_, redeemed := v.redeemedCodes.Get(authorizationCode)
+	return redeemed
 }
 
 /**
@@ -1076,7 +1149,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 
 	logging.Log().Debugf("Authenticate presentation %v for session %s", logging.PrettyPrintObject(verifiablePresentation), state)
 
-	loginSessionInterface, hit := v.sessionCache.Get(state)
+	loginSessionInterface, sessionExpiresAt, hit := v.sessionCache.GetWithExpiration(state)
 	if !hit {
 		logging.Log().Infof("Session %s is either expired or did never exist.", state)
 		return sameDevice, ErrorNoSuchSession
@@ -1093,7 +1166,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		}
 	}
 
-	credentialsByType, _ := extractCredentialTypes(verifiablePresentation)
+	credentialsByType, credentialTypes := extractCredentialTypes(verifiablePresentation)
 	trustedChain, _ := verifyChain(verifiablePresentation.Credentials())
 	var credentialsToBeIncluded []map[string]interface{}
 
@@ -1161,7 +1234,8 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		return sameDevice, err
 	}
 
-	tokenStore := tokenStore{token, loginSession.callback, loginSession.clientId}
+	tokenStore := tokenStore{token: token, redirect_uri: loginSession.callback, clientId: loginSession.clientId,
+		sessionId: state, session: loginSession, sessionExpiresAt: sessionExpiresAt}
 	authorizationCode := v.nonceGenerator.GenerateNonce()
 	// store for retrieval by token endpoint
 	err = v.tokenCache.Add(authorizationCode, tokenStore, cache.DefaultExpiration)
@@ -1170,11 +1244,33 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		logging.Log().Warnf("Was not able to store the token %s in cache.", logging.PrettyPrintObject(tokenStore))
 		return sameDevice, err
 	}
+	// A session is single-use. Responses are verified concurrently and the first one to get here
+	// redeems the session; any other that passed verification in the meantime finds it gone and
+	// discards its code. Nothing is locked during verification, so a slow or malicious response
+	// cannot hold up the legitimate one, and a rejected presentation never consumes the session.
+	if !v.redeemSession(state) {
+		v.tokenCache.Delete(authorizationCode)
+		logging.Log().Warnf("Discarded the code issued for session %s: the session was already redeemed by a concurrent response.", state)
+		return sameDevice, ErrorNoSuchSession
+	}
+	logging.Log().Infof("Completed login session %s for client %s, scope %s, credential types %v.", state, loginSession.clientId, loginSession.scope, credentialTypes)
+
 	switch loginSession.version {
 	case SAME_DEVICE:
 		return Response{FlowVersion: SAME_DEVICE, RedirectTarget: loginSession.callback, Code: authorizationCode, ExternalState: loginSession.externalState, Nonce: loginSession.nonce}, err
 	case CROSS_DEVICE_V1:
-		return sameDevice, callbackToRequester(loginSession, authorizationCode)
+		if err := callbackToRequester(loginSession, authorizationCode); err != nil {
+			// A requestor commonly exchanges the code while handling the callback and may still
+			// answer with an error status (e.g. no browser session on a server-to-server call). A
+			// code that was exchanged for a token means the login did complete. A failed exchange
+			// (e.g. a mismatching redirect_uri) also removes the code, but does not count.
+			if v.releaseCode(state, loginSession, sessionExpiresAt, authorizationCode) == codeRedeemed {
+				logging.Log().Infof("Requestor %s reported a failed callback for session %s but redeemed the code, the login is complete.", loginSession.callback, state)
+				return sameDevice, nil
+			}
+			return sameDevice, err
+		}
+		return sameDevice, nil
 	default:
 		return Response{FlowVersion: CROSS_DEVICE_V2, RedirectTarget: loginSession.callback, Code: authorizationCode, ExternalState: loginSession.externalState, Nonce: loginSession.nonce}, err
 	}
@@ -1494,6 +1590,88 @@ func verifyChain(vcs []*common.Credential) (bool, error) {
 		return false, fmt.Errorf("natural participent credential was not issued by the presented legal entity. Legal Participant VC id %s, natural VC issuer %s", legalEntitySubjectID, naturalEntity.Contents().Issuer.ID)
 	}
 	return true, nil
+}
+
+// HasLoginSession reports whether a login session is still open, i.e. neither expired nor
+// redeemed by a successful authentication response.
+func (v *CredentialVerifier) HasLoginSession(sessionId string) bool {
+	_, found := v.sessionCache.Get(sessionId)
+	return found
+}
+
+// redeemSession removes the login session if it still exists and reports whether this call was
+// the one that removed it. Like sessionCache itself, the guarantee holds within one process.
+func (v *CredentialVerifier) redeemSession(sessionId string) bool {
+	v.sessionRedeemMutex.Lock()
+	defer v.sessionRedeemMutex.Unlock()
+
+	if _, exists := v.sessionCache.Get(sessionId); !exists {
+		return false
+	}
+	v.sessionCache.Delete(sessionId)
+	return true
+}
+
+// codeRelease is the outcome of releasing a code that could not be delivered.
+type codeRelease int
+
+const (
+	// the session was put back, so the wallet can retry
+	sessionRestored codeRelease = iota
+	// the requestor claimed the code at the token endpoint: the login did complete
+	codeRedeemed
+	// the session stays redeemed: it has expired meanwhile, or redemptions are not recorded
+	sessionNotRestored
+)
+
+// releaseCode undoes redeemSession when the issued code could not be delivered: the code is
+// discarded and the session is put back for the rest of its lifetime, so a retry by the wallet can
+// complete the login. Only one code for the session is ever valid at a time. A code already
+// claimed at the token endpoint completed the login and is left alone; see claimCode for why
+// both run under codeMutex.
+func (v *CredentialVerifier) releaseCode(sessionId string, session loginSession, expiresAt time.Time, authorizationCode string) codeRelease {
+	v.codeMutex.Lock()
+	defer v.codeMutex.Unlock()
+
+	if v.redeemedCodes == nil {
+		// a claimed code cannot be told from an unused one, and restoring the session for a
+		// claimed code would let it be redeemed twice
+		logging.Log().Warnf("Did not restore session %s after the failed delivery: redeemed codes are not recorded.", sessionId)
+		return sessionNotRestored
+	}
+	if v.wasCodeRedeemed(authorizationCode) {
+		return codeRedeemed
+	}
+	v.tokenCache.Delete(authorizationCode)
+
+	ttl := cache.DefaultExpiration
+	if !expiresAt.IsZero() {
+		ttl = time.Until(expiresAt)
+		if ttl <= 0 {
+			logging.Log().Infof("Did not restore session %s after the failed delivery: it has expired meanwhile.", sessionId)
+			return sessionNotRestored
+		}
+	}
+	v.sessionCache.Set(sessionId, session, ttl)
+	logging.Log().Infof("Restored session %s after its code could not be delivered, so the wallet can retry.", sessionId)
+	return sessionRestored
+}
+
+// ReleaseUndeliveredCode is called when the code of a completed cross-device v2 login could not be
+// handed to the browser. It discards the code and restores the login session, unless the code was
+// already claimed at the token endpoint. It reports whether the session was restored.
+func (v *CredentialVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {
+	tokenSessionInterface, found := v.tokenCache.Get(authorizationCode)
+	if !found {
+		logging.Log().Infof("Did not restore session %s after the failed delivery: its code is no longer cached.", sessionId)
+		return false
+	}
+	tokenSession := tokenSessionInterface.(tokenStore)
+	if tokenSession.sessionId != sessionId {
+		logging.Log().Warnf("Did not restore session %s after the failed delivery: the code was issued for another session.", sessionId)
+		return false
+	}
+	return v.releaseCode(sessionId, tokenSession.session, tokenSession.sessionExpiresAt, authorizationCode) == sessionRestored
 }
 
 // intialize the OID4VP cross device flow
@@ -1838,10 +2016,16 @@ func callbackToRequester(loginSession loginSession, authorizationCode string) er
 	q.Add("code", authorizationCode)
 	callbackRequest.URL.RawQuery = q.Encode()
 
-	_, err = httpClient.Do(callbackRequest)
+	response, err := httpClient.Do(callbackRequest)
 	if err != nil {
 		logging.Log().Warnf("Was not able to notify requestor %s. Err: %v", loginSession.callback, err)
 		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+	// 2xx and 3xx accept the callback - a redirect is not followed, see InitVerifier
+	if response.StatusCode < 200 || response.StatusCode >= 400 {
+		logging.Log().Warnf("Requestor %s did not accept the callback, it answered with status %d.", loginSession.callback, response.StatusCode)
+		return ErrorCallbackRejected
 	}
 	return nil
 }
@@ -1929,6 +2113,13 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	}
 	if !slices.Contains(verifierConfig.SupportedModes, verifierConfig.RequestMode) { //nolint:govet
 		return ErrorRequestModeNotSupported
+	}
+	// as above, a config built directly gets the zero value instead of the "default:" tag
+	if verifierConfig.ClientCallbackTimeout == 0 {
+		verifierConfig.ClientCallbackTimeout = defaultClientCallbackTimeout
+	}
+	if verifierConfig.ClientCallbackTimeout < 0 {
+		return ErrorInvalidClientCallbackTimeout
 	}
 
 	// Default to accepting all recognized VC Data Model versions when the
