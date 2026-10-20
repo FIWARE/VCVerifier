@@ -83,6 +83,7 @@ var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorCallbackRejected = errors.New("callback_rejected_by_requestor")
 var ErrorInvalidClientCallbackTimeout = errors.New("invalid_client_callback_timeout")
+var ErrorClientCallbackTimeoutExceedsWriteTimeout = errors.New("client_callback_timeout_not_below_server_write_timeout")
 var ErrorWrongGrantType = errors.New("wrong_grant_type")
 var ErrorNoSuchCode = errors.New("no_such_code")
 var ErrorRedirectUriMismatch = errors.New("redirect_uri_does_not_match")
@@ -375,6 +376,14 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		return
 	}
 	verifierConfig := &config.Verifier
+
+	// The wallet's authentication response waits for the v1 callback before it is answered, so a
+	// callback allowed to run as long as the response may be written would make the wallet see a
+	// dropped connection even when the login completed. 0 means no write timeout.
+	if writeTimeout := config.Server.WriteTimeout; writeTimeout > 0 && verifierConfig.ClientCallbackTimeout >= writeTimeout {
+		logging.Log().Errorf("verifier.clientCallbackTimeout (%ds) must be lower than server.writeTimeout (%ds): the wallet's authentication response waits for the callback and must still be written afterwards.", verifierConfig.ClientCallbackTimeout, writeTimeout)
+		return ErrorClientCallbackTimeoutExceedsWriteTimeout
+	}
 
 	callbackTimeout := time.Duration(verifierConfig.ClientCallbackTimeout) * time.Second
 	httpClient = &http.Client{

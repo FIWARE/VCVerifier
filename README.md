@@ -102,6 +102,11 @@ server:
     templateDir: "views/"
     # directory to load static content from
     staticDir: "views/static/"
+    # maximum time in seconds to write a response. The wallet's authentication response is only answered after its
+    # presentation was verified and, in the cross-device v1 flow, the client_callback returned, so this has to cover
+    # both. verifier.clientCallbackTimeout must be lower, or the verifier refuses to start. A reverse proxy in front
+    # needs a read timeout at least as long (nginx: proxy_read_timeout, 60s by default).
+    writeTimeout: 60
     # The login page's WebSocket (used to hand the authorization code back to the browser) only
     # accepts connections opened from the verifier's own `host`. If the login page is also served
     # under other hosts (an alias, a second ingress), list their origins here, e.g.
@@ -158,7 +163,8 @@ verifier:
     # when delivering the authorization code. While it waits, the wallet's request is held open. A 2xx or 3xx answer
     # accepts the callback (redirects are not followed). If the callback fails and the requestor did not redeem the
     # code, the login session is restored so that the wallet can retry.
-    # Must not be negative; 0 or unset means the default.
+    # Must not be negative; 0 or unset means the default. Must be lower than server.writeTimeout (default 60), since
+    # the wallet's response is only written after the callback returned.
     clientCallbackTimeout: 20
     # scope(e.g. type of credential) to be requested from the wallet. if not configured, not specific scope will be requested.
     requestScope:
@@ -471,6 +477,7 @@ The login page of the cross-device flow (`/api/v2/loginQR`) learns about a compl
 
 * the proxy has to forward WebSocket upgrades on `/ws` (with a path prefix, `<pathPrefix>/ws`);
 * the page must be served from `server.host` - the WebSocket only accepts that origin, plus the ones listed in `server.webSocketAllowedOrigins`;
+* the wallet's authentication response (`/api/v1/authentication_response`) is answered only after the presentation was verified and, in the cross-device v1 flow, the `client_callback` returned. The proxy's read timeout has to cover that, like `server.writeTimeout` (default 60s, the same as nginx's `proxy_read_timeout`);
 * the verifier pings every `server.webSocketPingInterval` seconds (default 25) so the connection is not closed as idle. Keep that interval below the proxy's idle timeout (nginx and ingress-nginx: 60s, `proxy-read-timeout`). A browser that answers no ping within `server.webSocketPongTimeout` seconds (default 60) is disconnected.
 
 If the connection drops anyway (a network change, a proxy restart), the page reconnects to the same login session while the QR code is valid. A connection to a session that no longer exists - expired, or already completed - is answered with an `error` message and closed with code `4403`; the page then stops reconnecting and offers to start the login again.

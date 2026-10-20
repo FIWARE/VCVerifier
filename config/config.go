@@ -132,8 +132,11 @@ type Server struct {
 
 	// ReadTimeout is the maximum duration for reading the entire request, including the body.
 	ReadTimeout int `mapstructure:"readTimeout" default:"5"`
-	// WriteTimeout is the maximum duration before timing out writes of the response.
-	WriteTimeout int `mapstructure:"writeTimeout" default:"10"`
+	// WriteTimeout is the maximum duration, in seconds, before timing out writes of the response.
+	// The wallet's authentication response is answered only after its presentation was verified
+	// and, in the cross-device v1 flow, the requestor's callback returned, so it has to cover both
+	// (see verifier.clientCallbackTimeout, which must be lower).
+	WriteTimeout int `mapstructure:"writeTimeout" default:"60"`
 	// IdleTimeout is the maximum amount of time to wait for the next request when keep-alives are enabled.
 	IdleTimeout int `mapstructure:"idleTimeout" default:"120"`
 	// ShutdownTimeout is the time allowed for active requests to finish during shutdown.
