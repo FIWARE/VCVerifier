@@ -165,6 +165,9 @@ type wsClient struct {
 	closed chan struct{}
 }
 
+// errNoWebSocketConnection is returned when no page waits for the result of the session.
+var errNoWebSocketConnection = errors.New("no WebSocket connection for the session")
+
 func (c *wsClient) writeJSON(message interface{}) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -197,12 +200,12 @@ func (c *wsClient) keepAlive(sessionId string, done <-chan struct{}) {
 // registered under (see WsHandler) and has nothing to do with the external OIDC client.
 // externalState is that client's original state value, and is only ever used in the
 // redirect URL handed back to the browser, never to look anything up.
-func sendRedirect(c *gin.Context, sessionId string, externalState string, code string, redirectUrl string) {
+// It returns an error if the page did not get the result.
+func sendRedirect(sessionId string, externalState string, code string, redirectUrl string) error {
 	connection, exists := sessions.Load(sessionId)
 	if !exists {
 		logging.Log().Warnf("No connection for session %s exists.", sessionId)
-		c.Copy().AbortWithStatusJSON(500, ErrorMessageNoWebsocketConnection)
-		return
+		return errNoWebSocketConnection
 	}
 
 	// The connection is closed and unregistered by WsHandler's reader once the browser leaves the
@@ -210,9 +213,10 @@ func sendRedirect(c *gin.Context, sessionId string, externalState string, code s
 	err := connection.(*wsClient).writeJSON(gin.H{"type": "authenticated", "redirectUrl": redirectUrl + "?state=" + externalState + "&code=" + code})
 	if err != nil {
 		logging.Log().Warnf("Was not able to notify the frontend for session %s. Err: %v", sessionId, err)
-	} else {
-		logging.Log().Infof("Notified session %s of successful authentication.", sessionId)
+		return err
 	}
+	logging.Log().Infof("Notified session %s of successful authentication.", sessionId)
+	return nil
 }
 
 // rejectWebSocket tells the page that its login session no longer exists and closes the

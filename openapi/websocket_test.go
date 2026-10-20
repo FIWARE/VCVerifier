@@ -1,13 +1,17 @@
 package openapi
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/fiware/VCVerifier/common"
 	"github.com/fiware/VCVerifier/logging"
+	"github.com/fiware/VCVerifier/verifier"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -330,9 +334,9 @@ func TestSendRedirect_DeliversWhileKeepAliveRuns(t *testing.T) {
 		t.Fatalf("Expected the session message first, got %v (err %v)", message, err)
 	}
 
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	sendRedirect(c, "redirect-session", "external-state", "the-code", "https://rp.example/callback")
+	if err := sendRedirect("redirect-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the notification to be delivered, got %v", err)
+	}
 
 	if err := conn.ReadJSON(&message); err != nil {
 		t.Fatalf("Expected the authenticated message, got err %v", err)
@@ -411,5 +415,71 @@ func TestWsHandler_RejectsUnknownSession(t *testing.T) {
 	}
 	if registeredClient("gone-session") != nil {
 		t.Errorf("A connection to an unknown session must not be registered.")
+	}
+}
+
+func TestSendRedirect_NoConnection(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	err := sendRedirect("no-such-session", "external-state", "the-code", "https://rp.example/callback")
+	if !errors.Is(err, errNoWebSocketConnection) {
+		t.Errorf("Expected %v, got %v", errNoWebSocketConnection, err)
+	}
+}
+
+// TestHandleAuthenticationResponse_UndeliveredCodeIsReleased checks that a cross-device v2 login
+// whose result cannot be handed to the browser releases the code - so the session is restored and
+// the wallet can retry - and answers with an error rather than a success.
+func TestHandleAuthenticationResponse_UndeliveredCodeIsReleased(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	gin.SetMode(gin.TestMode)
+
+	mock := &mockVerifier{mockSameDevice: verifier.Response{FlowVersion: verifier.CROSS_DEVICE_V2, RedirectTarget: "https://rp.example/callback", Code: "the-code", ExternalState: "external-state"}}
+	apiVerifier = mock
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", nil)
+	handleAuthenticationResponse(c, "unconnected-session", &common.Presentation{})
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500, got %d", recorder.Code)
+	}
+	var body ErrorMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Summary != ErrorMessageNoWebsocketConnection.Summary {
+		t.Errorf("Expected %v, got %s (err %v)", ErrorMessageNoWebsocketConnection, recorder.Body.String(), err)
+	}
+	if mock.releasedCodes["unconnected-session"] != "the-code" {
+		t.Errorf("Expected the undelivered code to be released, released %v", mock.releasedCodes)
+	}
+}
+
+func TestHandleAuthenticationResponse_DeliveredCodeIsKept(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+	conn := dial("delivered-session")
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message first, got %v (err %v)", message, err)
+	}
+
+	mock := &mockVerifier{mockSameDevice: verifier.Response{FlowVersion: verifier.CROSS_DEVICE_V2, RedirectTarget: "https://rp.example/callback", Code: "the-code", ExternalState: "external-state"}}
+	apiVerifier = mock
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", nil)
+	handleAuthenticationResponse(c, "delivered-session", &common.Presentation{})
+
+	if recorder.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", recorder.Code)
+	}
+	if len(mock.releasedCodes) != 0 {
+		t.Errorf("A delivered code must not be released, released %v", mock.releasedCodes)
+	}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+		t.Errorf("Expected the authenticated message, got %v (err %v)", message, err)
 	}
 }

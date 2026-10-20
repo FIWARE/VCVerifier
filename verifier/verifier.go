@@ -132,6 +132,9 @@ type Verifier interface {
 	AuthenticationResponse(state string, verifiablePresentation *common.Presentation) (sameDevice Response, err error)
 	// HasLoginSession reports whether a login session is still open - not expired, not completed
 	HasLoginSession(sessionId string) bool
+	// ReleaseUndeliveredCode restores the login session of a cross-device v2 login whose code
+	// could not be handed to the browser, unless the code was already redeemed
+	ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool
 	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *common.Presentation) (int64, string, error)
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
 	GetRequestObject(state string) (jwt string, err error)
@@ -341,6 +344,11 @@ type tokenStore struct {
 	redirect_uri string
 	// clientId identifies the relying party for refresh token generation.
 	clientId string
+	// the redeemed login session the code was issued for and when it would have expired, so it can
+	// be restored if the code cannot be delivered (see ReleaseUndeliveredCode)
+	sessionId        string
+	session          loginSession
+	sessionExpiresAt time.Time
 }
 
 // Response structure for successful same-device authentications
@@ -1226,7 +1234,8 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		return sameDevice, err
 	}
 
-	tokenStore := tokenStore{token, loginSession.callback, loginSession.clientId}
+	tokenStore := tokenStore{token: token, redirect_uri: loginSession.callback, clientId: loginSession.clientId,
+		sessionId: state, session: loginSession, sessionExpiresAt: sessionExpiresAt}
 	authorizationCode := v.nonceGenerator.GenerateNonce()
 	// store for retrieval by token endpoint
 	err = v.tokenCache.Add(authorizationCode, tokenStore, cache.DefaultExpiration)
@@ -1646,6 +1655,23 @@ func (v *CredentialVerifier) releaseCode(sessionId string, session loginSession,
 	v.sessionCache.Set(sessionId, session, ttl)
 	logging.Log().Infof("Restored session %s after its code could not be delivered, so the wallet can retry.", sessionId)
 	return sessionRestored
+}
+
+// ReleaseUndeliveredCode is called when the code of a completed cross-device v2 login could not be
+// handed to the browser. It discards the code and restores the login session, unless the code was
+// already claimed at the token endpoint. It reports whether the session was restored.
+func (v *CredentialVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {
+	tokenSessionInterface, found := v.tokenCache.Get(authorizationCode)
+	if !found {
+		logging.Log().Infof("Did not restore session %s after the failed delivery: its code is no longer cached.", sessionId)
+		return false
+	}
+	tokenSession := tokenSessionInterface.(tokenStore)
+	if tokenSession.sessionId != sessionId {
+		logging.Log().Warnf("Did not restore session %s after the failed delivery: the code was issued for another session.", sessionId)
+		return false
+	}
+	return v.releaseCode(sessionId, tokenSession.session, tokenSession.sessionExpiresAt, authorizationCode) == sessionRestored
 }
 
 // intialize the OID4VP cross device flow

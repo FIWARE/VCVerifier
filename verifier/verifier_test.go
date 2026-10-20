@@ -1594,6 +1594,49 @@ func TestGetToken_ConcurrentExchangesOfOneCode(t *testing.T) {
 	assert.Equal(t, int64(1), successes.Load())
 }
 
+func TestReleaseUndeliveredCode(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	tests := []struct {
+		testName       string
+		sessionId      string
+		code           string
+		claimFirst     bool
+		expectRestored bool
+		expectCodeKept bool
+	}{
+		{"an undelivered code restores its session", "session-id", "the-code", false, true, false},
+		{"a code of another session is left alone", "other-session", "the-code", false, false, true},
+		{"an unknown code restores nothing", "session-id", "unknown-code", false, false, true},
+		{"a claimed code restores nothing", "session-id", "the-code", true, false, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V2)
+			verifier.signingKey = getECDSAKey()
+			session, expiresAt, _ := sessionCache.GetWithExpiration("session-id")
+			sessionCache.Delete("session-id")
+			tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback",
+				sessionId: "session-id", session: session.(loginSession), sessionExpiresAt: expiresAt})
+			if tc.claimFirst {
+				_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+				assert.NoError(t, err)
+			}
+
+			assert.Equal(t, tc.expectRestored, verifier.ReleaseUndeliveredCode(tc.sessionId, tc.code))
+
+			_, expiresAfter, found := sessionCache.GetWithExpiration("session-id")
+			assert.Equal(t, tc.expectRestored, found)
+			if tc.expectRestored {
+				assert.WithinDuration(t, expiresAt, expiresAfter, time.Second, "the restored session must keep its remaining lifetime")
+			}
+			_, found = tokenCache.Get("the-code")
+			assert.Equal(t, tc.expectCodeKept, found)
+		})
+	}
+}
+
 func verifySameDevice(t *testing.T, sdr Response, tokenCache mockTokenCache, tc authTest) {
 	if sdr != tc.expectedResponse {
 		t.Errorf("%s - Expected response %v but was %v.", tc.testName, tc.expectedResponse, sdr)
