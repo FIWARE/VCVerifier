@@ -16,7 +16,7 @@
     "another_tab_desc": "This login was opened in another tab or window.",
     "another_tab_continue": "Continue here",
     "presentation_rejected_title": "A presentation for this login was rejected",
-    "presentation_rejected_credential_not_accepted": "The credential was not accepted. You can try again.",
-    "presentation_rejected_credential_type_not_requested": "This credential is not one this service asks for. You can try again with another one.",
-    "presentation_rejected_verification_failed": "The presentation could not be verified. You can try again."
+    "presentation_rejected_credential_not_accepted": "The presented credential was not accepted.",
+    "presentation_rejected_credential_type_not_requested": "The presented credential is not accepted for this login.",
+    "presentation_rejected_verification_failed": "The presentation could not be verified."
 }
