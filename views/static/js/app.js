@@ -208,6 +208,14 @@ class AppManager {
     this.#showWebSocketError('session-invalid');
   }
 
+  // The server did not accept this page's secret: a stale page, or a customised page that does not
+  // send it. No reconnect can fix that.
+  #handlePageUnauthorized(reason) {
+    console.error(`WebSocket rejected (${reason}): the page did not present a valid secret. A customised login page must send the wsSecret meta value as {"type":"auth","secret":...} on every connection.`);
+    this.#finishWebSocket();
+    this.#showWebSocketError('page-unauthorized');
+  }
+
   // The page was opened in another tab as well, and the newer tab took the login over. Reconnecting
   // on its own would take it back and the two tabs would keep replacing each other, so this one
   // waits until the user asks to continue here.
@@ -307,8 +315,13 @@ class AppManager {
             break
 
           case "error":
-            console.log("Session error: " + message.reason)
-            this.#handleSessionInvalid();
+            // the close event (4403) follows; #finishWebSocket makes it a no-op
+            if (message.reason === 'session_not_found') {
+              console.log("Session error: " + message.reason)
+              this.#handleSessionInvalid();
+            } else {
+              this.#handlePageUnauthorized(message.reason);
+            }
             break
 
           case "replaced":

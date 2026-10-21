@@ -19,5 +19,8 @@
     "presentation_rejected_credential_not_accepted": "La credencial presentada no ha sido aceptada.",
     "presentation_rejected_credential_type_not_requested": "La credencial presentada no se acepta para este acceso.",
     "presentation_rejected_verification_failed": "No se ha podido verificar la presentación.",
-    "presentation_rejected_server_error": "Algo ha fallado por nuestra parte. Puedes intentarlo de nuevo."
+    "presentation_rejected_server_error": "Algo ha fallado por nuestra parte. Puedes intentarlo de nuevo.",
+    "page_unauthorized_title": "Esta página ya no puede completar el acceso",
+    "page_unauthorized_desc": "Vuelve a iniciar el acceso para obtener un código nuevo.",
+    "page_unauthorized_restart": "Empezar de nuevo"
 }

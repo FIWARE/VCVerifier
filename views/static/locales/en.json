@@ -19,5 +19,8 @@
     "presentation_rejected_credential_not_accepted": "The presented credential was not accepted.",
     "presentation_rejected_credential_type_not_requested": "The presented credential is not accepted for this login.",
     "presentation_rejected_verification_failed": "The presentation could not be verified.",
-    "presentation_rejected_server_error": "Something went wrong on our side. You can try again."
+    "presentation_rejected_server_error": "Something went wrong on our side. You can try again.",
+    "page_unauthorized_title": "This page can no longer complete the login",
+    "page_unauthorized_desc": "Start the login again to get a new code.",
+    "page_unauthorized_restart": "Start again"
 }
