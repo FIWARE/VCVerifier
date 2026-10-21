@@ -323,6 +323,10 @@ func (c *wsClient) handleMessage(sessionId string, data []byte) {
 				c.pending = false
 				c.rejectIfSessionGone(sessionId)
 			}
+		} else if c.pending {
+			// it waits because the registered connection authenticated: someone without the
+			// secret is trying to take this login over
+			logging.Log().Warnf("WebSocket for session %s presented no valid page secret (%v) while the session's registered connection did; it keeps waiting and will not get the login. This may be an attempt to take the login over.", sessionId, err)
 		} else {
 			logging.Log().Warnf("WebSocket for session %s presented no valid page secret (%v); accepted because server.webSocketSessionBinding is %q.", sessionId, err, WebSocketBindingWarn)
 		}
