@@ -346,7 +346,10 @@ func registerClient(sessionId string, client *wsClient) bool {
 		return false
 	}
 	if replaced && previous != client {
-		previous.(*wsClient).replace(sessionId)
+		// Not waited for: a half-open old peer can block the write for wsWriteWait, which would
+		// hold back the new page's session message. The old connection is out of the map, so no
+		// result can reach it any more, and replace checks notified/rejected under its lock.
+		go previous.(*wsClient).replace(sessionId)
 	}
 	return true
 }
