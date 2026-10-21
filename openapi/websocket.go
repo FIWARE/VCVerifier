@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fiware/VCVerifier/logging"
@@ -210,8 +211,10 @@ type wsClient struct {
 	// does not get contradicting answers.
 	notified bool
 	rejected bool
-	// guarded by writeMu: the connection presented the login page's secret
-	authenticated bool
+	// the connection presented the login page's secret. Written under registerMu, so checking a
+	// registered connection and replacing it is atomic with authentication; read without a lock,
+	// so nothing holding registerMu waits for writeMu, which is held across network writes.
+	authenticated atomic.Bool
 	// warn mode only: the connection did not authenticate and the session's registered connection
 	// did, so it waits unregistered until it authenticates (see registerUnauthenticated). Only
 	// touched by WsHandler and then by the connection's reader.
@@ -219,10 +222,11 @@ type wsClient struct {
 }
 
 // registerMu guards which connection is registered for a session (sessions.Swap) together with
-// the authenticated flag of every connection: checking whether the registered connection
-// authenticated and replacing it is one step (registerUnauthenticated), and no connection can
-// authenticate in between (handleMessage). Lock order is registerMu, then a connection's writeMu.
-// Nothing that writes to the network runs under it.
+// the writes of every connection's authenticated flag: checking whether the registered
+// connection authenticated and replacing it is one step (registerUnauthenticated), and no
+// connection can authenticate in between (handleMessage). It is a single lock for all sessions,
+// so nothing under it may block: no network writes, and no other lock - in particular no writeMu,
+// which is held across writes of up to wsWriteWait.
 var registerMu sync.Mutex
 
 // wsConnections counts the login WebSocket connections whose handler or goroutines still run,
@@ -297,9 +301,7 @@ func (c *wsClient) replace(sessionId string) {
 }
 
 func (c *wsClient) isAuthenticated() bool {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return c.authenticated
+	return c.authenticated.Load()
 }
 
 // handleMessage processes a message the page sent after the connection was registered. Only an
@@ -326,9 +328,7 @@ func (c *wsClient) handleMessage(sessionId string, data []byte) {
 		return
 	}
 	registerMu.Lock()
-	c.writeMu.Lock()
-	c.authenticated = true
-	c.writeMu.Unlock()
+	c.authenticated.Store(true)
 	if !c.pending {
 		registerMu.Unlock()
 		return
@@ -484,7 +484,7 @@ func rejectionCategory(err error) string {
 func (c *wsClient) sendRejection(category string) (bool, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if !c.authenticated || c.notified || c.rejected {
+	if !c.isAuthenticated() || c.notified || c.rejected {
 		return false, nil
 	}
 	return true, c.writeJSONLocked(gin.H{"type": "rejected", "reason": category})
@@ -601,11 +601,12 @@ func WsHandler(c *gin.Context) {
 			closeWebSocket(connection, state, gin.H{"type": "error", "reason": reason}, wsCloseSessionInvalid, reason)
 			return
 		}
-		client.authenticated = true
+		// not registered yet, so no one else can see it
+		client.authenticated.Store(true)
 	}
 
 	// With enforce, only a holder of the page secret gets here.
-	if client.authenticated {
+	if client.isAuthenticated() {
 		if !registerClient(state, client) {
 			return
 		}

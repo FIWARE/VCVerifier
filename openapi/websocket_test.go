@@ -1208,3 +1208,60 @@ func TestWsHandler_WarnModeConcurrentAuthentication(t *testing.T) {
 		awaitServerSide(t, sessionId, newcomer)
 	}
 }
+
+// TestWsHandler_SlowConnectionDoesNotStallOtherSessions checks that registerMu, a single lock for
+// all sessions, never waits for a connection's writeMu, which is held across network writes of up
+// to wsWriteWait: a write in progress on one session's page must not hold back the registration
+// and authentication of another session's page.
+func TestWsHandler_SlowConnectionDoesNotStallOtherSessions(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	withWarnBinding(t)
+	dial := startWsTestServer(t)
+	serverURL := frontendVerifier.(*mockVerifier).mockHost
+
+	slowPage := dial("slow-session")
+	expectMessage(t, slowPage, "session")
+	slowClient := registeredClient("slow-session")
+	waitFor(t, slowClient.isAuthenticated, "the slow page authenticated")
+
+	// a write to the slow page is in progress
+	slowClient.writeMu.Lock()
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			slowClient.writeMu.Unlock()
+		}
+	}
+	defer release()
+
+	// a connection for the slow session checks whether its registered connection authenticated
+	newcomer := dialUnauthenticated(t, serverURL, "slow-session")
+	defer func() { _ = newcomer.Close() }()
+	time.Sleep(100 * time.Millisecond)
+
+	start := time.Now()
+	otherPage := dialWebSocket(t, serverURL, "other-session", testPageSecret)
+	defer func() { _ = otherPage.Close() }()
+	_ = otherPage.SetReadDeadline(time.Now().Add(time.Second))
+	var message map[string]interface{}
+	if err := otherPage.ReadJSON(&message); err != nil || message["type"] != "session" {
+		release()
+		t.Fatalf("Expected another session's page to register while a write to the slow page is in progress, got %v (err %v)", message, err)
+	}
+	otherClient := registeredClient("other-session")
+	deadline := time.Now().Add(time.Second)
+	for !otherClient.isAuthenticated() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	elapsed := time.Since(start)
+	release()
+
+	if !otherClient.isAuthenticated() {
+		t.Fatalf("Expected another session's page to authenticate while a write to the slow page is in progress.")
+	}
+	if elapsed >= wsWriteWait/2 {
+		t.Errorf("Registering and authenticating another session took %v, which is not well below wsWriteWait (%v).", elapsed, wsWriteWait)
+	}
+	awaitServerSide(t, "other-session", otherPage)
+}
