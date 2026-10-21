@@ -212,7 +212,15 @@ type wsClient struct {
 	rejected bool
 	// guarded by writeMu: the connection presented the login page's secret
 	authenticated bool
+	// warn mode only: the connection did not authenticate and the session's registered connection
+	// did, so it waits unregistered until it authenticates (see registerUnauthenticated). Only
+	// touched by WsHandler and then by the connection's reader.
+	pending bool
 }
+
+// registerMu makes checking the registered connection and replacing it one step, so an
+// unauthenticated connection cannot slip in after the check (see registerUnauthenticated).
+var registerMu sync.Mutex
 
 // errWebSocketRejected is returned for a login result that reaches a connection which was already
 // told that it may no longer wait for it.
@@ -302,6 +310,62 @@ func (c *wsClient) handleMessage(sessionId string, data []byte) {
 	c.writeMu.Lock()
 	c.authenticated = true
 	c.writeMu.Unlock()
+	if !c.pending {
+		return
+	}
+	c.pending = false
+	logging.Log().Infof("Waiting WebSocket for session %s authenticated and takes the login over.", sessionId)
+	if registerClient(sessionId, c) {
+		c.sendSessionMessage(sessionId)
+	}
+}
+
+func (c *wsClient) sendSessionMessage(sessionId string) {
+	if err := c.writeJSON(gin.H{"type": "session"}); err != nil {
+		logging.Log().Warnf("Was not able to send session message for session %s. Err: %v", sessionId, err)
+	}
+}
+
+// registerClient makes the connection the one that gets the result of the session. The newest
+// connection of the login page wins: a reconnect, or the page duplicated into another tab. It
+// returns false if the connection was rejected because the session is gone.
+func registerClient(sessionId string, client *wsClient) bool {
+	registerMu.Lock()
+	previous, replaced := sessions.Swap(sessionId, client)
+	registerMu.Unlock()
+
+	// A page reconnecting after its session was completed (with the notification lost) or has
+	// expired would otherwise keep showing a QR code that can only yield no_such_session. This is
+	// checked only once the connection is registered: a login completing before the check finds
+	// no session left, one completing after it finds this connection.
+	if client.rejectIfSessionGone(sessionId) {
+		sessions.CompareAndDelete(sessionId, client)
+		if replaced {
+			previous.(*wsClient).rejectIfSessionGone(sessionId)
+		}
+		return false
+	}
+	if replaced && previous != client {
+		previous.(*wsClient).replace(sessionId)
+	}
+	return true
+}
+
+// registerUnauthenticated registers a connection that did not authenticate (warn mode), unless
+// the session's registered connection did: then anyone who saw the QR code could take the login
+// over, so the newcomer waits unregistered until it authenticates. It reports whether the
+// connection was registered.
+func registerUnauthenticated(sessionId string, client *wsClient) bool {
+	registerMu.Lock()
+	current, found := sessions.Load(sessionId)
+	if found && current.(*wsClient).isAuthenticated() {
+		client.pending = true
+		registerMu.Unlock()
+		logging.Log().Infof("WebSocket for session %s is not authenticated and waits: the session's registered connection is.", sessionId)
+		return false
+	}
+	registerMu.Unlock()
+	return registerClient(sessionId, client)
 }
 
 // keepAlive pings the client until done is closed or a ping cannot be written. WriteControl may
@@ -488,30 +552,25 @@ func WsHandler(c *gin.Context) {
 		client.authenticated = true
 	}
 
-	// The newest connection of the login page wins: a reconnect, or the page duplicated into
-	// another tab. With enforce, only a holder of the page secret can get here.
-	previous, replaced := sessions.Swap(state, client)
-
-	// A page reconnecting after its session was completed (with the notification lost) or has
-	// expired would otherwise keep showing a QR code that can only yield no_such_session. This is
-	// checked only once the connection is registered: a login completing before the check finds
-	// no session left, one completing after it finds this connection.
-	if client.rejectIfSessionGone(state) {
-		sessions.CompareAndDelete(state, client)
-		if replaced {
-			previous.(*wsClient).rejectIfSessionGone(state)
-		}
-		return
-	}
-	if replaced && previous != client {
-		previous.(*wsClient).replace(state)
-	}
+	// With enforce, only a holder of the page secret gets here.
 	if client.authenticated {
+		if !registerClient(state, client) {
+			return
+		}
 		logging.Log().Infof("WebSocket connected for session %s.", state)
 	} else {
-		logging.Log().Infof("WebSocket connected for session %s, not yet authenticated (server.webSocketSessionBinding is %q).", state, WebSocketBindingWarn)
+		if !registerUnauthenticated(state, client) {
+			// still the session has to exist, or the page waits for nothing
+			if client.rejectIfSessionGone(state) {
+				return
+			}
+		} else {
+			logging.Log().Infof("WebSocket connected for session %s, not yet authenticated (server.webSocketSessionBinding is %q).", state, WebSocketBindingWarn)
+		}
 		warnIfUnauthenticated(client, state)
 	}
+	// read before the reader starts: it changes pending once the connection authenticates
+	waiting := client.pending
 
 	connection.SetReadLimit(wsMaxMessageSize)
 	_ = connection.SetReadDeadline(time.Now().Add(client.pongWait))
@@ -550,7 +609,8 @@ func WsHandler(c *gin.Context) {
 		}
 	}()
 
-	if err := client.writeJSON(gin.H{"type": "session"}); err != nil {
-		logging.Log().Warnf("Was not able to send session message for session %s. Err: %v", state, err)
+	// a waiting connection gets it once it authenticated and was registered
+	if !waiting {
+		client.sendSessionMessage(state)
 	}
 }

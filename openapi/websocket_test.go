@@ -943,3 +943,56 @@ func TestAuthenticationResponse_ParseFailureReachesThePage(t *testing.T) {
 		})
 	}
 }
+
+// TestWsHandler_WarnModeKeepsAuthenticatedConnection checks that in warn mode a connection without
+// the page secret cannot displace the page's authenticated one: it waits unregistered, and takes
+// the login over only once it authenticates.
+func TestWsHandler_WarnModeKeepsAuthenticatedConnection(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	if err := SetWebSocketSessionBinding(WebSocketBindingWarn); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+	dial := startWsTestServer(t)
+	serverURL := frontendVerifier.(*mockVerifier).mockHost
+
+	page := dial("kept-session")
+	var message map[string]interface{}
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+	}
+	pageClient := registeredClient("kept-session")
+	waitFor(t, pageClient.isAuthenticated, "the page authenticated")
+
+	newcomer, resp, err := websocket.DefaultDialer.Dial("ws"+serverURL[len("http"):]+"/ws?state=kept-session", http.Header{"Origin": {serverURL}})
+	if err != nil {
+		t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+	}
+	// give the handler time to decide; a waiting connection is not registered
+	time.Sleep(200 * time.Millisecond)
+	if registeredClient("kept-session") != pageClient {
+		_ = newcomer.Close()
+		t.Fatalf("An unauthenticated connection must not replace the authenticated one.")
+	}
+
+	if err := newcomer.WriteJSON(map[string]string{"type": "auth", "secret": testPageSecret}); err != nil {
+		t.Fatalf("Expected the authentication message to be sent, got %v", err)
+	}
+	// the first message a waiting connection gets is the one sent once it was registered
+	_ = newcomer.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := newcomer.ReadJSON(&message); err != nil || message["type"] != "session" {
+		_ = newcomer.Close()
+		t.Fatalf("Expected the session message once authenticated, got %v (err %v)", message, err)
+	}
+	awaitServerSide(t, "kept-session", newcomer)
+	messages, err := readUntilClosed(t, page)
+	if len(messages) != 1 || messages[0]["type"] != "replaced" || !websocket.IsCloseError(err, wsCloseReplaced) {
+		t.Errorf("Expected the older page to be replaced with %d, got %v (err %v)", wsCloseReplaced, messages, err)
+	}
+	if err := sendRedirect("kept-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the result to be delivered, got %v", err)
+	}
+	if err := newcomer.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+		t.Errorf("Expected the authenticated newcomer to get the result, got %v (err %v)", message, err)
+	}
+}
