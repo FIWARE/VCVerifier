@@ -218,9 +218,16 @@ type wsClient struct {
 	pending bool
 }
 
-// registerMu makes checking the registered connection and replacing it one step, so an
-// unauthenticated connection cannot slip in after the check (see registerUnauthenticated).
+// registerMu guards which connection is registered for a session (sessions.Swap) together with
+// the authenticated flag of every connection: checking whether the registered connection
+// authenticated and replacing it is one step (registerUnauthenticated), and no connection can
+// authenticate in between (handleMessage). Lock order is registerMu, then a connection's writeMu.
+// Nothing that writes to the network runs under it.
 var registerMu sync.Mutex
+
+// wsConnections counts the login WebSocket connections whose handler or goroutines still run,
+// including those that wait unregistered, so they can be waited for.
+var wsConnections sync.WaitGroup
 
 // errWebSocketRejected is returned for a login result that reaches a connection which was already
 // told that it may no longer wait for it.
@@ -312,15 +319,20 @@ func (c *wsClient) handleMessage(sessionId string, data []byte) {
 		}
 		return
 	}
+	registerMu.Lock()
 	c.writeMu.Lock()
 	c.authenticated = true
 	c.writeMu.Unlock()
 	if !c.pending {
+		registerMu.Unlock()
 		return
 	}
 	c.pending = false
+	previous, replaced := swapLocked(sessionId, c)
+	registerMu.Unlock()
+
 	logging.Log().Infof("Waiting WebSocket for session %s authenticated and takes the login over.", sessionId)
-	if registerClient(sessionId, c) {
+	if completeRegistration(sessionId, c, previous, replaced) {
 		c.sendSessionMessage(sessionId)
 	}
 }
@@ -336,9 +348,25 @@ func (c *wsClient) sendSessionMessage(sessionId string) {
 // returns false if the connection was rejected because the session is gone.
 func registerClient(sessionId string, client *wsClient) bool {
 	registerMu.Lock()
-	previous, replaced := sessions.Swap(sessionId, client)
+	previous, replaced := swapLocked(sessionId, client)
 	registerMu.Unlock()
+	return completeRegistration(sessionId, client, previous, replaced)
+}
 
+// swapLocked registers the connection for the session and returns the one it replaced. The
+// caller holds registerMu.
+func swapLocked(sessionId string, client *wsClient) (previous *wsClient, replaced bool) {
+	current, replaced := sessions.Swap(sessionId, client)
+	if !replaced {
+		return nil, false
+	}
+	return current.(*wsClient), true
+}
+
+// completeRegistration finishes registerClient once registerMu is released: it rejects the
+// connection if the session is gone and tells the connection it replaced. It returns false if the
+// connection was rejected.
+func completeRegistration(sessionId string, client *wsClient, previous *wsClient, replaced bool) bool {
 	// A page reconnecting after its session was completed (with the notification lost) or has
 	// expired would otherwise keep showing a QR code that can only yield no_such_session. This is
 	// checked only once the connection is registered: a login completing before the check finds
@@ -346,7 +374,7 @@ func registerClient(sessionId string, client *wsClient) bool {
 	if client.rejectIfSessionGone(sessionId) {
 		sessions.CompareAndDelete(sessionId, client)
 		if replaced {
-			previous.(*wsClient).rejectIfSessionGone(sessionId)
+			previous.rejectIfSessionGone(sessionId)
 		}
 		return false
 	}
@@ -354,7 +382,7 @@ func registerClient(sessionId string, client *wsClient) bool {
 		// Not waited for: a half-open old peer can block the write for wsWriteWait, which would
 		// hold back the new page's session message. The old connection is out of the map, so no
 		// result can reach it any more, and replace checks notified/rejected under its lock.
-		go previous.(*wsClient).replace(sessionId)
+		go previous.replace(sessionId)
 	}
 	return true
 }
@@ -372,8 +400,10 @@ func registerUnauthenticated(sessionId string, client *wsClient) bool {
 		logging.Log().Infof("WebSocket for session %s is not authenticated and waits: the session's registered connection is.", sessionId)
 		return false
 	}
+	// still under registerMu: the registered connection cannot authenticate before the swap
+	previous, replaced := swapLocked(sessionId, client)
 	registerMu.Unlock()
-	return registerClient(sessionId, client)
+	return completeRegistration(sessionId, client, previous, replaced)
 }
 
 // keepAlive pings the client until done is closed or a ping cannot be written. WriteControl may
@@ -541,6 +571,14 @@ func WsHandler(c *gin.Context) {
 		_ = c.AbortWithError(http.StatusBadRequest, err)
 		return
 	}
+	// done here if the connection is rejected, otherwise once its reader finished
+	wsConnections.Add(1)
+	readerStarted := false
+	defer func() {
+		if !readerStarted {
+			wsConnections.Done()
+		}
+	}()
 	client := &wsClient{conn: connection, pingPeriod: wsPingPeriod, pongWait: wsPongWait, writeWait: wsWriteWait, closed: make(chan struct{})}
 
 	// The session id is in the QR, so anyone who saw it can connect. Only the page that started
@@ -592,7 +630,9 @@ func WsHandler(c *gin.Context) {
 		defer close(keepAliveStopped)
 		client.keepAlive(state, done)
 	}()
+	readerStarted = true
 	go func() {
+		defer wsConnections.Done()
 		defer func() {
 			close(done)
 			_ = connection.Close()
