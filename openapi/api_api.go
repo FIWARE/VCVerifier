@@ -581,6 +581,8 @@ func VerifierAPIAuthenticationResponse(c *gin.Context) {
 	presentation, err := extractVpFromToken(c, vptoken)
 	if err != nil {
 		logging.Log().Warnf("Was not able to extract the presentation from the vp_token.")
+		// signature, holder binding, data model and format checks all fail here
+		notifyRejected(state, err)
 		return
 	}
 	handleAuthenticationResponse(c, state, presentation)
@@ -603,6 +605,8 @@ func GetVerifierAPIAuthenticationResponse(c *gin.Context) {
 	presentation, err := extractVpFromToken(c, vpToken)
 	if err != nil {
 		logging.Log().Warnf("Was not able to extract the presentation from the vp_token.")
+		// signature, holder binding, data model and format checks all fail here
+		notifyRejected(state, err)
 		return
 	}
 	handleAuthenticationResponse(c, state, presentation)

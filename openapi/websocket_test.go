@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -753,7 +754,6 @@ func TestRejectionCategory(t *testing.T) {
 		expected string
 	}{
 		{verifier.ErrorInvalidVC, rejectionCredentialNotAccepted},
-		{verifier.ErrorInvalidVCHolder, rejectionCredentialNotAccepted},
 		{verifier.ErrorNoValidCredentialTypeProvided, rejectionCredentialTypeNotRequested},
 		{verifier.ErrorVerficationContextSetup, rejectionCredentialTypeNotRequested},
 		{errors.New("ld_proof_challenge_mismatch"), rejectionVerificationFailed},
@@ -857,4 +857,87 @@ func TestHandleAuthenticationResponse_RejectionNotSent(t *testing.T) {
 			t.Errorf("An unauthenticated connection must not learn about rejections, got %v (err %v)", message, err)
 		}
 	})
+}
+
+// TestAuthenticationResponse_ParseFailureReachesThePage covers presentations rejected while the
+// vp_token is parsed - signature, holder binding and format checks fail there, before the
+// verifier looks the session up. Only an authenticated page of an open session is told.
+func TestAuthenticationResponse_ParseFailureReachesThePage(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName        string
+		binding         string
+		authenticate    bool
+		sessionGone     bool
+		expectRejection bool
+	}
+	tests := []test{
+		{"an authenticated page of an open session is told", WebSocketBindingEnforce, true, false, true},
+		{"nothing is sent for a session that is gone", WebSocketBindingEnforce, true, true, false},
+		{"an unauthenticated connection is not told", WebSocketBindingWarn, false, false, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			if err := SetWebSocketSessionBinding(tc.binding); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+			startWsTestServer(t)
+			mock := frontendVerifier.(*mockVerifier)
+			serverURL := mock.mockHost
+
+			var page *websocket.Conn
+			if tc.authenticate {
+				page = dialWebSocket(t, serverURL, "parse-session", testPageSecret)
+			} else {
+				var resp *http.Response
+				var err error
+				page, resp, err = websocket.DefaultDialer.Dial("ws"+serverURL[len("http"):]+"/ws?state=parse-session", http.Header{"Origin": {serverURL}})
+				if err != nil {
+					t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+				}
+			}
+			var message map[string]interface{}
+			_ = page.SetReadDeadline(time.Now().Add(3 * time.Second))
+			if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+				_ = page.Close()
+				t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+			}
+			awaitServerSide(t, "parse-session", page)
+			if tc.sessionGone {
+				mock.mockMissingSessions = map[string]bool{"parse-session": true}
+			}
+
+			sdJwtParser = &verifier.ConfigurableSdJwtParser{}
+			presentationParser = &verifier.ConfigurablePresentationParser{}
+			t.Cleanup(func() { sdJwtParser, presentationParser = nil, nil })
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", strings.NewReader("state=parse-session&vp_token=%21%21not-base64%21%21"))
+			c.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			VerifierAPIAuthenticationResponse(c)
+			if recorder.Code != http.StatusBadRequest {
+				t.Errorf("Expected the wallet to get 400, got %d", recorder.Code)
+			}
+
+			if err := sendRedirect("parse-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+				t.Fatalf("Expected the result to be delivered, got %v", err)
+			}
+			if err := page.ReadJSON(&message); err != nil {
+				t.Fatalf("Expected a message, got err %v", err)
+			}
+			if tc.expectRejection {
+				if message["type"] != "rejected" || message["reason"] != rejectionVerificationFailed {
+					t.Errorf("Expected the parse failure as %s, got %v", rejectionVerificationFailed, message)
+				}
+				if err := page.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+					t.Errorf("Expected the login result after the rejection, got %v (err %v)", message, err)
+				}
+			} else if message["type"] != "authenticated" {
+				t.Errorf("Expected no rejection before the login result, got %v", message)
+			}
+		})
+	}
 }

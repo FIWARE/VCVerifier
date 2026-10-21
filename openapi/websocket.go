@@ -360,7 +360,7 @@ func rejectionCategory(err error) string {
 	switch {
 	case errors.Is(err, verifier.ErrorNoValidCredentialTypeProvided), errors.Is(err, verifier.ErrorVerficationContextSetup):
 		return rejectionCredentialTypeNotRequested
-	case errors.Is(err, verifier.ErrorInvalidVC), errors.Is(err, verifier.ErrorInvalidVCHolder):
+	case errors.Is(err, verifier.ErrorInvalidVC):
 		return rejectionCredentialNotAccepted
 	default:
 		return rejectionVerificationFailed
@@ -378,14 +378,20 @@ func (c *wsClient) sendRejection(category string) (bool, error) {
 	return true, c.writeJSONLocked(gin.H{"type": "rejected", "reason": category})
 }
 
-// notifyRejected tells the page waiting for a login that a presentation for it was rejected. The
-// session stays open, so the page keeps its QR code and the user can try again. Only a connection
+// notifyRejected tells the page waiting for a login that a presentation for it was rejected,
+// whether it failed while the vp_token was parsed or while it was verified. The session stays
+// open, so the page keeps its QR code and the user can try again. A registered connection can
+// outlive its session until the page notices, so nothing is sent for a session that is gone. Only a connection
 // that presented the page secret is told - in warn mode an unauthenticated one may be registered,
 // and anyone who knows the session id could otherwise read why presentations fail. Anyone can
 // post a bad presentation for a session whose id they saw, so the page's wording stays neutral.
 func notifyRejected(sessionId string, err error) {
 	connection, exists := sessions.Load(sessionId)
 	if !exists {
+		return
+	}
+	if !getFrontendVerifier().HasLoginSession(sessionId) {
+		logging.Log().Debugf("Did not tell the login page of session %s about a rejected presentation: the session no longer exists.", sessionId)
 		return
 	}
 	category := rejectionCategory(err)
