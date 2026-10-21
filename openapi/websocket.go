@@ -304,7 +304,12 @@ func (c *wsClient) handleMessage(sessionId string, data []byte) {
 		return
 	}
 	if err := getFrontendVerifier().CheckLoginPageSecret(sessionId, message.Secret); err != nil {
-		logging.Log().Warnf("WebSocket for session %s presented no valid page secret (%v); accepted because server.webSocketSessionBinding is %q.", sessionId, err, WebSocketBindingWarn)
+		if errors.Is(err, verifier.ErrorNoSuchSession) {
+			// routine once the login completed or expired; the page learns it elsewhere
+			logging.Log().Infof("WebSocket for session %s authenticated after the session no longer exists (expired or completed).", sessionId)
+		} else {
+			logging.Log().Warnf("WebSocket for session %s presented no valid page secret (%v); accepted because server.webSocketSessionBinding is %q.", sessionId, err, WebSocketBindingWarn)
+		}
 		return
 	}
 	c.writeMu.Lock()
