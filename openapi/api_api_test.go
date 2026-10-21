@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/fiware/VCVerifier/common"
@@ -58,6 +59,8 @@ type mockVerifier struct {
 	mockHost                string
 	// sessions HasLoginSession reports as gone; every other session exists
 	mockMissingSessions map[string]bool
+	// guards mockMissingSessions once WebSocket handlers may read it (see endSession)
+	sessionsMu sync.Mutex
 	// the secret CheckLoginPageSecret accepts for every open session
 	mockPageSecret string
 	// what ReturnLoginQRV2 returns, if set
@@ -72,11 +75,27 @@ func (mV *mockVerifier) HasLoginSession(sessionId string) bool {
 	if mV.mockOnHasLoginSession != nil {
 		mV.mockOnHasLoginSession(sessionId)
 	}
-	return !mV.mockMissingSessions[sessionId]
+	return !mV.isSessionMissing(sessionId)
+}
+
+func (mV *mockVerifier) isSessionMissing(sessionId string) bool {
+	mV.sessionsMu.Lock()
+	defer mV.sessionsMu.Unlock()
+	return mV.mockMissingSessions[sessionId]
+}
+
+// endSession makes the session gone, like a completed or expired login, while handlers may run.
+func (mV *mockVerifier) endSession(sessionId string) {
+	mV.sessionsMu.Lock()
+	defer mV.sessionsMu.Unlock()
+	if mV.mockMissingSessions == nil {
+		mV.mockMissingSessions = map[string]bool{}
+	}
+	mV.mockMissingSessions[sessionId] = true
 }
 
 func (mV *mockVerifier) CheckLoginPageSecret(sessionId string, secret string) error {
-	if mV.mockMissingSessions[sessionId] {
+	if mV.isSessionMissing(sessionId) {
 		return verifier.ErrorNoSuchSession
 	}
 	if secret != mV.mockPageSecret {

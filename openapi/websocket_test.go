@@ -540,7 +540,7 @@ func TestWsHandler_SessionCompletingDuringCheck(t *testing.T) {
 	frontendVerifier = mock
 	mock.mockOnHasLoginSession = func(sessionId string) {
 		// the wallet's response completes the session right after the page authenticated
-		mock.mockMissingSessions[sessionId] = true
+		mock.endSession(sessionId)
 		client := registeredClient(sessionId)
 		if client == nil {
 			t.Errorf("The connection must be registered before the session is checked.")
@@ -589,7 +589,7 @@ func TestWsClient_NotRejectedAfterDelivery(t *testing.T) {
 	if err := sendRedirect("delivered-first", "external-state", "the-code", "https://rp.example/callback"); err != nil {
 		t.Fatalf("Expected the notification to be delivered, got %v", err)
 	}
-	frontendVerifier.(*mockVerifier).mockMissingSessions = map[string]bool{"delivered-first": true}
+	frontendVerifier.(*mockVerifier).endSession("delivered-first")
 
 	if registeredClient("delivered-first").rejectIfSessionGone("delivered-first") {
 		t.Errorf("A connection that got the login result must not be rejected.")
@@ -928,7 +928,7 @@ func TestAuthenticationResponse_ParseFailureReachesThePage(t *testing.T) {
 			}
 			awaitServerSide(t, "parse-session", page)
 			if tc.sessionGone {
-				mock.mockMissingSessions = map[string]bool{"parse-session": true}
+				mock.endSession("parse-session")
 			}
 
 			sdJwtParser = &verifier.ConfigurableSdJwtParser{}
@@ -1068,6 +1068,26 @@ func TestWsHandler_WarnModeRegistration(t *testing.T) {
 				t.Fatalf("Expected the result to be delivered, got %v", err)
 			}
 			expectMessage(t, page, "authenticated")
+		}},
+		{"a waiting connection that authenticates after the session ended is told so", func(t *testing.T, serverURL string, mock *mockVerifier, page *websocket.Conn, pageClient *wsClient) {
+			newcomer := dialUnauthenticated(t, serverURL, "warn-registration")
+			defer func() { _ = newcomer.Close() }()
+			time.Sleep(200 * time.Millisecond)
+			mock.endSession("warn-registration")
+
+			if err := newcomer.WriteJSON(map[string]string{"type": "auth", "secret": testPageSecret}); err != nil {
+				t.Fatal(err)
+			}
+			messages, err := readUntilClosed(t, newcomer)
+			if len(messages) != 1 || messages[0]["type"] != "error" || messages[0]["reason"] != "session_not_found" {
+				t.Errorf("Expected a single session_not_found error, got %v", messages)
+			}
+			if !websocket.IsCloseError(err, wsCloseSessionInvalid) {
+				t.Errorf("Expected the connection to be closed with %d, got %v", wsCloseSessionInvalid, err)
+			}
+			if registeredClient("warn-registration") != pageClient {
+				t.Errorf("The registered page must be left alone.")
+			}
 		}},
 	}
 
