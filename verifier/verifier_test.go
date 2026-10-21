@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -753,6 +754,54 @@ func TestReturnLoginQRV2_UsesGeneratedSessionId(t *testing.T) {
 	assert.False(t, found, "the external state must not be a session key")
 }
 
+// TestCheckLoginPageSecret covers the secret a cross-device v2 login page uses to authenticate
+// its WebSocket: only the page that got it from ReturnLoginQRV2 passes, and the session keeps
+// nothing but its hash.
+func TestCheckLoginPageSecret(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	sessionCache := cache.New(time.Minute, time.Minute)
+	verifier := CredentialVerifier{
+		host:                  "verifier.org",
+		did:                   "did:key:verifier",
+		sessionCache:          sessionCache,
+		sessionDuration:       time.Minute,
+		nonceGenerator:        &mockNonceGenerator{staticValues: []string{"session-id", "the-page-secret"}},
+		tokenSigner:           mockTokenSigner{},
+		clock:                 mockClock{},
+		credentialsConfig:     mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
+		supportedRequestModes: []string{REQUEST_MODE_URL_ENCODED},
+		clientIdentification:  configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
+	}
+	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	assert.NoError(t, err)
+	assert.Equal(t, "the-page-secret", qrInfo.PageSecret)
+	assert.NotContains(t, qrInfo.QR+qrInfo.AuthenticationRequest, "the-page-secret", "the secret must never reach the QR")
+
+	stored, _ := sessionCache.Get("session-id")
+	assert.Equal(t, sha256.Sum256([]byte("the-page-secret")), stored.(loginSession).pageSecretHash, "the session keeps the hash only")
+
+	sessionCache.SetDefault("v1-session", loginSession{version: CROSS_DEVICE_V1, sessionId: "v1-session"})
+
+	tests := []struct {
+		testName      string
+		sessionId     string
+		secret        string
+		expectedError error
+	}{
+		{"the page's own secret is accepted", "session-id", "the-page-secret", nil},
+		{"another secret is rejected", "session-id", "another-secret", ErrorLoginPageSecretMismatch},
+		{"a missing secret is rejected", "session-id", "", ErrorLoginPageSecretMismatch},
+		{"an unknown session is reported as such", "unknown-session", "the-page-secret", ErrorNoSuchSession},
+		{"a session without a login page is rejected", "v1-session", "", ErrorLoginPageSecretMismatch},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			assert.Equal(t, tc.expectedError, verifier.CheckLoginPageSecret(tc.sessionId, tc.secret))
+		})
+	}
+}
+
 func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
@@ -954,7 +1003,7 @@ func TestInitOid4VPCrossDevice_ResponseUriIncludesPathPrefix(t *testing.T) {
 	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	_, authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE)
+	_, _, authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE)
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }

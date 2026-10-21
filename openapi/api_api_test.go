@@ -58,6 +58,8 @@ type mockVerifier struct {
 	mockHost                string
 	// sessions HasLoginSession reports as gone; every other session exists
 	mockMissingSessions map[string]bool
+	// the secret CheckLoginPageSecret accepts for every open session
+	mockPageSecret string
 	// called by HasLoginSession before it answers
 	mockOnHasLoginSession func(sessionId string)
 	// codes passed to ReleaseUndeliveredCode, by session id
@@ -69,6 +71,16 @@ func (mV *mockVerifier) HasLoginSession(sessionId string) bool {
 		mV.mockOnHasLoginSession(sessionId)
 	}
 	return !mV.mockMissingSessions[sessionId]
+}
+
+func (mV *mockVerifier) CheckLoginPageSecret(sessionId string, secret string) error {
+	if !mV.HasLoginSession(sessionId) {
+		return verifier.ErrorNoSuchSession
+	}
+	if secret != mV.mockPageSecret {
+		return verifier.ErrorLoginPageSecretMismatch
+	}
+	return nil
 }
 
 func (mV *mockVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {
