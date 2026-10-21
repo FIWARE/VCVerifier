@@ -119,6 +119,11 @@ server:
     # time in seconds a browser has to answer a ping before its login WebSocket is considered gone.
     # Must be greater than webSocketPingInterval.
     webSocketPongTimeout: 60
+    # The login WebSocket has to present the secret of the login page that started the session, so
+    # whoever only sees the QR code cannot take the login over. enforce (default) rejects a connection
+    # without it, warn accepts it with a warning - only for a customised login page that does not send
+    # it yet (see "Login WebSocket session binding").
+    webSocketSessionBinding: enforce
 # logging configuration
 logging:
     # the log level, accepted options are DEBUG, INFO, WARN and ERROR
@@ -481,6 +486,19 @@ The login page of the cross-device flow (`/api/v2/loginQR`) learns about a compl
 * the verifier pings every `server.webSocketPingInterval` seconds (default 25) so the connection is not closed as idle. Keep that interval below the proxy's idle timeout (nginx and ingress-nginx: 60s, `proxy-read-timeout`). A browser that answers no ping within `server.webSocketPongTimeout` seconds (default 60) is disconnected.
 
 If the connection drops anyway (a network change, a proxy restart), the page reconnects to the same login session while the QR code is valid. A connection to a session that no longer exists - expired, or already completed - is answered with an `error` message and closed with code `4403`; the page then stops reconnecting and offers to start the login again.
+
+#### Login WebSocket session binding
+
+The session id is part of the QR code, so anyone who sees the QR code (a screen share, a projector, someone looking over a shoulder) knows it. To keep them from opening the WebSocket for that session and receiving the authorization code, the login page gets a secret that is never part of the QR code or of any URL, and every WebSocket connection has to present it:
+
+* the page renders it as `<meta name="wsSecret" content="{{.wsSecret}}">` and sends `{"type":"auth","secret":"<secret>"}` as the first message of every connection, reconnects included;
+* the verifier registers the connection only once the secret matches. A wrong or missing secret (no message within 5 seconds) is answered with `{"type":"error","reason":"unauthorized"}` and closed with code `4403`, a session that no longer exists with `"reason":"session_not_found"`. Only then does the page get its `{"type":"session"}` message;
+* the newest connection with the secret wins - a reconnect, or the page duplicated into another tab. The older one gets `{"type":"replaced"}` and is closed with code `4409`; the page then offers to continue the login in that tab;
+* the page is served with `Cache-Control: no-store`.
+
+A customised login page (`server.templateDir` / `server.staticDir`) has to do the same. Until it does, `server.webSocketSessionBinding: warn` accepts connections without the secret and logs a warning for each - which leaves the login open to anyone who sees the QR code.
+
+This only concerns the cross-device v2 login page. The same-device flow, the cross-device v1 flow (`client_callback`) and the `vp_token` / token-exchange grants do not use the WebSocket and are unchanged.
 
 ### REST-Example
 

@@ -60,6 +60,8 @@ type mockVerifier struct {
 	mockMissingSessions map[string]bool
 	// the secret CheckLoginPageSecret accepts for every open session
 	mockPageSecret string
+	// what ReturnLoginQRV2 returns, if set
+	mockQRInfo *verifier.QRLoginInfo
 	// called by HasLoginSession before it answers
 	mockOnHasLoginSession func(sessionId string)
 	// codes passed to ReleaseUndeliveredCode, by session id
@@ -74,7 +76,7 @@ func (mV *mockVerifier) HasLoginSession(sessionId string) bool {
 }
 
 func (mV *mockVerifier) CheckLoginPageSecret(sessionId string, secret string) error {
-	if !mV.HasLoginSession(sessionId) {
+	if mV.mockMissingSessions[sessionId] {
 		return verifier.ErrorNoSuchSession
 	}
 	if secret != mV.mockPageSecret {
@@ -95,6 +97,9 @@ func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback str
 	return mV.mockQR, mV.mockError
 }
 func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string) (qrInfo verifier.QRLoginInfo, err error) {
+	if mV.mockQRInfo != nil {
+		return *mV.mockQRInfo, mV.mockError
+	}
 	return verifier.QRLoginInfo{QR: mV.mockQR}, mV.mockError
 }
 func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (connectionString string, err error) {

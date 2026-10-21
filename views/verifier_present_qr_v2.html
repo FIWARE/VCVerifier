@@ -8,6 +8,7 @@
     <title>Verificador OpenID4VC</title>
     <link rel="icon" type="image/x-icon" href="{{.prefix}}/static/img/favicon.ico">
     <meta name="wsUrl" content="{{.wsUrl}}">
+    <meta name="wsSecret" content="{{.wsSecret}}">
     <meta name="qrDuration" content="{{.qrDuration}}">
     <meta name="qrExpireAt" content="{{.qrExpireAt}}">
     <meta name="basePath" content="{{.prefix}}">
@@ -105,6 +106,21 @@
                     <button onclick="window.location.reload()" data-i18n="session_invalid_restart"
                         class="bg-primary text-white text-xs px-4 py-2 rounded-full hover:scale-105 transition-transform font-bold">
                         Start again
+                    </button>
+                </div>
+
+                <div id="another-tab" class="hidden flex-col items-center justify-center py-8 px-10">
+                    <svg class="w-12 h-12 text-red-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <p data-i18n="another_tab_title" class="text-sm font-bold text-gray-900">Login continues in
+                        another tab</p>
+                    <p data-i18n="another_tab_desc" class="text-[12px] text-gray-500 mb-3">This login was opened
+                        in another tab or window.</p>
+                    <button id="continue-here" data-i18n="another_tab_continue"
+                        class="bg-primary text-white text-xs px-4 py-2 rounded-full hover:scale-105 transition-transform font-bold">
+                        Continue here
                     </button>
                 </div>
 

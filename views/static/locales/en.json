@@ -11,5 +11,8 @@
     "ws_error_retry": "Retry",
     "session_invalid_title": "Session no longer valid",
     "session_invalid_desc": "This login has expired or was already used.",
-    "session_invalid_restart": "Start again"
+    "session_invalid_restart": "Start again",
+    "another_tab_title": "Login continues in another tab",
+    "another_tab_desc": "This login was opened in another tab or window.",
+    "another_tab_continue": "Continue here"
 }

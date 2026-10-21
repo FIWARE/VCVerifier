@@ -148,9 +148,12 @@ func VerifierLoginQr(c *gin.Context) {
 		return
 	}
 
+	// the page carries the secret its WebSocket authenticates with, so no cache may keep it
+	c.Header("Cache-Control", "no-store")
 	c.HTML(http.StatusOK, "verifier_present_qr_v2", gin.H{
 		"qrcode":      template.URL(qrInfo.QR),
 		"wsUrl":       getFrontendVerifier().GetHost() + "/ws?state=" + url.QueryEscape(qrInfo.SessionId),
+		"wsSecret":    qrInfo.PageSecret,
 		"qrExpireAt":  qrInfo.ExpireAt.UnixMilli(),
 		"qrDuration":  qrInfo.TotalDuration,
 		"authRequest": template.URL(qrInfo.AuthenticationRequest),

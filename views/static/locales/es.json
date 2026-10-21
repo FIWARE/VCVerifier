@@ -11,5 +11,8 @@
     "ws_error_retry": "Reintentar",
     "session_invalid_title": "La sesión ya no es válida",
     "session_invalid_desc": "Este inicio de sesión ha caducado o ya se ha utilizado.",
-    "session_invalid_restart": "Empezar de nuevo"
+    "session_invalid_restart": "Empezar de nuevo",
+    "another_tab_title": "El acceso continúa en otra pestaña",
+    "another_tab_desc": "Este acceso se ha abierto en otra pestaña o ventana.",
+    "another_tab_continue": "Continuar aquí"
 }

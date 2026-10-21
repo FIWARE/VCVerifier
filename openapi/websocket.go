@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fiware/VCVerifier/logging"
+	"github.com/fiware/VCVerifier/verifier"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -144,12 +146,52 @@ func SetWebSocketKeepAlive(pingInterval time.Duration, pongTimeout time.Duration
 	return nil
 }
 
-// wsMaxMessageSize bounds what a client may send - the frontend sends nothing but pongs.
+// wsMaxMessageSize bounds what a client may send - the frontend sends nothing but its
+// authentication message and pongs.
 const wsMaxMessageSize = 512
 
-// wsCloseSessionInvalid is the close code for a connection to a login session that no longer
-// exists - expired or already completed. The page must not reconnect, as no reconnect can succeed.
+// wsCloseSessionInvalid is the close code for a connection that may not wait for the login
+// session: the session no longer exists (expired or already completed) or the page did not
+// present its secret. The page must not reconnect, as no reconnect can succeed.
 const wsCloseSessionInvalid = 4403
+
+// wsCloseReplaced is the close code for a connection replaced by a newer one of the same login
+// page, e.g. the page duplicated into another tab. The page must not reconnect on its own, or the
+// two would keep replacing each other.
+const wsCloseReplaced = 4409
+
+// Session binding modes for the login WebSocket (server.webSocketSessionBinding).
+const (
+	// a connection is registered only after it presented the login page's secret
+	WebSocketBindingEnforce = "enforce"
+	// a connection is registered at once; one that does not authenticate is logged
+	WebSocketBindingWarn = "warn"
+)
+
+var (
+	// wsSessionBinding is set once at startup via SetWebSocketSessionBinding.
+	wsSessionBinding = WebSocketBindingEnforce
+	// wsAuthTimeout is the time a new connection has to present the login page's secret.
+	wsAuthTimeout = 5 * time.Second
+)
+
+// SetWebSocketSessionBinding configures whether the login WebSocket must present the login page's
+// secret before it is registered. It must be called before the server accepts connections.
+func SetWebSocketSessionBinding(mode string) error {
+	switch mode {
+	case WebSocketBindingEnforce, WebSocketBindingWarn:
+		wsSessionBinding = mode
+		return nil
+	default:
+		return fmt.Errorf("invalid server.webSocketSessionBinding %q: must be %q or %q", mode, WebSocketBindingEnforce, WebSocketBindingWarn)
+	}
+}
+
+// wsAuthMessage is the first message the login page sends on every connection.
+type wsAuthMessage struct {
+	Type   string `json:"type"`
+	Secret string `json:"secret"`
+}
 
 // wsClient is a login WebSocket connection. gorilla/websocket allows a single concurrent writer
 // (control frames excepted), and the initial session message and the login notification are
@@ -164,14 +206,17 @@ type wsClient struct {
 	// closed once the connection is closed, unregistered and its goroutines have finished
 	closed chan struct{}
 	// guarded by writeMu: the login result was written to the page, or the page was told that
-	// its session is gone. Never both, so the page does not get contradicting answers.
+	// it may no longer wait for it (session gone, connection replaced). Never both, so the page
+	// does not get contradicting answers.
 	notified bool
 	rejected bool
+	// guarded by writeMu: the connection presented the login page's secret
+	authenticated bool
 }
 
 // errWebSocketRejected is returned for a login result that reaches a connection which was already
-// told that its session is gone.
-var errWebSocketRejected = errors.New("the WebSocket was rejected, its session no longer exists")
+// told that it may no longer wait for it.
+var errWebSocketRejected = errors.New("the WebSocket was closed by the verifier: its session is gone or a newer connection replaced it")
 
 // errNoWebSocketConnection is returned when no page waits for the result of the session.
 var errNoWebSocketConnection = errors.New("no WebSocket connection for the session")
@@ -207,15 +252,56 @@ func (c *wsClient) deliverLogin(message interface{}) error {
 // result was delivered to it, and reports whether it did. The check runs under writeMu, so a
 // result is either delivered before it - and the session being gone is expected - or fails after
 // it, which releases the code again (see handleAuthenticationResponse).
+// A connection that was already closed by the verifier counts as rejected too.
 func (c *wsClient) rejectIfSessionGone(sessionId string) bool {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.rejected {
+		return true
+	}
 	if c.notified || getFrontendVerifier().HasLoginSession(sessionId) {
 		return false
 	}
 	c.rejected = true
-	rejectWebSocket(c.conn, sessionId)
+	logging.Log().Infof("Rejected WebSocket for session %s: the session does not exist (expired, completed or never created).", sessionId)
+	closeWebSocket(c.conn, sessionId, gin.H{"type": "error", "reason": "session_not_found"}, wsCloseSessionInvalid, "session_not_found")
 	return true
+}
+
+// replace tells the page that the login continues on a newer connection and closes this one,
+// unless it already got its answer.
+func (c *wsClient) replace(sessionId string) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.notified || c.rejected {
+		return
+	}
+	c.rejected = true
+	logging.Log().Infof("WebSocket for session %s was replaced by a newer connection of its login page.", sessionId)
+	closeWebSocket(c.conn, sessionId, gin.H{"type": "replaced"}, wsCloseReplaced, "replaced")
+}
+
+func (c *wsClient) isAuthenticated() bool {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.authenticated
+}
+
+// handleMessage processes a message the page sent after the connection was registered. Only an
+// authentication message means anything: in warn mode the connection is registered before the
+// page authenticated, and authenticates here.
+func (c *wsClient) handleMessage(sessionId string, data []byte) {
+	var message wsAuthMessage
+	if err := json.Unmarshal(data, &message); err != nil || message.Type != "auth" || c.isAuthenticated() {
+		return
+	}
+	if err := getFrontendVerifier().CheckLoginPageSecret(sessionId, message.Secret); err != nil {
+		logging.Log().Warnf("WebSocket for session %s presented no valid page secret (%v); accepted because server.webSocketSessionBinding is %q.", sessionId, err, WebSocketBindingWarn)
+		return
+	}
+	c.writeMu.Lock()
+	c.authenticated = true
+	c.writeMu.Unlock()
 }
 
 // keepAlive pings the client until done is closed or a ping cannot be written. WriteControl may
@@ -260,19 +346,50 @@ func sendRedirect(sessionId string, externalState string, code string, redirectU
 	return nil
 }
 
-// rejectWebSocket tells the page that its login session no longer exists and closes the
-// connection without registering it.
-func rejectWebSocket(connection *websocket.Conn, sessionId string) {
-	logging.Log().Infof("Rejected WebSocket for session %s: the session does not exist (expired, completed or never created).", sessionId)
+// closeWebSocket tells the page why it may no longer wait for its login, then closes the
+// connection with the given close code.
+func closeWebSocket(connection *websocket.Conn, sessionId string, message gin.H, closeCode int, reason string) {
 	defer func() { _ = connection.Close() }()
 
 	_ = connection.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	if err := connection.WriteJSON(gin.H{"type": "error", "reason": "session_not_found"}); err != nil {
-		logging.Log().Debugf("Was not able to tell the page of session %s that the session is gone: %v", sessionId, err)
+	if err := connection.WriteJSON(message); err != nil {
+		logging.Log().Debugf("Was not able to tell the page of session %s why its WebSocket is closed (%s): %v", sessionId, reason, err)
 		return
 	}
-	closeMessage := websocket.FormatCloseMessage(wsCloseSessionInvalid, "session_not_found")
+	closeMessage := websocket.FormatCloseMessage(closeCode, reason)
 	_ = connection.WriteControl(websocket.CloseMessage, closeMessage, time.Now().Add(wsWriteWait))
+}
+
+// authenticateWebSocket waits for the page's authentication message and checks its secret. It
+// returns verifier.ErrorNoSuchSession for a session that no longer exists. A read that fails or
+// times out leaves the connection unusable, so this is only for connections that are rejected
+// when it fails.
+func authenticateWebSocket(connection *websocket.Conn, sessionId string) error {
+	connection.SetReadLimit(wsMaxMessageSize)
+	_ = connection.SetReadDeadline(time.Now().Add(wsAuthTimeout))
+	var message wsAuthMessage
+	if err := connection.ReadJSON(&message); err != nil {
+		return fmt.Errorf("no authentication message within %v: %w", wsAuthTimeout, err)
+	}
+	if message.Type != "auth" {
+		return fmt.Errorf("the first message is %q, not an authentication message", message.Type)
+	}
+	return getFrontendVerifier().CheckLoginPageSecret(sessionId, message.Secret)
+}
+
+// warnIfUnauthenticated logs a connection that was registered in warn mode and did not present
+// the login page's secret in time - with enforce it would have been rejected.
+func warnIfUnauthenticated(client *wsClient, sessionId string) {
+	time.AfterFunc(wsAuthTimeout, func() {
+		select {
+		case <-client.closed:
+			return
+		default:
+		}
+		if !client.isAuthenticated() {
+			logging.Log().Warnf("WebSocket for session %s did not present the login page's secret within %v; accepted because server.webSocketSessionBinding is %q.", sessionId, wsAuthTimeout, WebSocketBindingWarn)
+		}
+	})
 }
 
 func WsHandler(c *gin.Context) {
@@ -290,8 +407,26 @@ func WsHandler(c *gin.Context) {
 	}
 	client := &wsClient{conn: connection, pingPeriod: wsPingPeriod, pongWait: wsPongWait, writeWait: wsWriteWait, closed: make(chan struct{})}
 
-	// A reconnecting browser replaces its earlier connection for the session.
-	sessions.Store(state, client)
+	// The session id is in the QR, so anyone who saw it can connect. Only the page that started
+	// the login knows its secret, and only a connection that presents it may wait for the result.
+	if wsSessionBinding == WebSocketBindingEnforce {
+		if err := authenticateWebSocket(connection, state); err != nil {
+			reason := "unauthorized"
+			if errors.Is(err, verifier.ErrorNoSuchSession) {
+				reason = "session_not_found"
+				logging.Log().Infof("Rejected WebSocket for session %s: the session does not exist (expired, completed or never created).", state)
+			} else {
+				logging.Log().Warnf("Rejected WebSocket for session %s: %v", state, err)
+			}
+			closeWebSocket(connection, state, gin.H{"type": "error", "reason": reason}, wsCloseSessionInvalid, reason)
+			return
+		}
+		client.authenticated = true
+	}
+
+	// The newest connection of the login page wins: a reconnect, or the page duplicated into
+	// another tab. With enforce, only a holder of the page secret can get here.
+	previous, replaced := sessions.Swap(state, client)
 
 	// A page reconnecting after its session was completed (with the notification lost) or has
 	// expired would otherwise keep showing a QR code that can only yield no_such_session. This is
@@ -299,9 +434,20 @@ func WsHandler(c *gin.Context) {
 	// no session left, one completing after it finds this connection.
 	if client.rejectIfSessionGone(state) {
 		sessions.CompareAndDelete(state, client)
+		if replaced {
+			previous.(*wsClient).rejectIfSessionGone(state)
+		}
 		return
 	}
-	logging.Log().Infof("WebSocket connected for session %s.", state)
+	if replaced && previous != client {
+		previous.(*wsClient).replace(state)
+	}
+	if client.authenticated {
+		logging.Log().Infof("WebSocket connected for session %s.", state)
+	} else {
+		logging.Log().Infof("WebSocket connected for session %s, not yet authenticated (server.webSocketSessionBinding is %q).", state, WebSocketBindingWarn)
+		warnIfUnauthenticated(client, state)
+	}
 
 	connection.SetReadLimit(wsMaxMessageSize)
 	_ = connection.SetReadDeadline(time.Now().Add(client.pongWait))
@@ -325,7 +471,8 @@ func WsHandler(c *gin.Context) {
 			close(client.closed)
 		}()
 		for {
-			if _, _, err := connection.ReadMessage(); err != nil {
+			_, data, err := connection.ReadMessage()
+			if err != nil {
 				// the browser closing or leaving the page is routine; anything else - a missed
 				// pong, a dropped connection - means it will have to reconnect
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
@@ -335,6 +482,7 @@ func WsHandler(c *gin.Context) {
 				}
 				return
 			}
+			client.handleMessage(state, data)
 		}
 	}()
 
