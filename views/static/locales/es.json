@@ -18,5 +18,6 @@
     "presentation_rejected_title": "Se ha rechazado una presentación para este acceso",
     "presentation_rejected_credential_not_accepted": "La credencial presentada no ha sido aceptada.",
     "presentation_rejected_credential_type_not_requested": "La credencial presentada no se acepta para este acceso.",
-    "presentation_rejected_verification_failed": "No se ha podido verificar la presentación."
+    "presentation_rejected_verification_failed": "No se ha podido verificar la presentación.",
+    "presentation_rejected_server_error": "Algo ha fallado por nuestra parte. Puedes intentarlo de nuevo."
 }

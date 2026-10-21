@@ -84,6 +84,10 @@ var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorLoginPageSecretMismatch = errors.New("login_page_secret_mismatch")
+
+// ErrorLoginCompletionFailed wraps a failure on the verifier's side after the presentation was
+// verified, so it is not reported as a rejected credential.
+var ErrorLoginCompletionFailed = errors.New("login_completion_failed")
 var ErrorCallbackRejected = errors.New("callback_rejected_by_requestor")
 var ErrorInvalidClientCallbackTimeout = errors.New("invalid_client_callback_timeout")
 var ErrorClientCallbackTimeoutExceedsWriteTimeout = errors.New("client_callback_timeout_not_below_server_write_timeout")
@@ -1246,7 +1250,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	token, err := v.generateJWT(credentialsToBeIncluded, verifiablePresentation.Holder, loginSession.clientId, flatClaims, loginSession.nonce)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)
-		return sameDevice, err
+		return sameDevice, fmt.Errorf("%w: %w", ErrorLoginCompletionFailed, err)
 	}
 
 	tokenStore := tokenStore{token: token, redirect_uri: loginSession.callback, clientId: loginSession.clientId,
@@ -1254,11 +1258,11 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	authorizationCode := v.nonceGenerator.GenerateNonce()
 	// store for retrieval by token endpoint
 	err = v.tokenCache.Add(authorizationCode, tokenStore, cache.DefaultExpiration)
-	logging.Log().Infof("Stored token for %s.", authorizationCode)
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the token %s in cache.", logging.PrettyPrintObject(tokenStore))
-		return sameDevice, err
+		return sameDevice, fmt.Errorf("%w: %w", ErrorLoginCompletionFailed, err)
 	}
+	logging.Log().Infof("Stored token for %s.", authorizationCode)
 	// A session is single-use. Responses are verified concurrently and the first one to get here
 	// redeems the session; any other that passed verification in the meantime finds it gone and
 	// discards its code. Nothing is locked during verification, so a slow or malicious response

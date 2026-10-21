@@ -3,6 +3,7 @@ package openapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -757,7 +758,8 @@ func TestRejectionCategory(t *testing.T) {
 		{verifier.ErrorNoValidCredentialTypeProvided, rejectionCredentialTypeNotRequested},
 		{verifier.ErrorVerficationContextSetup, rejectionCredentialTypeNotRequested},
 		{errors.New("ld_proof_challenge_mismatch"), rejectionVerificationFailed},
-		{errors.New("was not able to sign the token"), rejectionVerificationFailed},
+		{fmt.Errorf("%w: %w", verifier.ErrorLoginCompletionFailed, errors.New("cache full")), rejectionServerError},
+		{errors.New("trusted issuers registry unreachable"), rejectionVerificationFailed},
 	}
 	for _, tc := range tests {
 		if category := rejectionCategory(tc.err); category != tc.expected {

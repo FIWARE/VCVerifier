@@ -353,6 +353,8 @@ const (
 	rejectionCredentialNotAccepted      = "credential_not_accepted"
 	rejectionCredentialTypeNotRequested = "credential_type_not_requested"
 	rejectionVerificationFailed         = "verification_failed"
+	// the presentation was fine, the verifier failed to complete the login
+	rejectionServerError = "server_error"
 )
 
 // rejectionCategory maps the error a presentation was rejected with to what the page is told.
@@ -362,6 +364,8 @@ func rejectionCategory(err error) string {
 		return rejectionCredentialTypeNotRequested
 	case errors.Is(err, verifier.ErrorInvalidVC):
 		return rejectionCredentialNotAccepted
+	case errors.Is(err, verifier.ErrorLoginCompletionFailed):
+		return rejectionServerError
 	default:
 		return rejectionVerificationFailed
 	}

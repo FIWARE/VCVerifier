@@ -1174,7 +1174,7 @@ func TestAuthenticationResponse(t *testing.T) {
 			verifier := CredentialVerifier{did: "did:key:verifier", signingKey: testKey, tokenCache: &tokenCache, redeemedCodes: cache.New(time.Minute, time.Minute), sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, validationServices: validationServices, clock: mockClock{}, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"}}
 
 			sameDeviceResponse, err := verifier.AuthenticationResponse(tc.requestedState, &tc.testVP)
-			if err != tc.expectedError {
+			if !errors.Is(err, tc.expectedError) {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
 			}
 			if tc.testSession != (loginSession{}) && tc.requestedState == tc.testState {
@@ -1563,6 +1563,22 @@ func TestAuthenticationResponse_CallbackFailsWhileCodeIsExchanged(t *testing.T) 
 
 	close(signer.release)
 	assert.NoError(t, <-exchanged, "the exchange must still succeed")
+}
+
+// TestAuthenticationResponse_CompletionFailureIsMarked checks that a failure on the verifier's
+// side after the presentation was verified is marked as such, so the login page is not told
+// that the credential was rejected, and that the session stays open for a retry.
+func TestAuthenticationResponse_CompletionFailureIsMarked(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V2)
+	// the code the response will get is taken, so storing the token fails
+	tokenCache.SetDefault("code-1", tokenStore{})
+
+	vp := getVP([]string{"vc"})
+	_, err := verifier.AuthenticationResponse("session-id", &vp)
+	assert.ErrorIs(t, err, ErrorLoginCompletionFailed)
+	_, found := sessionCache.Get("session-id")
+	assert.True(t, found, "a login that could not be completed must not consume the session")
 }
 
 // TestReleaseCode_BeforeExchange checks the other order: a code released first is gone for the
