@@ -230,7 +230,8 @@ type wsClient struct {
 var registerMu sync.Mutex
 
 // wsConnections counts the login WebSocket connections whose handler or goroutines still run,
-// including those that wait unregistered, so they can be waited for.
+// including those that wait unregistered and the telling of a replaced connection, so they can
+// be waited for.
 var wsConnections sync.WaitGroup
 
 // errWebSocketRejected is returned for a login result that reaches a connection which was already
@@ -388,7 +389,13 @@ func completeRegistration(sessionId string, client *wsClient, previous *wsClient
 		// Not waited for: a half-open old peer can block the write for wsWriteWait, which would
 		// hold back the new page's session message. The old connection is out of the map, so no
 		// result can reach it any more, and replace checks notified/rejected under its lock.
-		go previous.replace(sessionId)
+		// Counted like the connection itself; the registering handler is counted too, so the
+		// counter cannot be zero here.
+		wsConnections.Add(1)
+		go func() {
+			defer wsConnections.Done()
+			previous.replace(sessionId)
+		}()
 	}
 	return true
 }
