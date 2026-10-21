@@ -468,18 +468,21 @@ const (
 	rejectionCredentialNotAccepted      = "credential_not_accepted"
 	rejectionCredentialTypeNotRequested = "credential_type_not_requested"
 	rejectionVerificationFailed         = "verification_failed"
-	// the presentation was fine, the verifier failed to complete the login
+	// the verifier failed on its side: reading the configuration needed to verify the
+	// presentation, or completing the login after it was verified
 	rejectionServerError = "server_error"
 )
 
 // rejectionCategory maps the error a presentation was rejected with to what the page is told.
 func rejectionCategory(err error) string {
 	switch {
-	case errors.Is(err, verifier.ErrorNoValidCredentialTypeProvided), errors.Is(err, verifier.ErrorVerficationContextSetup):
+	case errors.Is(err, verifier.ErrorNoValidCredentialTypeProvided):
 		return rejectionCredentialTypeNotRequested
 	case errors.Is(err, verifier.ErrorInvalidVC):
 		return rejectionCredentialNotAccepted
-	case errors.Is(err, verifier.ErrorLoginCompletionFailed):
+	// ErrorVerficationContextSetup is a failure to read the trust, status or eIDAS configuration;
+	// an unknown credential type yields empty lists, not this error
+	case errors.Is(err, verifier.ErrorVerficationContextSetup), errors.Is(err, verifier.ErrorLoginCompletionFailed):
 		return rejectionServerError
 	default:
 		return rejectionVerificationFailed

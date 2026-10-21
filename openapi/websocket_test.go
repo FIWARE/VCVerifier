@@ -775,7 +775,7 @@ func TestRejectionCategory(t *testing.T) {
 	}{
 		{verifier.ErrorInvalidVC, rejectionCredentialNotAccepted},
 		{verifier.ErrorNoValidCredentialTypeProvided, rejectionCredentialTypeNotRequested},
-		{verifier.ErrorVerficationContextSetup, rejectionCredentialTypeNotRequested},
+		{verifier.ErrorVerficationContextSetup, rejectionServerError},
 		{errors.New("ld_proof_challenge_mismatch"), rejectionVerificationFailed},
 		{fmt.Errorf("%w: %w", verifier.ErrorLoginCompletionFailed, errors.New("cache full")), rejectionServerError},
 		{errors.New("trusted issuers registry unreachable"), rejectionVerificationFailed},
