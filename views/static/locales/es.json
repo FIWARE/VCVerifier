@@ -14,5 +14,9 @@
     "session_invalid_restart": "Empezar de nuevo",
     "another_tab_title": "El acceso continúa en otra pestaña",
     "another_tab_desc": "Este acceso se ha abierto en otra pestaña o ventana.",
-    "another_tab_continue": "Continuar aquí"
+    "another_tab_continue": "Continuar aquí",
+    "presentation_rejected_title": "Se ha rechazado una presentación para este acceso",
+    "presentation_rejected_credential_not_accepted": "La credencial no ha sido aceptada. Puedes intentarlo de nuevo.",
+    "presentation_rejected_credential_type_not_requested": "Esta credencial no es una de las que pide este servicio. Puedes intentarlo de nuevo con otra.",
+    "presentation_rejected_verification_failed": "No se ha podido verificar la presentación. Puedes intentarlo de nuevo."
 }

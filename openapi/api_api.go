@@ -790,6 +790,12 @@ func handleAuthenticationResponse(c *gin.Context, state string, presentation *co
 	response, err := getApiVerifier().AuthenticationResponse(state, presentation)
 	if err != nil {
 		logging.Log().Warnf("Was not able to fullfil the authentication response. Err: %v", err)
+		// A rejected presentation leaves the session open; the page waiting for it shows that it
+		// can be tried again. A session that does not exist (or was just completed by a concurrent
+		// response) has no page waiting for this answer.
+		if !errors.Is(err, verifier.ErrorNoSuchSession) {
+			notifyRejected(state, err)
+		}
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessage{Summary: err.Error()})
 		return
 	}

@@ -195,6 +195,7 @@ class AppManager {
     document.getElementById('ws-connecting')?.classList.add('hidden');
     document.getElementById('qrcode')?.classList.add('hidden');
     document.getElementById('timer-section')?.classList.add('hidden');
+    document.getElementById('presentation-rejected')?.classList.add('hidden');
     const panel = document.getElementById(panelId);
     if (panel) {
       panel.classList.remove('hidden');
@@ -213,6 +214,17 @@ class AppManager {
   #handleReplaced() {
     this.#finishWebSocket();
     this.#showWebSocketError('another-tab');
+  }
+
+  // A presentation for this login was rejected. The session stays open and the QR code valid, so
+  // the user can try again; anyone who saw the QR can cause this, so it is only a notice.
+  #showRejection(reason) {
+    const notice = document.getElementById('presentation-rejected');
+    if (!notice) return;
+    const details = notice.querySelectorAll('[data-rejection]');
+    const known = Array.from(details).some(el => el.getAttribute('data-rejection') === reason);
+    details.forEach(el => el.classList.toggle('hidden', el.getAttribute('data-rejection') !== (known ? reason : 'verification_failed')));
+    notice.classList.remove('hidden');
   }
 
   #continueHere() {
@@ -302,6 +314,11 @@ class AppManager {
           case "replaced":
             console.log("The login continues in another tab")
             this.#handleReplaced();
+            break
+
+          case "rejected":
+            console.log("A presentation was rejected: " + message.reason)
+            this.#showRejection(message.reason);
             break
         }
       } catch (err) {

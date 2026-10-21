@@ -215,19 +215,25 @@ func startWsTestServer(t *testing.T) func(sessionId string) *websocket.Conn {
 		previous := registeredClient(sessionId)
 		conn := dialWebSocket(t, server.URL, sessionId, testPageSecret)
 		waitFor(t, func() bool { c := registeredClient(sessionId); return c != nil && c != previous }, "the connection was registered")
-		client := registeredClient(sessionId)
-		// the server-side goroutines outlive the client; let them finish before the next test
-		// reconfigures shared state such as the logger
-		t.Cleanup(func() {
-			_ = conn.Close()
-			select {
-			case <-client.closed:
-			case <-time.After(3 * time.Second):
-				t.Errorf("The server side of session %s did not shut down.", sessionId)
-			}
-		})
+		awaitServerSide(t, sessionId, conn)
 		return conn
 	}
+}
+
+// awaitServerSide closes a registered connection when the test ends and waits for its server-side
+// goroutines: they outlive the client, and must finish before the next test reconfigures shared
+// state such as the logger.
+func awaitServerSide(t *testing.T, sessionId string, conn *websocket.Conn) {
+	t.Helper()
+	client := registeredClient(sessionId)
+	t.Cleanup(func() {
+		_ = conn.Close()
+		select {
+		case <-client.closed:
+		case <-time.After(3 * time.Second):
+			t.Errorf("The server side of session %s did not shut down.", sessionId)
+		}
+	})
 }
 
 // testPageSecret is the login page secret the mock verifier accepts in the WebSocket tests.
@@ -703,12 +709,13 @@ func TestWsHandler_WarnMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
 	}
-	defer func() { _ = custom.Close() }()
 	var message map[string]interface{}
 	_ = custom.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if err := custom.ReadJSON(&message); err != nil || message["type"] != "session" {
+		_ = custom.Close()
 		t.Fatalf("Expected a page that sends no secret to be registered, got %v (err %v)", message, err)
 	}
+	awaitServerSide(t, "warn-session", custom)
 	if registeredClient("warn-session").isAuthenticated() {
 		t.Errorf("A connection without the page secret must not count as authenticated.")
 	}
@@ -738,4 +745,116 @@ func TestSetWebSocketSessionBinding(t *testing.T) {
 			t.Errorf("Expected %q to be rejected", mode)
 		}
 	}
+}
+
+func TestRejectionCategory(t *testing.T) {
+	tests := []struct {
+		err      error
+		expected string
+	}{
+		{verifier.ErrorInvalidVC, rejectionCredentialNotAccepted},
+		{verifier.ErrorInvalidVCHolder, rejectionCredentialNotAccepted},
+		{verifier.ErrorNoValidCredentialTypeProvided, rejectionCredentialTypeNotRequested},
+		{verifier.ErrorVerficationContextSetup, rejectionCredentialTypeNotRequested},
+		{errors.New("ld_proof_challenge_mismatch"), rejectionVerificationFailed},
+		{errors.New("was not able to sign the token"), rejectionVerificationFailed},
+	}
+	for _, tc := range tests {
+		if category := rejectionCategory(tc.err); category != tc.expected {
+			t.Errorf("Expected %v to map to %s, got %s", tc.err, tc.expected, category)
+		}
+	}
+}
+
+// postAuthenticationResponse runs the wallet's authentication response for a session against a
+// mock verifier answering with the given error, and returns the HTTP status.
+func postAuthenticationResponse(t *testing.T, sessionId string, verifierErr error) int {
+	t.Helper()
+	apiVerifier = &mockVerifier{mockError: verifierErr}
+	t.Cleanup(func() { apiVerifier = nil })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", nil)
+	handleAuthenticationResponse(c, sessionId, &common.Presentation{})
+	return recorder.Code
+}
+
+// TestHandleAuthenticationResponse_RejectionReachesThePage checks that the page waiting for a
+// login learns that a presentation was rejected - only as a coarse category - and keeps waiting,
+// so the next presentation can still complete the login.
+func TestHandleAuthenticationResponse_RejectionReachesThePage(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+	page := dial("rejected-session")
+	var message map[string]interface{}
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+	}
+
+	if status := postAuthenticationResponse(t, "rejected-session", verifier.ErrorInvalidVC); status != http.StatusBadRequest {
+		t.Errorf("Expected the wallet to get 400, got %d", status)
+	}
+	_ = page.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "rejected" || message["reason"] != rejectionCredentialNotAccepted {
+		t.Fatalf("Expected the page to be told about the rejection, got %v (err %v)", message, err)
+	}
+
+	if err := sendRedirect("rejected-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the page to still wait for the login, got %v", err)
+	}
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+		t.Errorf("Expected the login result, got %v (err %v)", message, err)
+	}
+}
+
+// TestHandleAuthenticationResponse_RejectionNotSent covers the answers no page is told about: a
+// session that does not exist (or was just completed by a concurrent response), and a connection
+// that did not present the page secret - which only exists with warn.
+func TestHandleAuthenticationResponse_RejectionNotSent(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	t.Run("no such session", func(t *testing.T) {
+		dial := startWsTestServer(t)
+		page := dial("completed-session")
+		var message map[string]interface{}
+		if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+			t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+		}
+		postAuthenticationResponse(t, "completed-session", verifier.ErrorNoSuchSession)
+		if err := sendRedirect("completed-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+			t.Fatalf("Expected the result to be delivered, got %v", err)
+		}
+		if err := page.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+			t.Errorf("Expected no rejection before the login result, got %v (err %v)", message, err)
+		}
+	})
+
+	t.Run("unauthenticated connection", func(t *testing.T) {
+		if err := SetWebSocketSessionBinding(WebSocketBindingWarn); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+		startWsTestServer(t)
+		serverURL := frontendVerifier.(*mockVerifier).mockHost
+		wsURL := "ws" + serverURL[len("http"):] + "/ws?state=custom-session"
+		custom, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {serverURL}})
+		if err != nil {
+			t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+		}
+		var message map[string]interface{}
+		_ = custom.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if err := custom.ReadJSON(&message); err != nil || message["type"] != "session" {
+			_ = custom.Close()
+			t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+		}
+		awaitServerSide(t, "custom-session", custom)
+
+		postAuthenticationResponse(t, "custom-session", verifier.ErrorInvalidVC)
+		if err := sendRedirect("custom-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+			t.Fatalf("Expected the result to be delivered, got %v", err)
+		}
+		if err := custom.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+			t.Errorf("An unauthenticated connection must not learn about rejections, got %v (err %v)", message, err)
+		}
+	})
 }

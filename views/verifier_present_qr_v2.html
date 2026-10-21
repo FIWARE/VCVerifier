@@ -151,6 +151,19 @@
                 </div>
             </div>
 
+            <div id="presentation-rejected" class="hidden mb-6 text-center" role="status">
+                <p data-i18n="presentation_rejected_title" class="text-sm font-bold text-red-500">A presentation
+                    for this login was rejected</p>
+                <p data-i18n="presentation_rejected_credential_not_accepted" data-rejection="credential_not_accepted"
+                    class="hidden text-[12px] text-gray-500">The credential was not accepted. You can try again.</p>
+                <p data-i18n="presentation_rejected_credential_type_not_requested"
+                    data-rejection="credential_type_not_requested" class="hidden text-[12px] text-gray-500">This
+                    credential is not one this service asks for. You can try again with another one.</p>
+                <p data-i18n="presentation_rejected_verification_failed" data-rejection="verification_failed"
+                    class="hidden text-[12px] text-gray-500">The presentation could not be verified. You can try
+                    again.</p>
+            </div>
+
             <div id="timer-section" class="hidden space-y-3 mb-6">
                 <div class="flex justify-between items-end px-1">
                     <span data-i18n="timer_label"

@@ -346,6 +346,60 @@ func sendRedirect(sessionId string, externalState string, code string, redirectU
 	return nil
 }
 
+// Categories of a rejected presentation, as shown on the login page. They are coarse on purpose:
+// the exact error helps debugging, so it goes to the logs, but it would also tell anyone probing
+// the verifier which check a forged presentation failed.
+const (
+	rejectionCredentialNotAccepted      = "credential_not_accepted"
+	rejectionCredentialTypeNotRequested = "credential_type_not_requested"
+	rejectionVerificationFailed         = "verification_failed"
+)
+
+// rejectionCategory maps the error a presentation was rejected with to what the page is told.
+func rejectionCategory(err error) string {
+	switch {
+	case errors.Is(err, verifier.ErrorNoValidCredentialTypeProvided), errors.Is(err, verifier.ErrorVerficationContextSetup):
+		return rejectionCredentialTypeNotRequested
+	case errors.Is(err, verifier.ErrorInvalidVC), errors.Is(err, verifier.ErrorInvalidVCHolder):
+		return rejectionCredentialNotAccepted
+	default:
+		return rejectionVerificationFailed
+	}
+}
+
+// sendRejection tells the page that a presentation for its session was rejected, if the
+// connection authenticated with the page secret and is still waiting. It reports whether it did.
+func (c *wsClient) sendRejection(category string) (bool, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if !c.authenticated || c.notified || c.rejected {
+		return false, nil
+	}
+	return true, c.writeJSONLocked(gin.H{"type": "rejected", "reason": category})
+}
+
+// notifyRejected tells the page waiting for a login that a presentation for it was rejected. The
+// session stays open, so the page keeps its QR code and the user can try again. Only a connection
+// that presented the page secret is told - in warn mode an unauthenticated one may be registered,
+// and anyone who knows the session id could otherwise read why presentations fail. Anyone can
+// post a bad presentation for a session whose id they saw, so the page's wording stays neutral.
+func notifyRejected(sessionId string, err error) {
+	connection, exists := sessions.Load(sessionId)
+	if !exists {
+		return
+	}
+	category := rejectionCategory(err)
+	sent, writeErr := connection.(*wsClient).sendRejection(category)
+	switch {
+	case writeErr != nil:
+		logging.Log().Warnf("Was not able to tell the login page of session %s that a presentation was rejected. Err: %v", sessionId, writeErr)
+	case sent:
+		logging.Log().Infof("Told the login page of session %s that a presentation was rejected (%s).", sessionId, category)
+	default:
+		logging.Log().Debugf("Did not tell the login page of session %s about a rejected presentation: its connection is not authenticated or no longer waiting.", sessionId)
+	}
+}
+
 // closeWebSocket tells the page why it may no longer wait for its login, then closes the
 // connection with the given close code.
 func closeWebSocket(connection *websocket.Conn, sessionId string, message gin.H, closeCode int, reason string) {
