@@ -129,6 +129,8 @@ class AppManager {
       if (wsUrl) this.#connectWebSocket(wsUrl);
     });
 
+    document.getElementById('continue-here')?.addEventListener('click', () => this.#continueHere());
+
     document.addEventListener("DOMContentLoaded", function () {
       const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       const walletButtonContainer = document.querySelector('#openWallet');
@@ -193,6 +195,7 @@ class AppManager {
     document.getElementById('ws-connecting')?.classList.add('hidden');
     document.getElementById('qrcode')?.classList.add('hidden');
     document.getElementById('timer-section')?.classList.add('hidden');
+    document.getElementById('presentation-rejected')?.classList.add('hidden');
     const panel = document.getElementById(panelId);
     if (panel) {
       panel.classList.remove('hidden');
@@ -203,6 +206,43 @@ class AppManager {
   #handleSessionInvalid() {
     this.#finishWebSocket();
     this.#showWebSocketError('session-invalid');
+  }
+
+  // The server did not accept this page's secret: a stale page, or a customised page that does not
+  // send it. No reconnect can fix that.
+  #handlePageUnauthorized(reason) {
+    console.error(`WebSocket rejected (${reason}): the page did not present a valid secret. A customised login page must send the wsSecret meta value as {"type":"auth","secret":...} on every connection.`);
+    this.#finishWebSocket();
+    this.#showWebSocketError('page-unauthorized');
+  }
+
+  // The page was opened in another tab as well, and the newer tab took the login over. Reconnecting
+  // on its own would take it back and the two tabs would keep replacing each other, so this one
+  // waits until the user asks to continue here.
+  #handleReplaced() {
+    this.#finishWebSocket();
+    this.#showWebSocketError('another-tab');
+  }
+
+  // A presentation for this login was rejected. The session stays open and the QR code valid, so
+  // the user can try again; anyone who saw the QR can cause this, so it is only a notice.
+  #showRejection(reason) {
+    const notice = document.getElementById('presentation-rejected');
+    if (!notice) return;
+    const details = notice.querySelectorAll('[data-rejection]');
+    const known = Array.from(details).some(el => el.getAttribute('data-rejection') === reason);
+    details.forEach(el => el.classList.toggle('hidden', el.getAttribute('data-rejection') !== (known ? reason : 'verification_failed')));
+    notice.classList.remove('hidden');
+  }
+
+  #continueHere() {
+    const panel = document.getElementById('another-tab');
+    panel?.classList.add('hidden');
+    panel?.classList.remove('flex');
+    document.getElementById('ws-connecting')?.classList.remove('hidden');
+    this.socketFinished = false;
+    this.reconnectAttempts = 0;
+    this.#connectWebSocket(this.config.get('wsUrl'));
   }
 
   // Delay before the given reconnect attempt: 1s, 2s, 4s, 8s, then 10s.
@@ -218,13 +258,12 @@ class AppManager {
     const socket = new WebSocket(url);
     this.socket = socket;
 
+    // Every connection first presents the page's secret: the session id is in the QR, so only the
+    // secret shows that this is the page that started the login. The server registers the
+    // connection, and answers with "session", only once it checked it.
     socket.onopen = () => {
       console.log('WebSocket connected');
-      this.socketEverConnected = true;
-      this.reconnectAttempts = 0;
-      document.getElementById('ws-connecting')?.classList.add('hidden');
-      document.getElementById('qrcode')?.classList.remove('hidden');
-      document.getElementById('timer-section')?.classList.remove('hidden');
+      socket.send(JSON.stringify({ type: 'auth', secret: this.config.get('wsSecret', '') }));
     }
     socket.onerror = (err) => {
       // always followed by onclose, which decides whether to reconnect
@@ -233,9 +272,15 @@ class AppManager {
 
     socket.onclose = (e) => {
       if (this.socketFinished || socket !== this.socket) return;
-      // the server closes with 4403 when the session no longer exists; no reconnect can succeed
+      // the server closes with 4403 when the session no longer exists or the page could not
+      // authenticate; no reconnect can succeed
       if (e.code === 4403) {
         this.#handleSessionInvalid();
+        return;
+      }
+      // 4409: a newer connection of this page, in another tab, took over
+      if (e.code === 4409) {
+        this.#handleReplaced();
         return;
       }
       const maxReconnectAttempts = this.socketEverConnected ? 6 : 2;
@@ -257,6 +302,11 @@ class AppManager {
         switch (message.type) {
           case "session":
             console.log("Session initiated")
+            this.socketEverConnected = true;
+            this.reconnectAttempts = 0;
+            document.getElementById('ws-connecting')?.classList.add('hidden');
+            document.getElementById('qrcode')?.classList.remove('hidden');
+            document.getElementById('timer-section')?.classList.remove('hidden');
             break
           case "authenticated":
             console.log("Redirect initiated " + message.redirectUrl)
@@ -265,8 +315,23 @@ class AppManager {
             break
 
           case "error":
-            console.log("Session error: " + message.reason)
-            this.#handleSessionInvalid();
+            // the close event (4403) follows; #finishWebSocket makes it a no-op
+            if (message.reason === 'session_not_found') {
+              console.log("Session error: " + message.reason)
+              this.#handleSessionInvalid();
+            } else {
+              this.#handlePageUnauthorized(message.reason);
+            }
+            break
+
+          case "replaced":
+            console.log("The login continues in another tab")
+            this.#handleReplaced();
+            break
+
+          case "rejected":
+            console.log("A presentation was rejected: " + message.reason)
+            this.#showRejection(message.reason);
             break
         }
       } catch (err) {

@@ -8,6 +8,7 @@
     <title>Verificador OpenID4VC</title>
     <link rel="icon" type="image/x-icon" href="{{.prefix}}/static/img/favicon.ico">
     <meta name="wsUrl" content="{{.wsUrl}}">
+    <meta name="wsSecret" content="{{.wsSecret}}">
     <meta name="qrDuration" content="{{.qrDuration}}">
     <meta name="qrExpireAt" content="{{.qrExpireAt}}">
     <meta name="basePath" content="{{.prefix}}">
@@ -108,6 +109,36 @@
                     </button>
                 </div>
 
+                <div id="page-unauthorized" class="hidden flex-col items-center justify-center py-8 px-10">
+                    <svg class="w-12 h-12 text-red-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <p data-i18n="page_unauthorized_title" class="text-sm font-bold text-gray-900">This page can no
+                        longer complete the login</p>
+                    <p data-i18n="page_unauthorized_desc" class="text-[12px] text-gray-500 mb-3">Start the login
+                        again to get a new code.</p>
+                    <button onclick="window.location.reload()" data-i18n="page_unauthorized_restart"
+                        class="bg-primary text-white text-xs px-4 py-2 rounded-full hover:scale-105 transition-transform font-bold">
+                        Start again
+                    </button>
+                </div>
+
+                <div id="another-tab" class="hidden flex-col items-center justify-center py-8 px-10">
+                    <svg class="w-12 h-12 text-red-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <p data-i18n="another_tab_title" class="text-sm font-bold text-gray-900">Login continues in
+                        another tab</p>
+                    <p data-i18n="another_tab_desc" class="text-[12px] text-gray-500 mb-3">This login was opened
+                        in another tab or window.</p>
+                    <button id="continue-here" data-i18n="another_tab_continue"
+                        class="bg-primary text-white text-xs px-4 py-2 rounded-full hover:scale-105 transition-transform font-bold">
+                        Continue here
+                    </button>
+                </div>
+
                 <div id="qrcode" class="hidden">
                     <img src="{{.qrcode}}" alt="the qr.">
                 </div>
@@ -133,6 +164,20 @@
                         <span data-i18n="open_wallet" class="text-primary">Open in Wallet</span>
                     </a>
                 </div>
+            </div>
+
+            <div id="presentation-rejected" class="hidden mb-6 text-center" role="status">
+                <p data-i18n="presentation_rejected_title" class="text-sm font-bold text-red-500">A presentation
+                    for this login was rejected</p>
+                <p data-i18n="presentation_rejected_credential_not_accepted" data-rejection="credential_not_accepted"
+                    class="hidden text-[12px] text-gray-500">The presented credential was not accepted.</p>
+                <p data-i18n="presentation_rejected_credential_type_not_requested"
+                    data-rejection="credential_type_not_requested" class="hidden text-[12px] text-gray-500">The
+                    presented credential is not accepted for this login.</p>
+                <p data-i18n="presentation_rejected_server_error" data-rejection="server_error"
+                    class="hidden text-[12px] text-gray-500">Something went wrong on our side. You can try again.</p>
+                <p data-i18n="presentation_rejected_verification_failed" data-rejection="verification_failed"
+                    class="hidden text-[12px] text-gray-500">The presentation could not be verified.</p>
             </div>
 
             <div id="timer-section" class="hidden space-y-3 mb-6">

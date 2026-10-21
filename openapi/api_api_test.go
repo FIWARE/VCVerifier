@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/fiware/VCVerifier/common"
@@ -58,6 +59,12 @@ type mockVerifier struct {
 	mockHost                string
 	// sessions HasLoginSession reports as gone; every other session exists
 	mockMissingSessions map[string]bool
+	// guards mockMissingSessions once WebSocket handlers may read it (see endSession)
+	sessionsMu sync.Mutex
+	// the secret CheckLoginPageSecret accepts for every open session
+	mockPageSecret string
+	// what ReturnLoginQRV2 returns, if set
+	mockQRInfo *verifier.QRLoginInfo
 	// called by HasLoginSession before it answers
 	mockOnHasLoginSession func(sessionId string)
 	// codes passed to ReleaseUndeliveredCode, by session id
@@ -68,7 +75,33 @@ func (mV *mockVerifier) HasLoginSession(sessionId string) bool {
 	if mV.mockOnHasLoginSession != nil {
 		mV.mockOnHasLoginSession(sessionId)
 	}
-	return !mV.mockMissingSessions[sessionId]
+	return !mV.isSessionMissing(sessionId)
+}
+
+func (mV *mockVerifier) isSessionMissing(sessionId string) bool {
+	mV.sessionsMu.Lock()
+	defer mV.sessionsMu.Unlock()
+	return mV.mockMissingSessions[sessionId]
+}
+
+// endSession makes the session gone, like a completed or expired login, while handlers may run.
+func (mV *mockVerifier) endSession(sessionId string) {
+	mV.sessionsMu.Lock()
+	defer mV.sessionsMu.Unlock()
+	if mV.mockMissingSessions == nil {
+		mV.mockMissingSessions = map[string]bool{}
+	}
+	mV.mockMissingSessions[sessionId] = true
+}
+
+func (mV *mockVerifier) CheckLoginPageSecret(sessionId string, secret string) error {
+	if mV.isSessionMissing(sessionId) {
+		return verifier.ErrorNoSuchSession
+	}
+	if secret != mV.mockPageSecret {
+		return verifier.ErrorLoginPageSecretMismatch
+	}
+	return nil
 }
 
 func (mV *mockVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {
@@ -83,6 +116,9 @@ func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback str
 	return mV.mockQR, mV.mockError
 }
 func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string) (qrInfo verifier.QRLoginInfo, err error) {
+	if mV.mockQRInfo != nil {
+		return *mV.mockQRInfo, mV.mockError
+	}
 	return verifier.QRLoginInfo{QR: mV.mockQR}, mV.mockError
 }
 func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (connectionString string, err error) {
