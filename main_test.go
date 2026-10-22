@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/database"
@@ -568,6 +569,52 @@ func TestGetRouter_CountsApiRequestsInMetrics(t *testing.T) {
 
 	assert.Contains(t, scrapeMetrics(t, router), `gin_uri_request_total{code="400",method="GET",uri="/api/v2/loginQR"}`,
 		"requests to the API routes must be counted")
+}
+
+func TestInitMetricsServer_DefaultServesMetricsOnVerifierPort(t *testing.T) {
+	router := getRouter("")
+	configuration := &config.Configuration{Server: config.Server{Port: 8080}}
+
+	metricsSrv := initMetricsServer(configuration, router)
+
+	assert.Nil(t, metricsSrv, "no separate server must be created without server.metricsPort")
+	scrapeMetrics(t, router)
+}
+
+func TestInitMetricsServer_SeparatePort(t *testing.T) {
+	router := getRouter("")
+	router.GET("/health", HealthReq)
+	configuration := &config.Configuration{Server: config.Server{
+		Port: 8080, MetricsPort: 9090, ReadTimeout: 5, WriteTimeout: 60, IdleTimeout: 120,
+	}}
+
+	metricsSrv := initMetricsServer(configuration, router)
+	require.NotNil(t, metricsSrv, "a separate server must be created for server.metricsPort")
+	assert.Equal(t, "0.0.0.0:9090", metricsSrv.Addr)
+	assert.Equal(t, 60*time.Second, metricsSrv.WriteTimeout)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code, "/metrics must not be served on the verifier port")
+
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code, "/health must stay on the verifier port")
+
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	w = httptest.NewRecorder()
+	metricsSrv.Handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code, "/health must also be served on the metrics port")
+
+	// a request to the verifier port is visible on the metrics port
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/loginQR", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, scrapeMetrics(t, metricsSrv.Handler), `gin_uri_request_total{code="400",method="GET",uri="/api/v1/loginQR"}`,
+		"requests to the verifier port must be counted on the metrics port")
 }
 
 // Ensure init() sets gin to test mode without interfering with other tests
