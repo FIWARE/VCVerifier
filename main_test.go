@@ -546,6 +546,30 @@ func TestGetRouter_HealthAndMetricsStayUnprefixed(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code, "/health must not additionally be available under the prefix")
 }
 
+// scrapeMetrics returns the /metrics output served by the given router.
+func scrapeMetrics(t *testing.T, router http.Handler) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "/metrics must be served")
+	return w.Body.String()
+}
+
+func TestGetRouter_CountsApiRequestsInMetrics(t *testing.T) {
+	router := getRouter("")
+	getMetricsMonitor().Expose(router)
+
+	// answers 400 without a configured verifier, which is enough to be counted
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/loginQR", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+
+	assert.Contains(t, scrapeMetrics(t, router), `gin_uri_request_total{code="400",method="GET",uri="/api/v2/loginQR"}`,
+		"requests to the API routes must be counted")
+}
+
 // Ensure init() sets gin to test mode without interfering with other tests
 func init() {
 	gin.SetMode(gin.TestMode)

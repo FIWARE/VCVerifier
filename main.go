@@ -162,10 +162,8 @@ func main() {
 		router.LoadHTMLGlob(templateDir)
 	}
 
-	// initiate metrics
-	metrics := ginmetrics.GetMonitor()
-	metrics.SetMetricPath("/metrics")
-	metrics.Use(router)
+	// expose the metrics collected by the interceptor installed in getRouter
+	getMetricsMonitor().Expose(router)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("0.0.0.0:%v", configuration.Server.Port),
@@ -298,6 +296,9 @@ func getRouter(pathPrefix string) *gin.Engine {
 	router := gin.New()
 
 	router.Use(logging.GinHandlerFunc(), gin.Recovery())
+	// gin only applies middleware to routes registered after it, so the metrics interceptor
+	// has to be in place before the API routes are added
+	getMetricsMonitor().UseWithoutExposingEndpoint(router)
 
 	group := router.Group(pathPrefix)
 	for _, route := range api.NewRouter().Routes() {
@@ -305,6 +306,13 @@ func getRouter(pathPrefix string) *gin.Engine {
 	}
 
 	return router
+}
+
+// getMetricsMonitor returns the shared gin-metrics monitor, serving its metrics at /metrics.
+func getMetricsMonitor() *ginmetrics.Monitor {
+	metrics := ginmetrics.GetMonitor()
+	metrics.SetMetricPath("/metrics")
+	return metrics
 }
 
 // allow override of the config-file on init. Everything else happens on main to improve testability
