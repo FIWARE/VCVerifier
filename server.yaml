@@ -1,5 +1,7 @@
 server:
     port: 8080
+    # Serve /metrics (and a copy of /health) on a separate port instead of on `port` (default 0: same port).
+    # metricsPort: 9090
     # Keepalive of the login WebSocket that delivers the result of a QR login to the browser.
     # The ping interval (seconds) must stay below the shortest idle timeout of any proxy or load
     # balancer in front of the verifier; the pong timeout must be greater than the interval.

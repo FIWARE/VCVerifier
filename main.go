@@ -162,10 +162,9 @@ func main() {
 		router.LoadHTMLGlob(templateDir)
 	}
 
-	// initiate metrics
-	metrics := ginmetrics.GetMonitor()
-	metrics.SetMetricPath("/metrics")
-	metrics.Use(router)
+	// expose the metrics collected by the interceptor installed in getRouter, either on a
+	// separate port or, by default, together with the API
+	metricsSrv := initMetricsServer(&configuration, router)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("0.0.0.0:%v", configuration.Server.Port),
@@ -195,6 +194,17 @@ func main() {
 		}()
 	}
 
+	// Start the metrics server if a separate metrics port is configured
+	if metricsSrv != nil {
+		go func() {
+			logging.Log().Infof("Starting metrics server on port %v", configuration.Server.MetricsPort)
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logging.Log().Errorf("Failed to start metrics server: %v", err)
+				os.Exit(1)
+			}
+		}()
+	}
+
 	// --- Graceful Shutdown Logic ---
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -219,6 +229,13 @@ func main() {
 	// Shut down the verifier server
 	if err := srv.Shutdown(ctx); err != nil {
 		logging.Log().Errorf("Verifier server forced to shutdown: %v", err)
+	}
+
+	// Shut down the metrics server last, so the shutdown of the others can still be observed
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(ctx); err != nil {
+			logging.Log().Errorf("Metrics server forced to shutdown: %v", err)
+		}
 	}
 
 	logging.Log().Info("All servers exiting gracefully")
@@ -298,6 +315,9 @@ func getRouter(pathPrefix string) *gin.Engine {
 	router := gin.New()
 
 	router.Use(logging.GinHandlerFunc(), gin.Recovery())
+	// gin only applies middleware to routes registered after it, so the metrics interceptor
+	// has to be in place before the API routes are added
+	getMetricsMonitor().UseWithoutExposingEndpoint(router)
 
 	group := router.Group(pathPrefix)
 	for _, route := range api.NewRouter().Routes() {
@@ -305,6 +325,42 @@ func getRouter(pathPrefix string) *gin.Engine {
 	}
 
 	return router
+}
+
+// initMetricsServer exposes /metrics. Without server.metricsPort it is added to the verifier
+// router and nil is returned. Otherwise it is served, together with /health, by a separate
+// HTTP server on that port, which the caller has to start.
+func initMetricsServer(configuration *configModel.Configuration, router *gin.Engine) *http.Server {
+	if configuration.Server.MetricsPort == 0 {
+		getMetricsMonitor().Expose(router)
+		return nil
+	}
+
+	srv := &http.Server{
+		Addr:         fmt.Sprintf("0.0.0.0:%v", configuration.Server.MetricsPort),
+		Handler:      getMetricsRouter(),
+		ReadTimeout:  time.Duration(configuration.Server.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(configuration.Server.WriteTimeout) * time.Second,
+		IdleTimeout:  time.Duration(configuration.Server.IdleTimeout) * time.Second,
+	}
+	logging.Log().Infof("Metrics server configured on port %v", configuration.Server.MetricsPort)
+	return srv
+}
+
+// getMetricsRouter creates the router of the separate metrics port, serving /metrics and /health.
+func getMetricsRouter() *gin.Engine {
+	router := gin.New()
+	router.Use(logging.GinHandlerFunc(), gin.Recovery())
+	router.GET("/health", HealthReq)
+	getMetricsMonitor().Expose(router)
+	return router
+}
+
+// getMetricsMonitor returns the shared gin-metrics monitor, serving its metrics at /metrics.
+func getMetricsMonitor() *ginmetrics.Monitor {
+	metrics := ginmetrics.GetMonitor()
+	metrics.SetMetricPath("/metrics")
+	return metrics
 }
 
 // allow override of the config-file on init. Everything else happens on main to improve testability
