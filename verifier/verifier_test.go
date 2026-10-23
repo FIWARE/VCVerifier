@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -753,6 +754,54 @@ func TestReturnLoginQRV2_UsesGeneratedSessionId(t *testing.T) {
 	assert.False(t, found, "the external state must not be a session key")
 }
 
+// TestCheckLoginPageSecret covers the secret a cross-device v2 login page uses to authenticate
+// its WebSocket: only the page that got it from ReturnLoginQRV2 passes, and the session keeps
+// nothing but its hash.
+func TestCheckLoginPageSecret(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	sessionCache := cache.New(time.Minute, time.Minute)
+	verifier := CredentialVerifier{
+		host:                  "verifier.org",
+		did:                   "did:key:verifier",
+		sessionCache:          sessionCache,
+		sessionDuration:       time.Minute,
+		nonceGenerator:        &mockNonceGenerator{staticValues: []string{"session-id", "the-page-secret"}},
+		tokenSigner:           mockTokenSigner{},
+		clock:                 mockClock{},
+		credentialsConfig:     mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
+		supportedRequestModes: []string{REQUEST_MODE_URL_ENCODED},
+		clientIdentification:  configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
+	}
+	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	assert.NoError(t, err)
+	assert.Equal(t, "the-page-secret", qrInfo.PageSecret)
+	assert.NotContains(t, qrInfo.QR+qrInfo.AuthenticationRequest, "the-page-secret", "the secret must never reach the QR")
+
+	stored, _ := sessionCache.Get("session-id")
+	assert.Equal(t, sha256.Sum256([]byte("the-page-secret")), stored.(loginSession).pageSecretHash, "the session keeps the hash only")
+
+	sessionCache.SetDefault("v1-session", loginSession{version: CROSS_DEVICE_V1, sessionId: "v1-session"})
+
+	tests := []struct {
+		testName      string
+		sessionId     string
+		secret        string
+		expectedError error
+	}{
+		{"the page's own secret is accepted", "session-id", "the-page-secret", nil},
+		{"another secret is rejected", "session-id", "another-secret", ErrorLoginPageSecretMismatch},
+		{"a missing secret is rejected", "session-id", "", ErrorLoginPageSecretMismatch},
+		{"an unknown session is reported as such", "unknown-session", "the-page-secret", ErrorNoSuchSession},
+		{"a session without a login page is rejected", "v1-session", "", ErrorLoginPageSecretMismatch},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			assert.Equal(t, tc.expectedError, verifier.CheckLoginPageSecret(tc.sessionId, tc.secret))
+		})
+	}
+}
+
 func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
@@ -954,7 +1003,7 @@ func TestInitOid4VPCrossDevice_ResponseUriIncludesPathPrefix(t *testing.T) {
 	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	_, authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE)
+	_, _, authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE)
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }
@@ -1125,7 +1174,7 @@ func TestAuthenticationResponse(t *testing.T) {
 			verifier := CredentialVerifier{did: "did:key:verifier", signingKey: testKey, tokenCache: &tokenCache, redeemedCodes: cache.New(time.Minute, time.Minute), sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, validationServices: validationServices, clock: mockClock{}, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"}}
 
 			sameDeviceResponse, err := verifier.AuthenticationResponse(tc.requestedState, &tc.testVP)
-			if err != tc.expectedError {
+			if !errors.Is(err, tc.expectedError) {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
 			}
 			if tc.testSession != (loginSession{}) && tc.requestedState == tc.testState {
@@ -1514,6 +1563,22 @@ func TestAuthenticationResponse_CallbackFailsWhileCodeIsExchanged(t *testing.T) 
 
 	close(signer.release)
 	assert.NoError(t, <-exchanged, "the exchange must still succeed")
+}
+
+// TestAuthenticationResponse_CompletionFailureIsMarked checks that a failure on the verifier's
+// side after the presentation was verified is marked as such, so the login page is not told
+// that the credential was rejected, and that the session stays open for a retry.
+func TestAuthenticationResponse_CompletionFailureIsMarked(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, sessionCache, tokenCache := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V2)
+	// the code the response will get is taken, so storing the token fails
+	tokenCache.SetDefault("code-1", tokenStore{})
+
+	vp := getVP([]string{"vc"})
+	_, err := verifier.AuthenticationResponse("session-id", &vp)
+	assert.ErrorIs(t, err, ErrorLoginCompletionFailed)
+	_, found := sessionCache.Get("session-id")
+	assert.True(t, found, "a login that could not be completed must not consume the session")
 }
 
 // TestReleaseCode_BeforeExchange checks the other order: a code released first is gone for the

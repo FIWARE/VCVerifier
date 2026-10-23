@@ -8,6 +8,7 @@ server:
   ShutdownTimeout:  400
   webSocketPingInterval: 15
   webSocketPongTimeout: 40
+  webSocketSessionBinding: warn
 logging:
   level: "DEBUG"
   jsonLogging: true

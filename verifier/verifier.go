@@ -6,6 +6,8 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -81,6 +83,11 @@ var ErrorNoSigningKey = errors.New("no_signing_key_available")
 var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
+var ErrorLoginPageSecretMismatch = errors.New("login_page_secret_mismatch")
+
+// ErrorLoginCompletionFailed wraps a failure on the verifier's side after the presentation was
+// verified, so it is not reported as a rejected credential.
+var ErrorLoginCompletionFailed = errors.New("login_completion_failed")
 var ErrorCallbackRejected = errors.New("callback_rejected_by_requestor")
 var ErrorInvalidClientCallbackTimeout = errors.New("invalid_client_callback_timeout")
 var ErrorClientCallbackTimeoutExceedsWriteTimeout = errors.New("client_callback_timeout_not_below_server_write_timeout")
@@ -119,6 +126,10 @@ type QRLoginInfo struct {
 	ExpireAt              time.Time
 	TotalDuration         int
 	AuthenticationRequest string
+	// PageSecret authenticates the login page's WebSocket for the session (see
+	// CheckLoginPageSecret). It is handed to the page that shows the QR and nowhere else: never
+	// put it in the QR, a URL or a log.
+	PageSecret string
 }
 
 // verifier interface
@@ -132,6 +143,10 @@ type Verifier interface {
 	AuthenticationResponse(state string, verifiablePresentation *common.Presentation) (sameDevice Response, err error)
 	// HasLoginSession reports whether a login session is still open - not expired, not completed
 	HasLoginSession(sessionId string) bool
+	// CheckLoginPageSecret checks the secret a login page presents for its cross-device v2
+	// session: ErrorNoSuchSession if the session is not open, ErrorLoginPageSecretMismatch if
+	// the secret is not the one handed to the page that started it
+	CheckLoginPageSecret(sessionId string, secret string) error
 	// ReleaseUndeliveredCode restores the login session of a cross-device v2 login whose code
 	// could not be handed to the browser, unless the code was already redeemed
 	ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool
@@ -336,6 +351,9 @@ type loginSession struct {
 	version int
 	// scope requested for the session
 	scope string
+	// SHA-256 of the secret handed to the login page of a cross-device v2 session, which its
+	// WebSocket has to present. Only the hash is kept, so a dump of the session cannot leak it.
+	pageSecretHash [sha256.Size]byte
 }
 
 // struct to represent a token, accessible through the token endpoint
@@ -654,7 +672,7 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 	}
 
 	logging.Log().Debugf("Generate a login qr for %s.", redircetUri)
-	sessionId, authenticationRequest, err := v.initOid4VPCrossDevice(host, protocol, redircetUri, state, clientId, scope, nonce, requestMode)
+	sessionId, pageSecret, authenticationRequest, err := v.initOid4VPCrossDevice(host, protocol, redircetUri, state, clientId, scope, nonce, requestMode)
 
 	if err != nil {
 		return qrInfo, err
@@ -676,6 +694,7 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 		ExpireAt:              expireAt,
 		TotalDuration:         int(v.sessionDuration),
 		AuthenticationRequest: authenticationRequest,
+		PageSecret:            pageSecret,
 	}
 	return qrInfo, err
 }
@@ -1231,7 +1250,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	token, err := v.generateJWT(credentialsToBeIncluded, verifiablePresentation.Holder, loginSession.clientId, flatClaims, loginSession.nonce)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)
-		return sameDevice, err
+		return sameDevice, fmt.Errorf("%w: %w", ErrorLoginCompletionFailed, err)
 	}
 
 	tokenStore := tokenStore{token: token, redirect_uri: loginSession.callback, clientId: loginSession.clientId,
@@ -1239,11 +1258,11 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	authorizationCode := v.nonceGenerator.GenerateNonce()
 	// store for retrieval by token endpoint
 	err = v.tokenCache.Add(authorizationCode, tokenStore, cache.DefaultExpiration)
-	logging.Log().Infof("Stored token for %s.", authorizationCode)
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the token %s in cache.", logging.PrettyPrintObject(tokenStore))
-		return sameDevice, err
+		return sameDevice, fmt.Errorf("%w: %w", ErrorLoginCompletionFailed, err)
 	}
+	logging.Log().Infof("Stored token for %s.", authorizationCode)
 	// A session is single-use. Responses are verified concurrently and the first one to get here
 	// redeems the session; any other that passed verification in the meantime finds it gone and
 	// discards its code. Nothing is locked during verification, so a slow or malicious response
@@ -1599,6 +1618,25 @@ func (v *CredentialVerifier) HasLoginSession(sessionId string) bool {
 	return found
 }
 
+// CheckLoginPageSecret checks the secret a login page presents for its session against the hash
+// stored when the session was created. Comparing the fixed-size hashes in constant time leaks
+// neither the secret nor its length. Only cross-device v2 sessions have a login page.
+func (v *CredentialVerifier) CheckLoginPageSecret(sessionId string, secret string) error {
+	sessionInterface, found := v.sessionCache.Get(sessionId)
+	if !found {
+		return ErrorNoSuchSession
+	}
+	session := sessionInterface.(loginSession)
+	if session.version != CROSS_DEVICE_V2 || session.pageSecretHash == ([sha256.Size]byte{}) {
+		return ErrorLoginPageSecretMismatch
+	}
+	presented := sha256.Sum256([]byte(secret))
+	if subtle.ConstantTimeCompare(presented[:], session.pageSecretHash[:]) != 1 {
+		return ErrorLoginPageSecretMismatch
+	}
+	return nil
+}
+
 // redeemSession removes the login session if it still exists and reports whether this call was
 // the one that removed it. Like sessionCache itself, the guarantee holds within one process.
 func (v *CredentialVerifier) redeemSession(sessionId string) bool {
@@ -1677,21 +1715,24 @@ func (v *CredentialVerifier) ReleaseUndeliveredCode(sessionId string, authorizat
 // intialize the OID4VP cross device flow
 // It returns the generated session id alongside the request, since the frontend needs it to
 // address the session (WebSocket, expiry) - the external state is not a lookup key.
-func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string, redirectUri string, state string, clientId string, scope string, nonce string, requestMode string) (sessionId string, authenticationRequest string, err error) {
+func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string, redirectUri string, state string, clientId string, scope string, nonce string, requestMode string) (sessionId string, pageSecret string, authenticationRequest string, err error) {
 
 	sessionId = v.nonceGenerator.GenerateNonce()
-	loginSession := loginSession{callback: redirectUri, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V2, scope: scope}
+	// The session id is in the QR, so anyone who sees the QR knows it. The page secret is what
+	// tells the page that started the login apart from them.
+	pageSecret = v.nonceGenerator.GenerateNonce()
+	loginSession := loginSession{callback: redirectUri, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V2, scope: scope, pageSecretHash: sha256.Sum256([]byte(pageSecret))}
 	err = v.sessionCache.Add(sessionId, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the login session %s in cache.", logging.PrettyPrintObject(loginSession))
-		return sessionId, authenticationRequest, err
+		return sessionId, "", authenticationRequest, err
 	}
 	logging.Log().Infof("Started cross-device (v2) login session %s for client %s, scope %s.", sessionId, clientId, scope)
 	authResponseUri := fmt.Sprintf("%s://%s%s/api/v1/authentication_response", protocol, host, v.pathPrefix)
 
 	authenticationRequest, err = v.generateAuthenticationRequest("openid4vp://", clientId, scope, authResponseUri, sessionId, nonce, loginSession, requestMode)
-	return sessionId, authenticationRequest, err
+	return sessionId, pageSecret, authenticationRequest, err
 }
 
 // initializes the cross-device siop flow
