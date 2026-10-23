@@ -62,7 +62,30 @@ func ReadConfig(configFile string) (configuration Configuration, err error) {
 		return
 	}
 
+	if err = validateServerPorts(&configuration); err != nil {
+		return
+	}
+
 	return configuration, nil
+}
+
+// validateServerPorts rejects a metrics port that collides with another listener, which would
+// otherwise only fail once the servers are started.
+func validateServerPorts(cfg *Configuration) error {
+	metricsPort := cfg.Server.MetricsPort
+	if metricsPort == 0 {
+		return nil
+	}
+	if metricsPort < 0 || metricsPort > 65535 {
+		return fmt.Errorf("invalid server.metricsPort %d, expected a port between 1 and 65535", metricsPort)
+	}
+	if metricsPort == cfg.Server.Port {
+		return fmt.Errorf("server.metricsPort %d must differ from server.port", metricsPort)
+	}
+	if cfg.ConfigServer.Enabled && metricsPort == cfg.ConfigServer.Port {
+		return fmt.Errorf("server.metricsPort %d must differ from configServer.port", metricsPort)
+	}
+	return nil
 }
 
 // validateEidasConfig rejects global eIDAS settings that cannot be honoured.

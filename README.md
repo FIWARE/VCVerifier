@@ -98,6 +98,10 @@ The configuration has to be provided via config-file. The file is either loaded 
 server:
     # port to bin to
     port: 8080
+    # separate port for the Prometheus metrics (/metrics) and a copy of the health check (/health), so that
+    # they are not published together with the API, e.g. by an ingress routing the whole host to `port`.
+    # Must differ from `port` and, when enabled, from `configServer.port`. 0 (the default) serves /metrics on `port`.
+    metricsPort: 0
     # folder to load the template pages from
     templateDir: "views/"
     # directory to load static content from
