@@ -314,13 +314,24 @@ func (c *wsClient) rejectIfSessionGone(sessionId string) bool {
 	if c.rejected {
 		return true
 	}
-	if c.notified || getFrontendVerifier().AwaitsLoginPage(sessionId) {
+	if c.notified || awaitsLoginPage(sessionId) {
 		return false
 	}
 	c.rejected = true
 	logging.Log().Infof("Rejected WebSocket for session %s: the session does not exist (expired, completed or never created).", sessionId)
 	closeWebSocket(c.conn, sessionId, gin.H{"type": "error", "reason": "session_not_found"}, wsCloseSessionInvalid, "session_not_found")
 	return true
+}
+
+// awaitsLoginPage reports whether a page may still wait on the session. With enforce that includes a
+// completed login whose code was not used yet, since a reconnecting page gets it. In warn mode no
+// page is handed a pending login (see deliverPendingLogin), so a page reconnecting after its session
+// was redeemed would only wait in front of a QR code that yields no_such_session.
+func awaitsLoginPage(sessionId string) bool {
+	if wsSessionBinding == WebSocketBindingEnforce {
+		return getFrontendVerifier().AwaitsLoginPage(sessionId)
+	}
+	return getFrontendVerifier().HasLoginSession(sessionId)
 }
 
 // replace tells the page that the login continues on a newer connection and closes this one,

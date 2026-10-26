@@ -1308,7 +1308,8 @@ func TestWsHandler_PendingLogin(t *testing.T) {
 	tests := []test{
 		{"the page reconnecting with its secret gets the result", WebSocketBindingEnforce, testPageSecret, "authenticated"},
 		{"a connection without the secret gets nothing", WebSocketBindingEnforce, "guessed", "error"},
-		{"in warn mode the result is not handed out", WebSocketBindingWarn, testPageSecret, "session"},
+		// warn: no page is handed a pending login, so it learns at once that its session is gone
+		{"in warn mode the result is not handed out", WebSocketBindingWarn, testPageSecret, "error"},
 	}
 
 	for _, tc := range tests {

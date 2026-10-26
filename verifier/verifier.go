@@ -1721,11 +1721,13 @@ func (v *CredentialVerifier) PendingLogin(sessionId string) (pending PendingLogi
 type droppedPendingLogin struct{}
 
 // logUncollectedLogin is the OnEvicted callback of pendingLogins: a pending login that expires was
-// never redeemed at the token endpoint - its page did not come back, or never got the result. The
-// wallet was told that the login succeeded, so this is what explains a user who did not get in.
+// never redeemed at the token endpoint - its page did not come back or never got the result, or the
+// client did not redeem the code it was redirected with. The wallet was told that the login
+// succeeded, so this is what explains a user who did not get in. go-cache evicts on its cleanup
+// interval, so this comes up to two session lifetimes after the code expired.
 func logUncollectedLogin(sessionId string, value interface{}) {
 	if _, uncollected := value.(PendingLogin); uncollected {
-		logging.Log().Infof("Login session %s completed, but its code expired without being exchanged: the login page did not collect the result. The wallet was told that the login succeeded.", sessionId)
+		logging.Log().Infof("Login session %s completed, but its code expired without being exchanged at the token endpoint: the login page did not collect the result, or the client did not redeem the code. The wallet was told that the login succeeded.", sessionId)
 	}
 }
 
