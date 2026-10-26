@@ -221,15 +221,18 @@ class AppManager {
     const hiddenFor = this.hiddenAt === null ? 0 : Date.now() - this.hiddenAt;
     this.hiddenAt = null;
     if (this.socketFinished) return;
-    clearTimeout(this.reconnectTimer);
-    this.reconnectAttempts = 0;
     if (this.expired) {
       console.log(`Page visible again after ${hiddenFor}ms, asking for a login that completed meanwhile`);
+      clearTimeout(this.reconnectTimer);
+      this.reconnectAttempts = 0;
       this.#collectLogin();
       return;
     }
+    // a reconnect already scheduled stays scheduled
     if (hiddenFor < 2000) return;
     console.log(`Page visible again after ${hiddenFor}ms, reconnecting`);
+    clearTimeout(this.reconnectTimer);
+    this.reconnectAttempts = 0;
     this.#connectWebSocket(this.config.get('wsUrl'));
   }
 
