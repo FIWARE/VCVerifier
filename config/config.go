@@ -112,6 +112,9 @@ type Server struct {
 	Host string `mapstructure:"host"`
 	// port to bind the server
 	Port int `mapstructure:"port" default:"8080"`
+	// MetricsPort, when set, serves /metrics (and a copy of /health) on this separate port
+	// instead of on port, so they are not published together with the API. 0 keeps /metrics on port.
+	MetricsPort int `mapstructure:"metricsPort" default:"0"`
 	// directory to read the template(s) from
 	TemplateDir string `mapstructure:"templateDir" default:"views/"`
 	// directory of static files to be provided, f.e. to be used inside the templates

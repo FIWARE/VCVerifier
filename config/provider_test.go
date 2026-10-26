@@ -484,3 +484,48 @@ func TestReadConfigVCDataModelVersionsUnquoted(t *testing.T) {
 	assert.Equal(t, []string{"1.1", "2"}, gotConfig.Verifier.VCDataModelVersions,
 		"an unquoted YAML version list is decoded as floats, dropping the fractional zero")
 }
+
+// TestReadConfig_MetricsPort verifies that server.metricsPort is read from YAML
+// and stays disabled (0) when not configured.
+func TestReadConfig_MetricsPort(t *testing.T) {
+	config.Reset()
+	gotConfig, err := ReadConfig("data/config_test_metrics_port.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for a valid metrics port")
+	assert.Equal(t, 9090, gotConfig.Server.MetricsPort, "MetricsPort must match the configured value")
+
+	config.Reset()
+	gotConfig, err = ReadConfig("data/empty_test.yaml")
+	assert.NoError(t, err, "ReadConfig should not return an error for empty config")
+	assert.Equal(t, 0, gotConfig.Server.MetricsPort, "MetricsPort must default to 0, keeping /metrics on the main port")
+}
+
+func TestValidateServerPorts(t *testing.T) {
+	tests := []struct {
+		name    string
+		server  Server
+		cfgSrv  ConfigServer
+		wantErr string
+	}{
+		{name: "metrics port not set", server: Server{Port: 8080}},
+		{name: "separate metrics port", server: Server{Port: 8080, MetricsPort: 9090}},
+		{name: "metrics port equal to the config port of a disabled config server",
+			server: Server{Port: 8080, MetricsPort: 8090}, cfgSrv: ConfigServer{Enabled: false, Port: 8090}},
+		{name: "metrics port equal to server port",
+			server: Server{Port: 8080, MetricsPort: 8080}, wantErr: "must differ from server.port"},
+		{name: "metrics port equal to the config server port",
+			server: Server{Port: 8080, MetricsPort: 8090}, cfgSrv: ConfigServer{Enabled: true, Port: 8090}, wantErr: "must differ from configServer.port"},
+		{name: "negative metrics port", server: Server{Port: 8080, MetricsPort: -1}, wantErr: "invalid server.metricsPort"},
+		{name: "metrics port out of range", server: Server{Port: 8080, MetricsPort: 70000}, wantErr: "invalid server.metricsPort"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateServerPorts(&Configuration{Server: tc.server, ConfigServer: tc.cfgSrv})
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+}
