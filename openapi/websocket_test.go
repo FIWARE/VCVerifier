@@ -3,8 +3,11 @@ package openapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -207,31 +210,69 @@ func startWsTestServer(t *testing.T) func(sessionId string) *websocket.Conn {
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 
-	frontendVerifier = &mockVerifier{mockHost: server.URL}
+	frontendVerifier = &mockVerifier{mockHost: server.URL, mockPageSecret: testPageSecret}
 	t.Cleanup(func() { frontendVerifier = nil })
+	// runs before the line above: connections the test could not wait for - those that wait
+	// unregistered, for instance - must have finished before shared state is reset
+	t.Cleanup(func() { waitForWsConnections(t) })
 
 	return func(sessionId string) *websocket.Conn {
 		t.Helper()
 		previous := registeredClient(sessionId)
-		wsURL := "ws" + server.URL[len("http"):] + "/ws?state=" + sessionId
-		conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {server.URL}})
-		if err != nil {
-			t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
-		}
+		conn := dialWebSocket(t, server.URL, sessionId, testPageSecret)
 		waitFor(t, func() bool { c := registeredClient(sessionId); return c != nil && c != previous }, "the connection was registered")
-		client := registeredClient(sessionId)
-		// the server-side goroutines outlive the client; let them finish before the next test
-		// reconfigures shared state such as the logger
-		t.Cleanup(func() {
-			_ = conn.Close()
-			select {
-			case <-client.closed:
-			case <-time.After(3 * time.Second):
-				t.Errorf("The server side of session %s did not shut down.", sessionId)
-			}
-		})
+		awaitServerSide(t, sessionId, conn)
 		return conn
 	}
+}
+
+// awaitServerSide closes a registered connection when the test ends and waits for its server-side
+// goroutines: they outlive the client, and must finish before the next test reconfigures shared
+// state such as the logger.
+func awaitServerSide(t *testing.T, sessionId string, conn *websocket.Conn) {
+	t.Helper()
+	client := registeredClient(sessionId)
+	t.Cleanup(func() {
+		_ = conn.Close()
+		select {
+		case <-client.closed:
+		case <-time.After(3 * time.Second):
+			t.Errorf("The server side of session %s did not shut down.", sessionId)
+		}
+	})
+}
+
+// waitForWsConnections waits until no login WebSocket handler or goroutine runs any more.
+func waitForWsConnections(t *testing.T) {
+	t.Helper()
+	finished := make(chan struct{})
+	go func() {
+		wsConnections.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Errorf("Login WebSocket connections were still running after the test.")
+	}
+}
+
+// testPageSecret is the login page secret the mock verifier accepts in the WebSocket tests.
+const testPageSecret = "the-page-secret"
+
+// dialWebSocket opens the login WebSocket of a session the way the login page does: from the
+// verifier's own origin, presenting the page secret as its first message.
+func dialWebSocket(t *testing.T, serverURL string, sessionId string, secret string) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + serverURL[len("http"):] + "/ws?state=" + sessionId
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {serverURL}})
+	if err != nil {
+		t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+	}
+	if err := conn.WriteJSON(map[string]string{"type": "auth", "secret": secret}); err != nil {
+		t.Fatalf("Expected the authentication message to be sent, got %v", err)
+	}
+	return conn
 }
 
 // withWsTiming shortens the keepalive timing for the duration of a test.
@@ -390,14 +431,10 @@ func TestWsHandler_RejectsUnknownSession(t *testing.T) {
 	server := httptest.NewServer(router)
 	defer server.Close()
 
-	frontendVerifier = &mockVerifier{mockHost: server.URL, mockMissingSessions: map[string]bool{"gone-session": true}}
+	frontendVerifier = &mockVerifier{mockHost: server.URL, mockPageSecret: testPageSecret, mockMissingSessions: map[string]bool{"gone-session": true}}
 	t.Cleanup(func() { frontendVerifier = nil })
 
-	wsURL := "ws" + server.URL[len("http"):] + "/ws?state=gone-session"
-	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {server.URL}})
-	if err != nil {
-		t.Fatalf("Expected the upgrade to succeed so the page can be told why, got %v (status %v)", err, statusOf(resp))
-	}
+	conn := dialWebSocket(t, server.URL, "gone-session", testPageSecret)
 	defer func() { _ = conn.Close() }()
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 
@@ -409,7 +446,7 @@ func TestWsHandler_RejectsUnknownSession(t *testing.T) {
 		t.Errorf("Unexpected message %v", message)
 	}
 
-	_, _, err = conn.ReadMessage()
+	_, _, err := conn.ReadMessage()
 	if !websocket.IsCloseError(err, wsCloseSessionInvalid) {
 		t.Errorf("Expected the connection to be closed with %d, got %v", wsCloseSessionInvalid, err)
 	}
@@ -499,29 +536,24 @@ func TestWsHandler_SessionCompletingDuringCheck(t *testing.T) {
 	t.Cleanup(func() { frontendVerifier = nil })
 
 	delivery := make(chan error, 1)
-	frontendVerifier = &mockVerifier{
-		mockHost:            server.URL,
-		mockMissingSessions: map[string]bool{"racing-session": true},
-		mockOnHasLoginSession: func(sessionId string) {
-			client := registeredClient(sessionId)
-			if client == nil {
-				t.Errorf("The connection must be registered before the session is checked.")
-				delivery <- errNoWebSocketConnection
-				return
-			}
-			// the wallet's response completed the session, and sendRedirect found this
-			// connection; its write waits for the check
-			go func() {
-				delivery <- client.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": "https://rp.example/callback?state=external-state&code=the-code"})
-			}()
-		},
+	mock := &mockVerifier{mockHost: server.URL, mockPageSecret: testPageSecret, mockMissingSessions: map[string]bool{}}
+	frontendVerifier = mock
+	mock.mockOnHasLoginSession = func(sessionId string) {
+		// the wallet's response completes the session right after the page authenticated
+		mock.endSession(sessionId)
+		client := registeredClient(sessionId)
+		if client == nil {
+			t.Errorf("The connection must be registered before the session is checked.")
+			delivery <- errNoWebSocketConnection
+			return
+		}
+		// sendRedirect found this connection; its write waits for the check
+		go func() {
+			delivery <- client.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": "https://rp.example/callback?state=external-state&code=the-code"})
+		}()
 	}
 
-	wsURL := "ws" + server.URL[len("http"):] + "/ws?state=racing-session"
-	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {server.URL}})
-	if err != nil {
-		t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
-	}
+	conn := dialWebSocket(t, server.URL, "racing-session", testPageSecret)
 	defer func() { _ = conn.Close() }()
 	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 
@@ -557,9 +589,679 @@ func TestWsClient_NotRejectedAfterDelivery(t *testing.T) {
 	if err := sendRedirect("delivered-first", "external-state", "the-code", "https://rp.example/callback"); err != nil {
 		t.Fatalf("Expected the notification to be delivered, got %v", err)
 	}
-	frontendVerifier.(*mockVerifier).mockMissingSessions = map[string]bool{"delivered-first": true}
+	frontendVerifier.(*mockVerifier).endSession("delivered-first")
 
 	if registeredClient("delivered-first").rejectIfSessionGone("delivered-first") {
 		t.Errorf("A connection that got the login result must not be rejected.")
 	}
+}
+
+// readUntilClosed reads the messages a connection gets until it is closed, and returns them with
+// the close error.
+func readUntilClosed(t *testing.T, conn *websocket.Conn) ([]map[string]interface{}, error) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var messages []map[string]interface{}
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return messages, err
+		}
+		var message map[string]interface{}
+		_ = json.Unmarshal(data, &message)
+		messages = append(messages, message)
+	}
+}
+
+// TestWsHandler_SessionBinding covers the connections that may not wait for a login: whoever only
+// knows the session id (it is in the QR code) gets an error and close code 4403 and is never
+// registered, so the page's own connection keeps getting the result.
+func TestWsHandler_SessionBinding(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	oldTimeout := wsAuthTimeout
+	wsAuthTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { wsAuthTimeout = oldTimeout })
+
+	tests := []struct {
+		testName string
+		send     func(conn *websocket.Conn)
+	}{
+		{"a wrong secret", func(conn *websocket.Conn) {
+			_ = conn.WriteJSON(map[string]string{"type": "auth", "secret": "guessed"})
+		}},
+		{"no secret", func(conn *websocket.Conn) {
+			_ = conn.WriteJSON(map[string]string{"type": "auth"})
+		}},
+		{"another first message", func(conn *websocket.Conn) {
+			_ = conn.WriteJSON(map[string]string{"type": "session"})
+		}},
+		{"no message at all", func(conn *websocket.Conn) {}},
+		{"a message that is not JSON", func(conn *websocket.Conn) {
+			_ = conn.WriteMessage(websocket.TextMessage, []byte("hello"))
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			dial := startWsTestServer(t)
+			page := dial("bound-session")
+			var message map[string]interface{}
+			if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+				t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+			}
+			pageClient := registeredClient("bound-session")
+
+			serverURL := frontendVerifier.(*mockVerifier).mockHost
+			wsURL := "ws" + serverURL[len("http"):] + "/ws?state=bound-session"
+			intruder, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {serverURL}})
+			if err != nil {
+				t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+			}
+			defer func() { _ = intruder.Close() }()
+			tc.send(intruder)
+
+			messages, err := readUntilClosed(t, intruder)
+			if len(messages) != 1 || messages[0]["type"] != "error" || messages[0]["reason"] != "unauthorized" {
+				t.Errorf("Expected a single unauthorized error, got %v", messages)
+			}
+			if !websocket.IsCloseError(err, wsCloseSessionInvalid) {
+				t.Errorf("Expected the connection to be closed with %d, got %v", wsCloseSessionInvalid, err)
+			}
+			if registeredClient("bound-session") != pageClient {
+				t.Fatalf("A connection without the page secret must not replace the page's connection.")
+			}
+
+			if err := sendRedirect("bound-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+				t.Fatalf("Expected the result to be delivered to the page, got %v", err)
+			}
+			if err := page.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+				t.Errorf("Expected the page to get the result, got %v (err %v)", message, err)
+			}
+		})
+	}
+}
+
+// TestWsHandler_NewerTabTakesOver checks that a second connection with the page secret - the page
+// duplicated into another tab - takes the login over, and that the older one is told so with close
+// code 4409 instead of being dropped silently.
+func TestWsHandler_NewerTabTakesOver(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+
+	first := dial("tab-session")
+	var message map[string]interface{}
+	if err := first.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+	}
+	second := dial("tab-session")
+	if err := second.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+	}
+
+	messages, err := readUntilClosed(t, first)
+	if len(messages) != 1 || messages[0]["type"] != "replaced" {
+		t.Errorf("Expected the older tab to be told it was replaced, got %v", messages)
+	}
+	if !websocket.IsCloseError(err, wsCloseReplaced) {
+		t.Errorf("Expected the older tab to be closed with %d, got %v", wsCloseReplaced, err)
+	}
+
+	if err := sendRedirect("tab-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the result to be delivered, got %v", err)
+	}
+	if err := second.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+		t.Errorf("Expected the newer tab to get the result, got %v (err %v)", message, err)
+	}
+}
+
+// TestWsHandler_WarnMode checks the escape hatch for customised login pages: a connection is
+// registered without the page secret, and one that presents it later is authenticated.
+func TestWsHandler_WarnMode(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	if err := SetWebSocketSessionBinding(WebSocketBindingWarn); err != nil {
+		t.Fatalf("Expected warn to be accepted, got %v", err)
+	}
+	t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+	dial := startWsTestServer(t)
+	serverURL := frontendVerifier.(*mockVerifier).mockHost
+	wsURL := "ws" + serverURL[len("http"):] + "/ws?state=warn-session"
+
+	custom, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {serverURL}})
+	if err != nil {
+		t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+	}
+	var message map[string]interface{}
+	_ = custom.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := custom.ReadJSON(&message); err != nil || message["type"] != "session" {
+		_ = custom.Close()
+		t.Fatalf("Expected a page that sends no secret to be registered, got %v (err %v)", message, err)
+	}
+	awaitServerSide(t, "warn-session", custom)
+	if registeredClient("warn-session").isAuthenticated() {
+		t.Errorf("A connection without the page secret must not count as authenticated.")
+	}
+
+	_ = custom.WriteJSON(map[string]string{"type": "auth", "secret": "guessed"})
+	time.Sleep(50 * time.Millisecond)
+	if registeredClient("warn-session").isAuthenticated() {
+		t.Errorf("A wrong secret must not authenticate the connection.")
+	}
+
+	page := dial("warn-session")
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+	}
+	waitFor(t, func() bool { return registeredClient("warn-session").isAuthenticated() }, "the page presenting its secret was authenticated")
+}
+
+func TestSetWebSocketSessionBinding(t *testing.T) {
+	t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+	for _, mode := range []string{WebSocketBindingEnforce, WebSocketBindingWarn} {
+		if err := SetWebSocketSessionBinding(mode); err != nil {
+			t.Errorf("Expected %q to be accepted, got %v", mode, err)
+		}
+	}
+	for _, mode := range []string{"", "off", "Enforce"} {
+		if err := SetWebSocketSessionBinding(mode); err == nil {
+			t.Errorf("Expected %q to be rejected", mode)
+		}
+	}
+}
+
+func TestRejectionCategory(t *testing.T) {
+	tests := []struct {
+		err      error
+		expected string
+	}{
+		{verifier.ErrorInvalidVC, rejectionCredentialNotAccepted},
+		{verifier.ErrorNoValidCredentialTypeProvided, rejectionCredentialTypeNotRequested},
+		{verifier.ErrorVerficationContextSetup, rejectionServerError},
+		{errors.New("ld_proof_challenge_mismatch"), rejectionVerificationFailed},
+		{fmt.Errorf("%w: %w", verifier.ErrorLoginCompletionFailed, errors.New("cache full")), rejectionServerError},
+		{errors.New("trusted issuers registry unreachable"), rejectionVerificationFailed},
+	}
+	for _, tc := range tests {
+		if category := rejectionCategory(tc.err); category != tc.expected {
+			t.Errorf("Expected %v to map to %s, got %s", tc.err, tc.expected, category)
+		}
+	}
+}
+
+// postAuthenticationResponse runs the wallet's authentication response for a session against a
+// mock verifier answering with the given error, and returns the HTTP status.
+func postAuthenticationResponse(t *testing.T, sessionId string, verifierErr error) int {
+	t.Helper()
+	apiVerifier = &mockVerifier{mockError: verifierErr}
+	t.Cleanup(func() { apiVerifier = nil })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", nil)
+	handleAuthenticationResponse(c, sessionId, &common.Presentation{})
+	return recorder.Code
+}
+
+// TestHandleAuthenticationResponse_RejectionReachesThePage checks that the page waiting for a
+// login learns that a presentation was rejected - only as a coarse category - and keeps waiting,
+// so the next presentation can still complete the login.
+func TestHandleAuthenticationResponse_RejectionReachesThePage(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+	page := dial("rejected-session")
+	var message map[string]interface{}
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+	}
+
+	if status := postAuthenticationResponse(t, "rejected-session", verifier.ErrorInvalidVC); status != http.StatusBadRequest {
+		t.Errorf("Expected the wallet to get 400, got %d", status)
+	}
+	_ = page.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "rejected" || message["reason"] != rejectionCredentialNotAccepted {
+		t.Fatalf("Expected the page to be told about the rejection, got %v (err %v)", message, err)
+	}
+
+	if err := sendRedirect("rejected-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the page to still wait for the login, got %v", err)
+	}
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+		t.Errorf("Expected the login result, got %v (err %v)", message, err)
+	}
+}
+
+// TestHandleAuthenticationResponse_RejectionNotSent covers the answers no page is told about: a
+// session that does not exist (or was just completed by a concurrent response), and a connection
+// that did not present the page secret - which only exists with warn.
+func TestHandleAuthenticationResponse_RejectionNotSent(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	t.Run("no such session", func(t *testing.T) {
+		dial := startWsTestServer(t)
+		page := dial("completed-session")
+		var message map[string]interface{}
+		if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+			t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+		}
+		postAuthenticationResponse(t, "completed-session", verifier.ErrorNoSuchSession)
+		if err := sendRedirect("completed-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+			t.Fatalf("Expected the result to be delivered, got %v", err)
+		}
+		if err := page.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+			t.Errorf("Expected no rejection before the login result, got %v (err %v)", message, err)
+		}
+	})
+
+	t.Run("unauthenticated connection", func(t *testing.T) {
+		if err := SetWebSocketSessionBinding(WebSocketBindingWarn); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+		startWsTestServer(t)
+		serverURL := frontendVerifier.(*mockVerifier).mockHost
+		wsURL := "ws" + serverURL[len("http"):] + "/ws?state=custom-session"
+		custom, resp, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Origin": {serverURL}})
+		if err != nil {
+			t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+		}
+		var message map[string]interface{}
+		_ = custom.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if err := custom.ReadJSON(&message); err != nil || message["type"] != "session" {
+			_ = custom.Close()
+			t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+		}
+		awaitServerSide(t, "custom-session", custom)
+
+		postAuthenticationResponse(t, "custom-session", verifier.ErrorInvalidVC)
+		if err := sendRedirect("custom-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+			t.Fatalf("Expected the result to be delivered, got %v", err)
+		}
+		if err := custom.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+			t.Errorf("An unauthenticated connection must not learn about rejections, got %v (err %v)", message, err)
+		}
+	})
+}
+
+// TestAuthenticationResponse_ParseFailureReachesThePage covers presentations rejected while the
+// vp_token is parsed - signature, holder binding and format checks fail there, before the
+// verifier looks the session up. Only an authenticated page of an open session is told.
+func TestAuthenticationResponse_ParseFailureReachesThePage(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName        string
+		binding         string
+		authenticate    bool
+		sessionGone     bool
+		expectRejection bool
+	}
+	tests := []test{
+		{"an authenticated page of an open session is told", WebSocketBindingEnforce, true, false, true},
+		{"nothing is sent for a session that is gone", WebSocketBindingEnforce, true, true, false},
+		{"an unauthenticated connection is not told", WebSocketBindingWarn, false, false, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			if err := SetWebSocketSessionBinding(tc.binding); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+			startWsTestServer(t)
+			mock := frontendVerifier.(*mockVerifier)
+			serverURL := mock.mockHost
+
+			var page *websocket.Conn
+			if tc.authenticate {
+				page = dialWebSocket(t, serverURL, "parse-session", testPageSecret)
+			} else {
+				var resp *http.Response
+				var err error
+				page, resp, err = websocket.DefaultDialer.Dial("ws"+serverURL[len("http"):]+"/ws?state=parse-session", http.Header{"Origin": {serverURL}})
+				if err != nil {
+					t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+				}
+			}
+			var message map[string]interface{}
+			_ = page.SetReadDeadline(time.Now().Add(3 * time.Second))
+			if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+				_ = page.Close()
+				t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+			}
+			awaitServerSide(t, "parse-session", page)
+			if tc.sessionGone {
+				mock.endSession("parse-session")
+			}
+
+			sdJwtParser = &verifier.ConfigurableSdJwtParser{}
+			presentationParser = &verifier.ConfigurablePresentationParser{}
+			t.Cleanup(func() { sdJwtParser, presentationParser = nil, nil })
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", strings.NewReader("state=parse-session&vp_token=%21%21not-base64%21%21"))
+			c.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			VerifierAPIAuthenticationResponse(c)
+			if recorder.Code != http.StatusBadRequest {
+				t.Errorf("Expected the wallet to get 400, got %d", recorder.Code)
+			}
+
+			if err := sendRedirect("parse-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+				t.Fatalf("Expected the result to be delivered, got %v", err)
+			}
+			if err := page.ReadJSON(&message); err != nil {
+				t.Fatalf("Expected a message, got err %v", err)
+			}
+			if tc.expectRejection {
+				if message["type"] != "rejected" || message["reason"] != rejectionVerificationFailed {
+					t.Errorf("Expected the parse failure as %s, got %v", rejectionVerificationFailed, message)
+				}
+				if err := page.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+					t.Errorf("Expected the login result after the rejection, got %v (err %v)", message, err)
+				}
+			} else if message["type"] != "authenticated" {
+				t.Errorf("Expected no rejection before the login result, got %v", message)
+			}
+		})
+	}
+}
+
+// TestWsHandler_WarnModeKeepsAuthenticatedConnection checks that in warn mode a connection without
+// the page secret cannot displace the page's authenticated one: it waits unregistered, and takes
+// the login over only once it authenticates.
+func TestWsHandler_WarnModeKeepsAuthenticatedConnection(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	if err := SetWebSocketSessionBinding(WebSocketBindingWarn); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+	dial := startWsTestServer(t)
+	serverURL := frontendVerifier.(*mockVerifier).mockHost
+
+	page := dial("kept-session")
+	var message map[string]interface{}
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message, got %v (err %v)", message, err)
+	}
+	pageClient := registeredClient("kept-session")
+	waitFor(t, pageClient.isAuthenticated, "the page authenticated")
+
+	newcomer, resp, err := websocket.DefaultDialer.Dial("ws"+serverURL[len("http"):]+"/ws?state=kept-session", http.Header{"Origin": {serverURL}})
+	if err != nil {
+		t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+	}
+	// give the handler time to decide; a waiting connection is not registered
+	time.Sleep(200 * time.Millisecond)
+	if registeredClient("kept-session") != pageClient {
+		_ = newcomer.Close()
+		t.Fatalf("An unauthenticated connection must not replace the authenticated one.")
+	}
+
+	if err := newcomer.WriteJSON(map[string]string{"type": "auth", "secret": testPageSecret}); err != nil {
+		t.Fatalf("Expected the authentication message to be sent, got %v", err)
+	}
+	// the first message a waiting connection gets is the one sent once it was registered
+	_ = newcomer.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := newcomer.ReadJSON(&message); err != nil || message["type"] != "session" {
+		_ = newcomer.Close()
+		t.Fatalf("Expected the session message once authenticated, got %v (err %v)", message, err)
+	}
+	awaitServerSide(t, "kept-session", newcomer)
+	messages, err := readUntilClosed(t, page)
+	if len(messages) != 1 || messages[0]["type"] != "replaced" || !websocket.IsCloseError(err, wsCloseReplaced) {
+		t.Errorf("Expected the older page to be replaced with %d, got %v (err %v)", wsCloseReplaced, messages, err)
+	}
+	if err := sendRedirect("kept-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the result to be delivered, got %v", err)
+	}
+	if err := newcomer.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+		t.Errorf("Expected the authenticated newcomer to get the result, got %v (err %v)", message, err)
+	}
+}
+
+// dialUnauthenticated opens the login WebSocket of a session without presenting the page secret,
+// as a customised page or someone who only saw the QR code does.
+func dialUnauthenticated(t *testing.T, serverURL string, sessionId string) *websocket.Conn {
+	t.Helper()
+	conn, resp, err := websocket.DefaultDialer.Dial("ws"+serverURL[len("http"):]+"/ws?state="+sessionId, http.Header{"Origin": {serverURL}})
+	if err != nil {
+		t.Fatalf("Expected the upgrade to succeed, got %v (status %v)", err, statusOf(resp))
+	}
+	return conn
+}
+
+// withWarnBinding switches the session binding to warn for the duration of a test.
+func withWarnBinding(t *testing.T) {
+	t.Helper()
+	if err := SetWebSocketSessionBinding(WebSocketBindingWarn); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+}
+
+// expectMessage reads the next message and fails unless it has the given type.
+func expectMessage(t *testing.T, conn *websocket.Conn, messageType string) map[string]interface{} {
+	t.Helper()
+	var message map[string]interface{}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != messageType {
+		t.Fatalf("Expected a %s message, got %v (err %v)", messageType, message, err)
+	}
+	return message
+}
+
+// TestWsHandler_WarnModeRegistration covers, in warn mode, a page that registered before it
+// authenticated - as the default page does there - facing a connection without the secret.
+func TestWsHandler_WarnModeRegistration(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName string
+		run      func(t *testing.T, serverURL string, mock *mockVerifier, page *websocket.Conn, pageClient *wsClient)
+	}
+	tests := []test{
+		{"a page that authenticated after registering keeps the login", func(t *testing.T, serverURL string, mock *mockVerifier, page *websocket.Conn, pageClient *wsClient) {
+			newcomer := dialUnauthenticated(t, serverURL, "warn-registration")
+			defer func() { _ = newcomer.Close() }()
+			time.Sleep(200 * time.Millisecond)
+			if registeredClient("warn-registration") != pageClient {
+				t.Fatalf("An unauthenticated connection must not replace the authenticated page.")
+			}
+			if err := sendRedirect("warn-registration", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+				t.Fatalf("Expected the result to be delivered, got %v", err)
+			}
+			expectMessage(t, page, "authenticated")
+		}},
+		{"a waiting connection that authenticates after the session ended is told so", func(t *testing.T, serverURL string, mock *mockVerifier, page *websocket.Conn, pageClient *wsClient) {
+			newcomer := dialUnauthenticated(t, serverURL, "warn-registration")
+			defer func() { _ = newcomer.Close() }()
+			time.Sleep(200 * time.Millisecond)
+			mock.endSession("warn-registration")
+
+			if err := newcomer.WriteJSON(map[string]string{"type": "auth", "secret": testPageSecret}); err != nil {
+				t.Fatal(err)
+			}
+			messages, err := readUntilClosed(t, newcomer)
+			if len(messages) != 1 || messages[0]["type"] != "error" || messages[0]["reason"] != "session_not_found" {
+				t.Errorf("Expected a single session_not_found error, got %v", messages)
+			}
+			if !websocket.IsCloseError(err, wsCloseSessionInvalid) {
+				t.Errorf("Expected the connection to be closed with %d, got %v", wsCloseSessionInvalid, err)
+			}
+			if registeredClient("warn-registration") != pageClient {
+				t.Errorf("The registered page must be left alone.")
+			}
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			withWarnBinding(t)
+			startWsTestServer(t)
+			mock := frontendVerifier.(*mockVerifier)
+			serverURL := mock.mockHost
+
+			page := dialUnauthenticated(t, serverURL, "warn-registration")
+			expectMessage(t, page, "session")
+			awaitServerSide(t, "warn-registration", page)
+			pageClient := registeredClient("warn-registration")
+			if pageClient.isAuthenticated() {
+				t.Fatalf("Precondition: the page registers before it authenticates.")
+			}
+			if err := page.WriteJSON(map[string]string{"type": "auth", "secret": testPageSecret}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, pageClient.isAuthenticated, "the page authenticated")
+
+			tc.run(t, serverURL, mock, page, pageClient)
+		})
+	}
+}
+
+// TestHandleMessage_AuthenticatesUnderRegisterMu checks that a connection cannot authenticate
+// while a registration holds registerMu - otherwise a newcomer that found the registered page not
+// yet authenticated could still replace it after it did.
+func TestHandleMessage_AuthenticatesUnderRegisterMu(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	withWarnBinding(t)
+	startWsTestServer(t)
+	serverURL := frontendVerifier.(*mockVerifier).mockHost
+
+	page := dialUnauthenticated(t, serverURL, "locked-session")
+	expectMessage(t, page, "session")
+	awaitServerSide(t, "locked-session", page)
+	pageClient := registeredClient("locked-session")
+
+	registerMu.Lock()
+	if err := page.WriteJSON(map[string]string{"type": "auth", "secret": testPageSecret}); err != nil {
+		registerMu.Unlock()
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	authenticatedWhileLocked := pageClient.isAuthenticated()
+	registerMu.Unlock()
+
+	if authenticatedWhileLocked {
+		t.Errorf("A connection must not authenticate while a registration holds registerMu.")
+	}
+	waitFor(t, pageClient.isAuthenticated, "the page authenticated once registerMu was released")
+}
+
+// TestWsHandler_WarnModeConcurrentAuthentication runs a page authenticating while a connection
+// without the secret arrives, many times, under the race detector. Whichever order registerMu
+// gives them, exactly one is registered and gets the result, and an authenticated page is only
+// ever replaced by a connection that registered before it authenticated.
+func TestWsHandler_WarnModeConcurrentAuthentication(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	withWarnBinding(t)
+	startWsTestServer(t)
+	serverURL := frontendVerifier.(*mockVerifier).mockHost
+
+	for i := 0; i < 10; i++ {
+		sessionId := fmt.Sprintf("concurrent-%d", i)
+		page := dialUnauthenticated(t, serverURL, sessionId)
+		expectMessage(t, page, "session")
+		awaitServerSide(t, sessionId, page)
+		pageClient := registeredClient(sessionId)
+
+		var newcomer *websocket.Conn
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = page.WriteJSON(map[string]string{"type": "auth", "secret": testPageSecret})
+		}()
+		go func() {
+			defer wg.Done()
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+serverURL[len("http"):]+"/ws?state="+sessionId, http.Header{"Origin": {serverURL}})
+			if err == nil {
+				newcomer = conn
+			}
+		}()
+		wg.Wait()
+		if newcomer == nil {
+			t.Fatalf("Expected the newcomer to connect.")
+		}
+		waitFor(t, pageClient.isAuthenticated, "the page authenticated")
+
+		// the newcomer either registered first (and gets the session message) or waits
+		_ = newcomer.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		var message map[string]interface{}
+		newcomerRegistered := newcomer.ReadJSON(&message) == nil && message["type"] == "session"
+		registered := registeredClient(sessionId)
+		if newcomerRegistered {
+			if registered == pageClient {
+				t.Fatalf("Iteration %d: the newcomer got a session message but the page is still registered.", i)
+			}
+			awaitServerSide(t, sessionId, newcomer)
+			continue
+		}
+		if registered != pageClient {
+			_ = newcomer.Close()
+			t.Fatalf("Iteration %d: a waiting newcomer must not have replaced the authenticated page.", i)
+		}
+		if err := sendRedirect(sessionId, "external-state", "the-code", "https://rp.example/callback"); err != nil {
+			_ = newcomer.Close()
+			t.Fatalf("Iteration %d: expected the result to be delivered, got %v", i, err)
+		}
+		expectMessage(t, page, "authenticated")
+		// a waiting connection is not registered, so let it register to wait for its server side
+		_ = newcomer.WriteJSON(map[string]string{"type": "auth", "secret": testPageSecret})
+		waitFor(t, func() bool { return registeredClient(sessionId) != pageClient }, "the waiting newcomer registered")
+		awaitServerSide(t, sessionId, newcomer)
+	}
+}
+
+// TestWsHandler_SlowConnectionDoesNotStallOtherSessions checks that registerMu, a single lock for
+// all sessions, never waits for a connection's writeMu, which is held across network writes of up
+// to wsWriteWait: a write in progress on one session's page must not hold back the registration
+// and authentication of another session's page.
+func TestWsHandler_SlowConnectionDoesNotStallOtherSessions(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	withWarnBinding(t)
+	dial := startWsTestServer(t)
+	serverURL := frontendVerifier.(*mockVerifier).mockHost
+
+	slowPage := dial("slow-session")
+	expectMessage(t, slowPage, "session")
+	slowClient := registeredClient("slow-session")
+	waitFor(t, slowClient.isAuthenticated, "the slow page authenticated")
+
+	// a write to the slow page is in progress
+	slowClient.writeMu.Lock()
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			slowClient.writeMu.Unlock()
+		}
+	}
+	defer release()
+
+	// a connection for the slow session checks whether its registered connection authenticated
+	newcomer := dialUnauthenticated(t, serverURL, "slow-session")
+	defer func() { _ = newcomer.Close() }()
+	time.Sleep(100 * time.Millisecond)
+
+	start := time.Now()
+	otherPage := dialWebSocket(t, serverURL, "other-session", testPageSecret)
+	defer func() { _ = otherPage.Close() }()
+	_ = otherPage.SetReadDeadline(time.Now().Add(time.Second))
+	var message map[string]interface{}
+	if err := otherPage.ReadJSON(&message); err != nil || message["type"] != "session" {
+		release()
+		t.Fatalf("Expected another session's page to register while a write to the slow page is in progress, got %v (err %v)", message, err)
+	}
+	otherClient := registeredClient("other-session")
+	deadline := time.Now().Add(time.Second)
+	for !otherClient.isAuthenticated() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	elapsed := time.Since(start)
+	release()
+
+	if !otherClient.isAuthenticated() {
+		t.Fatalf("Expected another session's page to authenticate while a write to the slow page is in progress.")
+	}
+	if elapsed >= wsWriteWait/2 {
+		t.Errorf("Registering and authenticating another session took %v, which is not well below wsWriteWait (%v).", elapsed, wsWriteWait)
+	}
+	awaitServerSide(t, "other-session", otherPage)
 }

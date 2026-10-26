@@ -146,6 +146,16 @@ func main() {
 	}
 	logger.Infof("Login WebSocket keepalive: ping every %v, connection dropped after %v without a pong", wsPingInterval, wsPongTimeout)
 
+	if err := api.SetWebSocketSessionBinding(configuration.Server.WebSocketSessionBinding); err != nil {
+		logger.Errorf("Invalid WebSocket session binding: %v", err)
+		panic(err)
+	}
+	if configuration.Server.WebSocketSessionBinding == api.WebSocketBindingWarn {
+		logger.Warnf("server.webSocketSessionBinding is %q: login WebSockets are accepted without the login page's secret, so anyone who sees a QR code can take over that login.", api.WebSocketBindingWarn)
+	} else {
+		logger.Infof("Login WebSockets must present the login page's secret (server.webSocketSessionBinding %q).", configuration.Server.WebSocketSessionBinding)
+	}
+
 	//new template engine
 	router.HTMLRender = ginview.Default()
 	// static files for the frontend

@@ -11,5 +11,16 @@
     "ws_error_retry": "Retry",
     "session_invalid_title": "Session no longer valid",
     "session_invalid_desc": "This login has expired or was already used.",
-    "session_invalid_restart": "Start again"
+    "session_invalid_restart": "Start again",
+    "another_tab_title": "Login continues in another tab",
+    "another_tab_desc": "This login was opened in another tab or window.",
+    "another_tab_continue": "Continue here",
+    "presentation_rejected_title": "A presentation for this login was rejected",
+    "presentation_rejected_credential_not_accepted": "The presented credential was not accepted.",
+    "presentation_rejected_credential_type_not_requested": "The presented credential is not accepted for this login.",
+    "presentation_rejected_verification_failed": "The presentation could not be verified.",
+    "presentation_rejected_server_error": "Something went wrong on our side. You can try again.",
+    "page_unauthorized_title": "This page can no longer complete the login",
+    "page_unauthorized_desc": "Start the login again to get a new code.",
+    "page_unauthorized_restart": "Start again"
 }

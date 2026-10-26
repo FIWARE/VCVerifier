@@ -7,6 +7,10 @@ server:
     # balancer in front of the verifier; the pong timeout must be greater than the interval.
     # webSocketPingInterval: 25
     # webSocketPongTimeout: 60
+    # The login WebSocket must present the secret of the login page that started the session, so
+    # someone who only sees the QR code cannot take over the login. "warn" accepts connections
+    # without it (logged) - only for a customised login page that does not send it yet.
+    # webSocketSessionBinding: enforce
 
 logging:
     jsonLogging: true

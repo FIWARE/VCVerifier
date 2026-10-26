@@ -10,9 +10,12 @@ import (
 	"testing"
 
 	"github.com/fiware/VCVerifier/logging"
+	"github.com/fiware/VCVerifier/verifier"
+	"github.com/foolin/goview"
 
 	"github.com/foolin/goview/supports/ginview"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestVerifierPageDisplayQRSIOP(t *testing.T) {
@@ -81,4 +84,28 @@ func TestVerifierPageDisplayQRSIOP(t *testing.T) {
 			continue
 		}
 	}
+}
+
+// TestVerifierLoginQr_HandsThePageItsSecret checks that the v2 login page carries the secret its
+// WebSocket authenticates with, and that no cache may keep the page.
+func TestVerifierLoginQr_HandsThePageItsSecret(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	recorder := httptest.NewRecorder()
+	testContext, engine := gin.CreateTestContext(recorder)
+	engine.HTMLRender = ginview.New(goview.Config{Root: "../views", Extension: ".html", DisableCache: true})
+
+	frontendVerifier = &mockVerifier{mockHost: "https://verifier.org", mockRequestMode: "urlEncoded",
+		mockQRInfo: &verifier.QRLoginInfo{SessionId: "the-session", PageSecret: "the-page-secret", QR: "data:image/png;base64,"}}
+	t.Cleanup(func() { frontendVerifier = nil })
+
+	testContext.Request, _ = http.NewRequest("GET", "https://verifier.org/api/v2/loginQR?state=my-state&redirect_uri=https://rp.example/callback&client_id=client", nil)
+	VerifierLoginQr(testContext)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	assert.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
+	assert.Contains(t, recorder.Body.String(), `<meta name="wsSecret" content="the-page-secret">`)
+	assert.Contains(t, recorder.Body.String(), `<meta name="wsUrl" content="https://verifier.org/ws?state=the-session">`)
 }

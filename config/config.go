@@ -132,6 +132,12 @@ type Server struct {
 	// WebSocketPongTimeout is the time, in seconds, a browser has to answer a ping before its
 	// login WebSocket is considered gone. Must be greater than WebSocketPingInterval.
 	WebSocketPongTimeout int `mapstructure:"webSocketPongTimeout" default:"60"`
+	// WebSocketSessionBinding decides whether the login WebSocket must present the secret of the
+	// login page that started the session before it may wait for the result: "enforce" (default)
+	// rejects a connection that does not, "warn" accepts it and logs a warning. Use "warn" only
+	// for a customised login page (server.templateDir / server.staticDir) that does not send it
+	// yet: without the binding, anyone who sees the QR code can take over the login.
+	WebSocketSessionBinding string `mapstructure:"webSocketSessionBinding" default:"enforce"`
 
 	// ReadTimeout is the maximum duration for reading the entire request, including the body.
 	ReadTimeout int `mapstructure:"readTimeout" default:"5"`
