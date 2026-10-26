@@ -815,9 +815,18 @@ func handleAuthenticationResponse(c *gin.Context, state string, presentation *co
 		// back), used to find the right WebSocket connection; response.ExternalState is
 		// the external OIDC client's original value, only used in the redirect it receives.
 		if err := sendRedirect(state, response.ExternalState, response.Code, response.RedirectTarget); err != nil {
-			// Nobody can redeem a code the browser did not get. Releasing it restores the session,
-			// so the wallet can retry once the page has (re)connected, instead of leaving the user
-			// in front of a QR code that only yields no_such_session.
+			// The login did complete. On a phone the page's WebSocket is commonly gone right now:
+			// opening the wallet sent the browser to the background. The result stays pending, and
+			// the page gets it once it reconnects and presents its secret.
+			if wsSessionBinding == WebSocketBindingEnforce {
+				logging.Log().Infof("Login session %s completed while its page was not connected; the page gets the result when it reconnects.", state)
+				c.JSON(http.StatusOK, gin.H{})
+				return
+			}
+			// In warn mode a connection may not present the secret, so a pending result is not
+			// handed out. Nobody can redeem a code the browser did not get. Releasing it restores the
+			// session, so the wallet can retry once the page has (re)connected, instead of leaving
+			// the user in front of a QR code that only yields no_such_session.
 			getApiVerifier().ReleaseUndeliveredCode(state, response.Code)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageNoWebsocketConnection)
 			return
