@@ -578,7 +578,8 @@ func TestWsHandler_SessionCompletingDuringCheck(t *testing.T) {
 		}
 		// sendRedirect found this connection; its write waits for the check
 		go func() {
-			delivery <- client.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": "https://rp.example/callback?state=external-state&code=the-code"})
+			_, err := client.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": "https://rp.example/callback?state=external-state&code=the-code"})
+			delivery <- err
 		}()
 	}
 
@@ -1402,6 +1403,10 @@ func TestWsClient_DeliversResultOnce(t *testing.T) {
 		if err := sendRedirect("once-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
 			t.Fatalf("Expected delivery %d to succeed, got %v", i, err)
 		}
+	}
+	// a delivery that finds the result already written reports that it wrote nothing
+	if written, err := registeredClient("once-session").deliverLoginResult("https://rp.example/callback", "external-state", "the-code"); written || err != nil {
+		t.Errorf("Expected a repeated delivery to write nothing, got written=%v, err %v", written, err)
 	}
 
 	if err := conn.ReadJSON(&message); err != nil || message["type"] != "authenticated" {

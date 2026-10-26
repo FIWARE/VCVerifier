@@ -256,27 +256,27 @@ func (c *wsClient) writeJSONLocked(message interface{}) error {
 
 // deliverLogin writes the login result to the page, unless the page was rejected meanwhile or
 // already has it: a reconnected page can be handed the result twice, once from the wallet's response
-// and once as a pending login (see deliverPendingLogin).
-func (c *wsClient) deliverLogin(message interface{}) error {
+// and once as a pending login (see deliverPendingLogin). It reports whether it wrote the result.
+func (c *wsClient) deliverLogin(message interface{}) (bool, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.rejected {
-		return errWebSocketRejected
+		return false, errWebSocketRejected
 	}
 	if c.notified {
-		return nil
+		return false, nil
 	}
 	if err := c.writeJSONLocked(message); err != nil {
-		return err
+		return false, err
 	}
 	c.notified = true
-	return nil
+	return true, nil
 }
 
 // deliverLoginResult hands the result of a completed login to the page. A successful write does
 // not mean the page got it - a socket that died in the background still takes the bytes - so the
 // result stays pending until its code is exchanged, and a page that reconnects gets it again.
-func (c *wsClient) deliverLoginResult(redirectTarget string, externalState string, code string) error {
+func (c *wsClient) deliverLoginResult(redirectTarget string, externalState string, code string) (bool, error) {
 	return c.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": redirectTarget + "?state=" + externalState + "&code=" + code})
 }
 
@@ -294,8 +294,13 @@ func (c *wsClient) deliverPendingLogin(sessionId string) bool {
 	if !found {
 		return false
 	}
-	if err := c.deliverLoginResult(pending.RedirectTarget, pending.ExternalState, pending.Code); err != nil {
+	written, err := c.deliverLoginResult(pending.RedirectTarget, pending.ExternalState, pending.Code)
+	if err != nil {
 		logging.Log().Warnf("Was not able to hand the login result of session %s to its reconnected page; it stays pending. Err: %v", sessionId, err)
+		return true
+	}
+	if !written {
+		logging.Log().Debugf("The reconnected page of session %s already got its login result.", sessionId)
 		return true
 	}
 	logging.Log().Infof("Handed the login result of session %s to its page, which reconnected after the login completed.", sessionId)
@@ -502,10 +507,14 @@ func sendRedirect(sessionId string, externalState string, code string, redirectU
 
 	// The connection is closed and unregistered by WsHandler's reader once the browser leaves the
 	// page, so nothing else is to be done here - in particular no second reader on it.
-	err := connection.(*wsClient).deliverLoginResult(redirectUrl, externalState, code)
+	written, err := connection.(*wsClient).deliverLoginResult(redirectUrl, externalState, code)
 	if err != nil {
 		logging.Log().Warnf("Was not able to notify the frontend for session %s. Err: %v", sessionId, err)
 		return err
+	}
+	if !written {
+		logging.Log().Infof("The page of session %s already got its login result as a pending login.", sessionId)
+		return nil
 	}
 	logging.Log().Infof("Notified session %s of successful authentication.", sessionId)
 	return nil
