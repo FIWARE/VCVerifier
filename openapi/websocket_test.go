@@ -283,6 +283,15 @@ func withWsTiming(t *testing.T, pingPeriod, pongWait time.Duration) {
 	t.Cleanup(func() { wsPingPeriod, wsPongWait = oldPing, oldPong })
 }
 
+// withWsBinding sets server.webSocketSessionBinding for the duration of a test.
+func withWsBinding(t *testing.T, mode string) {
+	t.Helper()
+	if err := SetWebSocketSessionBinding(mode); err != nil {
+		t.Fatalf("Unexpected error setting the session binding: %v", err)
+	}
+	t.Cleanup(func() { _ = SetWebSocketSessionBinding(WebSocketBindingEnforce) })
+}
+
 // registeredClient returns the connection registered for a session, or nil.
 func registeredClient(sessionId string) *wsClient {
 	client, found := sessions.Load(sessionId)
@@ -385,6 +394,9 @@ func TestSendRedirect_DeliversWhileKeepAliveRuns(t *testing.T) {
 	if message["type"] != "authenticated" || message["redirectUrl"] != "https://rp.example/callback?state=external-state&code=the-code" {
 		t.Errorf("Unexpected notification %v", message)
 	}
+	if code := frontendVerifier.(*mockVerifier).deliveredCode("redirect-session"); code != "the-code" {
+		t.Errorf("Expected the delivered code to be reported to the verifier, got %q", code)
+	}
 }
 
 func TestSetWebSocketKeepAlive(t *testing.T) {
@@ -464,31 +476,51 @@ func TestSendRedirect_NoConnection(t *testing.T) {
 	}
 }
 
-// TestHandleAuthenticationResponse_UndeliveredCodeIsReleased checks that a cross-device v2 login
-// whose result cannot be handed to the browser releases the code - so the session is restored and
-// the wallet can retry - and answers with an error rather than a success.
-func TestHandleAuthenticationResponse_UndeliveredCodeIsReleased(t *testing.T) {
-	logging.Configure(LOGGING_CONFIG)
-	gin.SetMode(gin.TestMode)
-
-	mock := &mockVerifier{mockSameDevice: verifier.Response{FlowVersion: verifier.CROSS_DEVICE_V2, RedirectTarget: "https://rp.example/callback", Code: "the-code", ExternalState: "external-state"}}
-	apiVerifier = mock
-	t.Cleanup(func() { apiVerifier = nil })
-
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", nil)
-	handleAuthenticationResponse(c, "unconnected-session", &common.Presentation{})
-
-	if recorder.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", recorder.Code)
+// TestHandleAuthenticationResponse_UndeliveredCode checks a cross-device v2 login whose result
+// cannot be handed to the browser. With enforce the result stays pending for the page, so the wallet
+// is told the login succeeded. In warn mode the code is released - so the session is restored and
+// the wallet can retry - and the wallet gets an error rather than a success.
+func TestHandleAuthenticationResponse_UndeliveredCode(t *testing.T) {
+	type test struct {
+		testName       string
+		binding        string
+		expectedStatus int
+		expectReleased bool
 	}
-	var body ErrorMessage
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Summary != ErrorMessageNoWebsocketConnection.Summary {
-		t.Errorf("Expected %v, got %s (err %v)", ErrorMessageNoWebsocketConnection, recorder.Body.String(), err)
+	tests := []test{
+		{"with enforce the result stays pending", WebSocketBindingEnforce, http.StatusOK, false},
+		{"in warn mode the code is released", WebSocketBindingWarn, http.StatusInternalServerError, true},
 	}
-	if mock.releasedCodes["unconnected-session"] != "the-code" {
-		t.Errorf("Expected the undelivered code to be released, released %v", mock.releasedCodes)
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			logging.Configure(LOGGING_CONFIG)
+			gin.SetMode(gin.TestMode)
+			withWsBinding(t, tc.binding)
+
+			mock := &mockVerifier{mockSameDevice: verifier.Response{FlowVersion: verifier.CROSS_DEVICE_V2, RedirectTarget: "https://rp.example/callback", Code: "the-code", ExternalState: "external-state"}}
+			apiVerifier = mock
+			t.Cleanup(func() { apiVerifier = nil })
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/authentication_response", nil)
+			handleAuthenticationResponse(c, "unconnected-session", &common.Presentation{})
+
+			if recorder.Code != tc.expectedStatus {
+				t.Errorf("Expected status %d, got %d", tc.expectedStatus, recorder.Code)
+			}
+			if released := mock.releasedCodes["unconnected-session"] == "the-code"; released != tc.expectReleased {
+				t.Errorf("Expected the code to be released: %v, released %v", tc.expectReleased, mock.releasedCodes)
+			}
+			if !tc.expectReleased {
+				return
+			}
+			var body ErrorMessage
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Summary != ErrorMessageNoWebsocketConnection.Summary {
+				t.Errorf("Expected %v, got %s (err %v)", ErrorMessageNoWebsocketConnection, recorder.Body.String(), err)
+			}
+		})
 	}
 }
 
@@ -1264,4 +1296,98 @@ func TestWsHandler_SlowConnectionDoesNotStallOtherSessions(t *testing.T) {
 		t.Errorf("Registering and authenticating another session took %v, which is not well below wsWriteWait (%v).", elapsed, wsWriteWait)
 	}
 	awaitServerSide(t, "other-session", otherPage)
+}
+
+// TestWsHandler_PendingLogin covers a page that reconnects after its login completed while it was
+// not connected - on a phone, opening the wallet sends the browser to the background. Only the page
+// that started the login collects the result, and only with enforce.
+func TestWsHandler_PendingLogin(t *testing.T) {
+	type test struct {
+		testName      string
+		binding       string
+		secret        string
+		expectedType  string
+		expectPending bool
+	}
+	tests := []test{
+		{"the page reconnecting with its secret gets the result", WebSocketBindingEnforce, testPageSecret, "authenticated", false},
+		{"a connection without the secret gets nothing", WebSocketBindingEnforce, "guessed", "error", true},
+		{"in warn mode the result is not handed out", WebSocketBindingWarn, testPageSecret, "session", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			logging.Configure(LOGGING_CONFIG)
+			withWsBinding(t, tc.binding)
+			startWsTestServer(t)
+			mock := frontendVerifier.(*mockVerifier)
+			mock.completeSession("pending-session", verifier.PendingLogin{RedirectTarget: "https://rp.example/callback", ExternalState: "external-state", Code: "the-code"})
+
+			conn := dialWebSocket(t, mock.mockHost, "pending-session", tc.secret)
+			defer func() { _ = conn.Close() }()
+			_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+
+			var message map[string]interface{}
+			if err := conn.ReadJSON(&message); err != nil || message["type"] != tc.expectedType {
+				t.Fatalf("Expected a %q message, got %v (err %v)", tc.expectedType, message, err)
+			}
+			if tc.expectedType == "authenticated" && message["redirectUrl"] != "https://rp.example/callback?state=external-state&code=the-code" {
+				t.Errorf("Unexpected result %v", message)
+			}
+			if _, pending := mock.PendingLogin("pending-session"); pending != tc.expectPending {
+				t.Errorf("Expected the login to stay pending: %v", tc.expectPending)
+			}
+		})
+	}
+}
+
+// TestWsHandler_PendingLoginDeliveredElsewhere covers a page reconnecting while another connection of
+// it collects the result: the session is gone and nothing is pending any more, so the page is told
+// at once instead of waiting in front of a QR code.
+func TestWsHandler_PendingLoginDeliveredElsewhere(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	startWsTestServer(t)
+	mock := frontendVerifier.(*mockVerifier)
+	mock.completeSession("collected-session", verifier.PendingLogin{RedirectTarget: "https://rp.example/callback", ExternalState: "external-state", Code: "the-code"})
+	// the result goes to the other connection between this one's registration and its delivery
+	mock.mockOnPendingLogin = func(sessionId string) {
+		mock.LoginDelivered(sessionId, "the-code")
+	}
+
+	conn := dialWebSocket(t, mock.mockHost, "collected-session", testPageSecret)
+	defer func() { _ = conn.Close() }()
+
+	messages, err := readUntilClosed(t, conn)
+	if len(messages) != 1 || messages[0]["type"] != "error" || messages[0]["reason"] != "session_not_found" {
+		t.Errorf("Expected a single session_not_found error, got %v", messages)
+	}
+	if !websocket.IsCloseError(err, wsCloseSessionInvalid) {
+		t.Errorf("Expected the connection to be closed with %d, got %v", wsCloseSessionInvalid, err)
+	}
+}
+
+// TestWsClient_DeliversResultOnce checks that a page gets the login result once, although it can
+// reach a reconnected page both from the wallet's response and as a pending login.
+func TestWsClient_DeliversResultOnce(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+	conn := dial("once-session")
+	var message map[string]interface{}
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message first, got %v (err %v)", message, err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := sendRedirect("once-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+			t.Fatalf("Expected delivery %d to succeed, got %v", i, err)
+		}
+	}
+
+	if err := conn.ReadJSON(&message); err != nil || message["type"] != "authenticated" {
+		t.Fatalf("Expected the authenticated message, got %v (err %v)", message, err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if err := conn.ReadJSON(&message); err == nil {
+		t.Errorf("Expected no second message, got %v", message)
+	}
 }

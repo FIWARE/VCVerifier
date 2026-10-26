@@ -69,6 +69,12 @@ type mockVerifier struct {
 	mockOnHasLoginSession func(sessionId string)
 	// codes passed to ReleaseUndeliveredCode, by session id
 	releasedCodes map[string]string
+	// completed logins whose page did not get the result yet, by session id; guarded by sessionsMu
+	mockPendingLogins map[string]verifier.PendingLogin
+	// codes passed to LoginDelivered, by session id; guarded by sessionsMu
+	deliveredCodes map[string]string
+	// called by PendingLogin before it answers
+	mockOnPendingLogin func(sessionId string)
 }
 
 func (mV *mockVerifier) HasLoginSession(sessionId string) bool {
@@ -95,13 +101,66 @@ func (mV *mockVerifier) endSession(sessionId string) {
 }
 
 func (mV *mockVerifier) CheckLoginPageSecret(sessionId string, secret string) error {
-	if mV.isSessionMissing(sessionId) {
+	// not via AwaitsLoginPage: mockOnHasLoginSession is about the check after registration
+	if _, pending := mV.pendingLogin(sessionId); mV.isSessionMissing(sessionId) && !pending {
 		return verifier.ErrorNoSuchSession
 	}
 	if secret != mV.mockPageSecret {
 		return verifier.ErrorLoginPageSecretMismatch
 	}
 	return nil
+}
+
+func (mV *mockVerifier) AwaitsLoginPage(sessionId string) bool {
+	if mV.HasLoginSession(sessionId) {
+		return true
+	}
+	_, pending := mV.pendingLogin(sessionId)
+	return pending
+}
+
+func (mV *mockVerifier) PendingLogin(sessionId string) (verifier.PendingLogin, bool) {
+	if mV.mockOnPendingLogin != nil {
+		mV.mockOnPendingLogin(sessionId)
+	}
+	return mV.pendingLogin(sessionId)
+}
+
+func (mV *mockVerifier) pendingLogin(sessionId string) (verifier.PendingLogin, bool) {
+	mV.sessionsMu.Lock()
+	defer mV.sessionsMu.Unlock()
+	pending, found := mV.mockPendingLogins[sessionId]
+	return pending, found
+}
+
+// completeSession ends the session like a completed login whose result its page did not get yet.
+func (mV *mockVerifier) completeSession(sessionId string, pending verifier.PendingLogin) {
+	mV.endSession(sessionId)
+	mV.sessionsMu.Lock()
+	defer mV.sessionsMu.Unlock()
+	if mV.mockPendingLogins == nil {
+		mV.mockPendingLogins = map[string]verifier.PendingLogin{}
+	}
+	mV.mockPendingLogins[sessionId] = pending
+}
+
+func (mV *mockVerifier) LoginDelivered(sessionId string, authorizationCode string) {
+	mV.sessionsMu.Lock()
+	defer mV.sessionsMu.Unlock()
+	if mV.deliveredCodes == nil {
+		mV.deliveredCodes = map[string]string{}
+	}
+	mV.deliveredCodes[sessionId] = authorizationCode
+	if pending, found := mV.mockPendingLogins[sessionId]; found && pending.Code == authorizationCode {
+		delete(mV.mockPendingLogins, sessionId)
+	}
+}
+
+// deliveredCode returns the code LoginDelivered was called with for the session.
+func (mV *mockVerifier) deliveredCode(sessionId string) string {
+	mV.sessionsMu.Lock()
+	defer mV.sessionsMu.Unlock()
+	return mV.deliveredCodes[sessionId]
 }
 
 func (mV *mockVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {

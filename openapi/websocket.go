@@ -254,12 +254,17 @@ func (c *wsClient) writeJSONLocked(message interface{}) error {
 	return c.conn.WriteJSON(message)
 }
 
-// deliverLogin writes the login result to the page, unless the page was rejected meanwhile.
+// deliverLogin writes the login result to the page, unless the page was rejected meanwhile or
+// already has it: the result of a login the page missed can reach a reconnected page twice, once
+// from the wallet's response and once as a pending login (see deliverPendingLogin).
 func (c *wsClient) deliverLogin(message interface{}) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.rejected {
 		return errWebSocketRejected
+	}
+	if c.notified {
+		return nil
 	}
 	if err := c.writeJSONLocked(message); err != nil {
 		return err
@@ -268,10 +273,41 @@ func (c *wsClient) deliverLogin(message interface{}) error {
 	return nil
 }
 
-// rejectIfSessionGone rejects the connection if its login session no longer exists and no login
-// result was delivered to it, and reports whether it did. The check runs under writeMu, so a
-// result is either delivered before it - and the session being gone is expected - or fails after
-// it, which releases the code again (see handleAuthenticationResponse).
+// deliverLoginResult hands the result of a completed login to the page and, once the page has it,
+// drops the pending login that kept it for a reconnect.
+func (c *wsClient) deliverLoginResult(sessionId string, redirectTarget string, externalState string, code string) error {
+	if err := c.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": redirectTarget + "?state=" + externalState + "&code=" + code}); err != nil {
+		return err
+	}
+	getFrontendVerifier().LoginDelivered(sessionId, code)
+	return nil
+}
+
+// deliverPendingLogin hands the page the result of a login that completed while it was not
+// connected, and reports whether there was one. Only an authenticated connection may collect it:
+// the session id is in the QR, so anyone could ask for it, and only with enforce, since in warn mode
+// an undelivered code is released at once (see handleAuthenticationResponse).
+func (c *wsClient) deliverPendingLogin(sessionId string) bool {
+	if wsSessionBinding != WebSocketBindingEnforce || !c.isAuthenticated() {
+		return false
+	}
+	pending, found := getFrontendVerifier().PendingLogin(sessionId)
+	if !found {
+		return false
+	}
+	if err := c.deliverLoginResult(sessionId, pending.RedirectTarget, pending.ExternalState, pending.Code); err != nil {
+		logging.Log().Warnf("Was not able to hand the login result of session %s to its reconnected page; it stays pending. Err: %v", sessionId, err)
+		return true
+	}
+	logging.Log().Infof("Handed the login result of session %s to its page, which reconnected after the login completed.", sessionId)
+	return true
+}
+
+// rejectIfSessionGone rejects the connection if its page may no longer wait on the login session
+// (see Verifier.AwaitsLoginPage) and no login result was delivered to it, and reports whether it
+// did. The check runs under writeMu, so a result is either delivered before it - and the session
+// being gone is expected - or fails after it and stays pending, or is released in warn mode (see
+// handleAuthenticationResponse).
 // A connection that was already closed by the verifier counts as rejected too.
 func (c *wsClient) rejectIfSessionGone(sessionId string) bool {
 	c.writeMu.Lock()
@@ -279,7 +315,7 @@ func (c *wsClient) rejectIfSessionGone(sessionId string) bool {
 	if c.rejected {
 		return true
 	}
-	if c.notified || getFrontendVerifier().HasLoginSession(sessionId) {
+	if c.notified || getFrontendVerifier().AwaitsLoginPage(sessionId) {
 		return false
 	}
 	c.rejected = true
@@ -450,13 +486,13 @@ func (c *wsClient) keepAlive(sessionId string, done <-chan struct{}) {
 func sendRedirect(sessionId string, externalState string, code string, redirectUrl string) error {
 	connection, exists := sessions.Load(sessionId)
 	if !exists {
-		logging.Log().Warnf("No connection for session %s exists.", sessionId)
+		logging.Log().Infof("No connection for session %s exists.", sessionId)
 		return errNoWebSocketConnection
 	}
 
 	// The connection is closed and unregistered by WsHandler's reader once the browser leaves the
 	// page, so nothing else is to be done here - in particular no second reader on it.
-	err := connection.(*wsClient).deliverLogin(gin.H{"type": "authenticated", "redirectUrl": redirectUrl + "?state=" + externalState + "&code=" + code})
+	err := connection.(*wsClient).deliverLoginResult(sessionId, redirectUrl, externalState, code)
 	if err != nil {
 		logging.Log().Warnf("Was not able to notify the frontend for session %s. Err: %v", sessionId, err)
 		return err
@@ -678,8 +714,10 @@ func WsHandler(c *gin.Context) {
 		}
 	}()
 
-	// a waiting connection gets it once it authenticated and was registered
-	if !waiting {
+	// A waiting connection gets it once it authenticated and was registered. A page that reconnects
+	// after its login completed gets the result instead - unless another connection of the page got
+	// it meanwhile, which leaves nothing to wait for.
+	if !waiting && !client.deliverPendingLogin(state) && !client.rejectIfSessionGone(state) {
 		client.sendSessionMessage(state)
 	}
 }

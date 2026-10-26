@@ -1523,6 +1523,7 @@ func newCodeTestVerifier(t *testing.T, signer common.TokenSigner, version int) (
 		tokenSigner:          signer,
 		tokenCache:           tokenCache,
 		redeemedCodes:        cache.New(time.Minute, time.Minute),
+		pendingLogins:        cache.New(time.Minute, time.Minute),
 		sessionCache:         sessionCache,
 		nonceGenerator:       &countingNonceGenerator{},
 		validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true}, nil}},
@@ -1700,6 +1701,81 @@ func TestReleaseUndeliveredCode(t *testing.T) {
 			assert.Equal(t, tc.expectCodeKept, found)
 		})
 	}
+}
+
+// TestPendingLogin covers the result of a completed cross-device v2 login, which is kept for a login
+// page that was not connected when the login completed: only that page can authenticate for it, and
+// it goes once the page got it or its code can no longer be used.
+func TestPendingLogin(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName        string
+		afterCompletion func(verifier *CredentialVerifier, code string)
+		expectPending   bool
+		expectOpen      bool
+	}
+	tests := []test{
+		{"it is kept until the page got it", func(verifier *CredentialVerifier, code string) {}, true, false},
+		{"it goes once the page got it", func(verifier *CredentialVerifier, code string) {
+			verifier.LoginDelivered("session-id", code)
+		}, false, false},
+		{"a delivery of another code leaves it", func(verifier *CredentialVerifier, code string) {
+			verifier.LoginDelivered("session-id", "another-code")
+		}, true, false},
+		{"it goes once its code was exchanged", func(verifier *CredentialVerifier, code string) {
+			_, _, _, err := verifier.GetToken(code, "https://myhost.org/callback", false)
+			assert.NoError(t, err)
+		}, false, false},
+		{"it goes when its code is released and the session restored", func(verifier *CredentialVerifier, code string) {
+			assert.True(t, verifier.ReleaseUndeliveredCode("session-id", code))
+		}, false, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			verifier, sessionCache, _ := newCodeTestVerifier(t, mockTokenSigner{}, CROSS_DEVICE_V2)
+			verifier.signingKey = getECDSAKey()
+			sessionCache.SetDefault("session-id", loginSession{version: CROSS_DEVICE_V2, callback: "https://myhost.org/callback", sessionId: "session-id",
+				externalState: "external-state", clientId: "clientId", pageSecretHash: sha256.Sum256([]byte("the-page-secret"))})
+
+			vp := getVP([]string{"vc"})
+			response, err := verifier.AuthenticationResponse("session-id", &vp)
+			assert.NoError(t, err)
+			assert.False(t, verifier.HasLoginSession("session-id"), "the session is redeemed")
+			pending, found := verifier.PendingLogin("session-id")
+			assert.True(t, found)
+			assert.Equal(t, PendingLogin{RedirectTarget: "https://myhost.org/callback", ExternalState: "external-state", Code: response.Code, pageSecretHash: sha256.Sum256([]byte("the-page-secret"))}, pending)
+
+			tc.afterCompletion(verifier, response.Code)
+
+			_, found = verifier.PendingLogin("session-id")
+			assert.Equal(t, tc.expectPending, found)
+			assert.Equal(t, tc.expectOpen, verifier.HasLoginSession("session-id"))
+			assert.Equal(t, tc.expectPending || tc.expectOpen, verifier.AwaitsLoginPage("session-id"))
+			if tc.expectPending || tc.expectOpen {
+				assert.NoError(t, verifier.CheckLoginPageSecret("session-id", "the-page-secret"))
+				assert.Equal(t, ErrorLoginPageSecretMismatch, verifier.CheckLoginPageSecret("session-id", "another-secret"))
+			} else {
+				assert.Equal(t, ErrorNoSuchSession, verifier.CheckLoginPageSecret("session-id", "the-page-secret"))
+			}
+		})
+	}
+}
+
+// TestPendingLogin_OnlyCrossDeviceV2 checks that only a login whose page waits on a WebSocket keeps
+// a pending result: the same-device and cross-device v1 flows hand the code over directly.
+func TestPendingLogin_OnlyCrossDeviceV2(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	verifier, _, _ := newCodeTestVerifier(t, mockTokenSigner{}, SAME_DEVICE)
+	verifier.signingKey = getECDSAKey()
+
+	vp := getVP([]string{"vc"})
+	_, err := verifier.AuthenticationResponse("session-id", &vp)
+	assert.NoError(t, err)
+	_, found := verifier.PendingLogin("session-id")
+	assert.False(t, found)
+	assert.False(t, verifier.AwaitsLoginPage("session-id"))
 }
 
 func verifySameDevice(t *testing.T, sdr Response, tokenCache mockTokenCache, tc authTest) {
