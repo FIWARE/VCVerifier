@@ -11,5 +11,16 @@
     "ws_error_retry": "Reintentar",
     "session_invalid_title": "La sesión ya no es válida",
     "session_invalid_desc": "Este inicio de sesión ha caducado o ya se ha utilizado.",
-    "session_invalid_restart": "Empezar de nuevo"
+    "session_invalid_restart": "Empezar de nuevo",
+    "another_tab_title": "El acceso continúa en otra pestaña",
+    "another_tab_desc": "Este acceso se ha abierto en otra pestaña o ventana.",
+    "another_tab_continue": "Continuar aquí",
+    "presentation_rejected_title": "Se ha rechazado una presentación para este acceso",
+    "presentation_rejected_credential_not_accepted": "La credencial presentada no ha sido aceptada.",
+    "presentation_rejected_credential_type_not_requested": "La credencial presentada no se acepta para este acceso.",
+    "presentation_rejected_verification_failed": "No se ha podido verificar la presentación.",
+    "presentation_rejected_server_error": "Algo ha fallado por nuestra parte. Puedes intentarlo de nuevo.",
+    "page_unauthorized_title": "Esta página ya no puede completar el acceso",
+    "page_unauthorized_desc": "Vuelve a iniciar el acceso para obtener un código nuevo.",
+    "page_unauthorized_restart": "Empezar de nuevo"
 }

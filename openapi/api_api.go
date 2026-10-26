@@ -581,6 +581,8 @@ func VerifierAPIAuthenticationResponse(c *gin.Context) {
 	presentation, err := extractVpFromToken(c, vptoken)
 	if err != nil {
 		logging.Log().Warnf("Was not able to extract the presentation from the vp_token.")
+		// signature, holder binding, data model and format checks all fail here
+		notifyRejected(state, err)
 		return
 	}
 	handleAuthenticationResponse(c, state, presentation)
@@ -603,6 +605,8 @@ func GetVerifierAPIAuthenticationResponse(c *gin.Context) {
 	presentation, err := extractVpFromToken(c, vpToken)
 	if err != nil {
 		logging.Log().Warnf("Was not able to extract the presentation from the vp_token.")
+		// signature, holder binding, data model and format checks all fail here
+		notifyRejected(state, err)
 		return
 	}
 	handleAuthenticationResponse(c, state, presentation)
@@ -790,6 +794,12 @@ func handleAuthenticationResponse(c *gin.Context, state string, presentation *co
 	response, err := getApiVerifier().AuthenticationResponse(state, presentation)
 	if err != nil {
 		logging.Log().Warnf("Was not able to fullfil the authentication response. Err: %v", err)
+		// A rejected presentation leaves the session open; the page waiting for it shows that it
+		// can be tried again. A session that does not exist (or was just completed by a concurrent
+		// response) has no page waiting for this answer.
+		if !errors.Is(err, verifier.ErrorNoSuchSession) {
+			notifyRejected(state, err)
+		}
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessage{Summary: err.Error()})
 		return
 	}

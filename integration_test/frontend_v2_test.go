@@ -187,6 +187,7 @@ func TestFrontendV2ByReference(t *testing.T) {
 	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, wsHeader)
 	require.NoError(t, err, "WebSocket connection should succeed")
 	defer wsConn.Close()
+	authenticateWebSocket(t, wsConn, htmlStr)
 
 	// Read the initial "session" message
 	var sessionMsg map[string]interface{}
@@ -306,6 +307,7 @@ func TestFrontendV2ByValue(t *testing.T) {
 	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, wsHeader)
 	require.NoError(t, err, "WebSocket connection should succeed")
 	defer wsConn.Close()
+	authenticateWebSocket(t, wsConn, string(htmlBody))
 
 	// Read initial session message
 	var sessionMsg map[string]interface{}
@@ -390,6 +392,19 @@ func extractWebSocketURL(t *testing.T, html string, walletState string) string {
 
 	wsURL.Scheme = strings.Replace(wsURL.Scheme, "http", "ws", 1)
 	return wsURL.String()
+}
+
+// wsSecretMetaPattern matches the secret the loginQR v2 page authenticates its WebSocket with.
+var wsSecretMetaPattern = regexp.MustCompile(`<meta name="wsSecret" content="([^"]+)">`)
+
+// authenticateWebSocket sends the page secret rendered into the loginQR v2 page as the first
+// message, as the page's script does - without it the verifier does not register the connection.
+func authenticateWebSocket(t *testing.T, conn *websocket.Conn, html string) {
+	t.Helper()
+	matches := wsSecretMetaPattern.FindStringSubmatch(html)
+	require.Len(t, matches, 2, "wsSecret meta tag must be present in the loginQR page")
+	assert.NotContains(t, html, "state="+matches[1], "the page secret must not be part of any URL")
+	require.NoError(t, conn.WriteJSON(map[string]string{"type": "auth", "secret": matches[1]}))
 }
 
 // getStringClaim extracts a string claim from a JWT token.
