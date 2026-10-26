@@ -92,10 +92,13 @@ class AppManager {
     this.socketEverConnected = false;
     this.reconnectAttempts = 0;
     this.reconnectTimer = null;
-    // set once the QR code expired; the page then only asks once more for a login that completed
-    // while it was away
+    // set once the QR code expired; the page then only waits for a login that completed while it
+    // was away, until collectUntil (see #handleExpiration)
     this.expired = false;
+    this.collectUntil = 0;
+    this.collectTimer = null;
     this.hiddenAt = null;
+    this.socketCreatedAt = 0;
     this.theme = new ThemeManager(this.config.get('defaultTheme'));
 
     this.#initTheme();
@@ -187,15 +190,29 @@ class AppManager {
     this.expired = true;
     if (this.socketFinished) return;
     // A login that completed while the page was away - on a phone, the wallet app was in front - is
-    // kept for the page beyond the QR code's lifetime. Ask for it once more; the server answers with
-    // the result, or closes the connection.
+    // kept for the page as long as its code, which lives as long as a session and was issued before
+    // the QR code expired. Keep asking for it until then; the expired notice stays meanwhile.
+    this.collectUntil = this.config.getInt('qrExpireAt') + this.config.getInt('qrDuration') * 1000;
+    this.collectTimer = setTimeout(() => this.#finishWebSocket(), Math.max(this.collectUntil - Date.now(), 0));
     clearTimeout(this.reconnectTimer);
+    this.reconnectAttempts = 0;
+    // Timers are throttled or suspended in the background, so this may run while the page is
+    // hidden, where a connection fails anyway; the page asks once it is visible again.
+    if (document.visibilityState === 'visible') this.#collectLogin();
+  }
+
+  // Asks the server for a login that completed while the page was away, by connecting anew: the
+  // server hands it only to a connection that presented the page secret.
+  #collectLogin() {
+    // a connection opened a moment ago - when the page became visible - already asks for it
+    if (this.socket && this.socket.readyState === WebSocket.CONNECTING) return;
+    if (this.socket && this.socket.readyState === WebSocket.OPEN && Date.now() - this.socketCreatedAt < 1000) return;
     this.#connectWebSocket(this.config.get('wsUrl'));
   }
 
   // Coming back to the page - typically from the wallet app on the same phone - reconnects at once:
-  // the socket may have died in the background, and the server hands a login that completed
-  // meanwhile only to a new connection. A short switch away keeps the socket.
+  // the socket may have died in the background, and a login that completed meanwhile is handed to a
+  // new connection. A short switch away keeps the socket, unless the QR code expired meanwhile.
   #handleVisibilityChange() {
     if (document.visibilityState === 'hidden') {
       this.hiddenAt = Date.now();
@@ -203,10 +220,16 @@ class AppManager {
     }
     const hiddenFor = this.hiddenAt === null ? 0 : Date.now() - this.hiddenAt;
     this.hiddenAt = null;
-    if (this.socketFinished || this.expired || hiddenFor < 2000) return;
-    console.log(`Page visible again after ${hiddenFor}ms, reconnecting`);
+    if (this.socketFinished) return;
     clearTimeout(this.reconnectTimer);
     this.reconnectAttempts = 0;
+    if (this.expired) {
+      console.log(`Page visible again after ${hiddenFor}ms, asking for a login that completed meanwhile`);
+      this.#collectLogin();
+      return;
+    }
+    if (hiddenFor < 2000) return;
+    console.log(`Page visible again after ${hiddenFor}ms, reconnecting`);
     this.#connectWebSocket(this.config.get('wsUrl'));
   }
 
@@ -214,6 +237,7 @@ class AppManager {
   #finishWebSocket() {
     this.socketFinished = true;
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.collectTimer);
     if (this.socket) this.socket.close(1000);
   }
 
@@ -286,7 +310,10 @@ class AppManager {
     const previous = this.socket;
     const socket = new WebSocket(url);
     this.socket = socket;
-    // the server replaces it with the new connection anyway; closing it first keeps it quiet
+    this.socketCreatedAt = Date.now();
+    // The server replaces it with the new connection anyway; closing it first keeps it quiet. A
+    // closed socket delivers no more messages, so a login result the server wrote to it is lost -
+    // the server keeps the result pending and hands it to the new connection.
     if (previous && previous.readyState <= WebSocket.OPEN) previous.close(1000);
 
     // Every connection first presents the page's secret: the session id is in the QR, so only the
@@ -303,9 +330,19 @@ class AppManager {
 
     socket.onclose = (e) => {
       if (this.socketFinished || socket !== this.socket) return;
-      // the last attempt after the QR code expired got no result: the expired notice stays
+      // After the QR code expired only a rejection is final: 4403 means nothing is pending (any more)
+      // and 4409 that another tab took over. A dropped connection - the page may still be in the
+      // background - is retried while a pending login can exist; the expired notice stays.
       if (this.expired) {
-        this.#finishWebSocket();
+        if (e.code === 4403 || e.code === 4409 || Date.now() >= this.collectUntil) {
+          console.log(`No login result after the QR code expired (code ${e.code})`);
+          this.#finishWebSocket();
+          return;
+        }
+        const delay = AppManager.#reconnectDelay(this.reconnectAttempts);
+        this.reconnectAttempts++;
+        console.log(`WebSocket closed (code ${e.code}) after the QR code expired, asking again in ${delay}ms`);
+        this.reconnectTimer = setTimeout(() => this.#connectWebSocket(url), delay);
         return;
       }
       // the server closes with 4403 when the session no longer exists or the page could not
@@ -332,17 +369,15 @@ class AppManager {
       this.reconnectTimer = setTimeout(() => this.#connectWebSocket(url), delay);
     }
     socket.onmessage = (event) => {
+      if (socket !== this.socket) return;
       try {
         const message = JSON.parse(event.data)
 
-        // A socket this page replaced may still bring what the server sent before it was closed.
-        // Only the login result counts: the server hands it out once, so it is not sent again.
-        if (socket !== this.socket && message.type !== "authenticated") return;
-
-        // the last attempt after the QR code expired only waits for a login result
+        // After the QR code expired the page only waits for a login result. "session" is no answer:
+        // the server's session may outlive the QR code on this page's clock, and a login completing
+        // then still arrives on this connection. The close event decides about the others.
         if (this.expired && message.type !== "authenticated") {
-          console.log(`No login result after the QR code expired (${message.type})`);
-          this.#finishWebSocket();
+          console.log(`Waiting for a login result after the QR code expired (${message.type})`);
           return;
         }
 
