@@ -255,8 +255,8 @@ func (c *wsClient) writeJSONLocked(message interface{}) error {
 }
 
 // deliverLogin writes the login result to the page, unless the page was rejected meanwhile or
-// already has it: the result of a login the page missed can reach a reconnected page twice, once
-// from the wallet's response and once as a pending login (see deliverPendingLogin).
+// already has it: a reconnected page can be handed the result twice, once from the wallet's response
+// and once as a pending login (see deliverPendingLogin).
 func (c *wsClient) deliverLogin(message interface{}) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -273,20 +273,19 @@ func (c *wsClient) deliverLogin(message interface{}) error {
 	return nil
 }
 
-// deliverLoginResult hands the result of a completed login to the page and, once the page has it,
-// drops the pending login that kept it for a reconnect.
-func (c *wsClient) deliverLoginResult(sessionId string, redirectTarget string, externalState string, code string) error {
-	if err := c.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": redirectTarget + "?state=" + externalState + "&code=" + code}); err != nil {
-		return err
-	}
-	getFrontendVerifier().LoginDelivered(sessionId, code)
-	return nil
+// deliverLoginResult hands the result of a completed login to the page. A successful write does
+// not mean the page got it - a socket that died in the background still takes the bytes - so the
+// result stays pending until its code is exchanged, and a page that reconnects gets it again.
+func (c *wsClient) deliverLoginResult(redirectTarget string, externalState string, code string) error {
+	return c.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": redirectTarget + "?state=" + externalState + "&code=" + code})
 }
 
-// deliverPendingLogin hands the page the result of a login that completed while it was not
-// connected, and reports whether there was one. Only an authenticated connection may collect it:
-// the session id is in the QR, so anyone could ask for it, and only with enforce, since in warn mode
-// an undelivered code is released at once (see handleAuthenticationResponse).
+// deliverPendingLogin hands the page the result of a completed login whose code was not exchanged
+// yet, and reports whether there was one: the page may have missed it while it was not connected.
+// Only an authenticated connection may collect it: the session id is in the QR, so anyone could ask
+// for it, and only with enforce, since in warn mode an undelivered code is released at once (see
+// handleAuthenticationResponse). The code can be exchanged only once, so handing it to the page
+// again does no harm.
 func (c *wsClient) deliverPendingLogin(sessionId string) bool {
 	if wsSessionBinding != WebSocketBindingEnforce || !c.isAuthenticated() {
 		return false
@@ -295,7 +294,7 @@ func (c *wsClient) deliverPendingLogin(sessionId string) bool {
 	if !found {
 		return false
 	}
-	if err := c.deliverLoginResult(sessionId, pending.RedirectTarget, pending.ExternalState, pending.Code); err != nil {
+	if err := c.deliverLoginResult(pending.RedirectTarget, pending.ExternalState, pending.Code); err != nil {
 		logging.Log().Warnf("Was not able to hand the login result of session %s to its reconnected page; it stays pending. Err: %v", sessionId, err)
 		return true
 	}
@@ -492,7 +491,7 @@ func sendRedirect(sessionId string, externalState string, code string, redirectU
 
 	// The connection is closed and unregistered by WsHandler's reader once the browser leaves the
 	// page, so nothing else is to be done here - in particular no second reader on it.
-	err := connection.(*wsClient).deliverLoginResult(sessionId, redirectUrl, externalState, code)
+	err := connection.(*wsClient).deliverLoginResult(redirectUrl, externalState, code)
 	if err != nil {
 		logging.Log().Warnf("Was not able to notify the frontend for session %s. Err: %v", sessionId, err)
 		return err
@@ -715,8 +714,8 @@ func WsHandler(c *gin.Context) {
 	}()
 
 	// A waiting connection gets it once it authenticated and was registered. A page that reconnects
-	// after its login completed gets the result instead - unless another connection of the page got
-	// it meanwhile, which leaves nothing to wait for.
+	// after its login completed gets the result instead - unless its code was exchanged meanwhile,
+	// which leaves nothing to wait for.
 	if !waiting && !client.deliverPendingLogin(state) && !client.rejectIfSessionGone(state) {
 		client.sendSessionMessage(state)
 	}

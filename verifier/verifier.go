@@ -151,13 +151,11 @@ type Verifier interface {
 	// could not be handed to the browser, unless the code was already redeemed
 	ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool
 	// AwaitsLoginPage reports whether a login page may still wait on the session: it is open, or it
-	// completed and its result has not reached the page yet
+	// completed and its code was neither exchanged nor released yet
 	AwaitsLoginPage(sessionId string) bool
-	// PendingLogin returns the result of a completed cross-device v2 login that its page has not
-	// received yet
+	// PendingLogin returns the result of a completed cross-device v2 login whose code was neither
+	// exchanged nor released yet
 	PendingLogin(sessionId string) (pending PendingLogin, found bool)
-	// LoginDelivered drops the pending login of the session once its page received the result
-	LoginDelivered(sessionId string, authorizationCode string)
 	GenerateToken(clientId, subject, audience string, scope []string, verifiablePresentation *common.Presentation) (int64, string, error)
 	GetOpenIDConfiguration(serviceIdentifier string) (metadata common.OpenIDProviderMetadata, err error)
 	GetRequestObject(state string) (jwt string, err error)
@@ -202,10 +200,10 @@ type CredentialVerifier struct {
 	sessionCache common.Cache
 	// makes redeeming a login session (check that it still exists, then remove it) atomic, and
 	// guards a session together with its pending login, so one of them is always found until the
-	// login page got its result
+	// code is exchanged or released
 	sessionRedeemMutex sync.Mutex
-	// results of completed cross-device v2 logins that their login page has not received yet, by
-	// session id (see PendingLogin)
+	// results of completed cross-device v2 logins whose code was neither exchanged nor released yet,
+	// by session id (see PendingLogin)
 	pendingLogins common.Cache
 	// cache to be used for jwt retrieval
 	tokenCache common.Cache
@@ -382,10 +380,12 @@ type tokenStore struct {
 	sessionExpiresAt time.Time
 }
 
-// PendingLogin is the result of a completed cross-device v2 login, kept until its login page
-// received it. The page's WebSocket may be gone when the wallet's response completes the login -
-// typically on a phone, where opening the wallet sends the browser to the background - and only
-// the page that started the login can collect it later (see CheckLoginPageSecret).
+// PendingLogin is the result of a completed cross-device v2 login, kept until its code is exchanged
+// at the token endpoint or released. The page's WebSocket may be gone when the wallet's response
+// completes the login - typically on a phone, where opening the wallet sends the browser to the
+// background - and only the page that started the login can collect it later (see
+// CheckLoginPageSecret). It is not dropped once written to the page: a successful write only means
+// the kernel took the bytes, and a socket that died in the background still takes them.
 type PendingLogin struct {
 	RedirectTarget string
 	ExternalState  string
@@ -455,6 +455,7 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 	redeemedCodes := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
 	// same lifetime as the code a pending login carries
 	pendingLogins := cache.New(time.Duration(verifierConfig.SessionExpiry)*time.Second, time.Duration(2*verifierConfig.SessionExpiry)*time.Second)
+	pendingLogins.OnEvicted(logUncollectedLogin)
 
 	clock := common.RealClock{}
 
@@ -1298,7 +1299,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	// discards its code. Nothing is locked during verification, so a slow or malicious response
 	// cannot hold up the legitimate one, and a rejected presentation never consumes the session.
 	// A cross-device v2 login page collects its result over a WebSocket that may be gone right now,
-	// so the result stays with the session until the page received it.
+	// so the result stays until its code is exchanged or released.
 	var pending *PendingLogin
 	if loginSession.version == CROSS_DEVICE_V2 {
 		pending = &PendingLogin{RedirectTarget: loginSession.callback, ExternalState: loginSession.externalState, Code: authorizationCode, pageSecretHash: loginSession.pageSecretHash}
@@ -1655,8 +1656,9 @@ func (v *CredentialVerifier) HasLoginSession(sessionId string) bool {
 }
 
 // AwaitsLoginPage reports whether a login page may still wait on the session: it is open, or it
-// completed and its result has not reached the page yet. Both are read under sessionRedeemMutex,
-// which moves a session to its pending login in one step, so neither is missed in between.
+// completed and its code was neither exchanged nor released yet. Both are read under
+// sessionRedeemMutex, which moves a session to its pending login in one step, so neither is missed
+// in between.
 func (v *CredentialVerifier) AwaitsLoginPage(sessionId string) bool {
 	v.sessionRedeemMutex.Lock()
 	defer v.sessionRedeemMutex.Unlock()
@@ -1705,18 +1707,26 @@ func (v *CredentialVerifier) loginPageSecretHash(sessionId string) (pageSecretHa
 	return pageSecretHash, ErrorNoSuchSession
 }
 
-// PendingLogin returns the result of a completed cross-device v2 login that its page has not
-// received yet. Whoever hands it to the page must have checked the page secret first.
+// PendingLogin returns the result of a completed cross-device v2 login whose code was neither
+// exchanged nor released yet. Whoever hands it to the page must have checked the page secret first.
 func (v *CredentialVerifier) PendingLogin(sessionId string) (pending PendingLogin, found bool) {
 	v.sessionRedeemMutex.Lock()
 	defer v.sessionRedeemMutex.Unlock()
 	return v.getPendingLogin(sessionId)
 }
 
-// LoginDelivered drops the pending login of the session once its page received the result. A
-// pending login for another code is left alone.
-func (v *CredentialVerifier) LoginDelivered(sessionId string, authorizationCode string) {
-	v.dropPendingLogin(sessionId, authorizationCode)
+// droppedPendingLogin replaces a pending login whose code was exchanged or released. go-cache calls
+// OnEvicted on Delete as well, so overwriting it is what lets logUncollectedLogin tell a result that
+// nobody collected from one that was used.
+type droppedPendingLogin struct{}
+
+// logUncollectedLogin is the OnEvicted callback of pendingLogins: a pending login that expires was
+// never redeemed at the token endpoint - its page did not come back, or never got the result. The
+// wallet was told that the login succeeded, so this is what explains a user who did not get in.
+func logUncollectedLogin(sessionId string, value interface{}) {
+	if _, uncollected := value.(PendingLogin); uncollected {
+		logging.Log().Infof("Login session %s completed, but its code expired without being exchanged: the login page did not collect the result. The wallet was told that the login succeeded.", sessionId)
+	}
 }
 
 // getPendingLogin reads the pending login of the session. Callers hold sessionRedeemMutex.
@@ -1728,7 +1738,8 @@ func (v *CredentialVerifier) getPendingLogin(sessionId string) (pending PendingL
 	if !found {
 		return pending, false
 	}
-	return pendingInterface.(PendingLogin), true
+	pending, found = pendingInterface.(PendingLogin)
+	return pending, found
 }
 
 // dropPendingLogin removes the pending login of the session if it carries the given code.
@@ -1741,7 +1752,7 @@ func (v *CredentialVerifier) dropPendingLogin(sessionId string, authorizationCod
 // dropPendingLoginLocked is dropPendingLogin for callers that hold sessionRedeemMutex.
 func (v *CredentialVerifier) dropPendingLoginLocked(sessionId string, authorizationCode string) {
 	if pending, found := v.getPendingLogin(sessionId); found && pending.Code == authorizationCode {
-		v.pendingLogins.Delete(sessionId)
+		v.pendingLogins.Set(sessionId, droppedPendingLogin{}, cache.DefaultExpiration)
 	}
 }
 
@@ -1818,6 +1829,9 @@ func (v *CredentialVerifier) releaseCode(sessionId string, session loginSession,
 func (v *CredentialVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {
 	tokenSessionInterface, found := v.tokenCache.Get(authorizationCode)
 	if !found {
+		// the code was exchanged meanwhile, which drops the pending login too, or expired with it;
+		// dropping it here only makes sure no page waits for it
+		v.dropPendingLogin(sessionId, authorizationCode)
 		logging.Log().Infof("Did not restore session %s after the failed delivery: its code is no longer cached.", sessionId)
 		return false
 	}

@@ -394,9 +394,6 @@ func TestSendRedirect_DeliversWhileKeepAliveRuns(t *testing.T) {
 	if message["type"] != "authenticated" || message["redirectUrl"] != "https://rp.example/callback?state=external-state&code=the-code" {
 		t.Errorf("Unexpected notification %v", message)
 	}
-	if code := frontendVerifier.(*mockVerifier).deliveredCode("redirect-session"); code != "the-code" {
-		t.Errorf("Expected the delivered code to be reported to the verifier, got %q", code)
-	}
 }
 
 func TestSetWebSocketKeepAlive(t *testing.T) {
@@ -1303,16 +1300,15 @@ func TestWsHandler_SlowConnectionDoesNotStallOtherSessions(t *testing.T) {
 // that started the login collects the result, and only with enforce.
 func TestWsHandler_PendingLogin(t *testing.T) {
 	type test struct {
-		testName      string
-		binding       string
-		secret        string
-		expectedType  string
-		expectPending bool
+		testName     string
+		binding      string
+		secret       string
+		expectedType string
 	}
 	tests := []test{
-		{"the page reconnecting with its secret gets the result", WebSocketBindingEnforce, testPageSecret, "authenticated", false},
-		{"a connection without the secret gets nothing", WebSocketBindingEnforce, "guessed", "error", true},
-		{"in warn mode the result is not handed out", WebSocketBindingWarn, testPageSecret, "session", true},
+		{"the page reconnecting with its secret gets the result", WebSocketBindingEnforce, testPageSecret, "authenticated"},
+		{"a connection without the secret gets nothing", WebSocketBindingEnforce, "guessed", "error"},
+		{"in warn mode the result is not handed out", WebSocketBindingWarn, testPageSecret, "session"},
 	}
 
 	for _, tc := range tests {
@@ -1334,27 +1330,51 @@ func TestWsHandler_PendingLogin(t *testing.T) {
 			if tc.expectedType == "authenticated" && message["redirectUrl"] != "https://rp.example/callback?state=external-state&code=the-code" {
 				t.Errorf("Unexpected result %v", message)
 			}
-			if _, pending := mock.PendingLogin("pending-session"); pending != tc.expectPending {
-				t.Errorf("Expected the login to stay pending: %v", tc.expectPending)
+			// only exchanging or releasing the code ends it
+			if _, pending := mock.PendingLogin("pending-session"); !pending {
+				t.Errorf("Expected the login to stay pending.")
 			}
 		})
 	}
 }
 
-// TestWsHandler_PendingLoginDeliveredElsewhere covers a page reconnecting while another connection of
-// it collects the result: the session is gone and nothing is pending any more, so the page is told
-// at once instead of waiting in front of a QR code.
-func TestWsHandler_PendingLoginDeliveredElsewhere(t *testing.T) {
+// TestWsHandler_ResultStaysPendingAfterWrite covers a result written to a socket that died in the
+// background: the write succeeds, as the kernel still takes the bytes, but the page never reads them.
+// The page reconnecting must get the result once more.
+func TestWsHandler_ResultStaysPendingAfterWrite(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	dial := startWsTestServer(t)
+	mock := frontendVerifier.(*mockVerifier)
+	stale := dial("background-session")
+	var message map[string]interface{}
+	if err := stale.ReadJSON(&message); err != nil || message["type"] != "session" {
+		t.Fatalf("Expected the session message first, got %v (err %v)", message, err)
+	}
+
+	mock.completeSession("background-session", verifier.PendingLogin{RedirectTarget: "https://rp.example/callback", ExternalState: "external-state", Code: "the-code"})
+	if err := sendRedirect("background-session", "external-state", "the-code", "https://rp.example/callback"); err != nil {
+		t.Fatalf("Expected the write to succeed, got %v", err)
+	}
+
+	page := dial("background-session")
+	_ = page.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := page.ReadJSON(&message); err != nil || message["type"] != "authenticated" || message["redirectUrl"] != "https://rp.example/callback?state=external-state&code=the-code" {
+		t.Errorf("Expected the reconnected page to get the result, got %v (err %v)", message, err)
+	}
+}
+
+// TestWsHandler_PendingLoginExchangedMeanwhile covers a page reconnecting while the code of its login
+// is exchanged: the session is gone and nothing is pending any more, so the page is told at once
+// instead of waiting in front of a QR code.
+func TestWsHandler_PendingLoginExchangedMeanwhile(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 	startWsTestServer(t)
 	mock := frontendVerifier.(*mockVerifier)
-	mock.completeSession("collected-session", verifier.PendingLogin{RedirectTarget: "https://rp.example/callback", ExternalState: "external-state", Code: "the-code"})
-	// the result goes to the other connection between this one's registration and its delivery
-	mock.mockOnPendingLogin = func(sessionId string) {
-		mock.LoginDelivered(sessionId, "the-code")
-	}
+	mock.completeSession("exchanged-session", verifier.PendingLogin{RedirectTarget: "https://rp.example/callback", ExternalState: "external-state", Code: "the-code"})
+	// the code is exchanged between this connection's registration and its delivery
+	mock.mockOnPendingLogin = mock.exchangeCode
 
-	conn := dialWebSocket(t, mock.mockHost, "collected-session", testPageSecret)
+	conn := dialWebSocket(t, mock.mockHost, "exchanged-session", testPageSecret)
 	defer func() { _ = conn.Close() }()
 
 	messages, err := readUntilClosed(t, conn)

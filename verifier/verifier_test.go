@@ -1705,7 +1705,8 @@ func TestReleaseUndeliveredCode(t *testing.T) {
 
 // TestPendingLogin covers the result of a completed cross-device v2 login, which is kept for a login
 // page that was not connected when the login completed: only that page can authenticate for it, and
-// it goes once the page got it or its code can no longer be used.
+// it goes once its code can no longer be used - not when it was written to the page, which does not
+// mean the page got it.
 func TestPendingLogin(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
@@ -1716,13 +1717,7 @@ func TestPendingLogin(t *testing.T) {
 		expectOpen      bool
 	}
 	tests := []test{
-		{"it is kept until the page got it", func(verifier *CredentialVerifier, code string) {}, true, false},
-		{"it goes once the page got it", func(verifier *CredentialVerifier, code string) {
-			verifier.LoginDelivered("session-id", code)
-		}, false, false},
-		{"a delivery of another code leaves it", func(verifier *CredentialVerifier, code string) {
-			verifier.LoginDelivered("session-id", "another-code")
-		}, true, false},
+		{"it is kept until its code is used", func(verifier *CredentialVerifier, code string) {}, true, false},
 		{"it goes once its code was exchanged", func(verifier *CredentialVerifier, code string) {
 			_, _, _, err := verifier.GetToken(code, "https://myhost.org/callback", false)
 			assert.NoError(t, err)
@@ -1730,6 +1725,13 @@ func TestPendingLogin(t *testing.T) {
 		{"it goes when its code is released and the session restored", func(verifier *CredentialVerifier, code string) {
 			assert.True(t, verifier.ReleaseUndeliveredCode("session-id", code))
 		}, false, true},
+		{"releasing a code that is no longer cached drops it", func(verifier *CredentialVerifier, code string) {
+			verifier.tokenCache.Delete(code)
+			assert.False(t, verifier.ReleaseUndeliveredCode("session-id", code))
+		}, false, false},
+		{"releasing another code leaves it", func(verifier *CredentialVerifier, code string) {
+			assert.False(t, verifier.ReleaseUndeliveredCode("session-id", "another-code"))
+		}, true, false},
 	}
 
 	for _, tc := range tests {

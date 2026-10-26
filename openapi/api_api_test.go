@@ -71,8 +71,6 @@ type mockVerifier struct {
 	releasedCodes map[string]string
 	// completed logins whose page did not get the result yet, by session id; guarded by sessionsMu
 	mockPendingLogins map[string]verifier.PendingLogin
-	// codes passed to LoginDelivered, by session id; guarded by sessionsMu
-	deliveredCodes map[string]string
 	// called by PendingLogin before it answers
 	mockOnPendingLogin func(sessionId string)
 }
@@ -144,23 +142,11 @@ func (mV *mockVerifier) completeSession(sessionId string, pending verifier.Pendi
 	mV.mockPendingLogins[sessionId] = pending
 }
 
-func (mV *mockVerifier) LoginDelivered(sessionId string, authorizationCode string) {
+// exchangeCode drops the pending login of the session, like its code being exchanged at /token.
+func (mV *mockVerifier) exchangeCode(sessionId string) {
 	mV.sessionsMu.Lock()
 	defer mV.sessionsMu.Unlock()
-	if mV.deliveredCodes == nil {
-		mV.deliveredCodes = map[string]string{}
-	}
-	mV.deliveredCodes[sessionId] = authorizationCode
-	if pending, found := mV.mockPendingLogins[sessionId]; found && pending.Code == authorizationCode {
-		delete(mV.mockPendingLogins, sessionId)
-	}
-}
-
-// deliveredCode returns the code LoginDelivered was called with for the session.
-func (mV *mockVerifier) deliveredCode(sessionId string) string {
-	mV.sessionsMu.Lock()
-	defer mV.sessionsMu.Unlock()
-	return mV.deliveredCodes[sessionId]
+	delete(mV.mockPendingLogins, sessionId)
 }
 
 func (mV *mockVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {
