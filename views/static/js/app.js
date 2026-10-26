@@ -188,17 +188,31 @@ class AppManager {
     document.getElementById('qrcode')?.classList.add('blur-lg', 'grayscale', 'opacity-50');
     document.getElementById('expired-overlay')?.classList.remove('hidden');
     this.expired = true;
+    // a page showing another panel - "another tab" - starts once the user continues here
     if (this.socketFinished) return;
-    // A login that completed while the page was away - on a phone, the wallet app was in front - is
-    // kept for the page as long as its code, which lives as long as a session and was issued before
-    // the QR code expired. Keep asking for it until then; the expired notice stays meanwhile.
+    this.#startCollecting();
+  }
+
+  // A login that completed while the page was away - on a phone, the wallet app was in front - is
+  // kept for the page as long as its code, which lives as long as a session and was issued before
+  // the QR code expired. Keep asking for it until then; the expired notice stays meanwhile.
+  #startCollecting() {
     this.collectUntil = this.config.getInt('qrExpireAt') + this.config.getInt('qrDuration') * 1000;
-    this.collectTimer = setTimeout(() => this.#finishWebSocket(), Math.max(this.collectUntil - Date.now(), 0));
+    clearTimeout(this.collectTimer);
+    this.collectTimer = setTimeout(() => this.#stopCollecting(), Math.max(this.collectUntil - Date.now(), 0));
     clearTimeout(this.reconnectTimer);
     this.reconnectAttempts = 0;
     // Timers are throttled or suspended in the background, so this may run while the page is
     // hidden, where a connection fails anyway; the page asks once it is visible again.
     if (document.visibilityState === 'visible') this.#collectLogin();
+  }
+
+  // Gives up waiting for a login result after the QR code expired. The expired notice on the QR
+  // code says so; a page that does not show the QR code - it continued from "another tab", or
+  // never got connected - shows "session no longer valid" instead of the connecting notice.
+  #stopCollecting() {
+    this.#finishWebSocket();
+    if (document.getElementById('qrcode')?.classList.contains('hidden')) this.#showWebSocketError('session-invalid');
   }
 
   // Asks the server for a login that completed while the page was away, by connecting anew: the
@@ -296,6 +310,11 @@ class AppManager {
     panel?.classList.remove('flex');
     document.getElementById('ws-connecting')?.classList.remove('hidden');
     this.socketFinished = false;
+    // after the QR code expired, only a login that completed meanwhile is left to collect
+    if (this.expired) {
+      this.#startCollecting();
+      return;
+    }
     this.reconnectAttempts = 0;
     this.#connectWebSocket(this.config.get('wsUrl'));
   }
@@ -337,9 +356,14 @@ class AppManager {
       // and 4409 that another tab took over. A dropped connection - the page may still be in the
       // background - is retried while a pending login can exist; the expired notice stays.
       if (this.expired) {
-        if (e.code === 4403 || e.code === 4409 || Date.now() >= this.collectUntil) {
+        if (e.code === 4409) {
+          console.log('The login continues in another tab after the QR code expired');
+          this.#handleReplaced();
+          return;
+        }
+        if (e.code === 4403 || Date.now() >= this.collectUntil) {
           console.log(`No login result after the QR code expired (code ${e.code})`);
-          this.#finishWebSocket();
+          this.#stopCollecting();
           return;
         }
         const delay = AppManager.#reconnectDelay(this.reconnectAttempts);
