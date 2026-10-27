@@ -3,6 +3,7 @@ package common
 import (
 	"crypto/x509"
 	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -250,6 +251,9 @@ type Credential struct {
 	// proofs holds the Linked Data Proofs attached to this credential, if any.
 	// Populated during JSON-LD credential parsing.
 	proofs []*LDProof
+	// requestAssociations records the DCQL query or Presentation Exchange
+	// descriptor that the wallet used to return this credential.
+	requestAssociations []PresentationRequestAssociation
 	// format records how the credential was encoded in the presentation it was
 	// extracted from (e.g. "jwt_vc", "ldp_vc", "sd-jwt"). Set during parsing
 	// by the presentation parser.
@@ -260,6 +264,22 @@ type Credential struct {
 	// Populated during SD-JWT parsing so downstream validators (e.g. eIDAS)
 	// can use the already-parsed certificates directly.
 	x5cCertificates []*x509.Certificate
+}
+
+// PresentationRequestKind identifies the mechanism associating a credential
+// with a configured presentation request.
+type PresentationRequestKind string
+
+const (
+	PresentationRequestDCQL       PresentationRequestKind = "dcql"
+	PresentationRequestDescriptor PresentationRequestKind = "presentation_exchange"
+)
+
+// PresentationRequestAssociation links a credential to one configured query
+// or input descriptor.
+type PresentationRequestAssociation struct {
+	Kind PresentationRequestKind
+	ID   string
 }
 
 // Contents returns the structured content of the credential.
@@ -281,6 +301,32 @@ func (c *Credential) Proofs() []*LDProof {
 // SetProofs stores Linked Data Proofs on this credential.
 func (c *Credential) SetProofs(proofs []*LDProof) {
 	c.proofs = proofs
+}
+
+// RequestIDs returns the query or descriptor IDs associated with this credential.
+func (c *Credential) RequestIDs() []string {
+	ids := make([]string, 0, len(c.requestAssociations))
+	for _, association := range c.requestAssociations {
+		if !slices.Contains(ids, association.ID) {
+			ids = append(ids, association.ID)
+		}
+	}
+	return ids
+}
+
+// RequestAssociations returns the typed request associations for this credential.
+func (c *Credential) RequestAssociations() []PresentationRequestAssociation {
+	return append([]PresentationRequestAssociation(nil), c.requestAssociations...)
+}
+
+// AddRequestAssociation associates this credential with a DCQL query or
+// Presentation Exchange input descriptor.
+func (c *Credential) AddRequestAssociation(kind PresentationRequestKind, id string) {
+	association := PresentationRequestAssociation{Kind: kind, ID: id}
+	if id == "" || slices.Contains(c.requestAssociations, association) {
+		return
+	}
+	c.requestAssociations = append(c.requestAssociations, association)
 }
 
 // Format returns the credential format identifier (e.g. "jwt_vc", "ldp_vc",
@@ -405,11 +451,12 @@ type PresentationOpt func(*Presentation)
 
 // Presentation represents a Verifiable Presentation.
 type Presentation struct {
-	Context     []string
-	ID          string
-	Type        []string
-	Holder      string
-	credentials []*Credential
+	Context                            []string
+	ID                                 string
+	Type                               []string
+	Holder                             string
+	credentials                        []*Credential
+	presentationSubmissionDefinitionID string
 	// Proofs holds the Linked Data Proofs attached to this presentation.
 	// A presentation may carry zero (JWT-signed) or multiple (LD-signed) proofs.
 	Proofs []*LDProof
@@ -420,6 +467,18 @@ type Presentation struct {
 	// rawToken stores the original VP JWT bytes for deferred signature verification.
 	// Only set in the SD-JWT VP path; nil for JSON-LD VPs.
 	rawToken []byte
+}
+
+// PresentationSubmissionDefinitionID returns the definition_id from the
+// associated Presentation Exchange submission, if one was provided.
+func (p *Presentation) PresentationSubmissionDefinitionID() string {
+	return p.presentationSubmissionDefinitionID
+}
+
+// SetPresentationSubmissionDefinitionID stores the definition_id from the
+// associated Presentation Exchange submission.
+func (p *Presentation) SetPresentationSubmissionDefinitionID(id string) {
+	p.presentationSubmissionDefinitionID = id
 }
 
 // HolderKey returns the public key that signed the VP JWT, if available.

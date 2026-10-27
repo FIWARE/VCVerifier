@@ -323,11 +323,26 @@ func (mcc mockCredentialConfig) RequiredCredentialTypes(serviceIdentifier string
 	if mcc.mockError != nil {
 		return credentialTypes, mcc.mockError
 	}
-	var types = []string{}
+	types := []string{}
 	for _, credential := range mcc.mockScopes[serviceIdentifier][scope].Credentials {
 		types = append(types, credential.Type)
 	}
 	return types, err
+}
+
+type rejectingUnknownClientConfig struct {
+	mockCredentialConfig
+}
+
+func (cc rejectingUnknownClientConfig) RequiredCredentialTypes(serviceIdentifier string, scope string) ([]string, error) {
+	scopes, found := cc.mockScopes[serviceIdentifier]
+	if !found {
+		return nil, fmt.Errorf("no service %s configured", serviceIdentifier)
+	}
+	if _, found := scopes[scope]; !found {
+		return nil, fmt.Errorf("no scope %s configured for service %s", scope, serviceIdentifier)
+	}
+	return cc.mockCredentialConfig.RequiredCredentialTypes(serviceIdentifier, scope)
 }
 
 func (mcc mockCredentialConfig) GetHolderVerification(serviceIdentifier string, scope string, credentialType string) (isEnabled bool, holderClaim string, err error) {
@@ -591,11 +606,15 @@ func verifyInitTest(t *testing.T, tc siopInitTest, authRequest string, err error
 	if expectedNonce == "" {
 		expectedNonce = "randomNonce"
 	}
+	expectedScope := tc.testScope
+	if flowVersion == CROSS_DEVICE_V1 {
+		expectedScope = "openid"
+	}
 	if tc.requestMode == REQUEST_MODE_BY_REFERENCE {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: expectedScope}
 		cachedSession.requestObject = removeSignature(cachedSession.requestObject)
 	} else {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: expectedScope}
 	}
 	// externalState must be exactly what the (external) caller sent as state - this is the
 	// critical property the sessionId/externalState split exists to guarantee: whatever
@@ -629,7 +648,7 @@ func TestStartSameDeviceFlow(t *testing.T) {
 		{testName: "If everything is provided, a samedevice flow should be started in by_reference mode.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testState: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
 			requestMode: REQUEST_MODE_BY_REFERENCE, expectedConnection: "https://verifier.org/redirect?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/my-random-session-id&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzdGF0ZSI6Im15LXJhbmRvbS1zZXNzaW9uLWlkIn0",
 		},
-		{testName: "If everything is provided, a samedevice flow should be started.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testState: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
+		{testName: "If everything is provided, a samedevice flow should be started.", testHost: "verifier.org", testProtocol: "https", testAddress: "/redirect", testState: "my-random-session-id", testClientId: "", credentialScopes: createMockCredentials("", "test", "", "", "", false), mockConfigError: nil, expectedCallback: "https://verifier.org/redirect",
 			requestMode: REQUEST_MODE_BY_REFERENCE, expectedConnection: "https://verifier.org/redirect?client_id=did:key:verifier&request_uri=verifier.org/api/v1/request/my-random-session-id&request_uri_method=get", sessionCacheError: nil, expectedError: nil, testRequestObjectJwt: "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9hdXRoLWF1dGh6LXJlcStqd3QifQ.eyJjbGllbnRfaWQiOiJkaWQ6a2V5OnZlcmlmaWVyIiwiZXhwIjozMCwiaXNzIjoiZGlkOmtleTp2ZXJpZmllciIsIm5vbmNlIjoicmFuZG9tTm9uY2UiLCJyZXNwb25zZV9tb2RlIjoiZGlyZWN0X3Bvc3QiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV91cmkiOiJodHRwczovL3ZlcmlmaWVyLm9yZy9hcGkvdjEvYXV0aGVudGljYXRpb25fcmVzcG9uc2UiLCJzdGF0ZSI6Im15LXJhbmRvbS1zZXNzaW9uLWlkIn0",
 			testScope: "test",
 		},
@@ -647,6 +666,37 @@ func TestStartSameDeviceFlow(t *testing.T) {
 		})
 	}
 
+}
+
+func TestStartSameDeviceFlowRejectsUnknownClient(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	credentialsConfig := rejectingUnknownClientConfig{
+		mockCredentialConfig: mockCredentialConfig{
+			mockScopes: createMockCredentials("known-client", "scope", "CustomerCredential", "https://tir.example", "", false),
+		},
+	}
+	verifier := CredentialVerifier{
+		sessionCache:      &sessionCache,
+		nonceGenerator:    &mockNonceGenerator{staticValues: []string{"session-id"}},
+		credentialsConfig: credentialsConfig,
+	}
+
+	_, err := verifier.StartSameDeviceFlow(
+		"verifier.example",
+		"https",
+		"external-state",
+		"",
+		"unknown-client",
+		"",
+		REQUEST_MODE_URL_ENCODED,
+		"scope",
+		"",
+	)
+
+	assert.Error(t, err)
+	assert.Empty(t, sessionCache.sessions, "an unknown client must not get a login session")
 }
 
 // decodeQRPixelWidth extracts the width (in pixels) of a "data:image/png;base64,..." QR image,
@@ -1204,6 +1254,588 @@ func TestAuthenticationResponse(t *testing.T) {
 		})
 
 	}
+}
+
+func TestAuthenticationResponseDoesNotSkipTrustValidationForGaiaXChain(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	trueOption := true
+	credentials := make([]*common.Credential, 0, 3)
+	credentialTypes := []string{"gx:LegalParticipant", "gx:compliance", "gx:NaturalParticipant"}
+	for _, credentialType := range credentialTypes {
+		issuer := "did:jwk:controller"
+		subject := "did:jwk:legal-entity"
+		if credentialType == "gx:NaturalParticipant" {
+			issuer = subject
+			subject = "did:jwk:controller"
+		}
+		credential, err := common.CreateCredential(common.CredentialContents{
+			Types:  []string{"VerifiableCredential", credentialType},
+			Issuer: &common.Issuer{ID: issuer},
+			Subject: []common.Subject{
+				{ID: subject},
+			},
+		}, common.CustomFields{})
+		if err != nil {
+			t.Fatalf("create %s credential: %v", credentialType, err)
+		}
+		credentials = append(credentials, credential)
+	}
+	presentation, err := common.NewPresentation(common.WithCredentials(credentials...))
+	if err != nil {
+		t.Fatalf("create presentation: %v", err)
+	}
+
+	configuredCredentials := make([]configModel.Credential, 0, len(credentialTypes))
+	for _, credentialType := range credentialTypes {
+		configuredCredentials = append(configuredCredentials, configModel.Credential{
+			Type: credentialType,
+			JwtInclusion: configModel.JwtInclusion{
+				Enabled:       &trueOption,
+				FullInclusion: true,
+			},
+		})
+	}
+	credentialsConfig := mockCredentialConfig{
+		mockScopes: map[string]map[string]configModel.ScopeEntry{
+			"clientId": {
+				"scope": {Credentials: configuredCredentials},
+			},
+		},
+	}
+	sessionCache := mockSessionCache{
+		sessions: map[string]loginSession{
+			"login-state": {
+				version:   SAME_DEVICE,
+				callback:  "https://verifier.example/callback",
+				sessionId: "login-state",
+				clientId:  "clientId",
+				scope:     "scope",
+			},
+		},
+	}
+	tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+	validationService := &mockExternalSsiKit{verificationResults: []bool{false}}
+	verifier := CredentialVerifier{
+		did:                "did:key:verifier",
+		signingKey:         getECDSAKey(),
+		tokenCache:         &tokenCache,
+		sessionCache:       &sessionCache,
+		nonceGenerator:     &mockNonceGenerator{staticValues: []string{"authorization-code"}},
+		validationServices: []ValidationService{validationService},
+		clock:              mockClock{},
+		credentialsConfig:  credentialsConfig,
+		clientIdentification: configModel.ClientIdentification{
+			Id: "did:key:verifier",
+		},
+	}
+
+	_, err = verifier.AuthenticationResponse("login-state", presentation)
+
+	assert.ErrorIs(t, err, ErrorInvalidVC)
+	assert.Empty(t, tokenCache.tokens, "untrusted credentials must not result in a token")
+}
+
+type credentialTypeRecorder struct {
+	types []string
+}
+
+func (r *credentialTypeRecorder) ValidateVC(credential *common.Credential, _ ValidationContext) (bool, error) {
+	for _, credentialType := range credential.Contents().Types {
+		if credentialType != "VerifiableCredential" {
+			r.types = append(r.types, credentialType)
+		}
+	}
+	return true, nil
+}
+
+func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type testCase struct {
+		name                   string
+		mode                   string
+		extraRequestID         string
+		extraAssociationKind   common.PresentationRequestKind
+		submissionDefinitionID string
+		includeRequested       bool
+		allowMultiple          bool
+		queryFormat            string
+		credentialFormat       string
+		expectedError          error
+		expectedValidated      []string
+	}
+	tests := []testCase{
+		{
+			name:              "credential covered by known DCQL id but not configured for inclusion is ignored",
+			mode:              "dcql",
+			extraRequestID:    "requested-query",
+			includeRequested:  true,
+			allowMultiple:     true,
+			expectedValidated: []string{"RequestedCredential"},
+		},
+		{
+			name:             "credential associated with an unknown DCQL id is rejected",
+			mode:             "dcql",
+			extraRequestID:   "unknown-query",
+			includeRequested: true,
+			expectedError:    ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:             "multiple credentials are rejected when the DCQL query does not allow them",
+			mode:             "dcql",
+			extraRequestID:   "requested-query",
+			includeRequested: true,
+			expectedError:    ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:              "unassociated unconfigured credential is ignored when DCQL is configured",
+			mode:              "dcql",
+			includeRequested:  true,
+			expectedValidated: []string{"RequestedCredential"},
+		},
+		{
+			name:           "missing configured credential is rejected even when another query-mapped credential is present",
+			mode:           "dcql",
+			extraRequestID: "requested-query",
+			expectedError:  ErrorRequiredCredentialNotProvided,
+		},
+		{
+			name:             "unsupported DCQL format is rejected",
+			mode:             "dcql",
+			queryFormat:      "mso_mdoc",
+			includeRequested: true,
+			expectedError:    ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:              "matching SD-JWT format is accepted",
+			mode:              "dcql",
+			queryFormat:       "dc+sd-jwt",
+			credentialFormat:  common.FormatSDJWT,
+			includeRequested:  true,
+			expectedValidated: []string{"RequestedCredential"},
+		},
+		{
+			name:              "known Presentation Exchange descriptor also covers an unconfigured type",
+			mode:              "presentation-definition",
+			extraRequestID:    "requested-descriptor",
+			includeRequested:  true,
+			expectedValidated: []string{"RequestedCredential"},
+		},
+		{
+			name:             "unknown Presentation Exchange descriptor is rejected",
+			mode:             "presentation-definition",
+			extraRequestID:   "unknown-descriptor",
+			includeRequested: true,
+			expectedError:    ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:                   "Presentation Exchange submission for another definition is rejected",
+			mode:                   "presentation-definition",
+			extraRequestID:         "requested-descriptor",
+			submissionDefinitionID: "different-definition",
+			includeRequested:       true,
+			expectedError:          ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:                 "descriptor id cannot be used as a DCQL query id",
+			mode:                 "both",
+			extraRequestID:       "requested-descriptor",
+			extraAssociationKind: common.PresentationRequestDCQL,
+			includeRequested:     true,
+			expectedError:        ErrorNoValidCredentialTypeProvided,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			trueOption := true
+			scope := configModel.ScopeEntry{
+				Credentials: []configModel.Credential{{
+					Type: "RequestedCredential",
+					JwtInclusion: configModel.JwtInclusion{
+						Enabled:       &trueOption,
+						FullInclusion: true,
+					},
+				}},
+			}
+			switch tc.mode {
+			case "dcql":
+				scope.DCQL = &configModel.DCQL{
+					Credentials: []configModel.CredentialQuery{{
+						Id:       "requested-query",
+						Multiple: tc.allowMultiple,
+						Format:   tc.queryFormat,
+					}},
+				}
+			case "presentation-definition":
+				scope.PresentationDefinition = &configModel.PresentationDefinition{
+					Id:               "requested-definition",
+					InputDescriptors: []configModel.InputDescriptor{{Id: "requested-descriptor"}},
+				}
+			case "both":
+				scope.DCQL = &configModel.DCQL{
+					Credentials: []configModel.CredentialQuery{{Id: "requested-query"}},
+				}
+				scope.PresentationDefinition = &configModel.PresentationDefinition{
+					Id:               "requested-definition",
+					InputDescriptors: []configModel.InputDescriptor{{Id: "requested-descriptor"}},
+				}
+			}
+
+			credentials := []*common.Credential{}
+			if tc.includeRequested {
+				requested, err := common.CreateCredential(common.CredentialContents{
+					Types: []string{"VerifiableCredential", "RequestedCredential"},
+				}, common.CustomFields{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.mode == "dcql" || tc.mode == "both" {
+					requested.AddRequestAssociation(common.PresentationRequestDCQL, "requested-query")
+				} else {
+					requested.AddRequestAssociation(common.PresentationRequestDescriptor, "requested-descriptor")
+				}
+				if tc.credentialFormat != "" {
+					requested.SetFormat(tc.credentialFormat)
+				}
+				credentials = append(credentials, requested)
+			}
+			extra, err := common.CreateCredential(common.CredentialContents{
+				Types: []string{"VerifiableCredential", "ExtraCredential"},
+			}, common.CustomFields{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.extraRequestID != "" {
+				kind := tc.extraAssociationKind
+				if kind == "" && (tc.mode == "dcql" || tc.mode == "both") {
+					kind = common.PresentationRequestDCQL
+				} else if kind == "" {
+					kind = common.PresentationRequestDescriptor
+				}
+				if kind == common.PresentationRequestDCQL {
+					extra.AddRequestAssociation(common.PresentationRequestDCQL, tc.extraRequestID)
+				} else {
+					extra.AddRequestAssociation(common.PresentationRequestDescriptor, tc.extraRequestID)
+				}
+			}
+			credentials = append(credentials, extra)
+			presentation, err := common.NewPresentation(common.WithCredentials(credentials...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (tc.mode == "presentation-definition" || tc.mode == "both") && tc.extraRequestID != "" {
+				definitionID := tc.submissionDefinitionID
+				if definitionID == "" {
+					definitionID = "requested-definition"
+				}
+				presentation.SetPresentationSubmissionDefinitionID(definitionID)
+			}
+
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{
+				"login-state": {
+					version:   SAME_DEVICE,
+					callback:  "https://verifier.example/callback",
+					sessionId: "login-state",
+					clientId:  "clientId",
+					scope:     "scope",
+				},
+			}}
+			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+			validator := &credentialTypeRecorder{}
+			verifier := CredentialVerifier{
+				did:                "did:key:verifier",
+				signingKey:         getECDSAKey(),
+				tokenSigner:        mockTokenSigner{},
+				tokenCache:         &tokenCache,
+				sessionCache:       &sessionCache,
+				nonceGenerator:     &mockNonceGenerator{staticValues: []string{"authorization-code"}},
+				validationServices: []ValidationService{validator},
+				clock:              mockClock{},
+				credentialsConfig: mockCredentialConfig{
+					mockScopes: map[string]map[string]configModel.ScopeEntry{
+						"clientId": {"scope": scope},
+					},
+				},
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			_, err = verifier.AuthenticationResponse("login-state", presentation)
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError)
+				assert.Empty(t, tokenCache.tokens)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedValidated, validator.types, "only configured credential types should be validated")
+			assert.Contains(t, tokenCache.tokens, "authorization-code")
+			var includedCredential map[string]interface{}
+			assert.NoError(t, tokenCache.tokens["authorization-code"].token.Get("verifiableCredential", &includedCredential))
+			includedJSON, marshalErr := json.Marshal(includedCredential)
+			assert.NoError(t, marshalErr)
+			assert.NotContains(t, string(includedJSON), "ExtraCredential", "unconfigured credential must not be included in the token")
+		})
+	}
+}
+
+func TestAuthenticationResponseRejectsCredentialsThatDoNotMatchQueries(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type testCase struct {
+		name        string
+		dcql        *configModel.DCQL
+		definition  *configModel.PresentationDefinition
+		credential  common.CredentialContents
+		format      string
+		expectError bool
+	}
+	tests := []testCase{
+		{
+			name: "DCQL claim value mismatch",
+			dcql: &configModel.DCQL{Credentials: []configModel.CredentialQuery{{
+				Id: "requested-query",
+				Claims: []configModel.ClaimsQuery{{
+					Path:   []interface{}{"credentialSubject", "role"},
+					Values: []interface{}{"admin"},
+				}},
+			}}},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "user"}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "DCQL claim match",
+			dcql: &configModel.DCQL{Credentials: []configModel.CredentialQuery{{
+				Id: "requested-query",
+				Claims: []configModel.ClaimsQuery{{
+					Path:   []interface{}{"credentialSubject", "role"},
+					Values: []interface{}{"admin"},
+				}},
+			}}},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "admin"}}},
+			},
+		},
+		{
+			name: "JWT-VC type_values match",
+			dcql: &configModel.DCQL{Credentials: []configModel.CredentialQuery{{
+				Id:     "requested-query",
+				Format: "jwt_vc_json",
+				Meta:   &configModel.MetaDataQuery{TypeValues: [][]string{{"VerifiableCredential", "RequestedCredential"}}},
+			}}},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "admin"}}},
+			},
+			format: common.FormatJWTVC,
+		},
+		{
+			name: "JWT-VC type_values mismatch",
+			dcql: &configModel.DCQL{Credentials: []configModel.CredentialQuery{{
+				Id:     "requested-query",
+				Format: "jwt_vc_json",
+				Meta:   &configModel.MetaDataQuery{TypeValues: [][]string{{"VerifiableCredential", "OtherCredential"}}},
+			}}},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "admin"}}},
+			},
+			format:      common.FormatJWTVC,
+			expectError: true,
+		},
+		{
+			name: "Presentation Exchange field filter mismatch",
+			definition: &configModel.PresentationDefinition{
+				Id: "requested-definition",
+				InputDescriptors: []configModel.InputDescriptor{{
+					Id: "requested-descriptor",
+					Constraints: configModel.Constraints{Fields: []configModel.Fields{{
+						Path:     []string{"$.credentialSubject.role"},
+						Optional: boolPtr(false),
+						Filter:   map[string]interface{}{"const": "admin"},
+					}}},
+				}},
+			},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "user"}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "Presentation Exchange rejects a disclosed optional field that violates its filter",
+			definition: &configModel.PresentationDefinition{
+				Id: "requested-definition",
+				InputDescriptors: []configModel.InputDescriptor{{
+					Id: "requested-descriptor",
+					Constraints: configModel.Constraints{Fields: []configModel.Fields{{
+						Path:   []string{"$.credentialSubject.role"},
+						Filter: map[string]interface{}{"const": "admin"},
+					}}},
+				}},
+			},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "user"}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "Presentation Exchange does not treat an array claim as a matching element",
+			definition: &configModel.PresentationDefinition{
+				Id: "requested-definition",
+				InputDescriptors: []configModel.InputDescriptor{{
+					Id: "requested-descriptor",
+					Constraints: configModel.Constraints{Fields: []configModel.Fields{{
+						Path:     []string{"$.credentialSubject.roles"},
+						Optional: boolPtr(false),
+						Filter:   map[string]interface{}{"const": "admin"},
+					}}},
+				}},
+			},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"roles": []string{"user"}}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "Presentation Exchange field filter match",
+			definition: &configModel.PresentationDefinition{
+				Id: "requested-definition",
+				InputDescriptors: []configModel.InputDescriptor{{
+					Id: "requested-descriptor",
+					Constraints: configModel.Constraints{Fields: []configModel.Fields{{
+						Path:     []string{"$.credentialSubject.role"},
+						Optional: boolPtr(false),
+						Filter:   map[string]interface{}{"const": "admin"},
+					}}},
+				}},
+			},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "admin"}}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			trueOption := true
+			scope := configModel.ScopeEntry{
+				Credentials: []configModel.Credential{{
+					Type: "RequestedCredential",
+					JwtInclusion: configModel.JwtInclusion{
+						Enabled:       &trueOption,
+						FullInclusion: true,
+					},
+				}},
+				DCQL:                   tc.dcql,
+				PresentationDefinition: tc.definition,
+			}
+			credential, err := common.CreateCredential(tc.credential, common.CustomFields{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.format != "" {
+				credential.SetFormat(tc.format)
+			}
+			if tc.dcql != nil {
+				credential.AddRequestAssociation(common.PresentationRequestDCQL, "requested-query")
+			} else {
+				credential.AddRequestAssociation(common.PresentationRequestDescriptor, "requested-descriptor")
+			}
+			presentation, err := common.NewPresentation(common.WithCredentials(credential))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.definition != nil {
+				presentation.SetPresentationSubmissionDefinitionID("requested-definition")
+			}
+
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{
+				"login-state": {
+					version:   SAME_DEVICE,
+					callback:  "https://verifier.example/callback",
+					sessionId: "login-state",
+					clientId:  "clientId",
+					scope:     "scope",
+				},
+			}}
+			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+			verifier := CredentialVerifier{
+				did:                "did:key:verifier",
+				signingKey:         getECDSAKey(),
+				tokenSigner:        mockTokenSigner{},
+				tokenCache:         &tokenCache,
+				sessionCache:       &sessionCache,
+				nonceGenerator:     &mockNonceGenerator{staticValues: []string{"authorization-code"}},
+				validationServices: []ValidationService{&credentialTypeRecorder{}},
+				clock:              mockClock{},
+				credentialsConfig: mockCredentialConfig{
+					mockScopes: map[string]map[string]configModel.ScopeEntry{
+						"clientId": {"scope": scope},
+					},
+				},
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			_, err = verifier.AuthenticationResponse("login-state", presentation)
+			if tc.expectError {
+				assert.Error(t, err, "a known request ID must not satisfy constraints the credential fails")
+				assert.Empty(t, tokenCache.tokens)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Contains(t, tokenCache.tokens, "authorization-code")
+		})
+	}
+}
+
+func TestPresentationRequestAlternatives(t *testing.T) {
+	dcql := &configModel.DCQL{
+		Credentials: []configModel.CredentialQuery{{Id: "query-a"}, {Id: "query-b"}},
+		CredentialSets: []configModel.CredentialSetQuery{{
+			Options:  [][]string{{"query-a"}, {"query-b"}},
+			Required: boolPtr(true),
+		}},
+	}
+	assert.True(t, satisfiesDCQLCredentialSets(dcql, map[string]struct{}{"query-a": {}}))
+	assert.True(t, satisfiesDCQLCredentialSets(dcql, map[string]struct{}{"query-b": {}}))
+	assert.False(t, satisfiesDCQLCredentialSets(dcql, map[string]struct{}{}))
+
+	defaultRequired := &configModel.DCQL{
+		Credentials: []configModel.CredentialQuery{{Id: "query-required"}},
+		CredentialSets: []configModel.CredentialSetQuery{{
+			Options: [][]string{{"query-required"}},
+		}},
+	}
+	assert.True(t, defaultRequired.CredentialSets[0].IsRequired())
+	assert.False(t, satisfiesDCQLCredentialSets(defaultRequired, map[string]struct{}{}))
+	optionalSet := configModel.CredentialSetQuery{Options: [][]string{{"query-required"}}, Required: boolPtr(false)}
+	optionalDCQL := &configModel.DCQL{
+		Credentials:    []configModel.CredentialQuery{{Id: "query-required"}},
+		CredentialSets: []configModel.CredentialSetQuery{optionalSet},
+	}
+	assert.True(t, satisfiesDCQLCredentialSets(optionalDCQL, map[string]struct{}{}))
+
+	presentationDefinition := &configModel.PresentationDefinition{
+		InputDescriptors: []configModel.InputDescriptor{
+			{Id: "descriptor-a", Group: []string{"choice"}},
+			{Id: "descriptor-b", Group: []string{"choice"}},
+		},
+		SubmissionRequirements: []configModel.SubmissionRequirement{{
+			Rule: "pick",
+			From: "choice",
+		}},
+	}
+	assert.True(t, satisfiesPresentationSubmissionRequirements(presentationDefinition, map[string]struct{}{"descriptor-a": {}}))
+	assert.True(t, satisfiesPresentationSubmissionRequirements(presentationDefinition, map[string]struct{}{"descriptor-b": {}}))
+	assert.False(t, satisfiesPresentationSubmissionRequirements(presentationDefinition, map[string]struct{}{}))
 }
 
 // gatedValidationService accepts every credential, but holds each validation until released,

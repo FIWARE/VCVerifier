@@ -21,6 +21,9 @@ import (
 // ErrorNoDefaultScope is returned when no default OIDC scope is configured for a service.
 var ErrorNoDefaultScope = errors.New("no_default_scope_configured")
 
+// ErrorUnknownClientOrScope marks a request for an unconfigured client or scope.
+var ErrorUnknownClientOrScope = errors.New("unknown_client_or_scope")
+
 // FormatLDPVC is the credential format identifier for JSON-LD Verifiable
 // Credentials with Linked Data Proofs, as defined in the W3C VC Data Model.
 const FormatLDPVC = "ldp_vc"
@@ -201,10 +204,14 @@ func (cc cacheBasedCredentialsConfig) RequiredCredentialTypes(serviceIdentifier 
 	if hit {
 		logging.Log().Debugf("Found service for %s", serviceIdentifier)
 		configuredService := cacheEntry.(config.ConfiguredService)
-		return configuredService.GetRequiredCredentialTypes(scope)
+		credentialTypes, err := configuredService.GetRequiredCredentialTypes(scope)
+		if errors.Is(err, config.ErrorNoSuchScope) {
+			return nil, fmt.Errorf("%w: %s", ErrorUnknownClientOrScope, scope)
+		}
+		return credentialTypes, err
 	}
 	logging.Log().Errorf("No service entry for %s", serviceIdentifier)
-	return []string{}, fmt.Errorf("no service %s configured", serviceIdentifier)
+	return nil, fmt.Errorf("%w: %s", ErrorUnknownClientOrScope, serviceIdentifier)
 }
 
 // GetDefaultScope returns the configured default OIDC scope for the given service.

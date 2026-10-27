@@ -189,15 +189,15 @@ func TestIsTrustedParticipantV5(t *testing.T) {
 
 func TestGetTrustedIssuerV5(t *testing.T) {
 	type test struct {
-		testName           string
-		testIssuer         string
-		testEndpoints      []string
-		mockResponses      map[string]*http.Response
-		mockErrors         map[string]error
-		expectedIssuer     string
-		expectedAttrCount  int
-		expectExists       bool
-		expectError        bool
+		testName          string
+		testIssuer        string
+		testEndpoints     []string
+		mockResponses     map[string]*http.Response
+		mockErrors        map[string]error
+		expectedIssuer    string
+		expectedAttrCount int
+		expectExists      bool
+		expectError       bool
 	}
 	tests := []test{
 		{
