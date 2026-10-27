@@ -1226,10 +1226,14 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		logging.Log().Warnf("Was not able to get configured credential types for client %s and scope %s. Err: %v", loginSession.clientId, loginSession.scope, err)
 		return sameDevice, ErrorVerficationContextSetup
 	}
+	presentedTypes := make(map[string]struct{}, len(credentialTypes))
+	for _, credentialType := range credentialTypes {
+		presentedTypes[credentialType] = struct{}{}
+	}
 	configuredTypes := make(map[string]struct{}, len(configuredCredentialTypes))
 	for _, credentialType := range configuredCredentialTypes {
 		configuredTypes[credentialType] = struct{}{}
-		if !slices.Contains(credentialTypes, credentialType) {
+		if _, ok := presentedTypes[credentialType]; !ok {
 			logging.Log().Infof("Required credential type %s was not provided for client %s and scope %s.", credentialType, loginSession.clientId, loginSession.scope)
 			return sameDevice, ErrorRequiredCredentialNotProvided
 		}
