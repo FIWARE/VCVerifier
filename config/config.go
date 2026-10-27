@@ -232,6 +232,9 @@ type Verifier struct {
 	KeyAlgorithm string `mapstructure:"keyAlgorithm" default:"RS256"`
 	// when set to true, the private key is generated on startup. Its not persisted and just kept in memory.
 	GenerateKey bool `mapstructure:"generateKey" default:"true"`
+	// AllowedCodeChallengeMethods is the allowlist of PKCE code challenge methods.
+	// S256 is the secure default; plain is supported only when explicitly enabled.
+	AllowedCodeChallengeMethods []string `mapstructure:"allowedCodeChallengeMethods"`
 	// path to the private key for jwt signatures
 	KeyPath string `mapstructure:"keyPath"`
 	// expiration time in minutes for JWT tokens

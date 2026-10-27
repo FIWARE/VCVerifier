@@ -568,6 +568,51 @@ func TestStartSiopFlow(t *testing.T) {
 	}
 }
 
+func TestStartSiopFlowWithPKCEStoresChallengeInV1Session(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	testKey := getECDSAKey()
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues("", "my-super-random-id")}
+	verifier := CredentialVerifier{
+		host:              "verifier.org",
+		did:               "did:key:verifier",
+		sessionCache:      &sessionCache,
+		nonceGenerator:    &nonceGenerator,
+		tokenSigner:       mockTokenSigner{},
+		clock:             mockClock{},
+		credentialsConfig: mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
+		requestSigningKey: &testKey,
+		clientIdentification: configModel.ClientIdentification{
+			Id:           "did:key:verifier",
+			KeyPath:      "/my-signing-key.pem",
+			KeyAlgorithm: "ES256",
+		},
+		verifierConfig: configModel.Verifier{AllowedCodeChallengeMethods: []string{PKCES256}},
+	}
+	pkce := PKCEChallenge{
+		Value:        strings.Repeat("a", 43),
+		Method:       "s256",
+		ChallengeSet: true,
+		MethodSet:    true,
+	}
+
+	_, err := verifier.StartSiopFlowWithPKCE(
+		"verifier.org", "https", "https://client.org/callback", "external-state", "",
+		"", REQUEST_MODE_BY_VALUE, pkce,
+	)
+	assert.NoError(t, err)
+
+	session, exists := sessionCache.sessions["my-super-random-id"]
+	assert.True(t, exists)
+	assert.Equal(t, PKCEChallenge{
+		Value:        pkce.Value,
+		Method:       PKCES256,
+		ChallengeSet: true,
+		MethodSet:    true,
+	}, session.pkce)
+}
+
 // sessionIdStaticValues builds the mockNonceGenerator static values so that, regardless of
 // whether the flow under test generates its own nonce (only when testNonce is empty, see
 // e.g. initSiopFlow), the *last* value consumed is always sessionId - the verifier-generated
@@ -2769,6 +2814,42 @@ func TestGetToken(t *testing.T) {
 				return
 			}
 		})
+	}
+}
+
+func TestGetTokenWithCodeVerifierRetainsCodeAfterFailedProof(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	codeVerifier := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
+	digest := sha256.Sum256([]byte(codeVerifier))
+	codeChallenge := base64.RawURLEncoding.EncodeToString(digest[:])
+	tokenCache := mockTokenCache{tokens: map[string]tokenStore{
+		"pkce-code": {
+			token:        getToken(),
+			redirect_uri: "https://myhost.org/redirect",
+			pkce:         PKCEChallenge{Value: codeChallenge, Method: PKCES256},
+		},
+	}}
+	testKey := getECDSAKey()
+	v := CredentialVerifier{
+		tokenCache:       &tokenCache,
+		signingKey:       testKey,
+		clock:            mockClock{},
+		tokenSigner:      mockTokenSigner{},
+		signingAlgorithm: "ES256",
+	}
+
+	_, _, _, err := v.GetTokenWithCodeVerifier("pkce-code", "https://myhost.org/redirect", false, codeVerifier+"x")
+	if !errors.Is(err, ErrorInvalidPKCEVerifier) {
+		t.Fatalf("expected invalid verifier error, got %v", err)
+	}
+
+	jwtString, _, _, err := v.GetTokenWithCodeVerifier("pkce-code", "https://myhost.org/redirect", false, codeVerifier)
+	if err != nil {
+		t.Fatalf("expected the valid verifier to exchange the code after a failed attempt, got %v", err)
+	}
+	if jwtString == "" {
+		t.Fatal("expected a signed token")
 	}
 }
 
