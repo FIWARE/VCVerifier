@@ -53,7 +53,7 @@ var ErrorMessageNoClientId = ErrorMessage{"no_client_id_provided", "Authenticati
 var ErrorMessageNoNonce = ErrorMessage{"no_nonce_provided", "Authentication requires a nonce provided as a query parameter."}
 var ErrorMessageNoToken = ErrorMessage{"no_token_provided", "Authentication requires a token provided as a form parameter."}
 var ErrorMessageNoPresentationSubmission = ErrorMessage{"no_presentation_submission_provided", "Authentication requires a presentation submission provided as a form parameter."}
-var ErrorMessageInvalidPresentationSubmission = ErrorMessage{"invalid_presentation_submission", "The presentation submission must contain a non-empty descriptor_map with an id for each entry."}
+var ErrorMessageInvalidPresentationSubmission = ErrorMessage{"invalid_presentation_submission", "The presentation submission must be valid JSON or Base64URL-encoded JSON with a definition_id and non-empty descriptor_map containing valid credential paths."}
 var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback address has to be provided as query-parameter."}
 var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could not be decoded."}
 var ErrorMessageInvalidTokenEncoding = ErrorMessage{"invalid_token", "The vp_token has to be base64url encoded without padding."}
@@ -770,7 +770,7 @@ func addRequestIDToPresentation(presentation *common.Presentation, requestID str
 		return
 	}
 	for _, credential := range presentation.Credentials() {
-		credential.AddRequestID(requestID)
+		credential.AddRequestAssociation(common.PresentationRequestDCQL, requestID)
 	}
 }
 
@@ -781,13 +781,19 @@ func addPresentationSubmissionRequestIDs(presentation *common.Presentation, subm
 	if presentation == nil {
 		return errors.New("presentation_submission provided without a parsed presentation")
 	}
-	var decoded struct {
-		DescriptorMap []presentationDescriptorMapEntry `json:"descriptor_map"`
-	}
-	if err := json.Unmarshal([]byte(submission), &decoded); err != nil {
+	submissionBytes, err := decodePresentationSubmission(submission)
+	if err != nil {
 		return err
 	}
-	if len(decoded.DescriptorMap) == 0 {
+	var decoded struct {
+		ID            string                           `json:"id"`
+		DefinitionID  string                           `json:"definition_id"`
+		DescriptorMap []presentationDescriptorMapEntry `json:"descriptor_map"`
+	}
+	if err := json.Unmarshal(submissionBytes, &decoded); err != nil {
+		return err
+	}
+	if decoded.ID == "" || decoded.DefinitionID == "" || len(decoded.DescriptorMap) == 0 {
 		return errors.New("presentation_submission has no descriptor_map entries")
 	}
 	credentials := presentation.Credentials()
@@ -795,18 +801,17 @@ func addPresentationSubmissionRequestIDs(presentation *common.Presentation, subm
 		if descriptor.ID == "" {
 			return errors.New("presentation_submission descriptor_map entry has no id")
 		}
-		path := descriptor.Path
+		paths := []string{descriptor.Path}
 		for nested := descriptor.PathNested; nested != nil; nested = nested.PathNested {
-			path = nested.Path
+			paths = append(paths, nested.Path)
 		}
-		indices, err := credentialIndicesFromDescriptorPath(path, len(credentials))
-		if err != nil {
-			return err
+		index, pathErr := credentialIndexFromDescriptorPathChain(paths, len(credentials))
+		if pathErr != nil {
+			return pathErr
 		}
-		for _, index := range indices {
-			credentials[index].AddRequestID(descriptor.ID)
-		}
+		credentials[index].AddRequestAssociation(common.PresentationRequestDescriptor, descriptor.ID)
 	}
+	presentation.SetPresentationSubmissionDefinitionID(decoded.DefinitionID)
 	return nil
 }
 
@@ -816,25 +821,91 @@ type presentationDescriptorMapEntry struct {
 	PathNested *presentationDescriptorMapEntry `json:"path_nested"`
 }
 
-var descriptorCredentialIndex = regexp.MustCompile(`verifiableCredential\[(\d+)\]`)
+var descriptorCredentialIndex = regexp.MustCompile(`^\$\.(?:vp\.)?verifiableCredential\[(0|[1-9][0-9]*)\]$`)
+var nestedDescriptorCredentialIndex = regexp.MustCompile(`^\$\.verifiableCredential\[(0|[1-9][0-9]*)\]$`)
+var arrayDescriptorCredentialIndex = regexp.MustCompile(`^\$\[(0|[1-9][0-9]*)\]$`)
 
 func credentialIndicesFromDescriptorPath(path string, credentialCount int) ([]int, error) {
-	matches := descriptorCredentialIndex.FindAllStringSubmatch(path, -1)
-	if len(matches) > 0 {
-		index, err := strconv.Atoi(matches[len(matches)-1][1])
-		if err != nil || index < 0 || index >= credentialCount {
-			return nil, errors.New("presentation_submission descriptor path selects an unavailable credential")
+	if isPresentationContainerPath(path) {
+		if credentialCount != 1 {
+			return nil, errors.New("presentation_submission presentation path is ambiguous")
 		}
-		return []int{index}, nil
+		return []int{0}, nil
 	}
-	if path == "$" || path == "$.vp" || path == "$.verifiableCredential" || path == "$.vp.verifiableCredential" {
-		indices := make([]int, credentialCount)
-		for i := range indices {
-			indices[i] = i
+	index, err := descriptorCredentialIndexForPath(path)
+	if err != nil {
+		return nil, err
+	}
+	if index < 0 || index >= credentialCount {
+		return nil, errors.New("presentation_submission descriptor path selects an unavailable credential")
+	}
+	return []int{index}, nil
+}
+
+func credentialIndexFromDescriptorPathChain(paths []string, credentialCount int) (int, error) {
+	if len(paths) == 1 {
+		indices, err := credentialIndicesFromDescriptorPath(paths[0], credentialCount)
+		if err != nil {
+			return 0, err
 		}
-		return indices, nil
+		return indices[0], nil
 	}
-	return nil, fmt.Errorf("unsupported presentation_submission descriptor path %q", path)
+	if len(paths) != 2 {
+		return 0, errors.New("presentation_submission descriptor path nesting is unsupported")
+	}
+
+	var leafPattern *regexp.Regexp
+	switch paths[0] {
+	case "$":
+		leafPattern = descriptorCredentialIndex
+	case "$.vp":
+		leafPattern = nestedDescriptorCredentialIndex
+	case "$.verifiableCredential":
+		leafPattern = arrayDescriptorCredentialIndex
+	default:
+		return 0, fmt.Errorf("unsupported presentation_submission descriptor path %q", paths[0])
+	}
+	match := leafPattern.FindStringSubmatch(paths[1])
+	if len(match) != 2 {
+		return 0, fmt.Errorf("unsupported presentation_submission descriptor path %q", paths[1])
+	}
+	index, err := strconv.Atoi(match[1])
+	if err != nil || index < 0 || index >= credentialCount {
+		return 0, errors.New("presentation_submission descriptor path selects an unavailable credential")
+	}
+	return index, nil
+}
+
+func descriptorCredentialIndexForPath(path string) (int, error) {
+	for _, pattern := range []*regexp.Regexp{descriptorCredentialIndex, nestedDescriptorCredentialIndex} {
+		match := pattern.FindStringSubmatch(path)
+		if len(match) == 2 {
+			index, err := strconv.Atoi(match[1])
+			if err != nil {
+				break
+			}
+			return index, nil
+		}
+	}
+	return 0, fmt.Errorf("unsupported presentation_submission descriptor path %q", path)
+}
+
+func isPresentationContainerPath(path string) bool {
+	return path == "$" || path == "$.vp" || path == "$.verifiableCredential" || path == "$.vp.verifiableCredential"
+}
+
+func decodePresentationSubmission(submission string) ([]byte, error) {
+	submission = strings.TrimSpace(submission)
+	if strings.HasPrefix(submission, "{") {
+		return []byte(submission), nil
+	}
+	if submission == "" {
+		return nil, errors.New("presentation_submission is empty")
+	}
+	if strings.Contains(submission, "=") {
+		return base64.URLEncoding.DecodeString(submission)
+	}
+	return base64.RawURLEncoding.DecodeString(submission)
 }
 
 // checks if the presented token contains a single sd-jwt credential. Will be repackage to a presentation for further validation

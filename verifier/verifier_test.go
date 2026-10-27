@@ -1349,12 +1349,14 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	type testCase struct {
-		name              string
-		mode              string
-		extraRequestID    string
-		includeRequested  bool
-		expectedError     error
-		expectedValidated []string
+		name                   string
+		mode                   string
+		extraRequestID         string
+		extraAssociationKind   common.PresentationRequestKind
+		submissionDefinitionID string
+		includeRequested       bool
+		expectedError          error
+		expectedValidated      []string
 	}
 	tests := []testCase{
 		{
@@ -1397,6 +1399,22 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 			includeRequested: true,
 			expectedError:    ErrorNoValidCredentialTypeProvided,
 		},
+		{
+			name:                   "Presentation Exchange submission for another definition is rejected",
+			mode:                   "presentation-definition",
+			extraRequestID:         "requested-descriptor",
+			submissionDefinitionID: "different-definition",
+			includeRequested:       true,
+			expectedError:          ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:                 "descriptor id cannot be used as a DCQL query id",
+			mode:                 "both",
+			extraRequestID:       "requested-descriptor",
+			extraAssociationKind: common.PresentationRequestDCQL,
+			includeRequested:     true,
+			expectedError:        ErrorNoValidCredentialTypeProvided,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1418,6 +1436,15 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 				}
 			case "presentation-definition":
 				scope.PresentationDefinition = &configModel.PresentationDefinition{
+					Id:               "requested-definition",
+					InputDescriptors: []configModel.InputDescriptor{{Id: "requested-descriptor"}},
+				}
+			case "both":
+				scope.DCQL = &configModel.DCQL{
+					Credentials: []configModel.CredentialQuery{{Id: "requested-query"}},
+				}
+				scope.PresentationDefinition = &configModel.PresentationDefinition{
+					Id:               "requested-definition",
 					InputDescriptors: []configModel.InputDescriptor{{Id: "requested-descriptor"}},
 				}
 			}
@@ -1430,10 +1457,10 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if tc.mode == "dcql" {
-					requested.AddRequestID("requested-query")
+				if tc.mode == "dcql" || tc.mode == "both" {
+					requested.AddRequestAssociation(common.PresentationRequestDCQL, "requested-query")
 				} else {
-					requested.AddRequestID("requested-descriptor")
+					requested.AddRequestAssociation(common.PresentationRequestDescriptor, "requested-descriptor")
 				}
 				credentials = append(credentials, requested)
 			}
@@ -1443,11 +1470,30 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			extra.AddRequestID(tc.extraRequestID)
+			if tc.extraRequestID != "" {
+				kind := tc.extraAssociationKind
+				if kind == "" && (tc.mode == "dcql" || tc.mode == "both") {
+					kind = common.PresentationRequestDCQL
+				} else if kind == "" {
+					kind = common.PresentationRequestDescriptor
+				}
+				if kind == common.PresentationRequestDCQL {
+					extra.AddRequestAssociation(common.PresentationRequestDCQL, tc.extraRequestID)
+				} else {
+					extra.AddRequestAssociation(common.PresentationRequestDescriptor, tc.extraRequestID)
+				}
+			}
 			credentials = append(credentials, extra)
 			presentation, err := common.NewPresentation(common.WithCredentials(credentials...))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if (tc.mode == "presentation-definition" || tc.mode == "both") && tc.extraRequestID != "" {
+				definitionID := tc.submissionDefinitionID
+				if definitionID == "" {
+					definitionID = "requested-definition"
+				}
+				presentation.SetPresentationSubmissionDefinitionID(definitionID)
 			}
 
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{

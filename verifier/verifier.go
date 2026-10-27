@@ -1234,7 +1234,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			return sameDevice, ErrorRequiredCredentialNotProvided
 		}
 	}
-	requestIDs, queryConfigured, err := v.getPresentationRequestIDs(loginSession.clientId, loginSession.scope)
+	dcqlRequestIDs, descriptorIDs, presentationDefinitionID, queryConfigured, err := v.getPresentationRequestIDs(loginSession.clientId, loginSession.scope)
 	if err != nil {
 		logging.Log().Warnf("Was not able to get presentation query identifiers for client %s and scope %s. Err: %v", loginSession.clientId, loginSession.scope, err)
 		return sameDevice, ErrorVerficationContextSetup
@@ -1247,18 +1247,34 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 				break
 			}
 		}
-		credentialRequestIDs := credential.RequestIDs()
+		associations := credential.RequestAssociations()
 		if queryConfigured {
-			if len(credentialRequestIDs) == 0 {
+			if len(associations) == 0 {
 				logging.Log().Infof("Credential types %v were not associated with a configured presentation query for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
 				return sameDevice, ErrorNoValidCredentialTypeProvided
 			}
-			for _, requestID := range credentialRequestIDs {
-				if _, ok := requestIDs[requestID]; !ok {
-					logging.Log().Infof("Presentation query identifier %s is not configured for client %s and scope %s.", requestID, loginSession.clientId, loginSession.scope)
+			for _, association := range associations {
+				var configuredID bool
+				switch association.Kind {
+				case common.PresentationRequestDCQL:
+					_, configuredID = dcqlRequestIDs[association.ID]
+				case common.PresentationRequestDescriptor:
+					_, configuredID = descriptorIDs[association.ID]
+					if configuredID && (presentationDefinitionID == "" || verifiablePresentation.PresentationSubmissionDefinitionID() != presentationDefinitionID) {
+						logging.Log().Infof("Presentation submission definition %s does not match configured definition %s for client %s and scope %s.", verifiablePresentation.PresentationSubmissionDefinitionID(), presentationDefinitionID, loginSession.clientId, loginSession.scope)
+						return sameDevice, ErrorNoValidCredentialTypeProvided
+					}
+				default:
+					configuredID = false
+				}
+				if !configuredID {
+					logging.Log().Infof("Presentation request association %s (%s) is not configured for client %s and scope %s.", association.ID, association.Kind, loginSession.clientId, loginSession.scope)
 					return sameDevice, ErrorNoValidCredentialTypeProvided
 				}
 			}
+		} else if len(associations) > 0 {
+			logging.Log().Infof("Credential types %v were associated with a presentation request but no query is configured for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
+			return sameDevice, ErrorNoValidCredentialTypeProvided
 		}
 		if !configured && !queryConfigured {
 			logging.Log().Infof("Credential types %v are not configured for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
@@ -1575,31 +1591,36 @@ func (v *CredentialVerifier) getCredentialStatusValidationContext(clientId strin
 	return CredentialStatusValidationContext{PerType: perType}, nil
 }
 
-func (v *CredentialVerifier) getPresentationRequestIDs(clientId string, scope string) (map[string]struct{}, bool, error) {
-	requestIDs := make(map[string]struct{})
+func (v *CredentialVerifier) getPresentationRequestIDs(clientId string, scope string) (map[string]struct{}, map[string]struct{}, string, bool, error) {
+	dcqlRequestIDs := make(map[string]struct{})
+	descriptorIDs := make(map[string]struct{})
 	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, "", false, err
 	}
 	dcql, err := v.credentialsConfig.GetDcqlQuery(clientId, scope)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, "", false, err
 	}
 	if presentationDefinition != nil {
 		for _, descriptor := range presentationDefinition.InputDescriptors {
 			if descriptor.Id != "" {
-				requestIDs[descriptor.Id] = struct{}{}
+				descriptorIDs[descriptor.Id] = struct{}{}
 			}
 		}
 	}
 	if dcql != nil {
 		for _, query := range dcql.Credentials {
 			if query.Id != "" {
-				requestIDs[query.Id] = struct{}{}
+				dcqlRequestIDs[query.Id] = struct{}{}
 			}
 		}
 	}
-	return requestIDs, presentationDefinition != nil || dcql != nil, nil
+	definitionID := ""
+	if presentationDefinition != nil {
+		definitionID = presentationDefinition.Id
+	}
+	return dcqlRequestIDs, descriptorIDs, definitionID, presentationDefinition != nil || dcql != nil, nil
 }
 
 // initValidationServices builds the ordered slice of ValidationService

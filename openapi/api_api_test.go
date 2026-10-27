@@ -965,28 +965,50 @@ func TestGetPresentationFromQuery(t *testing.T) {
 }
 
 func TestAddPresentationSubmissionRequestIDs(t *testing.T) {
-	presentation, err := common.NewPresentation(common.WithCredentials(&common.Credential{}, &common.Credential{}))
-	if err != nil {
-		t.Fatal(err)
+	const definitionID = "configured-definition"
+	submission := `{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"descriptor-a","path":"$","path_nested":{"path":"$.vp.verifiableCredential[0]"}},{"id":"descriptor-b","path":"$.verifiableCredential[1]"}]}`
+	tests := []struct {
+		name       string
+		submission string
+	}{
+		{name: "accepts JSON for backward compatibility", submission: submission},
+		{name: "accepts raw base64url JSON", submission: base64.RawURLEncoding.EncodeToString([]byte(submission))},
+		{name: "accepts padded base64url JSON", submission: base64.URLEncoding.EncodeToString([]byte(submission))},
 	}
-
-	err = addPresentationSubmissionRequestIDs(presentation, `{"descriptor_map":[{"id":"descriptor-a","path":"$","path_nested":{"path":"$.vp.verifiableCredential[0]"}},{"id":"descriptor-b","path":"$","path_nested":{"path":"$.vp.verifiableCredential[1]"}}]}`)
-	if err != nil {
-		t.Fatalf("Expected valid presentation_submission, got %v", err)
-	}
-	if got := presentation.Credentials()[0].RequestIDs(); !slices.Equal(got, []string{"descriptor-a"}) {
-		t.Errorf("Expected descriptor-a to map to the first credential, got %v", got)
-	}
-	if got := presentation.Credentials()[1].RequestIDs(); !slices.Equal(got, []string{"descriptor-b"}) {
-		t.Errorf("Expected descriptor-b to map to the second credential, got %v", got)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			presentation, err := common.NewPresentation(common.WithCredentials(&common.Credential{}, &common.Credential{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := addPresentationSubmissionRequestIDs(presentation, tc.submission); err != nil {
+				t.Fatalf("Expected valid presentation_submission, got %v", err)
+			}
+			if got := presentation.Credentials()[0].RequestIDs(); !slices.Equal(got, []string{"descriptor-a"}) {
+				t.Errorf("Expected descriptor-a to map to the first credential, got %v", got)
+			}
+			if got := presentation.Credentials()[1].RequestIDs(); !slices.Equal(got, []string{"descriptor-b"}) {
+				t.Errorf("Expected descriptor-b to map to the second credential, got %v", got)
+			}
+			if got := presentation.PresentationSubmissionDefinitionID(); got != definitionID {
+				t.Errorf("Expected definition id %q, got %q", definitionID, got)
+			}
+		})
 	}
 
 	for _, malformed := range []string{
 		`not-json`,
-		`{"descriptor_map":[]}`,
-		`{"descriptor_map":[{}]}`,
-		`{"descriptor_map":[{"id":"unsupported","path":"$.somewhere"}]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{}]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"unsupported","path":"$.ignored.verifiableCredential[0]"}]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"out-of-range","path":"$.verifiableCredential[2]"}]}`,
+		`{"id":"submission-1","definition_id":"","descriptor_map":[{"id":"descriptor-a","path":"$.verifiableCredential[0]"}]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"mismatched-nesting","path":"$.vp","path_nested":{"path":"$.vp.verifiableCredential[0]"}}]}`,
 	} {
+		presentation, err := common.NewPresentation(common.WithCredentials(&common.Credential{}, &common.Credential{}))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := addPresentationSubmissionRequestIDs(presentation, malformed); err == nil {
 			t.Errorf("Expected malformed presentation_submission %q to fail", malformed)
 		}
