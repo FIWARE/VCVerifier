@@ -430,6 +430,7 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 
 	// Create a service with rich configuration via CCS API
 	serviceID := "lookup-test-svc"
+	requiredSet := true
 	scopes := map[string]config.ScopeEntry{
 		"scopeA": {
 			Credentials: []config.Credential{
@@ -460,7 +461,7 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 					{Id: "dcql-cred-1", Format: "jwt_vp", Multiple: true},
 				},
 				CredentialSets: []config.CredentialSetQuery{
-					{Options: [][]string{{"dcql-cred-1"}}, Required: true},
+					{Options: [][]string{{"dcql-cred-1"}}, Required: &requiredSet},
 				},
 			},
 			FlatClaims: true,
@@ -519,7 +520,7 @@ func TestIntegration_CredentialTypeLookupsFullChain(t *testing.T) {
 	assert.Equal(t, "dcql-cred-1", dcql.Credentials[0].Id)
 	assert.True(t, dcql.Credentials[0].Multiple)
 	assert.Len(t, dcql.CredentialSets, 1)
-	assert.True(t, dcql.CredentialSets[0].Required)
+	assert.True(t, dcql.CredentialSets[0].IsRequired())
 
 	// Holder verification — CredTypeA has it enabled
 	holderEnabled, holderClaim, err := credConfig.GetHolderVerification(serviceID, "scopeA", "CredTypeA")

@@ -202,10 +202,10 @@ func TestCredentialQueryDB_FromVO_ClaimsConverted(t *testing.T) {
 // Type and Url fields.
 func TestCredentialDB_VO_TrustedListsV5(t *testing.T) {
 	tests := []struct {
-		name                     string
-		endpoints                []config.EndpointEntry
-		expectedIssuers          config.TrustedIssuersLists
-		expectedParticipants     config.TrustedParticipantsLists
+		name                 string
+		endpoints            []config.EndpointEntry
+		expectedIssuers      config.TrustedIssuersLists
+		expectedParticipants config.TrustedParticipantsLists
 	}{
 		{
 			name: "single ebsi-v5 issuer",
@@ -348,13 +348,35 @@ func TestCredentialDB_RoundTrip_V5(t *testing.T) {
 // DCQLDB — full VO / FromVO conversion
 // ---------------------------------------------------------------------------
 
+func TestPresentationDefinitionDB_RoundTripSubmissionRequirements(t *testing.T) {
+	minimum := 1
+	original := config.PresentationDefinition{
+		Id: "definition",
+		InputDescriptors: []config.InputDescriptor{
+			{Id: "descriptor-a", Group: []string{"choice"}},
+			{Id: "descriptor-b", Group: []string{"choice"}},
+		},
+		SubmissionRequirements: []config.SubmissionRequirement{{
+			Rule: "pick",
+			Min:  &minimum,
+			From: "choice",
+		}},
+	}
+
+	roundTripped := PresentationDefinitionDB{}.FromVO(original).VO()
+	assert.Equal(t, original.SubmissionRequirements, roundTripped.SubmissionRequirements)
+	assert.Equal(t, original.InputDescriptors[0].Group, roundTripped.InputDescriptors[0].Group)
+	assert.Equal(t, original.InputDescriptors[1].Group, roundTripped.InputDescriptors[1].Group)
+}
+
 func TestDCQLDB_VO(t *testing.T) {
+	required := true
 	db := DCQLDB{
 		Credentials: []CredentialQueryDB{
 			{Id: "pid", Format: "DC_SD_JWT", Claims: []ClaimsQueryDB{{Id: "fn", Path: []interface{}{"family_name"}}}},
 		},
 		CredentialSets: []config.CredentialSetQuery{
-			{Options: [][]string{{"pid"}}, Required: true},
+			{Options: [][]string{{"pid"}}, Required: &required},
 		},
 	}
 	vo := db.VO()
@@ -369,17 +391,18 @@ func TestDCQLDB_VO(t *testing.T) {
 
 func TestDCQLDB_FromVO(t *testing.T) {
 	reqBinding := true
+	notRequired := false
 	vo := config.DCQL{
 		Credentials: []config.CredentialQuery{
 			{
-				Id:     "mdl",
-				Format: "mso_mdoc",
-				Claims: []config.ClaimsQuery{{Id: "age", Namespace: "org.iso.18013.5.1", ClaimName: "age_over_18"}},
+				Id:                                "mdl",
+				Format:                            "mso_mdoc",
+				Claims:                            []config.ClaimsQuery{{Id: "age", Namespace: "org.iso.18013.5.1", ClaimName: "age_over_18"}},
 				RequireCryptographicHolderBinding: &reqBinding,
 			},
 		},
 		CredentialSets: []config.CredentialSetQuery{
-			{Options: [][]string{{"mdl"}}, Required: false},
+			{Options: [][]string{{"mdl"}}, Required: &notRequired},
 		},
 	}
 	db := DCQLDB{}.FromVO(vo)

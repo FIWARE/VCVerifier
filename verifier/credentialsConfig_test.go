@@ -42,6 +42,38 @@ func newServiceWithCredentials(credentials ...config.Credential) config.Configur
 	}
 }
 
+func TestCacheBasedCredentialsConfig_RequiredCredentialTypesUnknownClientOrScope(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	service := newServiceWithCredentials(config.Credential{Type: testStatusCredentialType})
+	seedServiceCache(t, service)
+	credentialsConfig := cacheBasedCredentialsConfig{}
+
+	tests := []struct {
+		name      string
+		serviceID string
+		scope     string
+	}{
+		{
+			name:      "unknown service",
+			serviceID: testStatusUnknownService,
+			scope:     testStatusScope,
+		},
+		{
+			name:      "unknown scope",
+			serviceID: testStatusServiceID,
+			scope:     "unknown-scope",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := credentialsConfig.RequiredCredentialTypes(tt.serviceID, tt.scope)
+			assert.ErrorIs(t, err, ErrorUnknownClientOrScope)
+		})
+	}
+}
+
 // TestServiceBackedCredentialsConfig_GetCredentialStatusConfig exercises the
 // table-driven behaviour of `GetCredentialStatusConfig` for known/unknown
 // services, scopes and credential types and for credentials that do / do not

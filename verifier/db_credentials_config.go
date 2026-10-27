@@ -62,11 +62,15 @@ func (dbc DbBackedCredentialsConfig) RequiredCredentialTypes(serviceIdentifier s
 	svc, err := dbc.getService(serviceIdentifier)
 	if err != nil {
 		if errors.Is(err, database.ErrServiceNotFound) {
-			return nil, fmt.Errorf("no service %s configured", serviceIdentifier)
+			return nil, fmt.Errorf("%w: %s", ErrorUnknownClientOrScope, serviceIdentifier)
 		}
 		return nil, err
 	}
-	return svc.GetRequiredCredentialTypes(scope)
+	credentialTypes, err := svc.GetRequiredCredentialTypes(scope)
+	if errors.Is(err, config.ErrorNoSuchScope) {
+		return nil, fmt.Errorf("%w: %s", ErrorUnknownClientOrScope, scope)
+	}
+	return credentialTypes, err
 }
 
 // GetDefaultScope returns the configured default OIDC scope for the given service.

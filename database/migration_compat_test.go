@@ -128,7 +128,7 @@ func TestMigrationCompat_CCSJavaFormatRoundTrip(t *testing.T) {
 	assert.Equal(t, "cred-q-1", dcql.Credentials[0].Id)
 	assert.Equal(t, "dc+sd-jwt", dcql.Credentials[0].Format)
 	require.Len(t, dcql.CredentialSets, 1)
-	assert.True(t, dcql.CredentialSets[0].Required)
+	assert.True(t, dcql.CredentialSets[0].IsRequired())
 
 	// Verify flat claims
 	assert.False(t, scope.FlatClaims)

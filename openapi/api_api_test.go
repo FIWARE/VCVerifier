@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -41,6 +42,7 @@ type mockVerifier struct {
 	mockQR                  string
 	mockConnectionString    string
 	mockAuthRequest         string
+	mockStartedScope        string
 	mockJWKS                jwk.Set
 	mockOpenIDConfig        common.OpenIDProviderMetadata
 	mockSameDevice          verifier.Response
@@ -56,6 +58,8 @@ type mockVerifier struct {
 	mockExchangeError       error
 	mockPathPrefix          string
 	mockRequestMode         string
+	mockDefaultScope        string
+	mockDefaultScopeError   error
 	mockHost                string
 	// sessions HasLoginSession reports as gone; every other session exists
 	mockMissingSessions map[string]bool
@@ -170,6 +174,7 @@ func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback str
 	return mV.mockConnectionString, mV.mockError
 }
 func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestType string, scope string, requestProtocol string) (authenticationRequest string, err error) {
+	mV.mockStartedScope = scope
 	return mV.mockAuthRequest, mV.mockError
 }
 func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
@@ -179,6 +184,12 @@ func (mV *mockVerifier) GetJWKS() jwk.Set {
 	return mV.mockJWKS
 }
 func (mV *mockVerifier) GetDefaultScope(clientId string) (string, error) {
+	if mV.mockDefaultScopeError != nil {
+		return "", mV.mockDefaultScopeError
+	}
+	if mV.mockDefaultScope != "" {
+		return mV.mockDefaultScope, nil
+	}
 	return "openid", nil
 }
 
@@ -413,6 +424,11 @@ func TestStartSIOPSameDevice(t *testing.T) {
 		testState          string
 		testRedirectPath   string
 		testRequestAddress string
+		testScope          string
+		scopePresent       bool
+		defaultScope       string
+		defaultScopeError  error
+		expectedScope      string
 		mockRedirect       string
 		mockError          error
 		expectedStatusCode int
@@ -422,6 +438,11 @@ func TestStartSIOPSameDevice(t *testing.T) {
 
 	tests := []test{
 		{testName: "If all neccessary parameters provided, a valid redirect should be returned.", testState: "my-state", testRedirectPath: "/my-redirect", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
+		{testName: "If the scope is omitted, use the client's default scope.", testState: "my-state", testRequestAddress: "http://host.org", defaultScope: "default-scope", expectedScope: "default-scope", mockRedirect: "http://host.org/api/v1/authentication_response", expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
+		{testName: "If the scope is provided, keep the requested scope.", testState: "my-state", testRequestAddress: "http://host.org", testScope: "requested-scope", expectedScope: "requested-scope", mockRedirect: "http://host.org/api/v1/authentication_response", expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
+		{testName: "If no default scope is configured, reject the request.", testState: "my-state", testRequestAddress: "http://host.org", defaultScopeError: errors.New("no default scope"), expectedStatusCode: 400},
+		{testName: "If the client or scope is not configured, reject the request without exposing configuration details.", testState: "my-state", testRedirectPath: "/", testRequestAddress: "http://host.org", mockError: verifier.ErrorUnknownClientOrScope, expectedStatusCode: 400},
+		{testName: "If an empty scope is explicitly provided, reject the request.", testState: "my-state", testRequestAddress: "http://host.org", scopePresent: true, expectedStatusCode: 400},
 		{testName: "If no state is provided, a 400 should be returned.", testState: "", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 400, expectedLocation: ""},
 		{testName: "If the verifier returns an error, a 500 should be returned.", testState: "my-state", testRedirectPath: "/", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: errors.New("verifier_failure"), expectedStatusCode: 500, expectedLocation: ""},
 		{testName: "If no path is provided, a deeplink should be returned.", testState: "my-state", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response", expectedResponse: ""},
@@ -434,7 +455,12 @@ func TestStartSIOPSameDevice(t *testing.T) {
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
-			apiVerifier = &mockVerifier{mockAuthRequest: tc.mockRedirect, mockError: tc.mockError}
+			apiVerifier = &mockVerifier{
+				mockAuthRequest:       tc.mockRedirect,
+				mockError:             tc.mockError,
+				mockDefaultScope:      tc.defaultScope,
+				mockDefaultScopeError: tc.defaultScopeError,
+			}
 
 			testParameters := []string{}
 			if tc.testState != "" {
@@ -443,6 +469,9 @@ func TestStartSIOPSameDevice(t *testing.T) {
 			if tc.testRedirectPath != "" {
 				testParameters = append(testParameters, "redirect_path="+tc.testRedirectPath)
 			}
+			if tc.scopePresent || tc.testScope != "" {
+				testParameters = append(testParameters, "scope="+tc.testScope)
+			}
 
 			testContext.Request, _ = http.NewRequest("GET", tc.testRequestAddress+"/?"+strings.Join(testParameters, "&"), nil)
 			StartSIOPSameDevice(testContext)
@@ -450,6 +479,12 @@ func TestStartSIOPSameDevice(t *testing.T) {
 			if recorder.Code != tc.expectedStatusCode {
 				t.Errorf("%s - Expected status %v but was %v.", tc.testName, tc.expectedStatusCode, recorder.Code)
 				return
+			}
+			if tc.mockError == verifier.ErrorUnknownClientOrScope && strings.Contains(recorder.Body.String(), tc.mockError.Error()) {
+				t.Errorf("%s - The response must not expose the internal configuration error.", tc.testName)
+			}
+			if tc.expectedScope != "" && apiVerifier.(*mockVerifier).mockStartedScope != tc.expectedScope {
+				t.Errorf("%s - Expected scope %q but got %q.", tc.testName, tc.expectedScope, apiVerifier.(*mockVerifier).mockStartedScope)
 			}
 			if tc.expectedStatusCode == 200 {
 				responseString := recorder.Body.String()
@@ -874,16 +909,17 @@ func TestGetPresentationFromQuery(t *testing.T) {
 		vpToken        string
 		expectedNonNil bool
 		expectedErr    error
+		expectedID     string
 	}
 
 	tests := []test{
-		{"OID4VP drafts 22-24 single-string-shape query map should be parsed.", string(stringShapeMap), true, nil},
-		{"OID4VP draft 25+ array-shape query map should be parsed.", string(arrayShapeMap), true, nil},
-		{"A raw base64url encoded query map should be parsed.", encodedStringShapeMap, true, nil},
-		{"A padded base64url encoded query map should be rejected.", paddedStringShapeMap, false, ErrorInvalidTokenEncoding},
-		{"A standard-alphabet base64 encoded query map should be rejected.", standardAlphabetArrayShapeMap, false, ErrorInvalidTokenEncoding},
-		{"A flat sd-jwt (no query map) should return nil so the caller falls through.", sdJwt, false, nil},
-		{"A non-JSON token should return nil so the caller falls through.", "this-is-not-json", false, nil},
+		{"OID4VP drafts 22-24 single-string-shape query map should be parsed.", string(stringShapeMap), true, nil, "lpc-query"},
+		{"OID4VP draft 25+ array-shape query map should be parsed.", string(arrayShapeMap), true, nil, "lpc-query"},
+		{"A raw base64url encoded query map should be parsed.", encodedStringShapeMap, true, nil, "lpc-query"},
+		{"A padded base64url encoded query map should be rejected.", paddedStringShapeMap, false, ErrorInvalidTokenEncoding, ""},
+		{"A standard-alphabet base64 encoded query map should be rejected.", standardAlphabetArrayShapeMap, false, ErrorInvalidTokenEncoding, ""},
+		{"A flat sd-jwt (no query map) should return nil so the caller falls through.", sdJwt, false, nil, ""},
+		{"A non-JSON token should return nil so the caller falls through.", "this-is-not-json", false, nil, ""},
 	}
 
 	for _, tc := range tests {
@@ -922,7 +958,82 @@ func TestGetPresentationFromQuery(t *testing.T) {
 				t.Errorf("%s - Expected nil presentation (so caller can fall through) but got %v.", tc.testName, parsed)
 				return
 			}
+			if tc.expectedID != "" {
+				credentials := parsed.Credentials()
+				if len(credentials) == 0 || !slices.Contains(credentials[0].RequestIDs(), tc.expectedID) {
+					t.Errorf("%s - Expected parsed credential to retain request id %q.", tc.testName, tc.expectedID)
+				}
+			}
 		})
+	}
+}
+
+func TestAddPresentationSubmissionRequestIDs(t *testing.T) {
+	const definitionID = "configured-definition"
+	submission := `{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"descriptor-a","path":"$","path_nested":{"path":"$.vp.verifiableCredential[0]"}},{"id":"descriptor-b","path":"$.verifiableCredential[1]"},{"id":"descriptor-c","path":"$","path_nested":{"path":"$.vp","path_nested":{"path":"$.verifiableCredential[1]","path_nested":{"path":"$.vc","path_nested":{"path":"$.credentialSubject.id"}}}}},{"id":"descriptor-d","path":"$.vp.verifiableCredential[0]","path_nested":{"path":"$"}}]}`
+	tests := []struct {
+		name       string
+		submission string
+	}{
+		{name: "accepts JSON for backward compatibility", submission: submission},
+		{name: "accepts raw base64url JSON", submission: base64.RawURLEncoding.EncodeToString([]byte(submission))},
+		{name: "accepts padded base64url JSON", submission: base64.URLEncoding.EncodeToString([]byte(submission))},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			presentation, err := common.NewPresentation(common.WithCredentials(&common.Credential{}, &common.Credential{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := addPresentationSubmissionRequestIDs(presentation, tc.submission); err != nil {
+				t.Fatalf("Expected valid presentation_submission, got %v", err)
+			}
+			if got := presentation.Credentials()[0].RequestIDs(); !slices.Equal(got, []string{"descriptor-a", "descriptor-d"}) {
+				t.Errorf("Expected descriptor-a to map to the first credential, got %v", got)
+			}
+			if got := presentation.Credentials()[1].RequestIDs(); !slices.Equal(got, []string{"descriptor-b", "descriptor-c"}) {
+				t.Errorf("Expected descriptor-b and descriptor-c to map to the second credential, got %v", got)
+			}
+			if got := presentation.PresentationSubmissionDefinitionID(); got != definitionID {
+				t.Errorf("Expected definition id %q, got %q", definitionID, got)
+			}
+		})
+	}
+
+	for _, malformed := range []string{
+		`not-json`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{}]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"unsupported","path":"$.ignored.verifiableCredential[0]"}]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"out-of-range","path":"$.verifiableCredential[2]"}]}`,
+		`{"id":"submission-1","definition_id":"","descriptor_map":[{"id":"descriptor-a","path":"$.verifiableCredential[0]"}]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"mismatched-nesting","path":"$.vp","path_nested":{"path":"$.vp.verifiableCredential[0]"}}]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"invalid-credential-relative-path","path":"$.verifiableCredential[0]","path_nested":{"path":"$..vc"}}]}`,
+	} {
+		presentation, err := common.NewPresentation(common.WithCredentials(&common.Credential{}, &common.Credential{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := addPresentationSubmissionRequestIDs(presentation, malformed); err == nil {
+			t.Errorf("Expected malformed presentation_submission %q to fail", malformed)
+		}
+	}
+
+	for _, tc := range []struct {
+		submission string
+		wantError  string
+	}{
+		{submission: `{"definition_id":"configured-definition","descriptor_map":[{"id":"descriptor-a","path":"$.verifiableCredential[0]"}]}`, wantError: "presentation_submission has no id"},
+		{submission: `{"id":"submission-1","descriptor_map":[{"id":"descriptor-a","path":"$.verifiableCredential[0]"}]}`, wantError: "presentation_submission has no definition_id"},
+	} {
+		presentation, err := common.NewPresentation(common.WithCredentials(&common.Credential{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = addPresentationSubmissionRequestIDs(presentation, tc.submission)
+		if err == nil || err.Error() != tc.wantError {
+			t.Errorf("Expected error %q, got %v", tc.wantError, err)
+		}
 	}
 }
 

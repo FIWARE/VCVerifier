@@ -742,6 +742,10 @@ func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callbac
 **/
 func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, state string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error) {
 	logging.Log().Debugf("Initiate samedevice flow for %s - %s.", host, clientId)
+	if _, err = v.credentialsConfig.RequiredCredentialTypes(clientId, scope); err != nil {
+		logging.Log().Infof("Rejecting same-device flow for unconfigured client %s and scope %s: %v", clientId, scope, err)
+		return authenticationRequest, err
+	}
 	if nonce == "" {
 		nonce = v.nonceGenerator.GenerateNonce()
 	}
@@ -1217,11 +1221,149 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	}
 
 	credentialsByType, credentialTypes := extractCredentialTypes(verifiablePresentation)
-	trustedChain, _ := verifyChain(verifiablePresentation.Credentials())
+	configuredCredentialTypes, err := v.credentialsConfig.RequiredCredentialTypes(loginSession.clientId, loginSession.scope)
+	if err != nil {
+		logging.Log().Warnf("Was not able to get configured credential types for client %s and scope %s. Err: %v", loginSession.clientId, loginSession.scope, err)
+		return sameDevice, ErrorVerficationContextSetup
+	}
+	configuredTypes := make(map[string]struct{}, len(configuredCredentialTypes))
+	for _, credentialType := range configuredCredentialTypes {
+		configuredTypes[credentialType] = struct{}{}
+	}
+	dcqlRequestIDs, descriptorIDs, presentationDefinitionID, queryConfigured, dcqlQuery, presentationDefinition, err := v.getPresentationRequestIDs(loginSession.clientId, loginSession.scope)
+	if err != nil {
+		logging.Log().Warnf("Was not able to get presentation query identifiers for client %s and scope %s. Err: %v", loginSession.clientId, loginSession.scope, err)
+		return sameDevice, ErrorVerficationContextSetup
+	}
+	if !queryConfigured {
+		presentedTypes := make(map[string]struct{}, len(credentialTypes))
+		for _, credentialType := range credentialTypes {
+			presentedTypes[credentialType] = struct{}{}
+		}
+		for _, credentialType := range configuredCredentialTypes {
+			if _, ok := presentedTypes[credentialType]; !ok {
+				logging.Log().Infof("Required credential type %s was not provided for client %s and scope %s.", credentialType, loginSession.clientId, loginSession.scope)
+				return sameDevice, ErrorRequiredCredentialNotProvided
+			}
+		}
+	}
+	presentedDCQLIDs := make(map[string]struct{})
+	presentedDescriptorIDs := make(map[string]struct{})
+	presentedDCQLCredentialCounts := make(map[string]int)
+	presentedConfiguredCredential := false
+	for _, credential := range verifiablePresentation.Credentials() {
+		configured := false
+		for _, credentialType := range credential.Contents().Types {
+			if _, ok := configuredTypes[credentialType]; ok {
+				configured = true
+				break
+			}
+		}
+		associations := credential.RequestAssociations()
+		if !configured && (!queryConfigured || len(associations) == 0) {
+			logging.Log().Debugf("Ignoring unconfigured credential types %v.", credential.Contents().Types)
+			continue
+		}
+		if configured {
+			presentedConfiguredCredential = true
+		}
+		if queryConfigured {
+			if len(associations) == 0 {
+				logging.Log().Infof("Credential types %v were not associated with a configured presentation query for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
+				return sameDevice, ErrorNoValidCredentialTypeProvided
+			}
+			for _, association := range associations {
+				var configuredID bool
+				switch association.Kind {
+				case common.PresentationRequestDCQL:
+					_, configuredID = dcqlRequestIDs[association.ID]
+					if configuredID {
+						matchedQuery := false
+						for _, query := range dcqlQuery.Credentials {
+							if query.Id == association.ID {
+								matchedQuery = true
+								if !matchesDCQLQuery(query, credential) {
+									logging.Log().Infof("Credential associated with DCQL query %s does not satisfy its constraints.", association.ID)
+									return sameDevice, ErrorNoValidCredentialTypeProvided
+								}
+								presentedDCQLCredentialCounts[association.ID]++
+								if !query.Multiple && presentedDCQLCredentialCounts[association.ID] > 1 {
+									logging.Log().Infof("More than one credential was associated with DCQL query %s, which does not allow multiple credentials.", association.ID)
+									return sameDevice, ErrorNoValidCredentialTypeProvided
+								}
+								break
+							}
+						}
+						configuredID = matchedQuery
+					}
+				case common.PresentationRequestDescriptor:
+					_, configuredID = descriptorIDs[association.ID]
+					if configuredID && (presentationDefinitionID == "" || verifiablePresentation.PresentationSubmissionDefinitionID() != presentationDefinitionID) {
+						logging.Log().Infof("Presentation submission definition %s does not match configured definition %s for client %s and scope %s.", verifiablePresentation.PresentationSubmissionDefinitionID(), presentationDefinitionID, loginSession.clientId, loginSession.scope)
+						return sameDevice, ErrorNoValidCredentialTypeProvided
+					}
+					if configuredID {
+						matchedDescriptor := false
+						for _, descriptor := range presentationDefinition.InputDescriptors {
+							if descriptor.Id == association.ID {
+								matchedDescriptor = true
+								if !matchesPresentationDescriptor(descriptor, presentationDefinition, credential) {
+									logging.Log().Infof("Credential associated with Presentation Exchange descriptor %s does not satisfy its constraints.", association.ID)
+									return sameDevice, ErrorNoValidCredentialTypeProvided
+								}
+								break
+							}
+						}
+						configuredID = matchedDescriptor
+					}
+				default:
+					configuredID = false
+				}
+				if !configuredID {
+					logging.Log().Infof("Presentation request association %s (%s) is not configured for client %s and scope %s.", association.ID, association.Kind, loginSession.clientId, loginSession.scope)
+					return sameDevice, ErrorNoValidCredentialTypeProvided
+				}
+				if configured {
+					switch association.Kind {
+					case common.PresentationRequestDCQL:
+						presentedDCQLIDs[association.ID] = struct{}{}
+					case common.PresentationRequestDescriptor:
+						presentedDescriptorIDs[association.ID] = struct{}{}
+					}
+				}
+			}
+		} else if len(associations) > 0 {
+			logging.Log().Infof("Credential types %v were associated with a presentation request but no query is configured for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
+			return sameDevice, ErrorNoValidCredentialTypeProvided
+		}
+	}
+	if dcqlQuery != nil && !satisfiesDCQLCredentialSets(dcqlQuery, presentedDCQLIDs) {
+		logging.Log().Infof("Presented credentials do not satisfy the configured DCQL credential sets for client %s and scope %s.", loginSession.clientId, loginSession.scope)
+		return sameDevice, ErrorRequiredCredentialNotProvided
+	}
+	if presentationDefinition != nil && !satisfiesPresentationSubmissionRequirements(presentationDefinition, presentedDescriptorIDs) {
+		logging.Log().Infof("Presented credentials do not satisfy the configured Presentation Exchange submission requirements for client %s and scope %s.", loginSession.clientId, loginSession.scope)
+		return sameDevice, ErrorRequiredCredentialNotProvided
+	}
+	if !presentedConfiguredCredential {
+		logging.Log().Infof("No configured credential was provided for client %s and scope %s.", loginSession.clientId, loginSession.scope)
+		return sameDevice, ErrorNoValidCredentialTypeProvided
+	}
 	var credentialsToBeIncluded []map[string]interface{}
 
 	flatClaims := false
 	for _, credential := range verifiablePresentation.Credentials() {
+		configured := false
+		for _, credentialType := range credential.Contents().Types {
+			if _, ok := configuredTypes[credentialType]; ok {
+				configured = true
+				break
+			}
+		}
+		if !configured {
+			logging.Log().Debugf("Ignoring unconfigured credential types %v for token inclusion.", credential.Contents().Types)
+			continue
+		}
 
 		verificationContext, err := v.getTrustRegistriesValidationContext(loginSession.clientId, credential.Contents().Types, loginSession.scope)
 		if err != nil {
@@ -1240,16 +1382,6 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		}
 		//FIXME make it an error if no policy was checked at all( possible misconfiguration)
 		for _, verificationService := range v.validationServices {
-			if trustedChain {
-				logging.Log().Debug("Credentials chain is trusted.")
-				_, isTrustedParticipantVerificationService := verificationService.(*TrustedParticipantValidationService)
-				_, isTrustedIssuerVerificationService := verificationService.(*TrustedIssuerValidationService)
-				if isTrustedIssuerVerificationService || isTrustedParticipantVerificationService {
-					logging.Log().Debug("Skip the tir services.")
-					continue
-				}
-			}
-
 			logging.Log().Debugf("Validate with context %v", verificationContext)
 			ctx := selectValidationContext(verificationService, verificationContext, statusValidationContext, eidasValidationContext)
 			result, err := verificationService.ValidateVC(credential, ctx)
@@ -1527,6 +1659,150 @@ func (v *CredentialVerifier) getCredentialStatusValidationContext(clientId strin
 	return CredentialStatusValidationContext{PerType: perType}, nil
 }
 
+func (v *CredentialVerifier) getPresentationRequestIDs(clientId string, scope string) (map[string]struct{}, map[string]struct{}, string, bool, *configModel.DCQL, *configModel.PresentationDefinition, error) {
+	dcqlRequestIDs := make(map[string]struct{})
+	descriptorIDs := make(map[string]struct{})
+	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
+	if err != nil {
+		return nil, nil, "", false, nil, nil, err
+	}
+	dcql, err := v.credentialsConfig.GetDcqlQuery(clientId, scope)
+	if err != nil {
+		return nil, nil, "", false, nil, nil, err
+	}
+	if presentationDefinition != nil {
+		for _, descriptor := range presentationDefinition.InputDescriptors {
+			if descriptor.Id != "" {
+				descriptorIDs[descriptor.Id] = struct{}{}
+			}
+		}
+	}
+	if dcql != nil {
+		for _, query := range dcql.Credentials {
+			if query.Id != "" {
+				dcqlRequestIDs[query.Id] = struct{}{}
+			}
+		}
+	}
+	definitionID := ""
+	if presentationDefinition != nil {
+		definitionID = presentationDefinition.Id
+	}
+	return dcqlRequestIDs, descriptorIDs, definitionID, presentationDefinition != nil || dcql != nil, dcql, presentationDefinition, nil
+}
+
+func satisfiesDCQLCredentialSets(dcql *configModel.DCQL, presentedIDs map[string]struct{}) bool {
+	if len(dcql.CredentialSets) == 0 {
+		for _, credential := range dcql.Credentials {
+			if credential.Id == "" {
+				return false
+			}
+			if _, presented := presentedIDs[credential.Id]; !presented {
+				return false
+			}
+		}
+		return len(dcql.Credentials) > 0
+	}
+
+	for _, credentialSet := range dcql.CredentialSets {
+		if !credentialSet.IsRequired() {
+			continue
+		}
+		optionSatisfied := false
+		for _, option := range credentialSet.Options {
+			if len(option) == 0 {
+				continue
+			}
+			allPresented := true
+			for _, credentialID := range option {
+				if _, presented := presentedIDs[credentialID]; !presented {
+					allPresented = false
+					break
+				}
+			}
+			if allPresented {
+				optionSatisfied = true
+				break
+			}
+		}
+		if !optionSatisfied {
+			return false
+		}
+	}
+	return true
+}
+
+func satisfiesPresentationSubmissionRequirements(definition *configModel.PresentationDefinition, presentedIDs map[string]struct{}) bool {
+	descriptorGroups := make(map[string][]string)
+	for _, descriptor := range definition.InputDescriptors {
+		for _, group := range descriptor.Group {
+			descriptorGroups[group] = append(descriptorGroups[group], descriptor.Id)
+		}
+	}
+	if len(definition.SubmissionRequirements) == 0 {
+		for _, descriptor := range definition.InputDescriptors {
+			if descriptor.Id == "" {
+				return false
+			}
+			if _, presented := presentedIDs[descriptor.Id]; !presented {
+				return false
+			}
+		}
+		return len(definition.InputDescriptors) > 0
+	}
+	for _, requirement := range definition.SubmissionRequirements {
+		if !satisfiesSubmissionRequirement(requirement, descriptorGroups, presentedIDs) {
+			return false
+		}
+	}
+	return true
+}
+
+func satisfiesSubmissionRequirement(requirement configModel.SubmissionRequirement, descriptorGroups map[string][]string, presentedIDs map[string]struct{}) bool {
+	total := 0
+	selected := 0
+	if requirement.From != "" {
+		descriptors := descriptorGroups[requirement.From]
+		if len(descriptors) == 0 {
+			return false
+		}
+		total = len(descriptors)
+		for _, descriptorID := range descriptors {
+			if _, presented := presentedIDs[descriptorID]; presented {
+				selected++
+			}
+		}
+	} else if len(requirement.FromNested) > 0 {
+		total = len(requirement.FromNested)
+		for _, nested := range requirement.FromNested {
+			if satisfiesSubmissionRequirement(nested, descriptorGroups, presentedIDs) {
+				selected++
+			}
+		}
+	} else {
+		return false
+	}
+
+	minimum, maximum := 1, total
+	if requirement.Count != nil {
+		minimum, maximum = *requirement.Count, *requirement.Count
+	}
+	if requirement.Min != nil {
+		minimum = *requirement.Min
+	}
+	if requirement.Max != nil {
+		maximum = *requirement.Max
+	}
+	switch requirement.Rule {
+	case "all":
+		return selected == total
+	case "pick":
+		return selected >= minimum && selected <= maximum
+	default:
+		return false
+	}
+}
+
 // initValidationServices builds the ordered slice of ValidationService
 // instances used by the verifier. When eIDAS is globally disabled the
 // EidasValidationService is omitted so that a nil trustStore can never be
@@ -1609,43 +1885,6 @@ func (v *CredentialVerifier) getTrustRegistriesValidationContextFromScope(client
 	}
 	context := TrustRegistriesValidationContext{trustedIssuersLists: trustedIssuersLists, trustedParticipantsRegistries: trustedParticipantsRegistries}
 	return context, err
-}
-
-// TODO Use more generic approach to validate that every credential is issued by a party that we trust
-func verifyChain(vcs []*common.Credential) (bool, error) {
-	if len(vcs) != 3 {
-		// TODO Simplification to be removed/replaced
-		return false, nil
-	}
-
-	var legalEntity *common.Credential
-	var naturalEntity *common.Credential
-	var compliance *common.Credential
-	for _, vc := range vcs {
-		types := vc.Contents().Types
-		if slices.Contains(types, "gx:LegalParticipant") { //nolint:govet
-			legalEntity = vc
-		}
-		if slices.Contains(types, "gx:compliance") { //nolint:govet
-			compliance = vc
-		}
-		if slices.Contains(types, "gx:NaturalParticipant") { //nolint:govet
-			naturalEntity = vc
-		}
-	}
-
-	// the expected credentials only have a single subject
-	legalEntitySubjectID := legalEntity.Contents().Subject[0].ID
-	complianceSubjectID := compliance.Contents().Subject[0].ID
-	// Make sure that the compliance credential is issued for the given credential
-	if legalEntitySubjectID != complianceSubjectID {
-		return false, fmt.Errorf("compliance credential was not issued for the presented legal entity. Compliance VC subject id %s, legal VC id %s", complianceSubjectID, legalEntitySubjectID)
-	}
-	// Natural participientVC must be issued by the legal participient VC
-	if legalEntitySubjectID != naturalEntity.Contents().Issuer.ID {
-		return false, fmt.Errorf("natural participent credential was not issued by the presented legal entity. Legal Participant VC id %s, natural VC issuer %s", legalEntitySubjectID, naturalEntity.Contents().Issuer.ID)
-	}
-	return true, nil
 }
 
 // HasLoginSession reports whether a login session is still open, i.e. neither expired nor
@@ -1870,13 +2109,20 @@ func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string,
 
 // initializes the cross-device siop flow
 func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (authenticationRequest string, err error) {
+	scope, err := v.credentialsConfig.GetDefaultScope(clientId)
+	if err != nil {
+		return authenticationRequest, err
+	}
+	if strings.TrimSpace(scope) == "" {
+		return authenticationRequest, ErrorNoDefaultScope
+	}
 
 	if nonce == "" {
 		logging.Log().Debugf("No nonce provided, generate one.")
 		nonce = v.nonceGenerator.GenerateNonce()
 	}
 	sessionId := v.nonceGenerator.GenerateNonce()
-	loginSession := loginSession{callback: callback, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V1}
+	loginSession := loginSession{callback: callback, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V1, scope: scope}
 	err = v.sessionCache.Add(sessionId, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
@@ -1886,7 +2132,7 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 	logging.Log().Infof("Started cross-device (v1) login session %s for client %s.", sessionId, clientId)
 	redirectUri := fmt.Sprintf("%s://%s%s/api/v1/authentication_response", protocol, host, v.pathPrefix)
 
-	return v.generateAuthenticationRequest("openid4vp://", clientId, "", redirectUri, sessionId, nonce, loginSession, requestMode)
+	return v.generateAuthenticationRequest("openid4vp://", clientId, scope, redirectUri, sessionId, nonce, loginSession, requestMode)
 }
 
 func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId string, scope string, redirectUri string, state string, nonce string, loginSession loginSession, requestMode string) (authenticationRequest string, err error) {

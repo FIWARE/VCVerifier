@@ -458,4 +458,3 @@ func (jpc *JWTProofChecker) verifyElsiJWT(token []byte, issuerDID string, header
 	logging.Log().Debugf("did:elsi JWT verified successfully for issuer %s", issuerDID)
 	return payload, verifiedKey, nil
 }
-
