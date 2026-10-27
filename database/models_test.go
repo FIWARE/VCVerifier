@@ -370,12 +370,13 @@ func TestPresentationDefinitionDB_RoundTripSubmissionRequirements(t *testing.T) 
 }
 
 func TestDCQLDB_VO(t *testing.T) {
+	required := true
 	db := DCQLDB{
 		Credentials: []CredentialQueryDB{
 			{Id: "pid", Format: "DC_SD_JWT", Claims: []ClaimsQueryDB{{Id: "fn", Path: []interface{}{"family_name"}}}},
 		},
 		CredentialSets: []config.CredentialSetQuery{
-			{Options: [][]string{{"pid"}}, Required: true},
+			{Options: [][]string{{"pid"}}, Required: &required},
 		},
 	}
 	vo := db.VO()
@@ -390,6 +391,7 @@ func TestDCQLDB_VO(t *testing.T) {
 
 func TestDCQLDB_FromVO(t *testing.T) {
 	reqBinding := true
+	notRequired := false
 	vo := config.DCQL{
 		Credentials: []config.CredentialQuery{
 			{
@@ -400,7 +402,7 @@ func TestDCQLDB_FromVO(t *testing.T) {
 			},
 		},
 		CredentialSets: []config.CredentialSetQuery{
-			{Options: [][]string{{"mdl"}}, Required: false},
+			{Options: [][]string{{"mdl"}}, Required: &notRequired},
 		},
 	}
 	db := DCQLDB{}.FromVO(vo)

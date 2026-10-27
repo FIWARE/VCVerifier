@@ -660,10 +660,15 @@ type TrustedAuthorityQuery struct {
 type CredentialSetQuery struct {
 	// A non-empty array, where each value in the array is a list of Credential Query identifiers representing one set of Credentials that satisfies the use case. The value of each element in the options array is a non-empty array of identifiers which reference elements in credentials.
 	Options [][]string `json:"options,omitempty" mapstructure:"options,omitempty"`
-	// A boolean which indicates whether this set of Credentials is required to satisfy the particular use case at the Verifier.
-	Required bool `json:"required,omitempty" mapstructure:"required,omitempty"`
+	// A boolean which indicates whether this set of Credentials is required to satisfy the particular use case at the Verifier. Defaults to true.
+	Required *bool `json:"required,omitempty" mapstructure:"required,omitempty"`
 	// A string, number or object specifying the purpose of the query. This specification does not define a specific structure or specific values for this property. The purpose is intended to be used by the Verifier to communicate the reason for the query to the Wallet. The Wallet MAY use this information to show the user the reason for the request.
 	Purpose interface{} `json:"purpose,omitempty" mapstructure:"purpose,omitempty"`
+}
+
+// IsRequired returns true when required is absent or explicitly true.
+func (csq CredentialSetQuery) IsRequired() bool {
+	return csq.Required == nil || *csq.Required
 }
 
 func (cs ConfiguredService) GetRequiredCredentialTypes(scope string) (types []string, err error) {

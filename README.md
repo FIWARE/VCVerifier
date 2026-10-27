@@ -347,9 +347,18 @@ configRepo:
                                         const: "CustomerCredential"
                             # format of the credential to be requested
                             format:
-                                'sd+jwt-vc':
-                                    alg: ES256
+                                'sd+jwt-vc': {}
 ```
+
+DCQL query IDs and Presentation Exchange descriptor IDs only associate a
+returned credential with a request; the verifier also checks the configured
+credential format, DCQL claims/metadata, and required descriptor fields and
+filters against the credential itself. Constraints the verifier cannot
+evaluate (including configured trusted-authority checks or signature
+algorithms in format restrictions) are rejected. In DCQL,
+`credential_sets[].required` defaults to `true`; set it explicitly to `false`
+for an optional credential set.
+
 #### Trusted issuers and participants
 
 Every entry of `trustedIssuersLists` and `trustedParticipantsLists` is the

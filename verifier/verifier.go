@@ -1249,6 +1249,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	}
 	presentedDCQLIDs := make(map[string]struct{})
 	presentedDescriptorIDs := make(map[string]struct{})
+	presentedDCQLCredentialCounts := make(map[string]int)
 	presentedConfiguredCredential := false
 	for _, credential := range verifiablePresentation.Credentials() {
 		configured := false
@@ -1276,11 +1277,44 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 				switch association.Kind {
 				case common.PresentationRequestDCQL:
 					_, configuredID = dcqlRequestIDs[association.ID]
+					if configuredID {
+						matchedQuery := false
+						for _, query := range dcqlQuery.Credentials {
+							if query.Id == association.ID {
+								matchedQuery = true
+								if !matchesDCQLQuery(query, credential) {
+									logging.Log().Infof("Credential associated with DCQL query %s does not satisfy its constraints.", association.ID)
+									return sameDevice, ErrorNoValidCredentialTypeProvided
+								}
+								presentedDCQLCredentialCounts[association.ID]++
+								if !query.Multiple && presentedDCQLCredentialCounts[association.ID] > 1 {
+									logging.Log().Infof("More than one credential was associated with DCQL query %s, which does not allow multiple credentials.", association.ID)
+									return sameDevice, ErrorNoValidCredentialTypeProvided
+								}
+								break
+							}
+						}
+						configuredID = matchedQuery
+					}
 				case common.PresentationRequestDescriptor:
 					_, configuredID = descriptorIDs[association.ID]
 					if configuredID && (presentationDefinitionID == "" || verifiablePresentation.PresentationSubmissionDefinitionID() != presentationDefinitionID) {
 						logging.Log().Infof("Presentation submission definition %s does not match configured definition %s for client %s and scope %s.", verifiablePresentation.PresentationSubmissionDefinitionID(), presentationDefinitionID, loginSession.clientId, loginSession.scope)
 						return sameDevice, ErrorNoValidCredentialTypeProvided
+					}
+					if configuredID {
+						matchedDescriptor := false
+						for _, descriptor := range presentationDefinition.InputDescriptors {
+							if descriptor.Id == association.ID {
+								matchedDescriptor = true
+								if !matchesPresentationDescriptor(descriptor, presentationDefinition, credential) {
+									logging.Log().Infof("Credential associated with Presentation Exchange descriptor %s does not satisfy its constraints.", association.ID)
+									return sameDevice, ErrorNoValidCredentialTypeProvided
+								}
+								break
+							}
+						}
+						configuredID = matchedDescriptor
 					}
 				default:
 					configuredID = false
@@ -1671,7 +1705,7 @@ func satisfiesDCQLCredentialSets(dcql *configModel.DCQL, presentedIDs map[string
 	}
 
 	for _, credentialSet := range dcql.CredentialSets {
-		if !credentialSet.Required {
+		if !credentialSet.IsRequired() {
 			continue
 		}
 		optionSatisfied := false

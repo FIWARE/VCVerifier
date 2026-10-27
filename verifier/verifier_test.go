@@ -1359,6 +1359,9 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 		extraAssociationKind   common.PresentationRequestKind
 		submissionDefinitionID string
 		includeRequested       bool
+		allowMultiple          bool
+		queryFormat            string
+		credentialFormat       string
 		expectedError          error
 		expectedValidated      []string
 	}
@@ -1368,12 +1371,20 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 			mode:              "dcql",
 			extraRequestID:    "requested-query",
 			includeRequested:  true,
+			allowMultiple:     true,
 			expectedValidated: []string{"RequestedCredential"},
 		},
 		{
 			name:             "credential associated with an unknown DCQL id is rejected",
 			mode:             "dcql",
 			extraRequestID:   "unknown-query",
+			includeRequested: true,
+			expectedError:    ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:             "multiple credentials are rejected when the DCQL query does not allow them",
+			mode:             "dcql",
+			extraRequestID:   "requested-query",
 			includeRequested: true,
 			expectedError:    ErrorNoValidCredentialTypeProvided,
 		},
@@ -1388,6 +1399,21 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 			mode:           "dcql",
 			extraRequestID: "requested-query",
 			expectedError:  ErrorRequiredCredentialNotProvided,
+		},
+		{
+			name:             "unsupported DCQL format is rejected",
+			mode:             "dcql",
+			queryFormat:      "mso_mdoc",
+			includeRequested: true,
+			expectedError:    ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:              "matching SD-JWT format is accepted",
+			mode:              "dcql",
+			queryFormat:       "dc+sd-jwt",
+			credentialFormat:  common.FormatSDJWT,
+			includeRequested:  true,
+			expectedValidated: []string{"RequestedCredential"},
 		},
 		{
 			name:              "known Presentation Exchange descriptor also covers an unconfigured type",
@@ -1436,7 +1462,11 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 			switch tc.mode {
 			case "dcql":
 				scope.DCQL = &configModel.DCQL{
-					Credentials: []configModel.CredentialQuery{{Id: "requested-query"}},
+					Credentials: []configModel.CredentialQuery{{
+						Id:       "requested-query",
+						Multiple: tc.allowMultiple,
+						Format:   tc.queryFormat,
+					}},
 				}
 			case "presentation-definition":
 				scope.PresentationDefinition = &configModel.PresentationDefinition{
@@ -1465,6 +1495,9 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 					requested.AddRequestAssociation(common.PresentationRequestDCQL, "requested-query")
 				} else {
 					requested.AddRequestAssociation(common.PresentationRequestDescriptor, "requested-descriptor")
+				}
+				if tc.credentialFormat != "" {
+					requested.SetFormat(tc.credentialFormat)
 				}
 				credentials = append(credentials, requested)
 			}
@@ -1546,17 +1579,218 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 	}
 }
 
+func TestAuthenticationResponseRejectsCredentialsThatDoNotMatchQueries(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type testCase struct {
+		name        string
+		dcql        *configModel.DCQL
+		definition  *configModel.PresentationDefinition
+		credential  common.CredentialContents
+		expectError bool
+	}
+	tests := []testCase{
+		{
+			name: "DCQL claim value mismatch",
+			dcql: &configModel.DCQL{Credentials: []configModel.CredentialQuery{{
+				Id: "requested-query",
+				Claims: []configModel.ClaimsQuery{{
+					Path:   []interface{}{"credentialSubject", "role"},
+					Values: []interface{}{"admin"},
+				}},
+			}}},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "user"}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "DCQL claim match",
+			dcql: &configModel.DCQL{Credentials: []configModel.CredentialQuery{{
+				Id: "requested-query",
+				Claims: []configModel.ClaimsQuery{{
+					Path:   []interface{}{"credentialSubject", "role"},
+					Values: []interface{}{"admin"},
+				}},
+			}}},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "admin"}}},
+			},
+		},
+		{
+			name: "Presentation Exchange field filter mismatch",
+			definition: &configModel.PresentationDefinition{
+				Id: "requested-definition",
+				InputDescriptors: []configModel.InputDescriptor{{
+					Id: "requested-descriptor",
+					Constraints: configModel.Constraints{Fields: []configModel.Fields{{
+						Path:     []string{"$.credentialSubject.role"},
+						Optional: boolPtr(false),
+						Filter:   map[string]interface{}{"const": "admin"},
+					}}},
+				}},
+			},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "user"}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "Presentation Exchange rejects a disclosed optional field that violates its filter",
+			definition: &configModel.PresentationDefinition{
+				Id: "requested-definition",
+				InputDescriptors: []configModel.InputDescriptor{{
+					Id: "requested-descriptor",
+					Constraints: configModel.Constraints{Fields: []configModel.Fields{{
+						Path:   []string{"$.credentialSubject.role"},
+						Filter: map[string]interface{}{"const": "admin"},
+					}}},
+				}},
+			},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "user"}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "Presentation Exchange does not treat an array claim as a matching element",
+			definition: &configModel.PresentationDefinition{
+				Id: "requested-definition",
+				InputDescriptors: []configModel.InputDescriptor{{
+					Id: "requested-descriptor",
+					Constraints: configModel.Constraints{Fields: []configModel.Fields{{
+						Path:     []string{"$.credentialSubject.roles"},
+						Optional: boolPtr(false),
+						Filter:   map[string]interface{}{"const": "admin"},
+					}}},
+				}},
+			},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"roles": []string{"user"}}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "Presentation Exchange field filter match",
+			definition: &configModel.PresentationDefinition{
+				Id: "requested-definition",
+				InputDescriptors: []configModel.InputDescriptor{{
+					Id: "requested-descriptor",
+					Constraints: configModel.Constraints{Fields: []configModel.Fields{{
+						Path:     []string{"$.credentialSubject.role"},
+						Optional: boolPtr(false),
+						Filter:   map[string]interface{}{"const": "admin"},
+					}}},
+				}},
+			},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "admin"}}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			trueOption := true
+			scope := configModel.ScopeEntry{
+				Credentials: []configModel.Credential{{
+					Type: "RequestedCredential",
+					JwtInclusion: configModel.JwtInclusion{
+						Enabled:       &trueOption,
+						FullInclusion: true,
+					},
+				}},
+				DCQL:                   tc.dcql,
+				PresentationDefinition: tc.definition,
+			}
+			credential, err := common.CreateCredential(tc.credential, common.CustomFields{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.dcql != nil {
+				credential.AddRequestAssociation(common.PresentationRequestDCQL, "requested-query")
+			} else {
+				credential.AddRequestAssociation(common.PresentationRequestDescriptor, "requested-descriptor")
+			}
+			presentation, err := common.NewPresentation(common.WithCredentials(credential))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.definition != nil {
+				presentation.SetPresentationSubmissionDefinitionID("requested-definition")
+			}
+
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{
+				"login-state": {
+					version:   SAME_DEVICE,
+					callback:  "https://verifier.example/callback",
+					sessionId: "login-state",
+					clientId:  "clientId",
+					scope:     "scope",
+				},
+			}}
+			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+			verifier := CredentialVerifier{
+				did:                "did:key:verifier",
+				signingKey:         getECDSAKey(),
+				tokenSigner:        mockTokenSigner{},
+				tokenCache:         &tokenCache,
+				sessionCache:       &sessionCache,
+				nonceGenerator:     &mockNonceGenerator{staticValues: []string{"authorization-code"}},
+				validationServices: []ValidationService{&credentialTypeRecorder{}},
+				clock:              mockClock{},
+				credentialsConfig: mockCredentialConfig{
+					mockScopes: map[string]map[string]configModel.ScopeEntry{
+						"clientId": {"scope": scope},
+					},
+				},
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			_, err = verifier.AuthenticationResponse("login-state", presentation)
+			if tc.expectError {
+				assert.Error(t, err, "a known request ID must not satisfy constraints the credential fails")
+				assert.Empty(t, tokenCache.tokens)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Contains(t, tokenCache.tokens, "authorization-code")
+		})
+	}
+}
+
 func TestPresentationRequestAlternatives(t *testing.T) {
 	dcql := &configModel.DCQL{
 		Credentials: []configModel.CredentialQuery{{Id: "query-a"}, {Id: "query-b"}},
 		CredentialSets: []configModel.CredentialSetQuery{{
 			Options:  [][]string{{"query-a"}, {"query-b"}},
-			Required: true,
+			Required: boolPtr(true),
 		}},
 	}
 	assert.True(t, satisfiesDCQLCredentialSets(dcql, map[string]struct{}{"query-a": {}}))
 	assert.True(t, satisfiesDCQLCredentialSets(dcql, map[string]struct{}{"query-b": {}}))
 	assert.False(t, satisfiesDCQLCredentialSets(dcql, map[string]struct{}{}))
+
+	defaultRequired := &configModel.DCQL{
+		Credentials: []configModel.CredentialQuery{{Id: "query-required"}},
+		CredentialSets: []configModel.CredentialSetQuery{{
+			Options: [][]string{{"query-required"}},
+		}},
+	}
+	assert.True(t, defaultRequired.CredentialSets[0].IsRequired())
+	assert.False(t, satisfiesDCQLCredentialSets(defaultRequired, map[string]struct{}{}))
+	optionalSet := configModel.CredentialSetQuery{Options: [][]string{{"query-required"}}, Required: boolPtr(false)}
+	optionalDCQL := &configModel.DCQL{
+		Credentials:    []configModel.CredentialQuery{{Id: "query-required"}},
+		CredentialSets: []configModel.CredentialSetQuery{optionalSet},
+	}
+	assert.True(t, satisfiesDCQLCredentialSets(optionalDCQL, map[string]struct{}{}))
 
 	presentationDefinition := &configModel.PresentationDefinition{
 		InputDescriptors: []configModel.InputDescriptor{
