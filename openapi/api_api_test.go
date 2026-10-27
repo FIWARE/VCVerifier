@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -73,6 +74,8 @@ type mockVerifier struct {
 	mockOnHasLoginSession func(sessionId string)
 	// codes passed to ReleaseUndeliveredCode, by session id
 	releasedCodes map[string]string
+	// what CheckRedirectUri returns
+	mockRedirectUriError error
 	// completed logins whose page did not get the result yet, by session id; guarded by sessionsMu
 	mockPendingLogins map[string]verifier.PendingLogin
 	// called by PendingLogin before it answers
@@ -151,6 +154,10 @@ func (mV *mockVerifier) exchangeCode(sessionId string) {
 	mV.sessionsMu.Lock()
 	defer mV.sessionsMu.Unlock()
 	delete(mV.mockPendingLogins, sessionId)
+}
+
+func (mV *mockVerifier) CheckRedirectUri(clientId string, redirectUri string) error {
+	return mV.mockRedirectUriError
 }
 
 func (mV *mockVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {
@@ -1039,18 +1046,37 @@ func TestAddPresentationSubmissionRequestIDs(t *testing.T) {
 
 func TestBuildFrontendV2Address(t *testing.T) {
 	tests := []struct {
-		testName string
-		prefix   string
-		want     string
+		testName    string
+		prefix      string
+		redirectUri string
+		wantPath    string
 	}{
-		{testName: "No prefix configured, path is unchanged", prefix: "", want: "https://verifier.org/api/v2/loginQR?state=my-state&client_id=my-client&redirect_uri=https://wallet.example/callback&scope=&nonce=my-nonce&request_mode=byReference"},
-		{testName: "Prefix is inserted before the loginQR path", prefix: "/myservice", want: "https://verifier.org/myservice/api/v2/loginQR?state=my-state&client_id=my-client&redirect_uri=https://wallet.example/callback&scope=&nonce=my-nonce&request_mode=byReference"},
+		{testName: "No prefix configured, path is unchanged", prefix: "", redirectUri: "https://wallet.example/callback", wantPath: "/api/v2/loginQR"},
+		{testName: "Prefix is inserted before the loginQR path", prefix: "/myservice", redirectUri: "https://wallet.example/callback", wantPath: "/myservice/api/v2/loginQR"},
+		{testName: "Redirect URI query parameters remain intact", prefix: "", redirectUri: "https://wallet.example/callback?tenant=one&mode=login", wantPath: "/api/v2/loginQR"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
-			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "byReference")
-			if actual != tc.want {
-				t.Errorf("%s - Expected %s but was %s", tc.testName, tc.want, actual)
+			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", tc.redirectUri, "", "my-nonce", "byReference")
+			parsed, err := url.Parse(actual)
+			if err != nil {
+				t.Fatalf("Could not parse frontend address %q: %v", actual, err)
+			}
+			if parsed.Scheme != "https" || parsed.Host != "verifier.org" || parsed.Path != tc.wantPath {
+				t.Errorf("Expected https://verifier.org%s, got %s", tc.wantPath, actual)
+			}
+			query := parsed.Query()
+			if got := query.Get("redirect_uri"); got != tc.redirectUri {
+				t.Errorf("Expected redirect_uri %q, got %q", tc.redirectUri, got)
+			}
+			if got := query.Get("state"); got != "my-state" {
+				t.Errorf("Expected state %q, got %q", "my-state", got)
+			}
+			if got := query.Get("client_id"); got != "my-client" {
+				t.Errorf("Expected client_id %q, got %q", "my-client", got)
+			}
+			if got := query.Get("request_mode"); got != "byReference" {
+				t.Errorf("Expected request_mode %q, got %q", "byReference", got)
 			}
 		})
 	}
@@ -1058,9 +1084,12 @@ func TestBuildFrontendV2Address(t *testing.T) {
 
 func TestBuildFrontendV2Address_UsesProvidedRequestMode(t *testing.T) {
 	actual := buildFrontendV2Address("https", "verifier.org", "", "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "urlEncoded")
-	want := "https://verifier.org/api/v2/loginQR?state=my-state&client_id=my-client&redirect_uri=https://wallet.example/callback&scope=&nonce=my-nonce&request_mode=urlEncoded"
-	if actual != want {
-		t.Errorf("Expected %s but was %s", want, actual)
+	parsed, err := url.Parse(actual)
+	if err != nil {
+		t.Fatalf("Could not parse frontend address %q: %v", actual, err)
+	}
+	if got := parsed.Query().Get("request_mode"); got != "urlEncoded" {
+		t.Errorf("Expected request_mode %q, got %q", "urlEncoded", got)
 	}
 }
 
@@ -1125,4 +1154,51 @@ func getNoHolderVPTokenJWT() string {
 			"verifiableCredential": []interface{}{buildFakeVCJWT()},
 		},
 	})
+}
+
+// TestLoginStartRefusesRedirectUri checks that every entry point of a login answers a redirect
+// URI the client does not allow with 400, and never redirects to it.
+func TestLoginStartRefusesRedirectUri(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	gin.SetMode(gin.TestMode)
+
+	type test struct {
+		testName string
+		path     string
+		handler  gin.HandlerFunc
+		mock     *mockVerifier
+	}
+	tests := []test{
+		{"the oidc authorization endpoint", "/api/v1/authorization?client_id=listed-client&response_type=code&scope=default&redirect_uri=https://evil.example/cb&state=s&nonce=n", AuthorizationEndpoint,
+			&mockVerifier{mockAuthorizationType: FRONTEND_V2, mockRedirectUriError: verifier.ErrorRedirectUriNotAllowed}},
+		{"the cross-device v2 login page", "/api/v2/loginQR?state=s&client_id=listed-client&redirect_uri=https://evil.example/cb", VerifierLoginQr,
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
+		{"the cross-device v1 login page", "/api/v1/loginQR?state=s&client_id=listed-client&client_callback=https://evil.example/cb", VerifierPageDisplayQRSIOP,
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
+		{"the cross-device v1 connection string", "/api/v1/startsiop?state=s&client_id=listed-client&client_callback=https://evil.example/cb", VerifierAPIStartSIOP,
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			apiVerifier = tc.mock
+			frontendVerifier = tc.mock
+			t.Cleanup(func() { apiVerifier = nil; frontendVerifier = nil })
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, tc.path, nil)
+			tc.handler(c)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Errorf("Expected status 400, got %d", recorder.Code)
+			}
+			if location := recorder.Header().Get("Location"); location != "" {
+				t.Errorf("A refused redirect URI must not be redirected to, got Location %q", location)
+			}
+			var body ErrorMessage
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body != ErrorMessageRedirectUriNotAllowed {
+				t.Errorf("Expected %v, got %s (err %v)", ErrorMessageRedirectUriNotAllowed, recorder.Body.String(), err)
+			}
+		})
+	}
 }

@@ -75,7 +75,7 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 
 	qr, err := getFrontendVerifier().ReturnLoginQR(c.Request.Host, "https", callback, state, clientId, nonce, requestMode)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{"qr_generation_error", err.Error()})
+		abortLoginStart(c, err, ErrorMessage{"qr_generation_error", err.Error()})
 		return
 	}
 
@@ -144,7 +144,7 @@ func VerifierLoginQr(c *gin.Context) {
 
 	qrInfo, err := getFrontendVerifier().ReturnLoginQRV2(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode)
 	if err != nil {
-		c.AbortWithStatusJSON(500, ErrorMessage{"qr_generation_error", err.Error()})
+		abortLoginStart(c, err, ErrorMessage{"qr_generation_error", err.Error()})
 		return
 	}
 

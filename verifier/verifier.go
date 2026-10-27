@@ -84,6 +84,7 @@ var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorLoginPageSecretMismatch = errors.New("login_page_secret_mismatch")
+var ErrorRedirectUriNotAllowed = errors.New("redirect_uri_not_allowed")
 
 // ErrorLoginCompletionFailed wraps a failure on the verifier's side after the presentation was
 // verified, so it is not reported as a rejected credential.
@@ -147,6 +148,9 @@ type Verifier interface {
 	// session: ErrorNoSuchSession if the page may no longer wait on it (see AwaitsLoginPage),
 	// ErrorLoginPageSecretMismatch if the secret is not the one handed to the page that started it
 	CheckLoginPageSecret(sessionId string, secret string) error
+	// CheckRedirectUri checks where a login of the client may send its authorization code:
+	// ErrorRedirectUriNotAllowed if the client has allowedRedirectUris and the URI matches none
+	CheckRedirectUri(clientId string, redirectUri string) error
 	// ReleaseUndeliveredCode restores the login session of a cross-device v2 login whose code
 	// could not be handed to the browser, unless the code was already redeemed
 	ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool
@@ -473,6 +477,16 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		logging.Log().Errorf("Was not able to initiate the credentials config. Err: %v", err)
 	}
 	WarnLDPVCFormat(config.ConfigRepo.Services, verifierConfig.ClientIdentification.Id)
+	// an invalid entry would match nothing and refuse every login of its service
+	if err = configModel.ValidateServicesAllowedRedirectUris(config.ConfigRepo.Services); err != nil {
+		logging.Log().Errorf("Invalid configRepo.services allowedRedirectUris. Err: %v", err)
+		return
+	}
+	for _, service := range config.ConfigRepo.Services {
+		if len(service.AllowedRedirectUris) > 0 {
+			logging.Log().Infof("Service %q sends authorization codes only to its %d allowedRedirectUris.", service.Id, len(service.AllowedRedirectUris))
+		}
+	}
 
 	var tokenProvider tir.TokenProvider
 	if (&config.M2M).AuthEnabled {
@@ -2084,10 +2098,33 @@ func (v *CredentialVerifier) ReleaseUndeliveredCode(sessionId string, authorizat
 	return v.releaseCode(sessionId, tokenSession.session, tokenSession.sessionExpiresAt, authorizationCode) == sessionRestored
 }
 
+// CheckRedirectUri checks the URI a login of the client sends its authorization code to - the
+// redirect_uri of the cross-device v2 and OIDC flows, the client_callback of the cross-device v1
+// flow - against the client's allowedRedirectUris. A client without the list, or not configured at
+// all, accepts any URI; an unconfigured client never gets a code, as its presentation fails
+// verification. A failure to read the configuration is returned, so the login is refused rather
+// than left unchecked.
+func (v *CredentialVerifier) CheckRedirectUri(clientId string, redirectUri string) error {
+	allowedRedirectUris, err := v.credentialsConfig.GetAllowedRedirectUris(clientId)
+	if err != nil {
+		logging.Log().Warnf("Was not able to read the allowed redirect URIs of client %s, refusing the login. Err: %v", clientId, err)
+		return err
+	}
+	if len(allowedRedirectUris) == 0 || configModel.RedirectUriAllowed(allowedRedirectUris, redirectUri) {
+		return nil
+	}
+	logging.Log().Infof("Refused a login for client %s: %q is not in its allowedRedirectUris.", clientId, redirectUri)
+	return ErrorRedirectUriNotAllowed
+}
+
 // intialize the OID4VP cross device flow
 // It returns the generated session id alongside the request, since the frontend needs it to
 // address the session (WebSocket, expiry) - the external state is not a lookup key.
 func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string, redirectUri string, state string, clientId string, scope string, nonce string, requestMode string) (sessionId string, pageSecret string, authenticationRequest string, err error) {
+
+	if err = v.CheckRedirectUri(clientId, redirectUri); err != nil {
+		return sessionId, "", authenticationRequest, err
+	}
 
 	sessionId = v.nonceGenerator.GenerateNonce()
 	// The session id is in the QR, so anyone who sees the QR knows it. The page secret is what
@@ -2115,6 +2152,11 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 	}
 	if strings.TrimSpace(scope) == "" {
 		return authenticationRequest, ErrorNoDefaultScope
+	}
+
+	// the verifier calls the callback itself once the login completed
+	if err = v.CheckRedirectUri(clientId, callback); err != nil {
+		return authenticationRequest, err
 	}
 
 	if nonce == "" {

@@ -276,6 +276,11 @@ configRepo:
         -   id: testService
             # default scope for the service
             defaultOidcScope: "default"
+            # Optional allowlist for redirect_uri / client_callback destinations.
+            # An empty or omitted list allows any URI.
+            # allowedRedirectUris:
+            #     - "https://rp.example/callback"
+            #     - "https://rp.example/tenants/*"
             # the concrete scopes for the service, defining the trust for credentials and the presentation definition to be requested
             oidcScopes:
                 # the concrete scope configuration
@@ -480,6 +485,8 @@ configRepo:
     services:
         ...
 ```
+
+Each service may set `allowedRedirectUris` to restrict where authorization codes can be sent. It applies to the OIDC and cross-device v2 `redirect_uri`, and to the cross-device v1 `client_callback`. Entries are exact absolute `https` URIs, or `http` URIs for loopback hosts only (`localhost`, `127.0.0.0/8` or `::1`), or may end in `/*` to allow paths below that prefix on the same scheme, host, and port (for example, `https://rp.example/tenants/*`). The wildcard is only supported at the end of a path; it does not allow other hosts or sibling paths. Wildcard entries and matching URIs cannot contain a query or fragment. An omitted or empty list preserves the existing behavior and allows any URI. On `PUT /service/:id`, omitting `allowedRedirectUris` preserves the current list; send an explicit empty array (`"allowedRedirectUris": []`) to remove the restriction. The same `allowedRedirectUris` field is accepted by the Credentials Config Service and persisted when service configuration is stored in the database.
 
 ## Usage
 

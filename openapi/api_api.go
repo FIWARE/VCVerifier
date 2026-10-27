@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -50,12 +51,18 @@ var ErrorMessageNoScope = ErrorMessage{"no_scope_provided", "Authentication requ
 var ErrorMessageUnknownClientOrScope = ErrorMessage{"invalid_client_or_scope", "The requested client or scope is not configured."}
 var ErrorMessageInvalidResponseType = ErrorMessage{"invalid_response_type", "Authentication requires the response_type to be `code`."}
 var ErrorMessageFailedSameDevice = ErrorMessage{"failed_same_device", "Was not able to start a same-device flow."}
+var ErrorMessageFailedFrontendRedirect = ErrorMessage{"failed_frontend_redirect", "Was not able to start the login."}
 var ErrorMessageNoClientId = ErrorMessage{"no_client_id_provided", "Authentication requires a client-id provided as a parameter."}
 var ErrorMessageNoNonce = ErrorMessage{"no_nonce_provided", "Authentication requires a nonce provided as a query parameter."}
 var ErrorMessageNoToken = ErrorMessage{"no_token_provided", "Authentication requires a token provided as a form parameter."}
 var ErrorMessageNoPresentationSubmission = ErrorMessage{"no_presentation_submission_provided", "Authentication requires a presentation submission provided as a form parameter."}
 var ErrorMessageInvalidPresentationSubmission = ErrorMessage{"invalid_presentation_submission", "The presentation submission must be valid JSON or Base64URL-encoded JSON with a definition_id and non-empty descriptor_map containing valid credential paths."}
 var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback address has to be provided as query-parameter."}
+
+// ErrorMessageRedirectUriNotAllowed is the answer to a login whose redirect_uri or client_callback
+// is not in the client's allowedRedirectUris. The verifier never redirects to such a URI, not even
+// to report the error (RFC 6749 §4.1.2.1).
+var ErrorMessageRedirectUriNotAllowed = ErrorMessage{"redirect_uri_not_allowed", "The redirect_uri or client_callback is not registered for this client."}
 var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could not be decoded."}
 var ErrorMessageInvalidTokenEncoding = ErrorMessage{"invalid_token", "The vp_token has to be base64url encoded without padding."}
 var ErrorMessageUnableToDecodeCredential = ErrorMessage{"invalid_token", "Could not read the credential(s) inside the token."}
@@ -246,13 +253,37 @@ func AuthorizationEndpoint(c *gin.Context) {
 			return
 		}
 	case FRONTEND_V2:
+		// checked before the browser is sent on, so a refused URI is reported here and not by the
+		// login page
+		if err = getApiVerifier().CheckRedirectUri(clientId, redirectUri); err != nil {
+			abortLoginStart(c, err, ErrorMessageFailedFrontendRedirect)
+			return
+		}
 		redirect = buildFrontendV2Address(protocol, c.Request.Host, getApiVerifier().GetPathPrefix(), state, clientId, redirectUri, scope, nonce, fallbackRequestMode)
 	}
 	c.Redirect(http.StatusFound, redirect)
 }
 
+// abortLoginStart answers a login that could not be started: 400 for a redirect URI the client
+// does not allow, 500 with the given message otherwise.
+func abortLoginStart(c *gin.Context, err error, otherwise ErrorMessage) {
+	if errors.Is(err, verifier.ErrorRedirectUriNotAllowed) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageRedirectUriNotAllowed)
+		return
+	}
+	c.AbortWithStatusJSON(http.StatusInternalServerError, otherwise)
+}
+
 func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode string) string {
-	address := fmt.Sprintf("%s://%s%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=%s", protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode)
+	query := url.Values{
+		"state":        {state},
+		"client_id":    {clientId},
+		"redirect_uri": {redirectUri},
+		"scope":        {scope},
+		"nonce":        {nonce},
+		"request_mode": {requestMode},
+	}
+	address := fmt.Sprintf("%s://%s%s/api/v2/loginQR?%s", protocol, host, prefix, query.Encode())
 	logging.Log().Debugf("%s", address)
 	return address
 }
@@ -1121,7 +1152,7 @@ func VerifierAPIStartSIOP(c *gin.Context) {
 
 	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, "", requestMode)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
+		abortLoginStart(c, err, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
 		return
 	}
 	c.String(http.StatusOK, connectionString)
