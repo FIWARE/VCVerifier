@@ -204,10 +204,14 @@ func (cc cacheBasedCredentialsConfig) RequiredCredentialTypes(serviceIdentifier 
 	if hit {
 		logging.Log().Debugf("Found service for %s", serviceIdentifier)
 		configuredService := cacheEntry.(config.ConfiguredService)
-		return configuredService.GetRequiredCredentialTypes(scope)
+		credentialTypes, err := configuredService.GetRequiredCredentialTypes(scope)
+		if errors.Is(err, config.ErrorNoSuchScope) {
+			return nil, fmt.Errorf("%w: %s", ErrorUnknownClientOrScope, scope)
+		}
+		return credentialTypes, err
 	}
 	logging.Log().Errorf("No service entry for %s", serviceIdentifier)
-	return []string{}, fmt.Errorf("no service %s configured", serviceIdentifier)
+	return nil, fmt.Errorf("%w: %s", ErrorUnknownClientOrScope, serviceIdentifier)
 }
 
 // GetDefaultScope returns the configured default OIDC scope for the given service.
