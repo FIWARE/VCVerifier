@@ -33,6 +33,7 @@ VCVerifier provides the necessary endpoints(see [API](./api/api.yaml)) to offer 
 * [Usage](#usage)
     * [Frontend-Integration](#frontend-integration)
     * [REST-Example](#rest-example)
+    * [PKCE](docs/pkce.md)
 * [API](#api)
     * [Open Issues](#open-issues)
 * [Testing](#testing)
@@ -196,6 +197,13 @@ verifier:
     keyAlgorithm:
     # when set to true, the private key is generated on startup. Its not persisted and just kept in memory.
     generateKey: true
+    # PKCE methods accepted for authorization-code requests. Defaults to ["S256"].
+    # "plain" is supported but not recommended; enable it explicitly only when a client
+    # cannot use S256. An explicitly configured list replaces the default.
+    # See docs/pkce.md for the PKCE flow and method details.
+    # allowedCodeChallengeMethods:
+    #   - S256
+    #   - plain
     # path to the private key(in PEM format) for jwt signatures
     keyPath:
     # TTL (in seconds) for entries in the cache of fetched status-list credentials.
@@ -491,6 +499,8 @@ Each service may set `allowedRedirectUris` to restrict where authorization codes
 ## Usage
 
 The VCVerifier provides support for integration in frontend-applications(e.g. typical H2M-interactin) or plain api-usage(mostly M2M).
+
+Authorization-code flows can optionally use PKCE. See the [PKCE guide](docs/pkce.md) for supported methods and configuration.
 
 ### Frontend-Integration
 

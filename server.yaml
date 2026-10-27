@@ -18,6 +18,12 @@ logging:
 verifier:
     tirAddress: https://tir.de
     did: did:key:myverifier
+    # PKCE methods accepted for authorization-code requests. S256 is the secure
+    # default when this option is omitted. Enable plain only for clients that
+    # cannot use S256; plain is not recommended.
+    # allowedCodeChallengeMethods:
+    #   - S256
+    #   - plain
     # Seconds to wait for the client_callback of the cross-device v1 flow when delivering the
     # authorization code (default 20). The wallet's request is held open meanwhile.
     # clientCallbackTimeout: 20

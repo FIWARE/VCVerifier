@@ -72,6 +72,7 @@ var ErrorMessageInvalidSdJwt = ErrorMessage{"invalid_sdjwt", "SdJwt does not con
 var ErrorMessageNoWebsocketConnection = ErrorMessage{"invalid_connection", "No Websocket connection available for the authenticated session."}
 var ErrorMessageUnresolvableRequestObject = ErrorMessage{"unresolvable_request_object", "Was not able to get the request object from the client."}
 var ErrorMessageInvalidAudience = ErrorMessage{"invalid_audience", "Audience of the request object was invalid."}
+var ErrorMessageInvalidPKCERequest = ErrorMessage{"invalid_pkce_request", "The PKCE challenge or method is invalid or not enabled."}
 var ErrorMessageUnsupportedAssertionType = ErrorMessage{"unsupported_assertion_type", "Assertion type is not supported."}
 var ErrorMessageInvalidClientAssertion = ErrorMessage{"invalid_client_assertion", "Provided client assertion is invalid."}
 var ErrorMessageInvalidTokenRequest = ErrorMessage{"invalid_token_request", "Token request has no redirect_uri and no valid client assertion."}
@@ -157,6 +158,8 @@ func AuthorizationEndpoint(c *gin.Context) {
 	redirectUri, redirectUriExists := c.GetQuery("redirect_uri")
 	nonce, nonceExists := c.GetQuery("nonce")
 	state, stateExists := c.GetQuery("state")
+	codeChallenge, codeChallengeSet := c.GetQuery("code_challenge")
+	codeChallengeMethod, codeChallengeMethodSet := c.GetQuery("code_challenge_method")
 
 	requestUri, requestUriExists := c.GetQuery("request_uri")
 	if requestUriExists {
@@ -195,6 +198,14 @@ func AuthorizationEndpoint(c *gin.Context) {
 		if cro.State != "" {
 			state = cro.State
 			stateExists = true
+		}
+		if cro.CodeChallenge != nil {
+			codeChallenge = *cro.CodeChallenge
+			codeChallengeSet = true
+		}
+		if cro.CodeChallengeMethod != nil {
+			codeChallengeMethod = *cro.CodeChallengeMethod
+			codeChallengeMethodSet = true
 		}
 
 		if cro.ResponseType != "" {
@@ -242,14 +253,15 @@ func AuthorizationEndpoint(c *gin.Context) {
 
 	authorizationType := getApiVerifier().GetAuthorizationType(clientId)
 	fallbackRequestMode := getApiVerifier().GetRequestMode()
+	pkce := verifier.PKCEChallenge{Value: codeChallenge, Method: codeChallengeMethod, ChallengeSet: codeChallengeSet, MethodSet: codeChallengeMethodSet}
 	var redirect string
 	var err error
 	switch authorizationType {
 	case DEEPLINK:
-		redirect, err = getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, "", clientId, nonce, fallbackRequestMode, scope, verifier.OPENID4VP_PROTOCOL)
+		redirect, err = getApiVerifier().StartSameDeviceFlowWithPKCE(c.Request.Host, protocol, state, "", clientId, nonce, fallbackRequestMode, scope, verifier.OPENID4VP_PROTOCOL, pkce)
 		if err != nil {
 			logging.Log().Warnf("Was not able start a same device flow. Err: %v", err)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageFailedSameDevice)
+			abortLoginStart(c, err, ErrorMessageFailedSameDevice)
 			return
 		}
 	case FRONTEND_V2:
@@ -259,7 +271,7 @@ func AuthorizationEndpoint(c *gin.Context) {
 			abortLoginStart(c, err, ErrorMessageFailedFrontendRedirect)
 			return
 		}
-		redirect = buildFrontendV2Address(protocol, c.Request.Host, getApiVerifier().GetPathPrefix(), state, clientId, redirectUri, scope, nonce, fallbackRequestMode)
+		redirect = buildFrontendV2Address(protocol, c.Request.Host, getApiVerifier().GetPathPrefix(), state, clientId, redirectUri, scope, nonce, fallbackRequestMode, pkce)
 	}
 	c.Redirect(http.StatusFound, redirect)
 }
@@ -271,10 +283,18 @@ func abortLoginStart(c *gin.Context, err error, otherwise ErrorMessage) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageRedirectUriNotAllowed)
 		return
 	}
+	if errors.Is(err, verifier.ErrorInvalidPKCEChallenge) || errors.Is(err, verifier.ErrorInvalidPKCEMethod) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidPKCERequest)
+		return
+	}
 	c.AbortWithStatusJSON(http.StatusInternalServerError, otherwise)
 }
 
-func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode string) string {
+func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode string, pkceOptions ...verifier.PKCEChallenge) string {
+	pkce := verifier.PKCEChallenge{}
+	if len(pkceOptions) > 0 {
+		pkce = pkceOptions[0]
+	}
 	query := url.Values{
 		"state":        {state},
 		"client_id":    {clientId},
@@ -282,6 +302,12 @@ func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri
 		"scope":        {scope},
 		"nonce":        {nonce},
 		"request_mode": {requestMode},
+	}
+	if pkce.Value != "" || pkce.ChallengeSet {
+		query.Set("code_challenge", pkce.Value)
+	}
+	if pkce.Method != "" || pkce.MethodSet {
+		query.Set("code_challenge_method", pkce.Method)
 	}
 	address := fmt.Sprintf("%s://%s%s/api/v2/loginQR?%s", protocol, host, prefix, query.Encode())
 	logging.Log().Debugf("%s", address)
@@ -436,9 +462,10 @@ func handleTokenTypeCode(c *gin.Context) {
 	}
 
 	assertionType, assertionTypeExists := c.GetPostForm("client_assertion_type")
+	codeVerifier, _ := c.GetPostForm("code_verifier")
 	redirectUri, redirectUriExists := c.GetPostForm("redirect_uri")
 	if redirectUriExists {
-		jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, redirectUri, false)
+		jwt, expiration, refreshToken, err := getApiVerifier().GetTokenWithCodeVerifier(code, redirectUri, false, codeVerifier)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 			return
@@ -447,7 +474,7 @@ func handleTokenTypeCode(c *gin.Context) {
 		return
 	}
 	if assertionTypeExists {
-		handleWithClientAssertion(c, assertionType, code)
+		handleWithClientAssertion(c, assertionType, code, codeVerifier)
 		return
 	}
 	c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidTokenRequest)
@@ -470,7 +497,7 @@ func getScopesFromRequest(c *gin.Context, clientId string) (scopes []string) {
 
 }
 
-func handleWithClientAssertion(c *gin.Context, assertionType string, code string) {
+func handleWithClientAssertion(c *gin.Context, assertionType string, code string, codeVerifier string) {
 	if assertionType != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
 		logging.Log().Warnf("Assertion type %s is not supported.", assertionType)
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnsupportedAssertionType)
@@ -533,7 +560,7 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 		return
 	}
 
-	jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, "", true)
+	jwt, expiration, refreshToken, err := getApiVerifier().GetTokenWithCodeVerifier(code, "", true, codeVerifier)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 		return
@@ -1150,7 +1177,7 @@ func VerifierAPIStartSIOP(c *gin.Context) {
 		requestMode = fallbackRequestMode
 	}
 
-	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, "", requestMode)
+	connectionString, err := getApiVerifier().StartSiopFlowWithPKCE(c.Request.Host, protocol, callback, state, clientId, "", requestMode, readPKCEChallenge(c))
 	if err != nil {
 		abortLoginStart(c, err, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
 		return

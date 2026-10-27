@@ -22,6 +22,8 @@ paths:
         - $ref: '#/components/parameters/Scope'
         - $ref: '#/components/parameters/Nonce'
         - $ref: '#/components/parameters/ResponseType'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: AuthorizationEndpoint
       summary: OAuth-2 compliant authorization endpoint, to provide the correct redirect
       description: Endpoint to be used as entry for the authorization process, providing the redirect to the concrete authorization method.
@@ -42,6 +44,8 @@ paths:
         - $ref: '#/components/parameters/Scope'
         - $ref: '#/components/parameters/Nonce'
         - $ref: '#/components/parameters/RequestMode'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: VerifierLoginQr
       summary: Presents a qr as starting point for the auth process
       description: Returns a rendered html with a QR encoding the login-starting point for the siop flow - e.g. 'openid://?scope=somethign&response_type=rt&response_mode=rm&client_id=ci&redirect_uri=uri&state=state&nonce=nonce&request_mode=urlEncoded'
@@ -70,6 +74,8 @@ paths:
         - $ref: '#/components/parameters/ClientId'
         - $ref: '#/components/parameters/Nonce'
         - $ref: '#/components/parameters/RequestMode'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: VerifierPageDisplayQRSIOP
       summary: Presents a qr as starting point for the auth process
       description: Returns a rendered html with a QR encoding the login-starting point for the siop flow - e.g. 'openid://?scope=somethign&response_type=rt&response_mode=rm&client_id=ci&redirect_uri=uri&state=state&nonce=nonce&request_mode=urlEncoded'
@@ -135,6 +141,8 @@ paths:
         - $ref: '#/components/parameters/QueryState'
         - $ref: '#/components/parameters/ClientCallback'
         - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: VerifierAPIStartSIOP
       summary: Initiates the siop flow and returns the 'openid://...' connection string
       responses:
@@ -366,6 +374,24 @@ components:
           - urlEncoded
           - byValue
           - byReference
+    CodeChallenge:
+      name: code_challenge
+      description: PKCE challenge bound to the authorization code.
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 43
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._~-]+$'
+    CodeChallengeMethod:
+      name: code_challenge_method
+      description: PKCE transformation method. If omitted, RFC 7636 defines plain; it must be enabled in verifier.allowedCodeChallengeMethods.
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [S256, plain]
     ServiceId:
       name: service_id
       description: The id of the client/service that intents to start the authentication flow. Will be used to retrieve the scope and trust services to be used for verification.
@@ -673,6 +699,12 @@ components:
           format: uri
           description: Same uri as provided as callback in the original request.
           example: https://my-portal.com/auth_callback
+        code_verifier:
+          type: string
+          minLength: 43
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._~-]+$'
+          description: Required when the authorization request included code_challenge.
         resource:
           type: string
           format: uri
