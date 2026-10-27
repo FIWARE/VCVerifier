@@ -541,7 +541,17 @@ func StartSIOPSameDevice(c *gin.Context) {
 	scope, scopeExists := c.GetQuery("scope")
 	if !scopeExists {
 		logging.Log().Infof("Start a login flow with default scope.")
-		scope = ""
+		var err error
+		scope, err = getApiVerifier().GetDefaultScope(clientId)
+		if err != nil {
+			logging.Log().Warnf("Was not able to get the default scope for client %s: %v", clientId, err)
+			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoScope)
+			return
+		}
+	}
+	if strings.TrimSpace(scope) == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoScope)
+		return
 	}
 
 	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, "", requestMode, scope, requestProtocol)

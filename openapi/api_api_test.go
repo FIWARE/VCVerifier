@@ -41,6 +41,7 @@ type mockVerifier struct {
 	mockQR                  string
 	mockConnectionString    string
 	mockAuthRequest         string
+	mockStartedScope        string
 	mockJWKS                jwk.Set
 	mockOpenIDConfig        common.OpenIDProviderMetadata
 	mockSameDevice          verifier.Response
@@ -56,6 +57,8 @@ type mockVerifier struct {
 	mockExchangeError       error
 	mockPathPrefix          string
 	mockRequestMode         string
+	mockDefaultScope        string
+	mockDefaultScopeError   error
 	mockHost                string
 	// sessions HasLoginSession reports as gone; every other session exists
 	mockMissingSessions map[string]bool
@@ -170,6 +173,7 @@ func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback str
 	return mV.mockConnectionString, mV.mockError
 }
 func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestType string, scope string, requestProtocol string) (authenticationRequest string, err error) {
+	mV.mockStartedScope = scope
 	return mV.mockAuthRequest, mV.mockError
 }
 func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
@@ -179,6 +183,12 @@ func (mV *mockVerifier) GetJWKS() jwk.Set {
 	return mV.mockJWKS
 }
 func (mV *mockVerifier) GetDefaultScope(clientId string) (string, error) {
+	if mV.mockDefaultScopeError != nil {
+		return "", mV.mockDefaultScopeError
+	}
+	if mV.mockDefaultScope != "" {
+		return mV.mockDefaultScope, nil
+	}
 	return "openid", nil
 }
 
@@ -413,6 +423,11 @@ func TestStartSIOPSameDevice(t *testing.T) {
 		testState          string
 		testRedirectPath   string
 		testRequestAddress string
+		testScope          string
+		scopePresent       bool
+		defaultScope       string
+		defaultScopeError  error
+		expectedScope      string
 		mockRedirect       string
 		mockError          error
 		expectedStatusCode int
@@ -422,6 +437,10 @@ func TestStartSIOPSameDevice(t *testing.T) {
 
 	tests := []test{
 		{testName: "If all neccessary parameters provided, a valid redirect should be returned.", testState: "my-state", testRedirectPath: "/my-redirect", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
+		{testName: "If the scope is omitted, use the client's default scope.", testState: "my-state", testRequestAddress: "http://host.org", defaultScope: "default-scope", expectedScope: "default-scope", mockRedirect: "http://host.org/api/v1/authentication_response", expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
+		{testName: "If the scope is provided, keep the requested scope.", testState: "my-state", testRequestAddress: "http://host.org", testScope: "requested-scope", expectedScope: "requested-scope", mockRedirect: "http://host.org/api/v1/authentication_response", expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
+		{testName: "If no default scope is configured, reject the request.", testState: "my-state", testRequestAddress: "http://host.org", defaultScopeError: errors.New("no default scope"), expectedStatusCode: 400},
+		{testName: "If an empty scope is explicitly provided, reject the request.", testState: "my-state", testRequestAddress: "http://host.org", scopePresent: true, expectedStatusCode: 400},
 		{testName: "If no state is provided, a 400 should be returned.", testState: "", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 400, expectedLocation: ""},
 		{testName: "If the verifier returns an error, a 500 should be returned.", testState: "my-state", testRedirectPath: "/", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: errors.New("verifier_failure"), expectedStatusCode: 500, expectedLocation: ""},
 		{testName: "If no path is provided, a deeplink should be returned.", testState: "my-state", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response", expectedResponse: ""},
@@ -434,7 +453,12 @@ func TestStartSIOPSameDevice(t *testing.T) {
 
 			recorder := httptest.NewRecorder()
 			testContext, _ := gin.CreateTestContext(recorder)
-			apiVerifier = &mockVerifier{mockAuthRequest: tc.mockRedirect, mockError: tc.mockError}
+			apiVerifier = &mockVerifier{
+				mockAuthRequest:       tc.mockRedirect,
+				mockError:             tc.mockError,
+				mockDefaultScope:      tc.defaultScope,
+				mockDefaultScopeError: tc.defaultScopeError,
+			}
 
 			testParameters := []string{}
 			if tc.testState != "" {
@@ -443,6 +467,9 @@ func TestStartSIOPSameDevice(t *testing.T) {
 			if tc.testRedirectPath != "" {
 				testParameters = append(testParameters, "redirect_path="+tc.testRedirectPath)
 			}
+			if tc.scopePresent || tc.testScope != "" {
+				testParameters = append(testParameters, "scope="+tc.testScope)
+			}
 
 			testContext.Request, _ = http.NewRequest("GET", tc.testRequestAddress+"/?"+strings.Join(testParameters, "&"), nil)
 			StartSIOPSameDevice(testContext)
@@ -450,6 +477,9 @@ func TestStartSIOPSameDevice(t *testing.T) {
 			if recorder.Code != tc.expectedStatusCode {
 				t.Errorf("%s - Expected status %v but was %v.", tc.testName, tc.expectedStatusCode, recorder.Code)
 				return
+			}
+			if tc.expectedScope != "" && apiVerifier.(*mockVerifier).mockStartedScope != tc.expectedScope {
+				t.Errorf("%s - Expected scope %q but got %q.", tc.testName, tc.expectedScope, apiVerifier.(*mockVerifier).mockStartedScope)
 			}
 			if tc.expectedStatusCode == 200 {
 				responseString := recorder.Body.String()
