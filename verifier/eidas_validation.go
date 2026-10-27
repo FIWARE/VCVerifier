@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/common"
+	configModel "github.com/fiware/VCVerifier/config"
 	"github.com/fiware/VCVerifier/eidas"
 	"github.com/fiware/VCVerifier/logging"
 )
@@ -277,4 +277,3 @@ func (v *CredentialVerifier) getEidasValidationContext(clientId string, scope st
 		EvaluateStatusAtIssuance: globalConfig.EvaluatesAtIssuance(),
 	}, nil
 }
-

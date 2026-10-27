@@ -769,10 +769,10 @@ func TestLDProofChecker_RejectsDidElsi(t *testing.T) {
 	checker := NewLDProofChecker(registry, docLoader)
 
 	tests := []struct {
-		name            string
-		expectedHolder  string
-		verifyFunc      func() error
-		proofPurpose    string
+		name           string
+		expectedHolder string
+		verifyFunc     func() error
+		proofPurpose   string
 	}{
 		{
 			name:           "VP proof with did:elsi holder is rejected",
