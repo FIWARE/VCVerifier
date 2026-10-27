@@ -48,6 +48,51 @@ class ConfigManager {
     const val = parseInt(this.get(key));
     return isNaN(val) ? defaultValue : val;
   }
+
+  set(key, value) {
+    this.settings[key] = String(value);
+  }
+}
+
+// Keeps what a reload of this tab needs to resume the login session the page started. Reloading
+// renders a new session with a new QR code and secret; on a phone the OS often reloads the tab
+// instead of resuming it when the user comes back from the wallet, and the wallet's answer then
+// completes the old session, whose result only the old secret can collect. sessionStorage survives
+// a reload but not the tab, and holds no more than the page itself does: the secret is in its
+// markup as well. Storage may be unavailable (private mode, blocked site data), so every access is
+// guarded and the page works without it - it just does not resume.
+class LoginSessionStore {
+  static #key = 'vcverifier.loginSession';
+
+  // A different login - other client, state or scope - never resumes this one.
+  static #request() {
+    return window.location.pathname + window.location.search;
+  }
+
+  static load() {
+    try {
+      const stored = JSON.parse(window.sessionStorage.getItem(LoginSessionStore.#key));
+      return stored && stored.request === LoginSessionStore.#request() ? stored.session : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  static save(session) {
+    try {
+      window.sessionStorage.setItem(LoginSessionStore.#key, JSON.stringify({ request: LoginSessionStore.#request(), session }));
+    } catch (err) {
+      console.log('Cannot keep the login session for a reload:', err);
+    }
+  }
+
+  static clear() {
+    try {
+      window.sessionStorage.removeItem(LoginSessionStore.#key);
+    } catch (err) {
+      // nothing was stored either
+    }
+  }
 }
 
 class LocaleManager {
@@ -99,11 +144,95 @@ class AppManager {
     this.collectTimer = null;
     this.hiddenAt = null;
     this.socketCreatedAt = 0;
+    // the session the server rendered with this page, while the page waits on one from before a
+    // reload (see #resumeStoredSession)
+    this.freshSession = null;
     this.theme = new ThemeManager(this.config.get('defaultTheme'));
 
     this.#initTheme();
+    this.#resumeStoredSession();
     this.#initEventListeners();
+    // a resumed session whose QR code expired only collects (see #resumeStoredSession)
+    if (!this.expired) this.#startTimer();
+  }
+
+  // What identifies the login session the page waits on, and what it shows for it.
+  #renderedSession() {
+    return {
+      wsUrl: this.config.get('wsUrl'),
+      wsSecret: this.config.get('wsSecret'),
+      qrExpireAt: this.config.getInt('qrExpireAt'),
+      qrDuration: this.config.getInt('qrDuration'),
+      qrcode: document.querySelector('#qrcode img')?.getAttribute('src'),
+      authRequest: document.querySelector('#openWallet a')?.getAttribute('href'),
+    };
+  }
+
+  #applySession(session) {
+    ['wsUrl', 'wsSecret', 'qrExpireAt', 'qrDuration'].forEach(key => this.config.set(key, session[key]));
+    if (session.qrcode) document.querySelector('#qrcode img')?.setAttribute('src', session.qrcode);
+    if (session.authRequest) document.querySelector('#openWallet a')?.setAttribute('href', session.authRequest);
+  }
+
+  // After a reload, waits on the session the page had before, while a result can still come from
+  // it: the QR code is still valid, or a login completed while the page was away may still be kept
+  // for it. The session the server just rendered stays unused unless the old one ends without a
+  // result (#fallBackToFreshSession) - an unused session costs the server nothing but its lifetime.
+  #resumeStoredSession() {
+    const rendered = this.#renderedSession();
+    const stored = LoginSessionStore.load();
+    const collectUntil = stored ? stored.qrExpireAt + stored.qrDuration * 1000 : 0;
+    if (!stored || stored.wsUrl === rendered.wsUrl || Date.now() >= collectUntil) {
+      LoginSessionStore.save(rendered);
+      return;
+    }
+    console.log('Resuming the login session from before the reload');
+    this.freshSession = rendered;
+    this.#applySession(stored);
+    // Its QR code expired: nothing can be scanned any more, so the page only asks for a result -
+    // showing the connecting notice, not the expired code - and falls back to the new session.
+    if (Date.now() >= stored.qrExpireAt) this.expired = true;
+  }
+
+  // The session from before the reload ended without a result for this page: it expired, or the
+  // server no longer knows it. The session rendered with the page takes over, without an error -
+  // for the user this is simply the page they loaded. It reports whether there was one to take over.
+  #fallBackToFreshSession() {
+    const fresh = this.freshSession;
+    if (!fresh) return false;
+    this.freshSession = null;
+    this.#finishWebSocket();
+    clearInterval(this.timerInterval);
+    // The rendered session started at the reload and has been running since. Taking over once the
+    // old QR code expired, it has only as long left as the old one had run before the reload - a
+    // reload 3s after the first load leaves 3s. Too little to scan: reload into a new session,
+    // with nothing stored, so the reload does not resume either.
+    if (fresh.qrExpireAt - Date.now() < fresh.qrDuration * 1000 / 2) {
+      console.log('The login session from before the reload ended, and the new one is nearly expired: starting a new login session');
+      LoginSessionStore.clear();
+      window.location.reload();
+      return true;
+    }
+    console.log('The login session from before the reload ended, continuing with a new one');
+    this.#applySession(fresh);
+    LoginSessionStore.save(fresh);
+
+    this.expired = false;
+    this.collectUntil = 0;
+    this.socketEverConnected = false;
+    this.reconnectAttempts = 0;
+    document.getElementById('qrcode')?.classList.remove('blur-lg', 'grayscale', 'opacity-50');
+    ['qrcode', 'timer-section', 'expired-overlay', 'presentation-rejected'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+    ['ws-error', 'session-invalid', 'page-unauthorized', 'another-tab'].forEach(id => {
+      document.getElementById(id)?.classList.add('hidden');
+      document.getElementById(id)?.classList.remove('flex');
+    });
+    document.getElementById('ws-connecting')?.classList.remove('hidden');
+
+    this.socketFinished = false;
     this.#startTimer();
+    this.#connectWebSocket(fresh.wsUrl);
+    return true;
   }
 
   #initTheme() {
@@ -133,7 +262,12 @@ class AppManager {
 
     window.addEventListener('load', () => {
       const wsUrl = this.config.get('wsUrl');
-      if (wsUrl) this.#connectWebSocket(wsUrl);
+      if (!wsUrl) return;
+      if (this.expired) {
+        this.#startCollecting();
+      } else {
+        this.#connectWebSocket(wsUrl);
+      }
     });
 
     document.getElementById('continue-here')?.addEventListener('click', () => this.#continueHere());
@@ -211,6 +345,8 @@ class AppManager {
   // code says so; a page that does not show the QR code - it continued from "another tab", or
   // never got connected - shows "session no longer valid" instead of the connecting notice.
   #stopCollecting() {
+    if (this.#fallBackToFreshSession()) return;
+    LoginSessionStore.clear();
     this.#finishWebSocket();
     if (document.getElementById('qrcode')?.classList.contains('hidden')) this.#showWebSocketError('session-invalid');
   }
@@ -273,6 +409,8 @@ class AppManager {
   }
 
   #handleSessionInvalid() {
+    if (this.#fallBackToFreshSession()) return;
+    LoginSessionStore.clear();
     this.#finishWebSocket();
     this.#showWebSocketError('session-invalid');
   }
@@ -280,7 +418,9 @@ class AppManager {
   // The server did not accept this page's secret: a stale page, or a customised page that does not
   // send it. No reconnect can fix that.
   #handlePageUnauthorized(reason) {
+    if (this.#fallBackToFreshSession()) return;
     console.error(`WebSocket rejected (${reason}): the page did not present a valid secret. A customised login page must send the wsSecret meta value as {"type":"auth","secret":...} on every connection.`);
+    LoginSessionStore.clear();
     this.#finishWebSocket();
     this.#showWebSocketError('page-unauthorized');
   }
@@ -419,6 +559,8 @@ class AppManager {
             break
           case "authenticated":
             console.log("Redirect initiated " + message.redirectUrl)
+            // going back to this page later starts a new login
+            LoginSessionStore.clear();
             this.#finishWebSocket();
             window.location.href = message.redirectUrl;
             break
