@@ -47,6 +47,7 @@ var ErrorMessageNoRedircetUri = ErrorMessage{"no_redirect_uri_provided", "Token 
 var ErrorMessageNoResource = ErrorMessage{"no_resource_provided", "When using token-exchange, resource is required to provide the client_id."}
 var ErrorMessageNoState = ErrorMessage{"no_state_provided", "Authentication requires a state provided as query parameter."}
 var ErrorMessageNoScope = ErrorMessage{"no_scope_provided", "Authentication requires a scope provided as a parameter."}
+var ErrorMessageUnknownClientOrScope = ErrorMessage{"invalid_client_or_scope", "The requested client or scope is not configured."}
 var ErrorMessageInvalidResponseType = ErrorMessage{"invalid_response_type", "Authentication requires the response_type to be `code`."}
 var ErrorMessageFailedSameDevice = ErrorMessage{"failed_same_device", "Was not able to start a same-device flow."}
 var ErrorMessageNoClientId = ErrorMessage{"no_client_id_provided", "Authentication requires a client-id provided as a parameter."}
@@ -560,6 +561,10 @@ func StartSIOPSameDevice(c *gin.Context) {
 	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, "", requestMode, scope, requestProtocol)
 	if err != nil {
 		logging.Log().Warnf("Error starting the same-device flow. Err: %v", err)
+		if errors.Is(err, verifier.ErrorUnknownClientOrScope) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnknownClientOrScope)
+			return
+		}
 		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
 		return
 	}
@@ -793,7 +798,13 @@ func addPresentationSubmissionRequestIDs(presentation *common.Presentation, subm
 	if err := json.Unmarshal(submissionBytes, &decoded); err != nil {
 		return err
 	}
-	if decoded.ID == "" || decoded.DefinitionID == "" || len(decoded.DescriptorMap) == 0 {
+	if decoded.ID == "" {
+		return errors.New("presentation_submission has no id")
+	}
+	if decoded.DefinitionID == "" {
+		return errors.New("presentation_submission has no definition_id")
+	}
+	if len(decoded.DescriptorMap) == 0 {
 		return errors.New("presentation_submission has no descriptor_map entries")
 	}
 	credentials := presentation.Credentials()
@@ -826,30 +837,26 @@ var nestedDescriptorCredentialIndex = regexp.MustCompile(`^\$\.verifiableCredent
 var arrayDescriptorCredentialIndex = regexp.MustCompile(`^\$\[(0|[1-9][0-9]*)\]$`)
 var credentialRelativeDescriptorPath = regexp.MustCompile(`^\$(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[(?:[0-9]+|'[A-Za-z_][A-Za-z0-9_-]*'|"[A-Za-z_][A-Za-z0-9_-]*")\])*$`)
 
-func credentialIndicesFromDescriptorPath(path string, credentialCount int) ([]int, error) {
-	if isPresentationContainerPath(path) {
+func credentialIndexFromDescriptorPath(path string, credentialCount int) (int, error) {
+	if isSupportedDescriptorContainerPath(path) {
 		if credentialCount != 1 {
-			return nil, errors.New("presentation_submission presentation path is ambiguous")
+			return 0, errors.New("presentation_submission presentation path is ambiguous")
 		}
-		return []int{0}, nil
+		return 0, nil
 	}
 	index, err := descriptorCredentialIndexForPath(path)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	if index < 0 || index >= credentialCount {
-		return nil, errors.New("presentation_submission descriptor path selects an unavailable credential")
+		return 0, errors.New("presentation_submission descriptor path selects an unavailable credential")
 	}
-	return []int{index}, nil
+	return index, nil
 }
 
 func credentialIndexFromDescriptorPathChain(paths []string, credentialCount int) (int, error) {
 	if len(paths) == 1 {
-		indices, err := credentialIndicesFromDescriptorPath(paths[0], credentialCount)
-		if err != nil {
-			return 0, err
-		}
-		return indices[0], nil
+		return credentialIndexFromDescriptorPath(paths[0], credentialCount)
 	}
 
 	currentPath := paths[0]
@@ -951,10 +958,6 @@ func descriptorCredentialIndexForPath(path string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("unsupported presentation_submission descriptor path %q", path)
-}
-
-func isPresentationContainerPath(path string) bool {
-	return path == "$" || path == "$.vp" || path == "$.verifiableCredential" || path == "$.vp.verifiableCredential"
 }
 
 func decodePresentationSubmission(submission string) ([]byte, error) {

@@ -21,6 +21,9 @@ import (
 // ErrorNoDefaultScope is returned when no default OIDC scope is configured for a service.
 var ErrorNoDefaultScope = errors.New("no_default_scope_configured")
 
+// ErrorUnknownClientOrScope marks a request for an unconfigured client or scope.
+var ErrorUnknownClientOrScope = errors.New("unknown_client_or_scope")
+
 // FormatLDPVC is the credential format identifier for JSON-LD Verifiable
 // Credentials with Linked Data Proofs, as defined in the W3C VC Data Model.
 const FormatLDPVC = "ldp_vc"

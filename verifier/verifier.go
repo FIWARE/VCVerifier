@@ -1226,23 +1226,30 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		logging.Log().Warnf("Was not able to get configured credential types for client %s and scope %s. Err: %v", loginSession.clientId, loginSession.scope, err)
 		return sameDevice, ErrorVerficationContextSetup
 	}
-	presentedTypes := make(map[string]struct{}, len(credentialTypes))
-	for _, credentialType := range credentialTypes {
-		presentedTypes[credentialType] = struct{}{}
-	}
 	configuredTypes := make(map[string]struct{}, len(configuredCredentialTypes))
 	for _, credentialType := range configuredCredentialTypes {
 		configuredTypes[credentialType] = struct{}{}
-		if _, ok := presentedTypes[credentialType]; !ok {
-			logging.Log().Infof("Required credential type %s was not provided for client %s and scope %s.", credentialType, loginSession.clientId, loginSession.scope)
-			return sameDevice, ErrorRequiredCredentialNotProvided
-		}
 	}
-	dcqlRequestIDs, descriptorIDs, presentationDefinitionID, queryConfigured, err := v.getPresentationRequestIDs(loginSession.clientId, loginSession.scope)
+	dcqlRequestIDs, descriptorIDs, presentationDefinitionID, queryConfigured, dcqlQuery, presentationDefinition, err := v.getPresentationRequestIDs(loginSession.clientId, loginSession.scope)
 	if err != nil {
 		logging.Log().Warnf("Was not able to get presentation query identifiers for client %s and scope %s. Err: %v", loginSession.clientId, loginSession.scope, err)
 		return sameDevice, ErrorVerficationContextSetup
 	}
+	if !queryConfigured {
+		presentedTypes := make(map[string]struct{}, len(credentialTypes))
+		for _, credentialType := range credentialTypes {
+			presentedTypes[credentialType] = struct{}{}
+		}
+		for _, credentialType := range configuredCredentialTypes {
+			if _, ok := presentedTypes[credentialType]; !ok {
+				logging.Log().Infof("Required credential type %s was not provided for client %s and scope %s.", credentialType, loginSession.clientId, loginSession.scope)
+				return sameDevice, ErrorRequiredCredentialNotProvided
+			}
+		}
+	}
+	presentedDCQLIDs := make(map[string]struct{})
+	presentedDescriptorIDs := make(map[string]struct{})
+	presentedConfiguredCredential := false
 	for _, credential := range verifiablePresentation.Credentials() {
 		configured := false
 		for _, credentialType := range credential.Contents().Types {
@@ -1252,6 +1259,13 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			}
 		}
 		associations := credential.RequestAssociations()
+		if !configured && (!queryConfigured || len(associations) == 0) {
+			logging.Log().Debugf("Ignoring unconfigured credential types %v.", credential.Contents().Types)
+			continue
+		}
+		if configured {
+			presentedConfiguredCredential = true
+		}
 		if queryConfigured {
 			if len(associations) == 0 {
 				logging.Log().Infof("Credential types %v were not associated with a configured presentation query for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
@@ -1275,15 +1289,31 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 					logging.Log().Infof("Presentation request association %s (%s) is not configured for client %s and scope %s.", association.ID, association.Kind, loginSession.clientId, loginSession.scope)
 					return sameDevice, ErrorNoValidCredentialTypeProvided
 				}
+				if configured {
+					switch association.Kind {
+					case common.PresentationRequestDCQL:
+						presentedDCQLIDs[association.ID] = struct{}{}
+					case common.PresentationRequestDescriptor:
+						presentedDescriptorIDs[association.ID] = struct{}{}
+					}
+				}
 			}
 		} else if len(associations) > 0 {
 			logging.Log().Infof("Credential types %v were associated with a presentation request but no query is configured for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
 			return sameDevice, ErrorNoValidCredentialTypeProvided
 		}
-		if !configured && !queryConfigured {
-			logging.Log().Infof("Credential types %v are not configured for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
-			return sameDevice, ErrorNoValidCredentialTypeProvided
-		}
+	}
+	if dcqlQuery != nil && !satisfiesDCQLCredentialSets(dcqlQuery, presentedDCQLIDs) {
+		logging.Log().Infof("Presented credentials do not satisfy the configured DCQL credential sets for client %s and scope %s.", loginSession.clientId, loginSession.scope)
+		return sameDevice, ErrorRequiredCredentialNotProvided
+	}
+	if presentationDefinition != nil && !satisfiesPresentationSubmissionRequirements(presentationDefinition, presentedDescriptorIDs) {
+		logging.Log().Infof("Presented credentials do not satisfy the configured Presentation Exchange submission requirements for client %s and scope %s.", loginSession.clientId, loginSession.scope)
+		return sameDevice, ErrorRequiredCredentialNotProvided
+	}
+	if !presentedConfiguredCredential {
+		logging.Log().Infof("No configured credential was provided for client %s and scope %s.", loginSession.clientId, loginSession.scope)
+		return sameDevice, ErrorNoValidCredentialTypeProvided
 	}
 	var credentialsToBeIncluded []map[string]interface{}
 
@@ -1297,7 +1327,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			}
 		}
 		if !configured {
-			logging.Log().Debugf("Ignoring credential types %v: query is configured but no matching Credentials Type is configured for token inclusion.", credential.Contents().Types)
+			logging.Log().Debugf("Ignoring unconfigured credential types %v for token inclusion.", credential.Contents().Types)
 			continue
 		}
 
@@ -1595,16 +1625,16 @@ func (v *CredentialVerifier) getCredentialStatusValidationContext(clientId strin
 	return CredentialStatusValidationContext{PerType: perType}, nil
 }
 
-func (v *CredentialVerifier) getPresentationRequestIDs(clientId string, scope string) (map[string]struct{}, map[string]struct{}, string, bool, error) {
+func (v *CredentialVerifier) getPresentationRequestIDs(clientId string, scope string) (map[string]struct{}, map[string]struct{}, string, bool, *configModel.DCQL, *configModel.PresentationDefinition, error) {
 	dcqlRequestIDs := make(map[string]struct{})
 	descriptorIDs := make(map[string]struct{})
 	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
 	if err != nil {
-		return nil, nil, "", false, err
+		return nil, nil, "", false, nil, nil, err
 	}
 	dcql, err := v.credentialsConfig.GetDcqlQuery(clientId, scope)
 	if err != nil {
-		return nil, nil, "", false, err
+		return nil, nil, "", false, nil, nil, err
 	}
 	if presentationDefinition != nil {
 		for _, descriptor := range presentationDefinition.InputDescriptors {
@@ -1624,7 +1654,119 @@ func (v *CredentialVerifier) getPresentationRequestIDs(clientId string, scope st
 	if presentationDefinition != nil {
 		definitionID = presentationDefinition.Id
 	}
-	return dcqlRequestIDs, descriptorIDs, definitionID, presentationDefinition != nil || dcql != nil, nil
+	return dcqlRequestIDs, descriptorIDs, definitionID, presentationDefinition != nil || dcql != nil, dcql, presentationDefinition, nil
+}
+
+func satisfiesDCQLCredentialSets(dcql *configModel.DCQL, presentedIDs map[string]struct{}) bool {
+	if len(dcql.CredentialSets) == 0 {
+		for _, credential := range dcql.Credentials {
+			if credential.Id == "" {
+				return false
+			}
+			if _, presented := presentedIDs[credential.Id]; !presented {
+				return false
+			}
+		}
+		return len(dcql.Credentials) > 0
+	}
+
+	for _, credentialSet := range dcql.CredentialSets {
+		if !credentialSet.Required {
+			continue
+		}
+		optionSatisfied := false
+		for _, option := range credentialSet.Options {
+			if len(option) == 0 {
+				continue
+			}
+			allPresented := true
+			for _, credentialID := range option {
+				if _, presented := presentedIDs[credentialID]; !presented {
+					allPresented = false
+					break
+				}
+			}
+			if allPresented {
+				optionSatisfied = true
+				break
+			}
+		}
+		if !optionSatisfied {
+			return false
+		}
+	}
+	return true
+}
+
+func satisfiesPresentationSubmissionRequirements(definition *configModel.PresentationDefinition, presentedIDs map[string]struct{}) bool {
+	descriptorGroups := make(map[string][]string)
+	for _, descriptor := range definition.InputDescriptors {
+		for _, group := range descriptor.Group {
+			descriptorGroups[group] = append(descriptorGroups[group], descriptor.Id)
+		}
+	}
+	if len(definition.SubmissionRequirements) == 0 {
+		for _, descriptor := range definition.InputDescriptors {
+			if descriptor.Id == "" {
+				return false
+			}
+			if _, presented := presentedIDs[descriptor.Id]; !presented {
+				return false
+			}
+		}
+		return len(definition.InputDescriptors) > 0
+	}
+	for _, requirement := range definition.SubmissionRequirements {
+		if !satisfiesSubmissionRequirement(requirement, descriptorGroups, presentedIDs) {
+			return false
+		}
+	}
+	return true
+}
+
+func satisfiesSubmissionRequirement(requirement configModel.SubmissionRequirement, descriptorGroups map[string][]string, presentedIDs map[string]struct{}) bool {
+	total := 0
+	selected := 0
+	if requirement.From != "" {
+		descriptors := descriptorGroups[requirement.From]
+		if len(descriptors) == 0 {
+			return false
+		}
+		total = len(descriptors)
+		for _, descriptorID := range descriptors {
+			if _, presented := presentedIDs[descriptorID]; presented {
+				selected++
+			}
+		}
+	} else if len(requirement.FromNested) > 0 {
+		total = len(requirement.FromNested)
+		for _, nested := range requirement.FromNested {
+			if satisfiesSubmissionRequirement(nested, descriptorGroups, presentedIDs) {
+				selected++
+			}
+		}
+	} else {
+		return false
+	}
+
+	minimum, maximum := 1, total
+	if requirement.Count != nil {
+		minimum, maximum = *requirement.Count, *requirement.Count
+	}
+	if requirement.Min != nil {
+		minimum = *requirement.Min
+	}
+	if requirement.Max != nil {
+		maximum = *requirement.Max
+	}
+	switch requirement.Rule {
+	case "all":
+		return selected == total
+	case "pick":
+		return selected >= minimum && selected <= maximum
+	default:
+		return false
+	}
 }
 
 // initValidationServices builds the ordered slice of ValidationService
@@ -1933,13 +2075,20 @@ func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string,
 
 // initializes the cross-device siop flow
 func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (authenticationRequest string, err error) {
+	scope, err := v.credentialsConfig.GetDefaultScope(clientId)
+	if err != nil {
+		return authenticationRequest, err
+	}
+	if strings.TrimSpace(scope) == "" {
+		return authenticationRequest, ErrorNoDefaultScope
+	}
 
 	if nonce == "" {
 		logging.Log().Debugf("No nonce provided, generate one.")
 		nonce = v.nonceGenerator.GenerateNonce()
 	}
 	sessionId := v.nonceGenerator.GenerateNonce()
-	loginSession := loginSession{callback: callback, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V1}
+	loginSession := loginSession{callback: callback, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V1, scope: scope}
 	err = v.sessionCache.Add(sessionId, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
@@ -1949,7 +2098,7 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 	logging.Log().Infof("Started cross-device (v1) login session %s for client %s.", sessionId, clientId)
 	redirectUri := fmt.Sprintf("%s://%s%s/api/v1/authentication_response", protocol, host, v.pathPrefix)
 
-	return v.generateAuthenticationRequest("openid4vp://", clientId, "", redirectUri, sessionId, nonce, loginSession, requestMode)
+	return v.generateAuthenticationRequest("openid4vp://", clientId, scope, redirectUri, sessionId, nonce, loginSession, requestMode)
 }
 
 func (v *CredentialVerifier) generateAuthenticationRequest(base string, clientId string, scope string, redirectUri string, state string, nonce string, loginSession loginSession, requestMode string) (authenticationRequest string, err error) {

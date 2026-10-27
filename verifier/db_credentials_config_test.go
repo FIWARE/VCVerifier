@@ -280,7 +280,7 @@ func TestDbBackedCredentialsConfig_ServiceNotFound(t *testing.T) {
 
 	t.Run("RequiredCredentialTypes_NotFound", func(t *testing.T) {
 		_, err := cc.RequiredCredentialTypes("nonexistent", "scope")
-		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrorUnknownClientOrScope)
 	})
 }
 

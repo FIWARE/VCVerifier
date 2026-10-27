@@ -473,6 +473,8 @@ type PresentationDefinition struct {
 	Id string `json:"id"`
 	// List of requested inputs
 	InputDescriptors []InputDescriptor `json:"input_descriptors" mapstructure:"input_descriptors"`
+	// Constraints on which combinations of input descriptors satisfy the request.
+	SubmissionRequirements []SubmissionRequirement `json:"submission_requirements,omitempty" mapstructure:"submission_requirements,omitempty"`
 	// Format of the credential to be requested
 	Format map[string]FormatObject `json:"format" mapstructure:"format"`
 	// A human readable name for the definition
@@ -489,6 +491,8 @@ type FormatObject struct {
 type InputDescriptor struct {
 	// Id of the descriptor
 	Id string `json:"id" mapstructure:"id"`
+	// Groups used by submission_requirements to select input descriptors.
+	Group []string `json:"group,omitempty" mapstructure:"group,omitempty"`
 	// defines the information to be requested
 	Constraints Constraints `json:"constraints" mapstructure:"constraints"`
 	// Format of the credential to be requested
@@ -497,6 +501,18 @@ type InputDescriptor struct {
 	Name string `json:"name,omitempty" mapstructure:"name,omitempty"`
 	// A string that describes the purpose for which the definition should be used
 	Purpose string `json:"purpose,omitempty" mapstructure:"purpose,omitempty"`
+}
+
+// SubmissionRequirement constrains which descriptors or nested requirements a wallet must satisfy.
+type SubmissionRequirement struct {
+	Name       string                  `json:"name,omitempty" mapstructure:"name,omitempty"`
+	Purpose    string                  `json:"purpose,omitempty" mapstructure:"purpose,omitempty"`
+	Rule       string                  `json:"rule" mapstructure:"rule"`
+	Count      *int                    `json:"count,omitempty" mapstructure:"count,omitempty"`
+	Min        *int                    `json:"min,omitempty" mapstructure:"min,omitempty"`
+	Max        *int                    `json:"max,omitempty" mapstructure:"max,omitempty"`
+	From       string                  `json:"from,omitempty" mapstructure:"from,omitempty"`
+	FromNested []SubmissionRequirement `json:"from_nested,omitempty" mapstructure:"from_nested,omitempty"`
 }
 
 type Constraints struct {

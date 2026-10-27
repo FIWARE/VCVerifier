@@ -348,6 +348,27 @@ func TestCredentialDB_RoundTrip_V5(t *testing.T) {
 // DCQLDB — full VO / FromVO conversion
 // ---------------------------------------------------------------------------
 
+func TestPresentationDefinitionDB_RoundTripSubmissionRequirements(t *testing.T) {
+	minimum := 1
+	original := config.PresentationDefinition{
+		Id: "definition",
+		InputDescriptors: []config.InputDescriptor{
+			{Id: "descriptor-a", Group: []string{"choice"}},
+			{Id: "descriptor-b", Group: []string{"choice"}},
+		},
+		SubmissionRequirements: []config.SubmissionRequirement{{
+			Rule: "pick",
+			Min:  &minimum,
+			From: "choice",
+		}},
+	}
+
+	roundTripped := PresentationDefinitionDB{}.FromVO(original).VO()
+	assert.Equal(t, original.SubmissionRequirements, roundTripped.SubmissionRequirements)
+	assert.Equal(t, original.InputDescriptors[0].Group, roundTripped.InputDescriptors[0].Group)
+	assert.Equal(t, original.InputDescriptors[1].Group, roundTripped.InputDescriptors[1].Group)
+}
+
 func TestDCQLDB_VO(t *testing.T) {
 	db := DCQLDB{
 		Credentials: []CredentialQueryDB{

@@ -355,7 +355,8 @@ type PresentationDefinitionDB struct {
 	Id string `json:"id" mapstructure:"id"`
 
 	// List of requested inputs
-	InputDescriptors []InputDescriptorDB `json:"inputDescriptors" mapstructure:"inputDescriptors"`
+	InputDescriptors       []InputDescriptorDB            `json:"inputDescriptors" mapstructure:"inputDescriptors"`
+	SubmissionRequirements []config.SubmissionRequirement `json:"submissionRequirements,omitempty" mapstructure:"submissionRequirements,omitempty"`
 	// Format of the credential to be requested
 	Format []FormatObjectDB `json:"format" mapstructure:"format"`
 }
@@ -366,9 +367,10 @@ func (pd PresentationDefinitionDB) VO() config.PresentationDefinition {
 		inputDescs = append(inputDescs, id.VO())
 	}
 	return config.PresentationDefinition{
-		Id:               pd.Id,
-		InputDescriptors: inputDescs,
-		Format:           toFormatVOMap(pd.Format),
+		Id:                     pd.Id,
+		InputDescriptors:       inputDescs,
+		SubmissionRequirements: pd.SubmissionRequirements,
+		Format:                 toFormatVOMap(pd.Format),
 	}
 }
 
@@ -378,9 +380,10 @@ func (pd PresentationDefinitionDB) FromVO(pdVO config.PresentationDefinition) Pr
 		inputDescs = append(inputDescs, InputDescriptorDB{}.FromVO(idVO))
 	}
 	return PresentationDefinitionDB{
-		Id:               pdVO.Id,
-		InputDescriptors: inputDescs,
-		Format:           fromFormatVOMap(pdVO.Format),
+		Id:                     pdVO.Id,
+		InputDescriptors:       inputDescs,
+		SubmissionRequirements: pdVO.SubmissionRequirements,
+		Format:                 fromFormatVOMap(pdVO.Format),
 	}
 }
 
@@ -414,7 +417,8 @@ func (f FormatObjectDB) VO() config.FormatObject {
 
 type InputDescriptorDB struct {
 	// Id of the descriptor
-	Id string `json:"id" mapstructure:"id"`
+	Id    string   `json:"id" mapstructure:"id"`
+	Group []string `json:"group,omitempty" mapstructure:"group,omitempty"`
 	// defines the information to be requested
 	Constraints config.Constraints `json:"constraints" mapstructure:"constraints"`
 	// Format of the credential to be requested
@@ -424,6 +428,7 @@ type InputDescriptorDB struct {
 func (id InputDescriptorDB) VO() config.InputDescriptor {
 	return config.InputDescriptor{
 		Id:          id.Id,
+		Group:       id.Group,
 		Constraints: id.Constraints,
 		Format:      toFormatVOMap(id.Format),
 	}
@@ -432,6 +437,7 @@ func (id InputDescriptorDB) VO() config.InputDescriptor {
 func (id InputDescriptorDB) FromVO(idVO config.InputDescriptor) InputDescriptorDB {
 	return InputDescriptorDB{
 		Id:          idVO.Id,
+		Group:       idVO.Group,
 		Constraints: idVO.Constraints,
 		Format:      fromFormatVOMap(idVO.Format),
 	}

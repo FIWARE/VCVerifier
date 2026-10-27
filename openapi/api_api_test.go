@@ -441,6 +441,7 @@ func TestStartSIOPSameDevice(t *testing.T) {
 		{testName: "If the scope is omitted, use the client's default scope.", testState: "my-state", testRequestAddress: "http://host.org", defaultScope: "default-scope", expectedScope: "default-scope", mockRedirect: "http://host.org/api/v1/authentication_response", expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
 		{testName: "If the scope is provided, keep the requested scope.", testState: "my-state", testRequestAddress: "http://host.org", testScope: "requested-scope", expectedScope: "requested-scope", mockRedirect: "http://host.org/api/v1/authentication_response", expectedStatusCode: 302, expectedLocation: "http://host.org/api/v1/authentication_response"},
 		{testName: "If no default scope is configured, reject the request.", testState: "my-state", testRequestAddress: "http://host.org", defaultScopeError: errors.New("no default scope"), expectedStatusCode: 400},
+		{testName: "If the client or scope is not configured, reject the request without exposing configuration details.", testState: "my-state", testRedirectPath: "/", testRequestAddress: "http://host.org", mockError: verifier.ErrorUnknownClientOrScope, expectedStatusCode: 400},
 		{testName: "If an empty scope is explicitly provided, reject the request.", testState: "my-state", testRequestAddress: "http://host.org", scopePresent: true, expectedStatusCode: 400},
 		{testName: "If no state is provided, a 400 should be returned.", testState: "", testRedirectPath: "", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: nil, expectedStatusCode: 400, expectedLocation: ""},
 		{testName: "If the verifier returns an error, a 500 should be returned.", testState: "my-state", testRedirectPath: "/", testRequestAddress: "http://host.org", mockRedirect: "http://host.org/api/v1/authentication_response", mockError: errors.New("verifier_failure"), expectedStatusCode: 500, expectedLocation: ""},
@@ -478,6 +479,9 @@ func TestStartSIOPSameDevice(t *testing.T) {
 			if recorder.Code != tc.expectedStatusCode {
 				t.Errorf("%s - Expected status %v but was %v.", tc.testName, tc.expectedStatusCode, recorder.Code)
 				return
+			}
+			if tc.mockError == verifier.ErrorUnknownClientOrScope && strings.Contains(recorder.Body.String(), tc.mockError.Error()) {
+				t.Errorf("%s - The response must not expose the internal configuration error.", tc.testName)
 			}
 			if tc.expectedScope != "" && apiVerifier.(*mockVerifier).mockStartedScope != tc.expectedScope {
 				t.Errorf("%s - Expected scope %q but got %q.", tc.testName, tc.expectedScope, apiVerifier.(*mockVerifier).mockStartedScope)
@@ -1012,6 +1016,23 @@ func TestAddPresentationSubmissionRequestIDs(t *testing.T) {
 		}
 		if err := addPresentationSubmissionRequestIDs(presentation, malformed); err == nil {
 			t.Errorf("Expected malformed presentation_submission %q to fail", malformed)
+		}
+	}
+
+	for _, tc := range []struct {
+		submission string
+		wantError  string
+	}{
+		{submission: `{"definition_id":"configured-definition","descriptor_map":[{"id":"descriptor-a","path":"$.verifiableCredential[0]"}]}`, wantError: "presentation_submission has no id"},
+		{submission: `{"id":"submission-1","descriptor_map":[{"id":"descriptor-a","path":"$.verifiableCredential[0]"}]}`, wantError: "presentation_submission has no definition_id"},
+	} {
+		presentation, err := common.NewPresentation(common.WithCredentials(&common.Credential{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = addPresentationSubmissionRequestIDs(presentation, tc.submission)
+		if err == nil || err.Error() != tc.wantError {
+			t.Errorf("Expected error %q, got %v", tc.wantError, err)
 		}
 	}
 }

@@ -606,11 +606,15 @@ func verifyInitTest(t *testing.T, tc siopInitTest, authRequest string, err error
 	if expectedNonce == "" {
 		expectedNonce = "randomNonce"
 	}
+	expectedScope := tc.testScope
+	if flowVersion == CROSS_DEVICE_V1 {
+		expectedScope = "openid"
+	}
 	if tc.requestMode == REQUEST_MODE_BY_REFERENCE {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: expectedScope}
 		cachedSession.requestObject = removeSignature(cachedSession.requestObject)
 	} else {
-		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: tc.testScope}
+		expectedSession = loginSession{version: flowVersion, callback: tc.expectedCallback, nonce: expectedNonce, sessionId: expectedSessionId, externalState: tc.testState, clientId: tc.testClientId, requestObject: tc.testRequestObjectJwt, scope: expectedScope}
 	}
 	// externalState must be exactly what the (external) caller sent as state - this is the
 	// critical property the sessionId/externalState split exists to guarantee: whatever
@@ -1374,10 +1378,10 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 			expectedError:    ErrorNoValidCredentialTypeProvided,
 		},
 		{
-			name:             "credential without a query id is rejected when DCQL is configured",
-			mode:             "dcql",
-			includeRequested: true,
-			expectedError:    ErrorNoValidCredentialTypeProvided,
+			name:              "unassociated unconfigured credential is ignored when DCQL is configured",
+			mode:              "dcql",
+			includeRequested:  true,
+			expectedValidated: []string{"RequestedCredential"},
 		},
 		{
 			name:           "missing configured credential is rejected even when another query-mapped credential is present",
@@ -1540,6 +1544,33 @@ func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
 			assert.NotContains(t, string(includedJSON), "ExtraCredential", "unconfigured credential must not be included in the token")
 		})
 	}
+}
+
+func TestPresentationRequestAlternatives(t *testing.T) {
+	dcql := &configModel.DCQL{
+		Credentials: []configModel.CredentialQuery{{Id: "query-a"}, {Id: "query-b"}},
+		CredentialSets: []configModel.CredentialSetQuery{{
+			Options:  [][]string{{"query-a"}, {"query-b"}},
+			Required: true,
+		}},
+	}
+	assert.True(t, satisfiesDCQLCredentialSets(dcql, map[string]struct{}{"query-a": {}}))
+	assert.True(t, satisfiesDCQLCredentialSets(dcql, map[string]struct{}{"query-b": {}}))
+	assert.False(t, satisfiesDCQLCredentialSets(dcql, map[string]struct{}{}))
+
+	presentationDefinition := &configModel.PresentationDefinition{
+		InputDescriptors: []configModel.InputDescriptor{
+			{Id: "descriptor-a", Group: []string{"choice"}},
+			{Id: "descriptor-b", Group: []string{"choice"}},
+		},
+		SubmissionRequirements: []configModel.SubmissionRequirement{{
+			Rule: "pick",
+			From: "choice",
+		}},
+	}
+	assert.True(t, satisfiesPresentationSubmissionRequirements(presentationDefinition, map[string]struct{}{"descriptor-a": {}}))
+	assert.True(t, satisfiesPresentationSubmissionRequirements(presentationDefinition, map[string]struct{}{"descriptor-b": {}}))
+	assert.False(t, satisfiesPresentationSubmissionRequirements(presentationDefinition, map[string]struct{}{}))
 }
 
 // gatedValidationService accepts every credential, but holds each validation until released,
