@@ -200,10 +200,20 @@ class AppManager {
   #fallBackToFreshSession() {
     const fresh = this.freshSession;
     if (!fresh) return false;
-    console.log('The login session from before the reload ended, continuing with a new one');
     this.freshSession = null;
     this.#finishWebSocket();
     clearInterval(this.timerInterval);
+    // The rendered session started at the reload and has been running since. Taking over once the
+    // old QR code expired, it has only as long left as the old one had run before the reload - a
+    // reload 3s after the first load leaves 3s. Too little to scan: reload into a new session,
+    // with nothing stored, so the reload does not resume either.
+    if (fresh.qrExpireAt - Date.now() < fresh.qrDuration * 1000 / 2) {
+      console.log('The login session from before the reload ended, and the new one is nearly expired: starting a new login session');
+      LoginSessionStore.clear();
+      window.location.reload();
+      return true;
+    }
+    console.log('The login session from before the reload ended, continuing with a new one');
     this.#applySession(fresh);
     LoginSessionStore.save(fresh);
 
