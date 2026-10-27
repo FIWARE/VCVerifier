@@ -15,7 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/fiware/VCVerifier/common"
@@ -51,6 +53,7 @@ var ErrorMessageNoClientId = ErrorMessage{"no_client_id_provided", "Authenticati
 var ErrorMessageNoNonce = ErrorMessage{"no_nonce_provided", "Authentication requires a nonce provided as a query parameter."}
 var ErrorMessageNoToken = ErrorMessage{"no_token_provided", "Authentication requires a token provided as a form parameter."}
 var ErrorMessageNoPresentationSubmission = ErrorMessage{"no_presentation_submission_provided", "Authentication requires a presentation submission provided as a form parameter."}
+var ErrorMessageInvalidPresentationSubmission = ErrorMessage{"invalid_presentation_submission", "The presentation submission must contain a non-empty descriptor_map with an id for each entry."}
 var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback address has to be provided as query-parameter."}
 var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could not be decoded."}
 var ErrorMessageInvalidTokenEncoding = ErrorMessage{"invalid_token", "The vp_token has to be base64url encoded without padding."}
@@ -595,6 +598,12 @@ func VerifierAPIAuthenticationResponse(c *gin.Context) {
 		notifyRejected(state, err)
 		return
 	}
+	if err := addPresentationSubmissionRequestIDs(presentation, c.PostForm("presentation_submission")); err != nil {
+		logging.Log().Warnf("Was not able to parse the presentation_submission. Err: %v", err)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidPresentationSubmission)
+		notifyRejected(state, err)
+		return
+	}
 	handleAuthenticationResponse(c, state, presentation)
 }
 
@@ -616,6 +625,12 @@ func GetVerifierAPIAuthenticationResponse(c *gin.Context) {
 	if err != nil {
 		logging.Log().Warnf("Was not able to extract the presentation from the vp_token.")
 		// signature, holder binding, data model and format checks all fail here
+		notifyRejected(state, err)
+		return
+	}
+	if err := addPresentationSubmissionRequestIDs(presentation, c.Query("presentation_submission")); err != nil {
+		logging.Log().Warnf("Was not able to parse the presentation_submission. Err: %v", err)
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidPresentationSubmission)
 		notifyRejected(state, err)
 		return
 	}
@@ -707,11 +722,12 @@ func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentatio
 	// Kept as-is for backward compatibility with wallets that follow drafts 22-24.
 	var stringQueryMap map[string]string
 	if legacyErr := json.Unmarshal(tokenBytes, &stringQueryMap); legacyErr == nil {
-		for _, v := range stringQueryMap {
+		for queryID, v := range stringQueryMap {
 			p, parseErr := tokenToPresentation(c, v)
 			if parseErr != nil {
 				return nil, parseErr
 			}
+			addRequestIDToPresentation(p, queryID)
 			if parsedPresentation == nil {
 				parsedPresentation = p
 			} else {
@@ -728,12 +744,13 @@ func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentatio
 	// not the JSON shape).
 	var arrayQueryMap map[string][]string
 	if draft22Err := json.Unmarshal(tokenBytes, &arrayQueryMap); draft22Err == nil {
-		for _, presentations := range arrayQueryMap {
+		for queryID, presentations := range arrayQueryMap {
 			for _, v := range presentations {
 				p, parseErr := tokenToPresentation(c, v)
 				if parseErr != nil {
 					return nil, parseErr
 				}
+				addRequestIDToPresentation(p, queryID)
 				if parsedPresentation == nil {
 					parsedPresentation = p
 				} else {
@@ -746,6 +763,78 @@ func getPresentationFromQuery(c *gin.Context, vpToken string) (parsedPresentatio
 
 	logging.Log().Debug("VP Token is not a DCQL query map (neither drafts 22-24 single-string nor draft 25+ array shape). Checking the other options.")
 	return nil, nil
+}
+
+func addRequestIDToPresentation(presentation *common.Presentation, requestID string) {
+	if presentation == nil {
+		return
+	}
+	for _, credential := range presentation.Credentials() {
+		credential.AddRequestID(requestID)
+	}
+}
+
+func addPresentationSubmissionRequestIDs(presentation *common.Presentation, submission string) error {
+	if submission == "" {
+		return nil
+	}
+	if presentation == nil {
+		return errors.New("presentation_submission provided without a parsed presentation")
+	}
+	var decoded struct {
+		DescriptorMap []presentationDescriptorMapEntry `json:"descriptor_map"`
+	}
+	if err := json.Unmarshal([]byte(submission), &decoded); err != nil {
+		return err
+	}
+	if len(decoded.DescriptorMap) == 0 {
+		return errors.New("presentation_submission has no descriptor_map entries")
+	}
+	credentials := presentation.Credentials()
+	for _, descriptor := range decoded.DescriptorMap {
+		if descriptor.ID == "" {
+			return errors.New("presentation_submission descriptor_map entry has no id")
+		}
+		path := descriptor.Path
+		for nested := descriptor.PathNested; nested != nil; nested = nested.PathNested {
+			path = nested.Path
+		}
+		indices, err := credentialIndicesFromDescriptorPath(path, len(credentials))
+		if err != nil {
+			return err
+		}
+		for _, index := range indices {
+			credentials[index].AddRequestID(descriptor.ID)
+		}
+	}
+	return nil
+}
+
+type presentationDescriptorMapEntry struct {
+	ID         string                          `json:"id"`
+	Path       string                          `json:"path"`
+	PathNested *presentationDescriptorMapEntry `json:"path_nested"`
+}
+
+var descriptorCredentialIndex = regexp.MustCompile(`verifiableCredential\[(\d+)\]`)
+
+func credentialIndicesFromDescriptorPath(path string, credentialCount int) ([]int, error) {
+	matches := descriptorCredentialIndex.FindAllStringSubmatch(path, -1)
+	if len(matches) > 0 {
+		index, err := strconv.Atoi(matches[len(matches)-1][1])
+		if err != nil || index < 0 || index >= credentialCount {
+			return nil, errors.New("presentation_submission descriptor path selects an unavailable credential")
+		}
+		return []int{index}, nil
+	}
+	if path == "$" || path == "$.vp" || path == "$.verifiableCredential" || path == "$.vp.verifiableCredential" {
+		indices := make([]int, credentialCount)
+		for i := range indices {
+			indices[i] = i
+		}
+		return indices, nil
+	}
+	return nil, fmt.Errorf("unsupported presentation_submission descriptor path %q", path)
 }
 
 // checks if the presented token contains a single sd-jwt credential. Will be repackage to a presentation for further validation

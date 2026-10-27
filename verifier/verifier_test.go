@@ -1332,6 +1332,170 @@ func TestAuthenticationResponseDoesNotSkipTrustValidationForGaiaXChain(t *testin
 	assert.Empty(t, tokenCache.tokens, "untrusted credentials must not result in a token")
 }
 
+type credentialTypeRecorder struct {
+	types []string
+}
+
+func (r *credentialTypeRecorder) ValidateVC(credential *common.Credential, _ ValidationContext) (bool, error) {
+	for _, credentialType := range credential.Contents().Types {
+		if credentialType != "VerifiableCredential" {
+			r.types = append(r.types, credentialType)
+		}
+	}
+	return true, nil
+}
+
+func TestAuthenticationResponseRequestQueryCoverage(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type testCase struct {
+		name              string
+		mode              string
+		extraRequestID    string
+		includeRequested  bool
+		expectedError     error
+		expectedValidated []string
+	}
+	tests := []testCase{
+		{
+			name:              "credential covered by known DCQL id but not configured for inclusion is ignored",
+			mode:              "dcql",
+			extraRequestID:    "requested-query",
+			includeRequested:  true,
+			expectedValidated: []string{"RequestedCredential"},
+		},
+		{
+			name:             "credential associated with an unknown DCQL id is rejected",
+			mode:             "dcql",
+			extraRequestID:   "unknown-query",
+			includeRequested: true,
+			expectedError:    ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:             "credential without a query id is rejected when DCQL is configured",
+			mode:             "dcql",
+			includeRequested: true,
+			expectedError:    ErrorNoValidCredentialTypeProvided,
+		},
+		{
+			name:           "missing configured credential is rejected even when another query-mapped credential is present",
+			mode:           "dcql",
+			extraRequestID: "requested-query",
+			expectedError:  ErrorRequiredCredentialNotProvided,
+		},
+		{
+			name:              "known Presentation Exchange descriptor also covers an unconfigured type",
+			mode:              "presentation-definition",
+			extraRequestID:    "requested-descriptor",
+			includeRequested:  true,
+			expectedValidated: []string{"RequestedCredential"},
+		},
+		{
+			name:             "unknown Presentation Exchange descriptor is rejected",
+			mode:             "presentation-definition",
+			extraRequestID:   "unknown-descriptor",
+			includeRequested: true,
+			expectedError:    ErrorNoValidCredentialTypeProvided,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			trueOption := true
+			scope := configModel.ScopeEntry{
+				Credentials: []configModel.Credential{{
+					Type: "RequestedCredential",
+					JwtInclusion: configModel.JwtInclusion{
+						Enabled:       &trueOption,
+						FullInclusion: true,
+					},
+				}},
+			}
+			switch tc.mode {
+			case "dcql":
+				scope.DCQL = &configModel.DCQL{
+					Credentials: []configModel.CredentialQuery{{Id: "requested-query"}},
+				}
+			case "presentation-definition":
+				scope.PresentationDefinition = &configModel.PresentationDefinition{
+					InputDescriptors: []configModel.InputDescriptor{{Id: "requested-descriptor"}},
+				}
+			}
+
+			credentials := []*common.Credential{}
+			if tc.includeRequested {
+				requested, err := common.CreateCredential(common.CredentialContents{
+					Types: []string{"VerifiableCredential", "RequestedCredential"},
+				}, common.CustomFields{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.mode == "dcql" {
+					requested.AddRequestID("requested-query")
+				} else {
+					requested.AddRequestID("requested-descriptor")
+				}
+				credentials = append(credentials, requested)
+			}
+			extra, err := common.CreateCredential(common.CredentialContents{
+				Types: []string{"VerifiableCredential", "ExtraCredential"},
+			}, common.CustomFields{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			extra.AddRequestID(tc.extraRequestID)
+			credentials = append(credentials, extra)
+			presentation, err := common.NewPresentation(common.WithCredentials(credentials...))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{
+				"login-state": {
+					version:   SAME_DEVICE,
+					callback:  "https://verifier.example/callback",
+					sessionId: "login-state",
+					clientId:  "clientId",
+					scope:     "scope",
+				},
+			}}
+			tokenCache := mockTokenCache{tokens: map[string]tokenStore{}}
+			validator := &credentialTypeRecorder{}
+			verifier := CredentialVerifier{
+				did:                "did:key:verifier",
+				signingKey:         getECDSAKey(),
+				tokenSigner:        mockTokenSigner{},
+				tokenCache:         &tokenCache,
+				sessionCache:       &sessionCache,
+				nonceGenerator:     &mockNonceGenerator{staticValues: []string{"authorization-code"}},
+				validationServices: []ValidationService{validator},
+				clock:              mockClock{},
+				credentialsConfig: mockCredentialConfig{
+					mockScopes: map[string]map[string]configModel.ScopeEntry{
+						"clientId": {"scope": scope},
+					},
+				},
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			_, err = verifier.AuthenticationResponse("login-state", presentation)
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError)
+				assert.Empty(t, tokenCache.tokens)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedValidated, validator.types, "only configured credential types should be validated")
+			assert.Contains(t, tokenCache.tokens, "authorization-code")
+			var includedCredential map[string]interface{}
+			assert.NoError(t, tokenCache.tokens["authorization-code"].token.Get("verifiableCredential", &includedCredential))
+			includedJSON, marshalErr := json.Marshal(includedCredential)
+			assert.NoError(t, marshalErr)
+			assert.NotContains(t, string(includedJSON), "ExtraCredential", "unconfigured credential must not be included in the token")
+		})
+	}
+}
+
 // gatedValidationService accepts every credential, but holds each validation until released,
 // so a test can get several responses past verification at the same time.
 type gatedValidationService struct {

@@ -1234,6 +1234,40 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			return sameDevice, ErrorRequiredCredentialNotProvided
 		}
 	}
+	requestIDs, queryConfigured, err := v.getPresentationRequestIDs(loginSession.clientId, loginSession.scope)
+	if err != nil {
+		logging.Log().Warnf("Was not able to get presentation query identifiers for client %s and scope %s. Err: %v", loginSession.clientId, loginSession.scope, err)
+		return sameDevice, ErrorVerficationContextSetup
+	}
+	for _, credential := range verifiablePresentation.Credentials() {
+		configured := false
+		for _, credentialType := range credential.Contents().Types {
+			if _, ok := configuredTypes[credentialType]; ok {
+				configured = true
+				break
+			}
+		}
+		credentialRequestIDs := credential.RequestIDs()
+		if queryConfigured {
+			if len(credentialRequestIDs) == 0 {
+				logging.Log().Infof("Credential types %v were not associated with a configured presentation query for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
+				return sameDevice, ErrorNoValidCredentialTypeProvided
+			}
+			for _, requestID := range credentialRequestIDs {
+				if _, ok := requestIDs[requestID]; !ok {
+					logging.Log().Infof("Presentation query identifier %s is not configured for client %s and scope %s.", requestID, loginSession.clientId, loginSession.scope)
+					return sameDevice, ErrorNoValidCredentialTypeProvided
+				}
+			}
+		}
+		if !configured && !queryConfigured {
+			logging.Log().Infof("Credential types %v are not configured for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
+			return sameDevice, ErrorNoValidCredentialTypeProvided
+		}
+	}
+	var credentialsToBeIncluded []map[string]interface{}
+
+	flatClaims := false
 	for _, credential := range verifiablePresentation.Credentials() {
 		configured := false
 		for _, credentialType := range credential.Contents().Types {
@@ -1243,14 +1277,9 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 			}
 		}
 		if !configured {
-			logging.Log().Infof("Credential types %v are not configured for client %s and scope %s.", credential.Contents().Types, loginSession.clientId, loginSession.scope)
-			return sameDevice, ErrorNoValidCredentialTypeProvided
+			logging.Log().Debugf("Ignoring credential types %v: query is configured but no matching Credentials Type is configured for token inclusion.", credential.Contents().Types)
+			continue
 		}
-	}
-	var credentialsToBeIncluded []map[string]interface{}
-
-	flatClaims := false
-	for _, credential := range verifiablePresentation.Credentials() {
 
 		verificationContext, err := v.getTrustRegistriesValidationContext(loginSession.clientId, credential.Contents().Types, loginSession.scope)
 		if err != nil {
@@ -1544,6 +1573,33 @@ func (v *CredentialVerifier) getCredentialStatusValidationContext(clientId strin
 		perType[credentialType] = statusConfig
 	}
 	return CredentialStatusValidationContext{PerType: perType}, nil
+}
+
+func (v *CredentialVerifier) getPresentationRequestIDs(clientId string, scope string) (map[string]struct{}, bool, error) {
+	requestIDs := make(map[string]struct{})
+	presentationDefinition, err := v.credentialsConfig.GetPresentationDefinition(clientId, scope)
+	if err != nil {
+		return nil, false, err
+	}
+	dcql, err := v.credentialsConfig.GetDcqlQuery(clientId, scope)
+	if err != nil {
+		return nil, false, err
+	}
+	if presentationDefinition != nil {
+		for _, descriptor := range presentationDefinition.InputDescriptors {
+			if descriptor.Id != "" {
+				requestIDs[descriptor.Id] = struct{}{}
+			}
+		}
+	}
+	if dcql != nil {
+		for _, query := range dcql.Credentials {
+			if query.Id != "" {
+				requestIDs[query.Id] = struct{}{}
+			}
+		}
+	}
+	return requestIDs, presentationDefinition != nil || dcql != nil, nil
 }
 
 // initValidationServices builds the ordered slice of ValidationService

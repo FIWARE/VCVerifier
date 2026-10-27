@@ -3,6 +3,7 @@ package common
 import (
 	"crypto/x509"
 	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -250,6 +251,9 @@ type Credential struct {
 	// proofs holds the Linked Data Proofs attached to this credential, if any.
 	// Populated during JSON-LD credential parsing.
 	proofs []*LDProof
+	// requestIDs records the DCQL query or Presentation Exchange descriptor
+	// that the wallet used to return this credential.
+	requestIDs []string
 	// format records how the credential was encoded in the presentation it was
 	// extracted from (e.g. "jwt_vc", "ldp_vc", "sd-jwt"). Set during parsing
 	// by the presentation parser.
@@ -281,6 +285,19 @@ func (c *Credential) Proofs() []*LDProof {
 // SetProofs stores Linked Data Proofs on this credential.
 func (c *Credential) SetProofs(proofs []*LDProof) {
 	c.proofs = proofs
+}
+
+// RequestIDs returns the query or descriptor IDs associated with this credential.
+func (c *Credential) RequestIDs() []string {
+	return c.requestIDs
+}
+
+// AddRequestID associates a query or descriptor ID with this credential.
+func (c *Credential) AddRequestID(id string) {
+	if id == "" || slices.Contains(c.requestIDs, id) {
+		return
+	}
+	c.requestIDs = append(c.requestIDs, id)
 }
 
 // Format returns the credential format identifier (e.g. "jwt_vc", "ldp_vc",

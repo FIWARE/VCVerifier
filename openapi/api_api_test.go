@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -904,16 +905,17 @@ func TestGetPresentationFromQuery(t *testing.T) {
 		vpToken        string
 		expectedNonNil bool
 		expectedErr    error
+		expectedID     string
 	}
 
 	tests := []test{
-		{"OID4VP drafts 22-24 single-string-shape query map should be parsed.", string(stringShapeMap), true, nil},
-		{"OID4VP draft 25+ array-shape query map should be parsed.", string(arrayShapeMap), true, nil},
-		{"A raw base64url encoded query map should be parsed.", encodedStringShapeMap, true, nil},
-		{"A padded base64url encoded query map should be rejected.", paddedStringShapeMap, false, ErrorInvalidTokenEncoding},
-		{"A standard-alphabet base64 encoded query map should be rejected.", standardAlphabetArrayShapeMap, false, ErrorInvalidTokenEncoding},
-		{"A flat sd-jwt (no query map) should return nil so the caller falls through.", sdJwt, false, nil},
-		{"A non-JSON token should return nil so the caller falls through.", "this-is-not-json", false, nil},
+		{"OID4VP drafts 22-24 single-string-shape query map should be parsed.", string(stringShapeMap), true, nil, "lpc-query"},
+		{"OID4VP draft 25+ array-shape query map should be parsed.", string(arrayShapeMap), true, nil, "lpc-query"},
+		{"A raw base64url encoded query map should be parsed.", encodedStringShapeMap, true, nil, "lpc-query"},
+		{"A padded base64url encoded query map should be rejected.", paddedStringShapeMap, false, ErrorInvalidTokenEncoding, ""},
+		{"A standard-alphabet base64 encoded query map should be rejected.", standardAlphabetArrayShapeMap, false, ErrorInvalidTokenEncoding, ""},
+		{"A flat sd-jwt (no query map) should return nil so the caller falls through.", sdJwt, false, nil, ""},
+		{"A non-JSON token should return nil so the caller falls through.", "this-is-not-json", false, nil, ""},
 	}
 
 	for _, tc := range tests {
@@ -952,7 +954,42 @@ func TestGetPresentationFromQuery(t *testing.T) {
 				t.Errorf("%s - Expected nil presentation (so caller can fall through) but got %v.", tc.testName, parsed)
 				return
 			}
+			if tc.expectedID != "" {
+				credentials := parsed.Credentials()
+				if len(credentials) == 0 || !slices.Contains(credentials[0].RequestIDs(), tc.expectedID) {
+					t.Errorf("%s - Expected parsed credential to retain request id %q.", tc.testName, tc.expectedID)
+				}
+			}
 		})
+	}
+}
+
+func TestAddPresentationSubmissionRequestIDs(t *testing.T) {
+	presentation, err := common.NewPresentation(common.WithCredentials(&common.Credential{}, &common.Credential{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = addPresentationSubmissionRequestIDs(presentation, `{"descriptor_map":[{"id":"descriptor-a","path":"$","path_nested":{"path":"$.vp.verifiableCredential[0]"}},{"id":"descriptor-b","path":"$","path_nested":{"path":"$.vp.verifiableCredential[1]"}}]}`)
+	if err != nil {
+		t.Fatalf("Expected valid presentation_submission, got %v", err)
+	}
+	if got := presentation.Credentials()[0].RequestIDs(); !slices.Equal(got, []string{"descriptor-a"}) {
+		t.Errorf("Expected descriptor-a to map to the first credential, got %v", got)
+	}
+	if got := presentation.Credentials()[1].RequestIDs(); !slices.Equal(got, []string{"descriptor-b"}) {
+		t.Errorf("Expected descriptor-b to map to the second credential, got %v", got)
+	}
+
+	for _, malformed := range []string{
+		`not-json`,
+		`{"descriptor_map":[]}`,
+		`{"descriptor_map":[{}]}`,
+		`{"descriptor_map":[{"id":"unsupported","path":"$.somewhere"}]}`,
+	} {
+		if err := addPresentationSubmissionRequestIDs(presentation, malformed); err == nil {
+			t.Errorf("Expected malformed presentation_submission %q to fail", malformed)
+		}
 	}
 }
 
