@@ -824,6 +824,7 @@ type presentationDescriptorMapEntry struct {
 var descriptorCredentialIndex = regexp.MustCompile(`^\$\.(?:vp\.)?verifiableCredential\[(0|[1-9][0-9]*)\]$`)
 var nestedDescriptorCredentialIndex = regexp.MustCompile(`^\$\.verifiableCredential\[(0|[1-9][0-9]*)\]$`)
 var arrayDescriptorCredentialIndex = regexp.MustCompile(`^\$\[(0|[1-9][0-9]*)\]$`)
+var credentialRelativeDescriptorPath = regexp.MustCompile(`^\$(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[(?:[0-9]+|'[A-Za-z_][A-Za-z0-9_-]*'|"[A-Za-z_][A-Za-z0-9_-]*")\])*$`)
 
 func credentialIndicesFromDescriptorPath(path string, credentialCount int) ([]int, error) {
 	if isPresentationContainerPath(path) {
@@ -850,30 +851,92 @@ func credentialIndexFromDescriptorPathChain(paths []string, credentialCount int)
 		}
 		return indices[0], nil
 	}
-	if len(paths) != 2 {
-		return 0, errors.New("presentation_submission descriptor path nesting is unsupported")
-	}
 
-	var leafPattern *regexp.Regexp
-	switch paths[0] {
-	case "$":
-		leafPattern = descriptorCredentialIndex
-	case "$.vp":
-		leafPattern = nestedDescriptorCredentialIndex
-	case "$.verifiableCredential":
-		leafPattern = arrayDescriptorCredentialIndex
-	default:
-		return 0, fmt.Errorf("unsupported presentation_submission descriptor path %q", paths[0])
+	currentPath := paths[0]
+	if !isSupportedDescriptorContainerPath(currentPath) {
+		selectedIndex, err := descriptorCredentialIndexForPath(currentPath)
+		if err != nil {
+			return 0, err
+		}
+		if selectedIndex >= credentialCount {
+			return 0, errors.New("presentation_submission descriptor path selects an unavailable credential")
+		}
+		for _, path := range paths[1:] {
+			if !credentialRelativeDescriptorPath.MatchString(path) {
+				return 0, fmt.Errorf("unsupported presentation_submission descriptor path %q", path)
+			}
+		}
+		return selectedIndex, nil
 	}
-	match := leafPattern.FindStringSubmatch(paths[1])
-	if len(match) != 2 {
-		return 0, fmt.Errorf("unsupported presentation_submission descriptor path %q", paths[1])
+	selectedIndex := -1
+	for _, path := range paths[1:] {
+		if selectedIndex >= 0 {
+			if !credentialRelativeDescriptorPath.MatchString(path) {
+				return 0, fmt.Errorf("unsupported presentation_submission descriptor path %q", path)
+			}
+			continue
+		}
+
+		index, nextPath, selected, err := descriptorPathTransition(currentPath, path)
+		if err != nil {
+			return 0, err
+		}
+		if selected {
+			selectedIndex = index
+		} else {
+			currentPath = nextPath
+		}
 	}
-	index, err := strconv.Atoi(match[1])
-	if err != nil || index < 0 || index >= credentialCount {
+	if selectedIndex < 0 {
+		return 0, errors.New("presentation_submission descriptor path does not select a credential")
+	}
+	if selectedIndex >= credentialCount {
 		return 0, errors.New("presentation_submission descriptor path selects an unavailable credential")
 	}
-	return index, nil
+	return selectedIndex, nil
+}
+
+func isSupportedDescriptorContainerPath(path string) bool {
+	switch path {
+	case "$", "$.vp", "$.verifiableCredential", "$.vp.verifiableCredential":
+		return true
+	default:
+		return false
+	}
+}
+
+func descriptorPathTransition(currentPath string, nextPath string) (int, string, bool, error) {
+	var leafPattern *regexp.Regexp
+	switch currentPath {
+	case "$":
+		switch nextPath {
+		case "$.vp":
+			return 0, nextPath, false, nil
+		case "$.vp.verifiableCredential":
+			return 0, nextPath, false, nil
+		}
+		leafPattern = descriptorCredentialIndex
+	case "$.vp":
+		switch nextPath {
+		case "$.verifiableCredential":
+			return 0, nextPath, false, nil
+		}
+		leafPattern = nestedDescriptorCredentialIndex
+	case "$.verifiableCredential", "$.vp.verifiableCredential":
+		leafPattern = arrayDescriptorCredentialIndex
+	default:
+		return 0, "", false, fmt.Errorf("unsupported presentation_submission descriptor path %q", currentPath)
+	}
+
+	match := leafPattern.FindStringSubmatch(nextPath)
+	if len(match) != 2 {
+		return 0, "", false, fmt.Errorf("unsupported presentation_submission descriptor path %q", nextPath)
+	}
+	index, err := strconv.Atoi(match[1])
+	if err != nil || index < 0 {
+		return 0, "", false, errors.New("presentation_submission descriptor path selects an unavailable credential")
+	}
+	return index, "", true, nil
 }
 
 func descriptorCredentialIndexForPath(path string) (int, error) {

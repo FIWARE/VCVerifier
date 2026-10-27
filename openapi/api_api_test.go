@@ -966,7 +966,7 @@ func TestGetPresentationFromQuery(t *testing.T) {
 
 func TestAddPresentationSubmissionRequestIDs(t *testing.T) {
 	const definitionID = "configured-definition"
-	submission := `{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"descriptor-a","path":"$","path_nested":{"path":"$.vp.verifiableCredential[0]"}},{"id":"descriptor-b","path":"$.verifiableCredential[1]"}]}`
+	submission := `{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"descriptor-a","path":"$","path_nested":{"path":"$.vp.verifiableCredential[0]"}},{"id":"descriptor-b","path":"$.verifiableCredential[1]"},{"id":"descriptor-c","path":"$","path_nested":{"path":"$.vp","path_nested":{"path":"$.verifiableCredential[1]","path_nested":{"path":"$.vc","path_nested":{"path":"$.credentialSubject.id"}}}}},{"id":"descriptor-d","path":"$.vp.verifiableCredential[0]","path_nested":{"path":"$"}}]}`
 	tests := []struct {
 		name       string
 		submission string
@@ -984,11 +984,11 @@ func TestAddPresentationSubmissionRequestIDs(t *testing.T) {
 			if err := addPresentationSubmissionRequestIDs(presentation, tc.submission); err != nil {
 				t.Fatalf("Expected valid presentation_submission, got %v", err)
 			}
-			if got := presentation.Credentials()[0].RequestIDs(); !slices.Equal(got, []string{"descriptor-a"}) {
+			if got := presentation.Credentials()[0].RequestIDs(); !slices.Equal(got, []string{"descriptor-a", "descriptor-d"}) {
 				t.Errorf("Expected descriptor-a to map to the first credential, got %v", got)
 			}
-			if got := presentation.Credentials()[1].RequestIDs(); !slices.Equal(got, []string{"descriptor-b"}) {
-				t.Errorf("Expected descriptor-b to map to the second credential, got %v", got)
+			if got := presentation.Credentials()[1].RequestIDs(); !slices.Equal(got, []string{"descriptor-b", "descriptor-c"}) {
+				t.Errorf("Expected descriptor-b and descriptor-c to map to the second credential, got %v", got)
 			}
 			if got := presentation.PresentationSubmissionDefinitionID(); got != definitionID {
 				t.Errorf("Expected definition id %q, got %q", definitionID, got)
@@ -1004,6 +1004,7 @@ func TestAddPresentationSubmissionRequestIDs(t *testing.T) {
 		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"out-of-range","path":"$.verifiableCredential[2]"}]}`,
 		`{"id":"submission-1","definition_id":"","descriptor_map":[{"id":"descriptor-a","path":"$.verifiableCredential[0]"}]}`,
 		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"mismatched-nesting","path":"$.vp","path_nested":{"path":"$.vp.verifiableCredential[0]"}}]}`,
+		`{"id":"submission-1","definition_id":"configured-definition","descriptor_map":[{"id":"invalid-credential-relative-path","path":"$.verifiableCredential[0]","path_nested":{"path":"$..vc"}}]}`,
 	} {
 		presentation, err := common.NewPresentation(common.WithCredentials(&common.Credential{}, &common.Credential{}))
 		if err != nil {
