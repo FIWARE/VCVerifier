@@ -67,19 +67,19 @@ func NewServiceRepository(db *sql.DB, dbType string) *SqlServiceRepository {
 }
 
 const (
-	sqlInsertService = `INSERT INTO service (id, default_oidc_scope, authorization_type) VALUES (?, ?, ?)`
+	sqlInsertService = `INSERT INTO service (id, default_oidc_scope, authorization_type, allowed_redirect_uris) VALUES (?, ?, ?, ?)`
 
 	sqlInsertScopeEntry = `INSERT INTO scope_entry (service_id, scope_key, credentials, presentation_definition, flat_claims, dcql_query) VALUES (?, ?, ?, ?, ?, ?)`
 
-	sqlSelectServiceByID = `SELECT id, default_oidc_scope, authorization_type FROM service WHERE id = ?`
+	sqlSelectServiceByID = `SELECT id, default_oidc_scope, authorization_type, allowed_redirect_uris FROM service WHERE id = ?`
 
 	sqlSelectScopesByServiceID = `SELECT id, service_id, scope_key, credentials, presentation_definition, flat_claims, dcql_query FROM scope_entry WHERE service_id = ? ORDER BY id`
 
 	sqlCountServices = `SELECT COUNT(*) FROM service`
 
-	sqlSelectServicesPaginated = `SELECT id, default_oidc_scope, authorization_type FROM service ORDER BY id LIMIT ? OFFSET ?`
+	sqlSelectServicesPaginated = `SELECT id, default_oidc_scope, authorization_type, allowed_redirect_uris FROM service ORDER BY id LIMIT ? OFFSET ?`
 
-	sqlUpdateService = `UPDATE service SET default_oidc_scope = ?, authorization_type = ? WHERE id = ?`
+	sqlUpdateService = `UPDATE service SET default_oidc_scope = ?, authorization_type = ?, allowed_redirect_uris = COALESCE(?, allowed_redirect_uris) WHERE id = ?`
 
 	sqlDeleteScopesByServiceID = `DELETE FROM scope_entry WHERE service_id = ?`
 
@@ -109,7 +109,7 @@ func (r *SqlServiceRepository) CreateService(ctx context.Context, service config
 
 	svcRow := ServiceToRow(service)
 	if _, err := tx.ExecContext(ctx, r.adapt(sqlInsertService),
-		svcRow.ID, svcRow.DefaultOidcScope, svcRow.AuthorizationType); err != nil {
+		svcRow.ID, svcRow.DefaultOidcScope, svcRow.AuthorizationType, svcRow.AllowedRedirectUris); err != nil {
 		return fmt.Errorf("insert service: %w", err)
 	}
 
@@ -161,7 +161,7 @@ func (r *SqlServiceRepository) GetAllServices(ctx context.Context, page, pageSiz
 	svcRows := make(map[string]ServiceRow)
 	for rows.Next() {
 		var sr ServiceRow
-		if err := rows.Scan(&sr.ID, &sr.DefaultOidcScope, &sr.AuthorizationType); err != nil {
+		if err := rows.Scan(&sr.ID, &sr.DefaultOidcScope, &sr.AuthorizationType, &sr.AllowedRedirectUris); err != nil {
 			return nil, 0, fmt.Errorf("scan service: %w", err)
 		}
 		serviceIDs = append(serviceIDs, sr.ID)
@@ -206,7 +206,7 @@ func (r *SqlServiceRepository) UpdateService(ctx context.Context, id string, ser
 
 	svcRow := ServiceToRow(service)
 	if _, err := tx.ExecContext(ctx, r.adapt(sqlUpdateService),
-		svcRow.DefaultOidcScope, svcRow.AuthorizationType, id); err != nil {
+		svcRow.DefaultOidcScope, svcRow.AuthorizationType, svcRow.AllowedRedirectUris, id); err != nil {
 		return config.ConfiguredService{}, fmt.Errorf("update service: %w", err)
 	}
 
@@ -309,7 +309,7 @@ type queryExecer interface {
 func (r *SqlServiceRepository) scanServiceRow(ctx context.Context, qe queryExecer, id string) (ServiceRow, error) {
 	var sr ServiceRow
 	err := qe.QueryRowContext(ctx, r.adapt(sqlSelectServiceByID), id).
-		Scan(&sr.ID, &sr.DefaultOidcScope, &sr.AuthorizationType)
+		Scan(&sr.ID, &sr.DefaultOidcScope, &sr.AuthorizationType, &sr.AllowedRedirectUris)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return sr, ErrServiceNotFound

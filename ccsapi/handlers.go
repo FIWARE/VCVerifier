@@ -252,6 +252,13 @@ func validateServiceRequest(req ServiceRequest, requireID bool) error {
 		return fmt.Errorf("default scope %q must exist in OIDC scopes list", req.DefaultOidcScope)
 	}
 
+	// an invalid entry would match nothing and refuse every login of the service
+	for _, entry := range req.AllowedRedirectUris {
+		if err := config.ValidateAllowedRedirectUri(entry); err != nil {
+			return fmt.Errorf("field 'allowedRedirectUris': %w", err)
+		}
+	}
+
 	for scopeKey, scope := range req.OidcScopes {
 		if len(scope.Credentials) == 0 {
 			return fmt.Errorf("scope %q must contain at least one credential", scopeKey)

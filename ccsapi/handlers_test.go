@@ -436,6 +436,7 @@ func TestUpdateService_Success(t *testing.T) {
 		updateServiceFn: func(_ context.Context, id string, svc config.ConfiguredService) (config.ConfiguredService, error) {
 			assert.Equal(t, "my-service", id)
 			assert.Equal(t, "updated", svc.DefaultOidcScope)
+			assert.Nil(t, svc.AllowedRedirectUris, "an omitted list remains nil so the repository preserves it")
 			return updated, nil
 		},
 	}
@@ -470,6 +471,24 @@ func TestUpdateService_NotFound(t *testing.T) {
 	var pd ProblemDetails
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &pd))
 	assert.Equal(t, http.StatusNotFound, pd.Status)
+}
+
+func TestUpdateService_EmptyRedirectAllowlistClearsExistingList(t *testing.T) {
+	repo := &mockServiceRepository{
+		updateServiceFn: func(_ context.Context, id string, svc config.ConfiguredService) (config.ConfiguredService, error) {
+			assert.Equal(t, "my-service", id)
+			assert.Empty(t, svc.AllowedRedirectUris)
+			return svc, nil
+		},
+	}
+
+	body := `{"defaultOidcScope":"updated","oidcScopes":{"updated":{"credentials":[{"type":"UpdatedCredential"}]}},"allowedRedirectUris":[]}`
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPut, "/service/my-service", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	setupRouter(repo).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestUpdateService_ValidationErrors(t *testing.T) {
@@ -947,6 +966,29 @@ func TestValidateServiceRequest(t *testing.T) {
 			requireID: true,
 			wantErr:   true,
 			errMsg:    "cannot be null",
+		},
+		{
+			name: "valid allowed redirect URIs",
+			req: ServiceRequest{
+				ID:                  "svc",
+				DefaultOidcScope:    "default",
+				OidcScopes:          map[string]config.ScopeEntry{"default": {Credentials: []config.Credential{{Type: "VC"}}}},
+				AllowedRedirectUris: []string{"https://rp.example/callback", "https://rp.example/tenants/*"},
+			},
+			requireID: true,
+			wantErr:   false,
+		},
+		{
+			name: "an invalid allowed redirect URI",
+			req: ServiceRequest{
+				ID:                  "svc",
+				DefaultOidcScope:    "default",
+				OidcScopes:          map[string]config.ScopeEntry{"default": {Credentials: []config.Credential{{Type: "VC"}}}},
+				AllowedRedirectUris: []string{"https://rp.example/callback", "https://*.rp.example/callback"},
+			},
+			requireID: true,
+			wantErr:   true,
+			errMsg:    "allowedRedirectUris",
 		},
 	}
 

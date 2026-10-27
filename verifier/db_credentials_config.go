@@ -103,6 +103,20 @@ func (dbc DbBackedCredentialsConfig) GetAuthorizationType(serviceIdentifier stri
 	return svc.AuthorizationType, nil
 }
 
+// GetAllowedRedirectUris returns the allowed redirect URIs of the given service. A failure to
+// read the service is returned, so the caller rejects the redirect rather than skipping the check.
+func (dbc DbBackedCredentialsConfig) GetAllowedRedirectUris(serviceIdentifier string) ([]string, error) {
+	svc, err := dbc.getService(serviceIdentifier)
+	if errors.Is(err, database.ErrServiceNotFound) {
+		logging.Log().Debugf("No allowed redirect URIs for %s: the service is not configured.", serviceIdentifier)
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return svc.AllowedRedirectUris, nil
+}
+
 // GetAuthorizationPath returns the authorization endpoint path for the given service.
 func (dbc DbBackedCredentialsConfig) GetAuthorizationPath(serviceIdentifier string) string {
 	svc, err := dbc.getService(serviceIdentifier)
