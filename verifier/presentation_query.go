@@ -31,8 +31,11 @@ func matchesDCQLQuery(query configModel.CredentialQuery, credential *common.Cred
 				return false
 			}
 		}
-		if query.Meta.DoctypeValue != "" || len(query.Meta.TypeValues) > 0 {
-			if query.Meta.DoctypeValue != "" || credential.Format() != common.FormatLDPVC {
+		if query.Meta.DoctypeValue != "" {
+			return false
+		}
+		if len(query.Meta.TypeValues) > 0 {
+			if credential.Format() != common.FormatJWTVC && credential.Format() != common.FormatLDPVC {
 				return false
 			}
 			types := credential.Contents().Types
@@ -228,33 +231,38 @@ func jsonNumber(value interface{}) (float64, bool) {
 		converted := float64(number)
 		return converted, !math.IsNaN(converted) && !math.IsInf(converted, 0) && exactInteger(converted)
 	case int:
-		return exactIntegerNumber(float64(number))
+		return exactSignedIntegerNumber(int64(number))
 	case int8:
-		return exactIntegerNumber(float64(number))
+		return exactSignedIntegerNumber(int64(number))
 	case int16:
-		return exactIntegerNumber(float64(number))
+		return exactSignedIntegerNumber(int64(number))
 	case int32:
-		return exactIntegerNumber(float64(number))
+		return exactSignedIntegerNumber(int64(number))
 	case int64:
-		return exactIntegerNumber(float64(number))
+		return exactSignedIntegerNumber(number)
 	case uint:
-		return exactIntegerNumber(float64(number))
+		return exactUnsignedIntegerNumber(uint64(number))
 	case uint8:
-		return exactIntegerNumber(float64(number))
+		return exactUnsignedIntegerNumber(uint64(number))
 	case uint16:
-		return exactIntegerNumber(float64(number))
+		return exactUnsignedIntegerNumber(uint64(number))
 	case uint32:
-		return exactIntegerNumber(float64(number))
+		return exactUnsignedIntegerNumber(uint64(number))
 	case uint64:
-		return exactIntegerNumber(float64(number))
+		return exactUnsignedIntegerNumber(number)
 	default:
 		return 0, false
 	}
 }
 
-func exactIntegerNumber(number float64) (float64, bool) {
+func exactSignedIntegerNumber(number int64) (float64, bool) {
 	const maxExactInteger = 1 << 53
-	return number, math.Abs(number) <= maxExactInteger
+	return float64(number), number >= -maxExactInteger && number <= maxExactInteger
+}
+
+func exactUnsignedIntegerNumber(number uint64) (float64, bool) {
+	const maxExactInteger = 1 << 53
+	return float64(number), number <= maxExactInteger
 }
 
 func matchesPresentationDescriptor(descriptor configModel.InputDescriptor, definition *configModel.PresentationDefinition, credential *common.Credential) bool {

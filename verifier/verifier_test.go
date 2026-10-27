@@ -1587,6 +1587,7 @@ func TestAuthenticationResponseRejectsCredentialsThatDoNotMatchQueries(t *testin
 		dcql        *configModel.DCQL
 		definition  *configModel.PresentationDefinition
 		credential  common.CredentialContents
+		format      string
 		expectError bool
 	}
 	tests := []testCase{
@@ -1618,6 +1619,33 @@ func TestAuthenticationResponseRejectsCredentialsThatDoNotMatchQueries(t *testin
 				Types:   []string{"VerifiableCredential", "RequestedCredential"},
 				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "admin"}}},
 			},
+		},
+		{
+			name: "JWT-VC type_values match",
+			dcql: &configModel.DCQL{Credentials: []configModel.CredentialQuery{{
+				Id:     "requested-query",
+				Format: "jwt_vc_json",
+				Meta:   &configModel.MetaDataQuery{TypeValues: [][]string{{"VerifiableCredential", "RequestedCredential"}}},
+			}}},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "admin"}}},
+			},
+			format: common.FormatJWTVC,
+		},
+		{
+			name: "JWT-VC type_values mismatch",
+			dcql: &configModel.DCQL{Credentials: []configModel.CredentialQuery{{
+				Id:     "requested-query",
+				Format: "jwt_vc_json",
+				Meta:   &configModel.MetaDataQuery{TypeValues: [][]string{{"VerifiableCredential", "OtherCredential"}}},
+			}}},
+			credential: common.CredentialContents{
+				Types:   []string{"VerifiableCredential", "RequestedCredential"},
+				Subject: []common.Subject{{CustomFields: map[string]interface{}{"role": "admin"}}},
+			},
+			format:      common.FormatJWTVC,
+			expectError: true,
 		},
 		{
 			name: "Presentation Exchange field filter mismatch",
@@ -1712,6 +1740,9 @@ func TestAuthenticationResponseRejectsCredentialsThatDoNotMatchQueries(t *testin
 			credential, err := common.CreateCredential(tc.credential, common.CustomFields{})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.format != "" {
+				credential.SetFormat(tc.format)
 			}
 			if tc.dcql != nil {
 				credential.AddRequestAssociation(common.PresentationRequestDCQL, "requested-query")

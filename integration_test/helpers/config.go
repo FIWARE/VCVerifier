@@ -28,7 +28,8 @@ type CredentialQuery struct {
 
 // MetaQuery defines metadata constraints for a credential query.
 type MetaQuery struct {
-	VctValues []string `json:"vct_values,omitempty"`
+	VctValues  []string   `json:"vct_values,omitempty"`
+	TypeValues [][]string `json:"type_values,omitempty"`
 }
 
 // ClaimDef defines a claim to be requested in a DCQL query.
@@ -47,7 +48,7 @@ func NewJWTVCQuery(id, credType string) CredentialQuery {
 	return CredentialQuery{
 		Id:     id,
 		Format: "jwt_vc_json",
-		Meta:   &MetaQuery{VctValues: []string{credType}},
+		Meta:   &MetaQuery{TypeValues: [][]string{{"VerifiableCredential", credType}}},
 	}
 }
 
@@ -325,11 +326,26 @@ func (cb *ConfigBuilder) writeDCQL(b *strings.Builder, dcql *DCQLConfig) {
 		for _, cq := range dcql.Credentials {
 			b.WriteString(fmt.Sprintf("              - id: \"%s\"\n", cq.Id))
 			b.WriteString(fmt.Sprintf("                format: \"%s\"\n", cq.Format))
-			if cq.Meta != nil && len(cq.Meta.VctValues) > 0 {
+			if cq.Meta != nil && (len(cq.Meta.VctValues) > 0 || len(cq.Meta.TypeValues) > 0) {
 				b.WriteString("                meta:\n")
+			}
+			if cq.Meta != nil && len(cq.Meta.VctValues) > 0 {
 				b.WriteString("                  vct_values:\n")
 				for _, v := range cq.Meta.VctValues {
 					b.WriteString(fmt.Sprintf("                    - \"%s\"\n", v))
+				}
+			}
+			if cq.Meta != nil && len(cq.Meta.TypeValues) > 0 {
+				b.WriteString("                  type_values:\n")
+				for _, types := range cq.Meta.TypeValues {
+					b.WriteString("                    - [")
+					for i, typ := range types {
+						if i > 0 {
+							b.WriteString(", ")
+						}
+						b.WriteString(fmt.Sprintf("\"%s\"", typ))
+					}
+					b.WriteString("]\n")
 				}
 			}
 			if len(cq.Claims) > 0 {
