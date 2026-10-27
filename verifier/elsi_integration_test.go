@@ -261,10 +261,10 @@ func TestElsiIntegration_HappyPathPayload(t *testing.T) {
 
 	now := time.Now().Unix()
 	token := buildElsiJWT(t, leafKey, []*x509.Certificate{leafCert, caCert}, map[string]interface{}{
-		"iss":              "did:elsi:" + orgID,
-		"sub":              "holder-did:key:z6Mk...",
-		"iat":              now,
-		"exp":              now + 3600,
+		"iss":                  "did:elsi:" + orgID,
+		"sub":                  "holder-did:key:z6Mk...",
+		"iat":                  now,
+		"exp":                  now + 3600,
 		"verifiableCredential": "credential-data-here",
 	})
 

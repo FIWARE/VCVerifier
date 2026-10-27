@@ -9,17 +9,17 @@ import (
 )
 
 var DB_FORMAT_MAP = map[string]string{
-	"dc+sd-jwt": "DC_SD_JWT",
-	"vc+sd-jwt": "VC_SD_JWT",
-	"mso_mdoc": "MSO_MDOC",
-	"ldp_vc": "LDP_VC",
+	"dc+sd-jwt":   "DC_SD_JWT",
+	"vc+sd-jwt":   "VC_SD_JWT",
+	"mso_mdoc":    "MSO_MDOC",
+	"ldp_vc":      "LDP_VC",
 	"jwt_vc_json": "JWT_VC_JSON",
 }
 var FORMAT_MAP = map[string]string{
-    "DC_SD_JWT": "dc+sd-jwt",
-	"VC_SD_JWT": "vc+sd-jwt",
-	"MSO_MDOC": "mso_mdoc",
-	"LDP_VC": "ldp_vc",
+	"DC_SD_JWT":   "dc+sd-jwt",
+	"VC_SD_JWT":   "vc+sd-jwt",
+	"MSO_MDOC":    "mso_mdoc",
+	"LDP_VC":      "ldp_vc",
 	"JWT_VC_JSON": "jwt_vc_json",
 }
 

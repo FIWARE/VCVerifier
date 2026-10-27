@@ -24,7 +24,7 @@ func init() {
 type mockServiceRepository struct {
 	services     []config.ConfiguredService
 	total        int
-	getAllError   error
+	getAllError  error
 	getError     error
 	createError  error
 	deleteError  error

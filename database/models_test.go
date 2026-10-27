@@ -202,10 +202,10 @@ func TestCredentialQueryDB_FromVO_ClaimsConverted(t *testing.T) {
 // Type and Url fields.
 func TestCredentialDB_VO_TrustedListsV5(t *testing.T) {
 	tests := []struct {
-		name                     string
-		endpoints                []config.EndpointEntry
-		expectedIssuers          config.TrustedIssuersLists
-		expectedParticipants     config.TrustedParticipantsLists
+		name                 string
+		endpoints            []config.EndpointEntry
+		expectedIssuers      config.TrustedIssuersLists
+		expectedParticipants config.TrustedParticipantsLists
 	}{
 		{
 			name: "single ebsi-v5 issuer",
@@ -372,9 +372,9 @@ func TestDCQLDB_FromVO(t *testing.T) {
 	vo := config.DCQL{
 		Credentials: []config.CredentialQuery{
 			{
-				Id:     "mdl",
-				Format: "mso_mdoc",
-				Claims: []config.ClaimsQuery{{Id: "age", Namespace: "org.iso.18013.5.1", ClaimName: "age_over_18"}},
+				Id:                                "mdl",
+				Format:                            "mso_mdoc",
+				Claims:                            []config.ClaimsQuery{{Id: "age", Namespace: "org.iso.18013.5.1", ClaimName: "age_over_18"}},
 				RequireCryptographicHolderBinding: &reqBinding,
 			},
 		},

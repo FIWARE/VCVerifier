@@ -109,7 +109,7 @@ func (t *DIDDocument_VerificationMethod_Item) FromJsonWebKey2020VerificationMeth
 	return err
 }
 
-func toPointer(in string) *string{
+func toPointer(in string) *string {
 	return &in
 }
 

@@ -20,7 +20,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-
 func TestInitConfigServer_WithSQLite(t *testing.T) {
 	configuration := &config.Configuration{
 		Database: config.Database{
