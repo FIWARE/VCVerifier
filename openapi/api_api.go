@@ -633,7 +633,7 @@ func StartSIOPSameDevice(c *gin.Context) {
 		return
 	}
 
-	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, "", requestMode, scope, requestProtocol, verifier.PKCEChallenge{})
+	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, "", requestMode, scope, requestProtocol, readPKCEChallenge(c))
 	if err != nil {
 		logging.Log().Warnf("Error starting the same-device flow. Err: %v", err)
 		if errors.Is(err, verifier.ErrorUnknownClientOrScope) {

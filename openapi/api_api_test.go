@@ -1344,3 +1344,44 @@ func TestAuthorizationEndpointDeeplinkUsesRedirectUri(t *testing.T) {
 	assert.Equal(t, "https://rp.example/callback", mock.mockStartedRedirectUri)
 	assert.Equal(t, "openid4vp://?request_uri=x", recorder.Header().Get("Location"))
 }
+
+// TestStartSIOPSameDevice_PassesPKCE checks that the same-device flow binds the challenge of the
+// request instead of dropping it.
+func TestStartSIOPSameDevice_PassesPKCE(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	expectedPKCE := verifier.PKCEChallenge{
+		Value:        strings.Repeat("a", 43),
+		Method:       verifier.PKCES256,
+		ChallengeSet: true,
+		MethodSet:    true,
+	}
+	mock := &mockVerifier{mockAuthRequest: "openid4vp://?request_uri=x"}
+	apiVerifier = mock
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	testContext, _ := gin.CreateTestContext(recorder)
+	testContext.Request, _ = http.NewRequest(
+		"GET",
+		"https://verifier.org/api/v1/samedevice?state=state&scope=s&code_challenge="+expectedPKCE.Value+"&code_challenge_method="+expectedPKCE.Method,
+		nil,
+	)
+	StartSIOPSameDevice(testContext)
+
+	assert.Equal(t, http.StatusFound, recorder.Code)
+	assert.Equal(t, expectedPKCE, mock.mockReceivedPKCE)
+}
+
+// TestStartSIOPSameDevice_RejectsInvalidPKCE checks that an invalid challenge is answered with 400.
+func TestStartSIOPSameDevice_RejectsInvalidPKCE(t *testing.T) {
+	apiVerifier = &mockVerifier{mockError: verifier.ErrorInvalidPKCEChallenge}
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	testContext, _ := gin.CreateTestContext(recorder)
+	testContext.Request, _ = http.NewRequest("GET", "https://verifier.org/api/v1/samedevice?state=state&scope=s&code_challenge=short", nil)
+	StartSIOPSameDevice(testContext)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+}

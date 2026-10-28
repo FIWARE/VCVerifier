@@ -568,6 +568,36 @@ func TestStartSiopFlow(t *testing.T) {
 	}
 }
 
+// TestStartSameDeviceFlowStoresChallengeInSession checks that the same-device flow binds the
+// normalized challenge to its login session.
+func TestStartSameDeviceFlowStoresChallengeInSession(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	testKey := getECDSAKey()
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	verifier := CredentialVerifier{
+		host:                 "verifier.org",
+		did:                  "did:key:verifier",
+		sessionCache:         &sessionCache,
+		nonceGenerator:       &mockNonceGenerator{staticValues: []string{"session-id"}},
+		tokenSigner:          mockTokenSigner{},
+		clock:                mockClock{},
+		credentialsConfig:    mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
+		requestSigningKey:    &testKey,
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"},
+		verifierConfig:       configModel.Verifier{AllowedCodeChallengeMethods: []string{PKCES256}},
+	}
+	pkce := PKCEChallenge{Value: strings.Repeat("a", 43), Method: "s256", ChallengeSet: true, MethodSet: true}
+
+	_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", "/redirect", "", "", REQUEST_MODE_BY_VALUE, "", REDIRECT_PROTOCOL, pkce)
+	assert.NoError(t, err)
+
+	assert.Len(t, sessionCache.sessions, 1)
+	for _, session := range sessionCache.sessions {
+		assert.Equal(t, PKCEChallenge{Value: pkce.Value, Method: PKCES256, ChallengeSet: true, MethodSet: true}, session.pkce)
+	}
+}
+
 func TestStartSiopFlowStoresChallengeInV1Session(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 

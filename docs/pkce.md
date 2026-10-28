@@ -6,7 +6,8 @@ request. The verifier binds the challenge to the login session and then to the
 issued authorization code. The RP must send the matching `code_verifier` to
 `/token`; a missing or invalid verifier makes the exchange fail.
 
-The challenge is also accepted by the legacy cross-device v1 entry points
+The challenge is also accepted by the same-device entry point
+`/api/v1/samedevice` and by the legacy cross-device v1 entry points
 `/api/v1/loginQR` and `/api/v1/startsiop`. The callback still receives only the
 authorization code and state; the RP supplies its verifier separately to
 `/token`. Requests that omit a challenge retain the existing behavior.

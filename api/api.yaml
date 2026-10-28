@@ -126,6 +126,8 @@ paths:
         - $ref: '#/components/parameters/Scope'
         - $ref: '#/components/parameters/RequestMode'
         - $ref: '#/components/parameters/RedirectPath'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: StartSIOPSameDevice
       summary: Starts the siop flow for credentials hold by the same device
       description: When the credential is already present in the requesting browser, the same-device flow can be used. It creates the login information and then redirects to the /authenticationresponse path.
@@ -704,7 +706,7 @@ components:
           minLength: 43
           maxLength: 128
           pattern: '^[A-Za-z0-9._~-]+$'
-          description: Required when the authorization request included code_challenge.
+          description: Required when the authorization request included code_challenge, and rejected when it did not.
         resource:
           type: string
           format: uri
