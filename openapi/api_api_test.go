@@ -1385,3 +1385,85 @@ func TestStartSIOPSameDevice_RejectsInvalidPKCE(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
 }
+
+type staticKeyResolver struct{ key jwk.Key }
+
+func (r staticKeyResolver) ResolvePublicKeyFromDID(kid string) (jwk.Key, error) { return r.key, nil }
+func (r staticKeyResolver) ExtractKIDFromJWT(tokenString string) (string, error) {
+	return "did:key:client#key", nil
+}
+
+type staticResponseClient struct{ body string }
+
+func (c staticResponseClient) Do(req *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(c.body))}, nil
+}
+
+// useRequestObject makes the request object client return the given claims, signed by the client.
+func useRequestObject(t *testing.T, claims map[string]any) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	assert.NoError(t, err)
+	signingKey, _ := jwk.Import(privateKey)
+	publicKey, _ := signingKey.PublicKey()
+	payload, _ := json.Marshal(claims)
+	signed, err := jws.Sign(payload, jws.WithKey(jwa.ES256(), signingKey))
+	assert.NoError(t, err)
+	requestObjectClient = &verifier.RequestObjectClient{HttpClient: staticResponseClient{string(signed)}, KeyResolver: staticKeyResolver{publicKey}}
+	t.Cleanup(func() { requestObjectClient = nil })
+}
+
+// TestRequestObject_IgnoresPKCEOfTheQuery checks that a request passed by reference takes its PKCE
+// challenge from the request object only: a challenge added to the query is not the client's.
+func TestRequestObject_IgnoresPKCEOfTheQuery(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	injected := "&code_challenge=" + strings.Repeat("a", 43) + "&code_challenge_method=S256"
+	signedChallenge := strings.Repeat("b", 43)
+
+	type test struct {
+		name         string
+		claims       map[string]any
+		expectedPKCE verifier.PKCEChallenge
+	}
+	tests := []test{
+		{"no challenge in the request object", map[string]any{},
+			verifier.PKCEChallenge{}},
+		{"challenge in the request object", map[string]any{"code_challenge": signedChallenge, "code_challenge_method": "S256"},
+			verifier.PKCEChallenge{Value: signedChallenge, Method: "S256", ChallengeSet: true, MethodSet: true}},
+	}
+	for _, tc := range tests {
+		claims := map[string]any{"aud": []string{"https://verifier.org"}, "client_id": "client", "scope": "openid",
+			"redirect_uri": "https://rp.example/callback", "state": "state", "response_type": "code"}
+		for k, v := range tc.claims {
+			claims[k] = v
+		}
+
+		t.Run("authorization endpoint: "+tc.name, func(t *testing.T) {
+			useRequestObject(t, claims)
+			mock := &mockVerifier{mockHost: "https://verifier.org", mockAuthorizationType: DEEPLINK, mockAuthRequest: "openid4vp://?request_uri=x"}
+			apiVerifier, frontendVerifier = mock, mock
+			t.Cleanup(func() { apiVerifier, frontendVerifier = nil, nil })
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v2/authorization?client_id=client&request_uri=https://rp.example/ro"+injected, nil)
+			AuthorizationEndpoint(c)
+
+			assert.Equal(t, http.StatusFound, recorder.Code, recorder.Body.String())
+			assert.Equal(t, tc.expectedPKCE, mock.mockReceivedPKCE)
+		})
+
+		t.Run("login QR: "+tc.name, func(t *testing.T) {
+			useRequestObject(t, claims)
+			mock := &mockVerifier{mockHost: "https://verifier.org", mockError: errors.New("stop")}
+			frontendVerifier = mock
+			t.Cleanup(func() { frontendVerifier = nil })
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v2/loginQR?state=state&request_uri=https://rp.example/ro"+injected, nil)
+			VerifierLoginQr(c)
+
+			assert.Equal(t, tc.expectedPKCE, mock.mockReceivedPKCE)
+		})
+	}
+}

@@ -50,6 +50,19 @@ func readPKCEChallenge(c *gin.Context) verifier.PKCEChallenge {
 	}
 }
 
+// requestObjectPKCE reads the PKCE challenge of a request passed by reference. Only the request
+// object counts (RFC 9101 §6.3): a challenge in the query of the URL is not covered by the client's
+// request object, so whoever handles that URL could bind the code to a verifier of their own.
+func requestObjectPKCE(cro *verifier.ClientRequestObject) (value string, method string, challengeSet bool, methodSet bool) {
+	if cro.CodeChallenge != nil {
+		value, challengeSet = *cro.CodeChallenge, true
+	}
+	if cro.CodeChallengeMethod != nil {
+		method, methodSet = *cro.CodeChallengeMethod, true
+	}
+	return value, method, challengeSet, methodSet
+}
+
 // VerifierPageDisplayQRSIOP - Presents a qr as starting point for the auth process
 func VerifierPageDisplayQRSIOP(c *gin.Context) {
 
@@ -141,14 +154,7 @@ func VerifierLoginQr(c *gin.Context) {
 		clientId = cro.ClientId
 		scope = cro.Scope
 		redirectUri = cro.RedirectUri
-		if cro.CodeChallenge != nil {
-			codeChallenge = *cro.CodeChallenge
-			codeChallengeSet = true
-		}
-		if cro.CodeChallengeMethod != nil {
-			codeChallengeMethod = *cro.CodeChallengeMethod
-			codeChallengeMethodSet = true
-		}
+		codeChallenge, codeChallengeMethod, codeChallengeSet, codeChallengeMethodSet = requestObjectPKCE(cro)
 	}
 
 	nonce, nonceExists := c.GetQuery("nonce")

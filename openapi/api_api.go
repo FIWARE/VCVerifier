@@ -200,14 +200,7 @@ func AuthorizationEndpoint(c *gin.Context) {
 			state = cro.State
 			stateExists = true
 		}
-		if cro.CodeChallenge != nil {
-			codeChallenge = *cro.CodeChallenge
-			codeChallengeSet = true
-		}
-		if cro.CodeChallengeMethod != nil {
-			codeChallengeMethod = *cro.CodeChallengeMethod
-			codeChallengeMethodSet = true
-		}
+		codeChallenge, codeChallengeMethod, codeChallengeSet, codeChallengeMethodSet = requestObjectPKCE(cro)
 
 		if cro.ResponseType != "" {
 			responseType = cro.ResponseType
