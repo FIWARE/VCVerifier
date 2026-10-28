@@ -936,8 +936,8 @@ func TestCheckLoginPageSecret(t *testing.T) {
 	}
 }
 
-// TestCheckRedirectUri covers where a login may send its authorization code: anywhere for a
-// client without allowedRedirectUris, only to a listed URI for one with them.
+// TestCheckRedirectUri covers where a login may send its authorization code: to any absolute
+// http(s) URI for a client without allowedRedirectUris, only to a listed URI for one with them.
 func TestCheckRedirectUri(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 	configError := errors.New("config unavailable")
@@ -955,7 +955,16 @@ func TestCheckRedirectUri(t *testing.T) {
 		{"a listed uri is accepted", "listed-client", "https://rp.example/callback", nil, nil},
 		{"a uri below a listed wildcard is accepted", "listed-client", "https://rp.example/tenants/a", nil, nil},
 		{"an unlisted uri is refused", "listed-client", "https://evil.example/callback", nil, ErrorRedirectUriNotAllowed},
-		{"a missing uri is refused for a client with a list", "listed-client", "", nil, ErrorRedirectUriNotAllowed},
+		{"a missing uri is refused for a client with a list", "listed-client", "", nil, ErrorInvalidRedirectUri},
+		{"a missing uri is refused for a client without a list", "open-client", "", nil, ErrorInvalidRedirectUri},
+		{"a plain http uri is accepted for a client without a list", "open-client", "http://anywhere.example/cb", nil, nil},
+		{"a javascript uri is refused for a client without a list", "open-client", "javascript:alert(1)//", nil, ErrorInvalidRedirectUri},
+		{"a data uri is refused for a client without a list", "unknown-client", "data:text/html,<script>alert(1)</script>", nil, ErrorInvalidRedirectUri},
+		{"a relative uri is refused for a client without a list", "open-client", "/cb", nil, ErrorInvalidRedirectUri},
+		{"a scheme-relative uri is refused for a client without a list", "open-client", "//anywhere.example/cb", nil, ErrorInvalidRedirectUri},
+		{"a uri with user info is refused for a client without a list", "open-client", "https://user@anywhere.example/cb", nil, ErrorInvalidRedirectUri},
+		{"a uri with a fragment is refused for a client without a list", "open-client", "https://anywhere.example/cb#x", nil, ErrorInvalidRedirectUri},
+		{"a malformed uri is refused before the configuration is read", "listed-client", "javascript:alert(1)", configError, ErrorInvalidRedirectUri},
 		{"a configuration that cannot be read refuses the login", "listed-client", "https://rp.example/callback", configError, configError},
 	}
 	for _, tc := range tests {
@@ -1240,7 +1249,7 @@ func TestStartSiopFlow_ResponseUriIncludesPathPrefix(t *testing.T) {
 	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	authReq, err := verifier.StartSiopFlow("verifier.org", "https", "/redirect", "my-state", "", "", REQUEST_MODE_BY_VALUE, PKCEChallenge{})
+	authReq, err := verifier.StartSiopFlow("verifier.org", "https", "https://client.org/redirect", "my-state", "", "", REQUEST_MODE_BY_VALUE, PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }

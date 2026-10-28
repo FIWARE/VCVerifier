@@ -1230,7 +1230,8 @@ func getNoHolderVPTokenJWT() string {
 }
 
 // TestLoginStartRefusesRedirectUri checks that every entry point of a login answers a redirect
-// URI the client does not allow with 400, and never redirects to it.
+// URI the client does not allow, or one that is not an absolute http(s) URI, with 400, and never
+// redirects to it.
 func TestLoginStartRefusesRedirectUri(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 	gin.SetMode(gin.TestMode)
@@ -1240,18 +1241,23 @@ func TestLoginStartRefusesRedirectUri(t *testing.T) {
 		path     string
 		handler  gin.HandlerFunc
 		mock     *mockVerifier
+		expected ErrorMessage
 	}
 	tests := []test{
 		{"the oidc authorization endpoint", "/api/v1/authorization?client_id=listed-client&response_type=code&scope=default&redirect_uri=https://evil.example/cb&state=s&nonce=n", AuthorizationEndpoint,
-			&mockVerifier{mockAuthorizationType: FRONTEND_V2, mockRedirectUriError: verifier.ErrorRedirectUriNotAllowed}},
+			&mockVerifier{mockAuthorizationType: FRONTEND_V2, mockRedirectUriError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
 		{"the cross-device v2 login page", "/api/v2/loginQR?state=s&client_id=listed-client&redirect_uri=https://evil.example/cb", VerifierLoginQr,
-			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
 		{"the cross-device v1 login page", "/api/v1/loginQR?state=s&client_id=listed-client&client_callback=https://evil.example/cb", VerifierPageDisplayQRSIOP,
-			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
 		{"the cross-device v1 connection string", "/api/v1/startsiop?state=s&client_id=listed-client&client_callback=https://evil.example/cb", VerifierAPIStartSIOP,
-			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
 		{"the same-device flow", "/api/v1/samedevice?state=s&client_id=listed-client&scope=s&redirect_path=/cb", StartSIOPSameDevice,
-			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
+		{"the oidc authorization endpoint without a redirect_uri", "/api/v1/authorization?client_id=open-client&response_type=code&scope=default&state=s&nonce=n", AuthorizationEndpoint,
+			&mockVerifier{mockAuthorizationType: FRONTEND_V2, mockRedirectUriError: verifier.ErrorInvalidRedirectUri}, ErrorMessageInvalidRedirectUri},
+		{"the cross-device v2 login page with a javascript uri", "/api/v2/loginQR?state=s&client_id=open-client&redirect_uri=javascript:alert(1)//", VerifierLoginQr,
+			&mockVerifier{mockError: verifier.ErrorInvalidRedirectUri}, ErrorMessageInvalidRedirectUri},
 	}
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
@@ -1271,8 +1277,8 @@ func TestLoginStartRefusesRedirectUri(t *testing.T) {
 				t.Errorf("A refused redirect URI must not be redirected to, got Location %q", location)
 			}
 			var body ErrorMessage
-			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body != ErrorMessageRedirectUriNotAllowed {
-				t.Errorf("Expected %v, got %s (err %v)", ErrorMessageRedirectUriNotAllowed, recorder.Body.String(), err)
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body != tc.expected {
+				t.Errorf("Expected %v, got %s (err %v)", tc.expected, recorder.Body.String(), err)
 			}
 		})
 	}

@@ -548,7 +548,7 @@ func rejectionCategory(err error) string {
 	// ErrorRedirectUriNotAllowed at this point means the client's allowedRedirectUris no longer
 	// cover the URI the login was started with - the presentation itself was fine
 	case errors.Is(err, verifier.ErrorVerficationContextSetup), errors.Is(err, verifier.ErrorLoginCompletionFailed),
-		errors.Is(err, verifier.ErrorRedirectUriNotAllowed):
+		errors.Is(err, verifier.ErrorRedirectUriNotAllowed), errors.Is(err, verifier.ErrorInvalidRedirectUri):
 		return rejectionServerError
 	default:
 		return rejectionVerificationFailed

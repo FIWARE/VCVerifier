@@ -63,6 +63,7 @@ var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback addr
 // is not in the client's allowedRedirectUris. The verifier never redirects to such a URI, not even
 // to report the error (RFC 6749 §4.1.2.1).
 var ErrorMessageRedirectUriNotAllowed = ErrorMessage{"redirect_uri_not_allowed", "The redirect_uri or client_callback is not registered for this client."}
+var ErrorMessageInvalidRedirectUri = ErrorMessage{"invalid_redirect_uri", "The redirect_uri or client_callback has to be an absolute http(s) URI without user info or fragment."}
 var ErrorMessageInvalidRedirectPath = ErrorMessage{"invalid_redirect_path", "The redirect_path has to be an absolute path on the verifier's host."}
 var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could not be decoded."}
 var ErrorMessageInvalidTokenEncoding = ErrorMessage{"invalid_token", "The vp_token has to be base64url encoded without padding."}
@@ -275,6 +276,10 @@ func AuthorizationEndpoint(c *gin.Context) {
 func abortLoginStart(c *gin.Context, err error, otherwise ErrorMessage) {
 	if errors.Is(err, verifier.ErrorRedirectUriNotAllowed) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageRedirectUriNotAllowed)
+		return
+	}
+	if errors.Is(err, verifier.ErrorInvalidRedirectUri) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidRedirectUri)
 		return
 	}
 	if errors.Is(err, verifier.ErrorInvalidPKCEChallenge) || errors.Is(err, verifier.ErrorInvalidPKCEMethod) {

@@ -85,6 +85,7 @@ var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorLoginPageSecretMismatch = errors.New("login_page_secret_mismatch")
 var ErrorRedirectUriNotAllowed = errors.New("redirect_uri_not_allowed")
+var ErrorInvalidRedirectUri = errors.New("invalid_redirect_uri")
 var ErrorInvalidRedirectPath = errors.New("invalid_redirect_path")
 
 // ErrorLoginCompletionFailed wraps a failure on the verifier's side after the presentation was
@@ -153,7 +154,8 @@ type Verifier interface {
 	// ErrorLoginPageSecretMismatch if the secret is not the one handed to the page that started it
 	CheckLoginPageSecret(sessionId string, secret string) error
 	// CheckRedirectUri checks where a login of the client may send its authorization code:
-	// ErrorRedirectUriNotAllowed if the client has allowedRedirectUris and the URI matches none
+	// ErrorInvalidRedirectUri if the URI is not an absolute http(s) URI, ErrorRedirectUriNotAllowed
+	// if the client has allowedRedirectUris and the URI matches none
 	CheckRedirectUri(clientId string, redirectUri string) error
 	// ReleaseUndeliveredCode restores the login session of a cross-device v2 login whose code
 	// could not be handed to the browser, unless the code was already redeemed
@@ -1481,7 +1483,7 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 	// Checked again before a code is issued: when the login started, the client may not have been
 	// in the configuration yet (an unknown client accepts any URI), or its list may have changed.
 	if err = v.CheckRedirectUri(loginSession.clientId, loginSession.callback); err != nil {
-		if errors.Is(err, ErrorRedirectUriNotAllowed) {
+		if errors.Is(err, ErrorRedirectUriNotAllowed) || errors.Is(err, ErrorInvalidRedirectUri) {
 			return sameDevice, err
 		}
 		return sameDevice, fmt.Errorf("%w: %w", ErrorVerficationContextSetup, err)
@@ -2163,11 +2165,16 @@ func (v *CredentialVerifier) ReleaseUndeliveredCode(sessionId string, authorizat
 
 // CheckRedirectUri checks the URI a login of the client sends its authorization code to - the
 // redirect_uri of the cross-device v2 and OIDC flows, the client_callback of the cross-device v1
-// flow - against the client's allowedRedirectUris. A client without the list, or not configured at
-// all, accepts any URI; an unconfigured client never gets a code, as its presentation fails
+// flow - against the client's allowedRedirectUris. Every URI has to be an absolute http(s) URI
+// (configModel.RedirectUriWellFormed); beyond that, a client without the list, or not configured
+// at all, accepts any URI - an unconfigured client never gets a code, as its presentation fails
 // verification. A failure to read the configuration is returned, so the login is refused rather
 // than left unchecked.
 func (v *CredentialVerifier) CheckRedirectUri(clientId string, redirectUri string) error {
+	if !configModel.RedirectUriWellFormed(redirectUri) {
+		logging.Log().Infof("Refused a login for client %s: %q is not an absolute http(s) URI.", clientId, redirectUri)
+		return ErrorInvalidRedirectUri
+	}
 	allowedRedirectUris, err := v.credentialsConfig.GetAllowedRedirectUris(clientId)
 	if err != nil {
 		logging.Log().Warnf("Was not able to read the allowed redirect URIs of client %s, refusing the login. Err: %v", clientId, err)

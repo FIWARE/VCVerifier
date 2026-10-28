@@ -49,6 +49,22 @@ func ValidateAllowedRedirectUri(entry string) error {
 	return nil
 }
 
+// RedirectUriWellFormed reports whether a redirect URI is an absolute http(s) URI with a host and
+// without user info or fragment (RFC 6749 §3.1.2). It is checked for every login, with or without
+// allowedRedirectUris: the cross-device v2 page navigates to the URI, so a "javascript:" or
+// "data:" URI would run in the verifier's origin, and an empty one would send the code back to the
+// login page. http stays allowed for every host - a same-device callback behind a TLS-terminating
+// proxy is one.
+func RedirectUriWellFormed(redirectUri string) bool {
+	parsed, err := url.Parse(redirectUri)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	return (scheme == "http" || scheme == "https") && parsed.Host != "" && parsed.Opaque == "" &&
+		parsed.User == nil && parsed.Fragment == "" && !strings.Contains(redirectUri, "#")
+}
+
 func isLoopbackHost(host string) bool {
 	if strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
 		return true
