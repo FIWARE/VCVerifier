@@ -97,3 +97,22 @@ func TestInitSchema_CascadeDelete(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "scope entries should be cascade-deleted")
 }
+
+// TestInitSchema_AddsAllowedRedirectUrisToExistingTable covers a database created before the column
+// existed - by an older verifier or by the CCS - which CREATE TABLE IF NOT EXISTS leaves unchanged.
+func TestInitSchema_AddsAllowedRedirectUrisToExistingTable(t *testing.T) {
+	db := openTestDB(t)
+	_, err := db.Exec(`CREATE TABLE service (id VARCHAR(255) NOT NULL PRIMARY KEY, default_oidc_scope VARCHAR(255), authorization_type VARCHAR(255))`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO service (id, default_oidc_scope) VALUES ('old-svc', 'default')`)
+	require.NoError(t, err)
+
+	require.NoError(t, InitSchema(db, DriverTypeSQLite))
+	// a second start finds the column in place
+	require.NoError(t, InitSchema(db, DriverTypeSQLite))
+
+	var allowedRedirectUris sql.NullString
+	err = db.QueryRow(`SELECT allowed_redirect_uris FROM service WHERE id = 'old-svc'`).Scan(&allowedRedirectUris)
+	require.NoError(t, err, "the column must have been added")
+	assert.False(t, allowedRedirectUris.Valid, "an existing service restricts nothing")
+}

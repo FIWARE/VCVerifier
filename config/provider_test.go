@@ -424,6 +424,13 @@ func TestReadConfigVCDataModelVersions(t *testing.T) {
 		"VCDataModelVersions should be parsed from the config file")
 }
 
+func TestReadConfigAllowedCodeChallengeMethods(t *testing.T) {
+	config.Reset()
+	gotConfig, err := ReadConfig("data/config_test_pkce.yaml")
+	assert.NoError(t, err, "ReadConfig should parse configured PKCE methods")
+	assert.Equal(t, []string{"S256", "plain"}, gotConfig.Verifier.AllowedCodeChallengeMethods)
+}
+
 // TestReadConfigVCDataModelVersionsDefault verifies that an empty
 // vcDataModelVersions field results in a nil/empty slice (the default is
 // applied at verifyConfig time, not at config parsing time).

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -50,12 +51,20 @@ var ErrorMessageNoScope = ErrorMessage{"no_scope_provided", "Authentication requ
 var ErrorMessageUnknownClientOrScope = ErrorMessage{"invalid_client_or_scope", "The requested client or scope is not configured."}
 var ErrorMessageInvalidResponseType = ErrorMessage{"invalid_response_type", "Authentication requires the response_type to be `code`."}
 var ErrorMessageFailedSameDevice = ErrorMessage{"failed_same_device", "Was not able to start a same-device flow."}
+var ErrorMessageFailedFrontendRedirect = ErrorMessage{"failed_frontend_redirect", "Was not able to start the login."}
 var ErrorMessageNoClientId = ErrorMessage{"no_client_id_provided", "Authentication requires a client-id provided as a parameter."}
 var ErrorMessageNoNonce = ErrorMessage{"no_nonce_provided", "Authentication requires a nonce provided as a query parameter."}
 var ErrorMessageNoToken = ErrorMessage{"no_token_provided", "Authentication requires a token provided as a form parameter."}
 var ErrorMessageNoPresentationSubmission = ErrorMessage{"no_presentation_submission_provided", "Authentication requires a presentation submission provided as a form parameter."}
 var ErrorMessageInvalidPresentationSubmission = ErrorMessage{"invalid_presentation_submission", "The presentation submission must be valid JSON or Base64URL-encoded JSON with a definition_id and non-empty descriptor_map containing valid credential paths."}
 var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback address has to be provided as query-parameter."}
+
+// ErrorMessageRedirectUriNotAllowed is the answer to a login whose redirect_uri or client_callback
+// is not in the client's allowedRedirectUris. The verifier never redirects to such a URI, not even
+// to report the error (RFC 6749 §4.1.2.1).
+var ErrorMessageRedirectUriNotAllowed = ErrorMessage{"redirect_uri_not_allowed", "The redirect_uri or client_callback is not registered for this client."}
+var ErrorMessageInvalidRedirectUri = ErrorMessage{"invalid_redirect_uri", "The redirect_uri or client_callback has to be an absolute http(s) URI without user info or fragment."}
+var ErrorMessageInvalidRedirectPath = ErrorMessage{"invalid_redirect_path", "The redirect_path has to be an absolute path on the verifier's host."}
 var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could not be decoded."}
 var ErrorMessageInvalidTokenEncoding = ErrorMessage{"invalid_token", "The vp_token has to be base64url encoded without padding."}
 var ErrorMessageUnableToDecodeCredential = ErrorMessage{"invalid_token", "Could not read the credential(s) inside the token."}
@@ -65,6 +74,7 @@ var ErrorMessageInvalidSdJwt = ErrorMessage{"invalid_sdjwt", "SdJwt does not con
 var ErrorMessageNoWebsocketConnection = ErrorMessage{"invalid_connection", "No Websocket connection available for the authenticated session."}
 var ErrorMessageUnresolvableRequestObject = ErrorMessage{"unresolvable_request_object", "Was not able to get the request object from the client."}
 var ErrorMessageInvalidAudience = ErrorMessage{"invalid_audience", "Audience of the request object was invalid."}
+var ErrorMessageInvalidPKCERequest = ErrorMessage{"invalid_pkce_request", "The PKCE challenge or method is invalid or not enabled."}
 var ErrorMessageUnsupportedAssertionType = ErrorMessage{"unsupported_assertion_type", "Assertion type is not supported."}
 var ErrorMessageInvalidClientAssertion = ErrorMessage{"invalid_client_assertion", "Provided client assertion is invalid."}
 var ErrorMessageInvalidTokenRequest = ErrorMessage{"invalid_token_request", "Token request has no redirect_uri and no valid client assertion."}
@@ -150,6 +160,8 @@ func AuthorizationEndpoint(c *gin.Context) {
 	redirectUri, redirectUriExists := c.GetQuery("redirect_uri")
 	nonce, nonceExists := c.GetQuery("nonce")
 	state, stateExists := c.GetQuery("state")
+	codeChallenge, codeChallengeSet := c.GetQuery("code_challenge")
+	codeChallengeMethod, codeChallengeMethodSet := c.GetQuery("code_challenge_method")
 
 	requestUri, requestUriExists := c.GetQuery("request_uri")
 	if requestUriExists {
@@ -189,6 +201,7 @@ func AuthorizationEndpoint(c *gin.Context) {
 			state = cro.State
 			stateExists = true
 		}
+		codeChallenge, codeChallengeMethod, codeChallengeSet, codeChallengeMethodSet = requestObjectPKCE(cro)
 
 		if cro.ResponseType != "" {
 			responseType = cro.ResponseType
@@ -235,24 +248,83 @@ func AuthorizationEndpoint(c *gin.Context) {
 
 	authorizationType := getApiVerifier().GetAuthorizationType(clientId)
 	fallbackRequestMode := getApiVerifier().GetRequestMode()
+	pkce := verifier.PKCEChallenge{Value: codeChallenge, Method: codeChallengeMethod, ChallengeSet: codeChallengeSet, MethodSet: codeChallengeMethodSet}
 	var redirect string
 	var err error
 	switch authorizationType {
 	case DEEPLINK:
-		redirect, err = getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, "", clientId, nonce, fallbackRequestMode, scope, verifier.OPENID4VP_PROTOCOL)
+		redirect, err = getApiVerifier().StartSameDeviceFlowForRedirectUri(c.Request.Host, protocol, state, redirectUri, clientId, nonce, fallbackRequestMode, scope, pkce)
 		if err != nil {
 			logging.Log().Warnf("Was not able start a same device flow. Err: %v", err)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessageFailedSameDevice)
+			abortLoginStart(c, err, ErrorMessageFailedSameDevice)
 			return
 		}
 	case FRONTEND_V2:
-		redirect = buildFrontendV2Address(protocol, c.Request.Host, getApiVerifier().GetPathPrefix(), state, clientId, redirectUri, scope, nonce, fallbackRequestMode)
+		// checked before the browser is sent on, so a refused URI is reported here and not by the
+		// login page
+		if err = getApiVerifier().CheckRedirectUri(clientId, redirectUri); err != nil {
+			abortLoginStart(c, err, ErrorMessageFailedFrontendRedirect)
+			return
+		}
+		redirect = buildFrontendV2Address(protocol, c.Request.Host, getApiVerifier().GetPathPrefix(), state, clientId, redirectUri, scope, nonce, fallbackRequestMode, pkce)
 	}
 	c.Redirect(http.StatusFound, redirect)
 }
 
-func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode string) string {
-	address := fmt.Sprintf("%s://%s%s/api/v2/loginQR?state=%s&client_id=%s&redirect_uri=%s&scope=%s&nonce=%s&request_mode=%s", protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode)
+// abortLoginStart answers a login that could not be started: 400 for a redirect URI the client
+// does not allow, 500 with the given message otherwise.
+func abortLoginStart(c *gin.Context, err error, otherwise ErrorMessage) {
+	if errors.Is(err, verifier.ErrorRedirectUriNotAllowed) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageRedirectUriNotAllowed)
+		return
+	}
+	if errors.Is(err, verifier.ErrorInvalidRedirectUri) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidRedirectUri)
+		return
+	}
+	if errors.Is(err, verifier.ErrorInvalidPKCEChallenge) || errors.Is(err, verifier.ErrorInvalidPKCEMethod) {
+		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidPKCERequest)
+		return
+	}
+	c.AbortWithStatusJSON(http.StatusInternalServerError, otherwise)
+}
+
+// codeRedirectUrl appends the authorization response to the client's redirect target (RFC 6749
+// §4.1.2). A query the target carries is kept, and every value is escaped, so a state chosen by
+// whoever started the login cannot add parameters of its own.
+func codeRedirectUrl(redirectTarget string, state string, code string, nonce string) (string, error) {
+	target, err := url.Parse(redirectTarget)
+	if err != nil {
+		return "", err
+	}
+	params := "state=" + url.QueryEscape(state) + "&code=" + url.QueryEscape(code)
+	if nonce != "" {
+		params += "&nonce=" + url.QueryEscape(nonce)
+	}
+	if target.RawQuery != "" {
+		target.RawQuery += "&" + params
+	} else {
+		target.RawQuery = params
+	}
+	return target.String(), nil
+}
+
+func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode string, pkce verifier.PKCEChallenge) string {
+	query := url.Values{
+		"state":        {state},
+		"client_id":    {clientId},
+		"redirect_uri": {redirectUri},
+		"scope":        {scope},
+		"nonce":        {nonce},
+		"request_mode": {requestMode},
+	}
+	if pkce.Value != "" || pkce.ChallengeSet {
+		query.Set("code_challenge", pkce.Value)
+	}
+	if pkce.Method != "" || pkce.MethodSet {
+		query.Set("code_challenge_method", pkce.Method)
+	}
+	address := fmt.Sprintf("%s://%s%s/api/v2/loginQR?%s", protocol, host, prefix, query.Encode())
 	logging.Log().Debugf("%s", address)
 	return address
 }
@@ -405,21 +477,43 @@ func handleTokenTypeCode(c *gin.Context) {
 	}
 
 	assertionType, assertionTypeExists := c.GetPostForm("client_assertion_type")
+	codeVerifier, _ := c.GetPostForm("code_verifier")
 	redirectUri, redirectUriExists := c.GetPostForm("redirect_uri")
 	if redirectUriExists {
-		jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, redirectUri, false)
+		jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, redirectUri, false, codeVerifier)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
+			abortCodeGrant(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken, RefreshTokenExpiresIn: refreshTokenExpiresIn(refreshToken)})
 		return
 	}
 	if assertionTypeExists {
-		handleWithClientAssertion(c, assertionType, code)
+		handleWithClientAssertion(c, assertionType, code, codeVerifier)
 		return
 	}
 	c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidTokenRequest)
+}
+
+// abortCodeGrant answers an authorization code that could not be exchanged (RFC 6749 §5.2): an
+// unknown, expired or already used code, a redirect_uri other than the one the code was issued
+// for and a failed PKCE verification (RFC 7636 §4.6) are "invalid_grant" with 400; anything else
+// is a failure on the verifier's side.
+func abortCodeGrant(c *gin.Context, err error) {
+	var description string
+	switch {
+	case errors.Is(err, verifier.ErrorNoSuchCode):
+		description = "The authorization code is unknown, expired or already used."
+	case errors.Is(err, verifier.ErrorRedirectUriMismatch):
+		description = "The redirect_uri does not match the one the authorization code was issued for."
+	case errors.Is(err, verifier.ErrorInvalidPKCEVerifier):
+		description = "The code_verifier does not match the code_challenge of the authorization request."
+	default:
+		logging.Log().Warnf("Was not able to issue a token for an authorization code. Err: %v", err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, TokenErrorResponse{Error: "server_error"})
+		return
+	}
+	c.AbortWithStatusJSON(http.StatusBadRequest, TokenErrorResponse{Error: "invalid_grant", ErrorDescription: description})
 }
 
 func getScopesFromRequest(c *gin.Context, clientId string) (scopes []string) {
@@ -439,7 +533,7 @@ func getScopesFromRequest(c *gin.Context, clientId string) (scopes []string) {
 
 }
 
-func handleWithClientAssertion(c *gin.Context, assertionType string, code string) {
+func handleWithClientAssertion(c *gin.Context, assertionType string, code string, codeVerifier string) {
 	if assertionType != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
 		logging.Log().Warnf("Assertion type %s is not supported.", assertionType)
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnsupportedAssertionType)
@@ -502,9 +596,9 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 		return
 	}
 
-	jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, "", true)
+	jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, "", true, codeVerifier)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
+		abortCodeGrant(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken, RefreshTokenExpiresIn: refreshTokenExpiresIn(refreshToken)})
@@ -558,14 +652,18 @@ func StartSIOPSameDevice(c *gin.Context) {
 		return
 	}
 
-	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, "", requestMode, scope, requestProtocol)
+	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, "", requestMode, scope, requestProtocol, readPKCEChallenge(c))
 	if err != nil {
 		logging.Log().Warnf("Error starting the same-device flow. Err: %v", err)
 		if errors.Is(err, verifier.ErrorUnknownClientOrScope) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnknownClientOrScope)
 			return
 		}
-		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
+		if errors.Is(err, verifier.ErrorInvalidRedirectPath) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidRedirectPath)
+			return
+		}
+		abortLoginStart(c, err, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
 		return
 	}
 
@@ -1040,11 +1138,13 @@ func handleAuthenticationResponse(c *gin.Context, state string, presentation *co
 		return
 	}
 	if response != (verifier.Response{}) && response.FlowVersion == verifier.SAME_DEVICE {
-		if response.Nonce != "" {
-			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s&nonce=%s", response.RedirectTarget, response.ExternalState, response.Code, response.Nonce))
-		} else {
-			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s", response.RedirectTarget, response.ExternalState, response.Code))
+		redirect, err := codeRedirectUrl(response.RedirectTarget, response.ExternalState, response.Code, response.Nonce)
+		if err != nil {
+			logging.Log().Warnf("Was not able to build the redirect of session %s to %s. Err: %v", state, response.RedirectTarget, err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{Summary: "invalid_redirect_target"})
+			return
 		}
+		c.Redirect(302, redirect)
 		return
 	} else if response != (verifier.Response{}) && response.FlowVersion == verifier.CROSS_DEVICE_V2 {
 		// state here is the verifier's own internal session id (what the wallet echoed
@@ -1119,9 +1219,9 @@ func VerifierAPIStartSIOP(c *gin.Context) {
 		requestMode = fallbackRequestMode
 	}
 
-	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, "", requestMode)
+	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, "", requestMode, readPKCEChallenge(c))
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
+		abortLoginStart(c, err, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
 		return
 	}
 	c.String(http.StatusOK, connectionString)

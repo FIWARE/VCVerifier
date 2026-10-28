@@ -165,15 +165,18 @@ func TestDeeplinkByReference(t *testing.T) {
 	require.NoError(t, err)
 	code := parsedRedirect.Query().Get("code")
 	require.NotEmpty(t, code, "authorization code must be in redirect URL")
+	assert.Equal(t, deeplinkState, parsedRedirect.Query().Get("state"))
+	// the code goes to the redirect_uri of the authorization request
+	parsedRedirect.RawQuery = ""
+	assert.Equal(t, redirectURI, parsedRedirect.String(), "the code must be sent to the client's redirect_uri")
 
 	// Step 10: Exchange authorization code for JWT
-	// For DEEPLINK same-device flow, the stored callback is the verifier's own base URL
-	// (since redirectPath is empty in the authorization endpoint call).
-	// The redirect_uri in the token exchange must match the stored callback.
+	// The redirect_uri in the token exchange must match the one of the authorization request
+	// (RFC 6749 §4.1.3).
 	tokenResp, err := http.PostForm(fmt.Sprintf("%s/token", fixture.verifier.BaseURL), url.Values{
 		"grant_type":   {"authorization_code"},
 		"code":         {code},
-		"redirect_uri": {fixture.verifier.BaseURL},
+		"redirect_uri": {redirectURI},
 	})
 	require.NoError(t, err)
 	defer tokenResp.Body.Close()

@@ -12,8 +12,20 @@ import (
 const createServiceTable = `CREATE TABLE IF NOT EXISTS service (
 	id VARCHAR(255) NOT NULL PRIMARY KEY,
 	default_oidc_scope VARCHAR(255),
-	authorization_type VARCHAR(255)
+	authorization_type VARCHAR(255),
+	allowed_redirect_uris TEXT
 )`
+
+// Columns added to the service table after it was first released. CREATE TABLE IF NOT EXISTS
+// leaves an existing table as it is, so they are added to it at startup (see ensureColumn). The
+// CCS adds the same columns with Liquibase; whichever runs first, the other finds them in place.
+var addedServiceColumns = []struct {
+	name       string
+	definition string
+}{
+	// JSON array of strings, as the JSON columns of scope_entry
+	{name: "allowed_redirect_uris", definition: "TEXT"},
+}
 
 // DDL for the scope_entry table — PostgreSQL variant.
 // Uses BIGSERIAL for the auto-incrementing primary key.
@@ -97,6 +109,22 @@ func refreshTokenDDL(dbType string) (string, error) {
 	}
 }
 
+// ensureColumn adds a column to an existing table unless it is there. ADD COLUMN IF NOT EXISTS is
+// not available on SQLite and MySQL, so the column is probed with a query that selects it and reads
+// no row - it fails only when the column is missing.
+func ensureColumn(db *sql.DB, table string, column string, definition string) error {
+	probe, probeErr := db.Query(fmt.Sprintf("SELECT %s FROM %s WHERE 1 = 0", column, table))
+	if probeErr == nil {
+		_ = probe.Close()
+		return nil
+	}
+	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+		return fmt.Errorf("failed to add column %s.%s (probing it failed with: %v): %w", table, column, probeErr, err)
+	}
+	logging.Log().Infof("Added column %s.%s to the existing database schema.", table, column)
+	return nil
+}
+
 // InitSchema creates the service and scope_entry tables if they do not
 // already exist. The DDL is database-type-aware: PostgreSQL uses BIGSERIAL,
 // SQLite uses INTEGER PRIMARY KEY AUTOINCREMENT, and MySQL uses BIGINT
@@ -114,6 +142,11 @@ func InitSchema(db *sql.DB, dbType string) error {
 
 	if _, err := db.Exec(createServiceTable); err != nil {
 		return fmt.Errorf("failed to create service table: %w", err)
+	}
+	for _, column := range addedServiceColumns {
+		if err := ensureColumn(db, "service", column.name, column.definition); err != nil {
+			return err
+		}
 	}
 
 	scopeSQL, err := scopeEntryDDL(dbType)

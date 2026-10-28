@@ -459,6 +459,15 @@ class AppManager {
     this.#connectWebSocket(this.config.get('wsUrl'));
   }
 
+  static #isHttpUrl(value) {
+    try {
+      const protocol = new URL(value).protocol;
+      return protocol === 'http:' || protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
   // Delay before the given reconnect attempt: 1s, 2s, 4s, 8s, then 10s.
   static #reconnectDelay(attempt) {
     return Math.min(1000 * 2 ** attempt, 10000);
@@ -562,6 +571,13 @@ class AppManager {
             // going back to this page later starts a new login
             LoginSessionStore.clear();
             this.#finishWebSocket();
+            // the server only accepts http(s) redirect URIs; never navigate to anything else, a
+            // "javascript:" URL would run in the verifier's origin
+            if (!AppManager.#isHttpUrl(message.redirectUrl)) {
+              console.error("Refusing to redirect to a non-http(s) URL: " + message.redirectUrl);
+              this.#showWebSocketError();
+              break
+            }
             window.location.href = message.redirectUrl;
             break
 

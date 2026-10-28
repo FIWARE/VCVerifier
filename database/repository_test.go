@@ -1103,3 +1103,46 @@ func TestConfigureHashing_DifferentSaltsProduceDifferentKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 }
+
+// TestService_AllowedRedirectUrisRoundTrip checks that the allowed redirect URIs survive create,
+// read, list and update, and that a service without them reads back with none.
+func TestService_AllowedRedirectUrisRoundTrip(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	restricted := sampleService("restricted")
+	restricted.AllowedRedirectUris = []string{"https://rp.example/callback", "https://rp.example/tenants/*"}
+	require.NoError(t, repo.CreateService(ctx, restricted))
+	require.NoError(t, repo.CreateService(ctx, sampleService("open")))
+
+	got, err := repo.GetService(ctx, "restricted")
+	require.NoError(t, err)
+	assert.Equal(t, restricted.AllowedRedirectUris, got.AllowedRedirectUris)
+
+	open, err := repo.GetService(ctx, "open")
+	require.NoError(t, err)
+	assert.Empty(t, open.AllowedRedirectUris)
+
+	all, _, err := repo.GetAllServices(ctx, 0, 10)
+	require.NoError(t, err)
+	for _, svc := range all {
+		if svc.Id == "restricted" {
+			assert.Equal(t, restricted.AllowedRedirectUris, svc.AllowedRedirectUris)
+		}
+	}
+
+	restricted.AllowedRedirectUris = []string{"https://rp.example/other"}
+	updated, err := repo.UpdateService(ctx, "restricted", restricted)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://rp.example/other"}, updated.AllowedRedirectUris)
+
+	restricted.AllowedRedirectUris = nil
+	preserved, err := repo.UpdateService(ctx, "restricted", restricted)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://rp.example/other"}, preserved.AllowedRedirectUris, "an update without the list preserves it")
+
+	restricted.AllowedRedirectUris = []string{}
+	cleared, err := repo.UpdateService(ctx, "restricted", restricted)
+	require.NoError(t, err)
+	assert.Empty(t, cleared.AllowedRedirectUris, "an explicitly empty list removes the restriction")
+}

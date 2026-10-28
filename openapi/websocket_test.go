@@ -808,6 +808,7 @@ func TestRejectionCategory(t *testing.T) {
 		{verifier.ErrorVerficationContextSetup, rejectionServerError},
 		{errors.New("ld_proof_challenge_mismatch"), rejectionVerificationFailed},
 		{fmt.Errorf("%w: %w", verifier.ErrorLoginCompletionFailed, errors.New("cache full")), rejectionServerError},
+		{verifier.ErrorRedirectUriNotAllowed, rejectionServerError},
 		{errors.New("trusted issuers registry unreachable"), rejectionVerificationFailed},
 	}
 	for _, tc := range tests {

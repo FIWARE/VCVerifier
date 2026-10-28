@@ -22,6 +22,8 @@ paths:
         - $ref: '#/components/parameters/Scope'
         - $ref: '#/components/parameters/Nonce'
         - $ref: '#/components/parameters/ResponseType'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: AuthorizationEndpoint
       summary: OAuth-2 compliant authorization endpoint, to provide the correct redirect
       description: Endpoint to be used as entry for the authorization process, providing the redirect to the concrete authorization method.
@@ -42,6 +44,8 @@ paths:
         - $ref: '#/components/parameters/Scope'
         - $ref: '#/components/parameters/Nonce'
         - $ref: '#/components/parameters/RequestMode'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: VerifierLoginQr
       summary: Presents a qr as starting point for the auth process
       description: Returns a rendered html with a QR encoding the login-starting point for the siop flow - e.g. 'openid://?scope=somethign&response_type=rt&response_mode=rm&client_id=ci&redirect_uri=uri&state=state&nonce=nonce&request_mode=urlEncoded'
@@ -70,6 +74,8 @@ paths:
         - $ref: '#/components/parameters/ClientId'
         - $ref: '#/components/parameters/Nonce'
         - $ref: '#/components/parameters/RequestMode'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: VerifierPageDisplayQRSIOP
       summary: Presents a qr as starting point for the auth process
       description: Returns a rendered html with a QR encoding the login-starting point for the siop flow - e.g. 'openid://?scope=somethign&response_type=rt&response_mode=rm&client_id=ci&redirect_uri=uri&state=state&nonce=nonce&request_mode=urlEncoded'
@@ -120,6 +126,8 @@ paths:
         - $ref: '#/components/parameters/Scope'
         - $ref: '#/components/parameters/RequestMode'
         - $ref: '#/components/parameters/RedirectPath'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: StartSIOPSameDevice
       summary: Starts the siop flow for credentials hold by the same device
       description: When the credential is already present in the requesting browser, the same-device flow can be used. It creates the login information and then redirects to the /authenticationresponse path.
@@ -135,6 +143,8 @@ paths:
         - $ref: '#/components/parameters/QueryState'
         - $ref: '#/components/parameters/ClientCallback'
         - $ref: '#/components/parameters/ClientId'
+        - $ref: '#/components/parameters/CodeChallenge'
+        - $ref: '#/components/parameters/CodeChallengeMethod'
       operationId: VerifierAPIStartSIOP
       summary: Initiates the siop flow and returns the 'openid://...' connection string
       responses:
@@ -195,12 +205,26 @@ paths:
             application/json:
               schema: 
                 $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: An authorization code that cannot be exchanged - unknown, expired or already used, issued for another redirect_uri, or with a missing or wrong code_verifier (RFC 6749 §5.2, RFC 7636 §4.6). A request missing a parameter is answered with an ErrorMessage instead.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TokenErrorResponse'
+                  - $ref: '#/components/schemas/ErrorMessage'
         '403':
-          description: Whenever something is requested that is not allowed or existent
+          description: Whenever something is requested that is not allowed or existent (grants other than authorization_code)
           content:
             application/json:
               schema: 
                 $ref: '#/components/schemas/ErrorMessage'
+        '500':
+          description: The token for an authorization code could not be issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenErrorResponse'
   /.well-known/jwks:
     get: 
       tags:
@@ -250,12 +274,26 @@ paths:
             application/json:
               schema: 
                 $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: An authorization code that cannot be exchanged - unknown, expired or already used, issued for another redirect_uri, or with a missing or wrong code_verifier (RFC 6749 §5.2, RFC 7636 §4.6). A request missing a parameter is answered with an ErrorMessage instead.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TokenErrorResponse'
+                  - $ref: '#/components/schemas/ErrorMessage'
         '403':
-          description: Whenever something is requested that is not allowed or existent
+          description: Whenever something is requested that is not allowed or existent (grants other than authorization_code)
           content:
             application/json:
               schema: 
                 $ref: '#/components/schemas/ErrorMessage'
+        '500':
+          description: The token for an authorization code could not be issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenErrorResponse'
                 
 components:
   parameters:
@@ -366,6 +404,24 @@ components:
           - urlEncoded
           - byValue
           - byReference
+    CodeChallenge:
+      name: code_challenge
+      description: PKCE challenge bound to the authorization code.
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 43
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._~-]+$'
+    CodeChallengeMethod:
+      name: code_challenge_method
+      description: PKCE transformation method. If omitted, RFC 7636 defines plain; it must be enabled in verifier.allowedCodeChallengeMethods.
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [S256, plain]
     ServiceId:
       name: service_id
       description: The id of the client/service that intents to start the authentication flow. Will be used to retrieve the scope and trust services to be used for verification.
@@ -650,6 +706,25 @@ components:
           items:
             type: string
           example: ["private_key_jwt"]
+        code_challenge_methods_supported:
+          type: array
+          description: The PKCE methods the verifier accepts (verifier.allowedCodeChallengeMethods)
+          items:
+            type: string
+            enum: ["S256", "plain"]
+          example: ["S256"]
+    TokenErrorResponse:
+      type: object
+      description: Error response of the token endpoint (RFC 6749 §5.2)
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: invalid_grant
+        error_description:
+          type: string
+          example: The code_verifier does not match the code_challenge of the authorization request.
     ErrorMessage:
       type: object
       properties:
@@ -673,6 +748,12 @@ components:
           format: uri
           description: Same uri as provided as callback in the original request.
           example: https://my-portal.com/auth_callback
+        code_verifier:
+          type: string
+          minLength: 43
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._~-]+$'
+          description: Required when the authorization request included code_challenge, and rejected when it did not.
         resource:
           type: string
           format: uri

@@ -93,6 +93,11 @@ type ConfiguredService struct {
 	// applied and the verifier falls back to the global default (wildcard).
 	// Set to ["*"] to explicitly allow all origins for this service.
 	AllowedOrigins []string `json:"allowedOrigins,omitempty" mapstructure:"allowedOrigins,omitempty"`
+	// AllowedRedirectUris lists where the authorization code of this service may be sent: the
+	// redirect_uri of the cross-device v2 and OIDC flows and the client_callback of the cross-device
+	// v1 flow. Each entry is an exact URI, or one ending in "/*" for every path below it (see
+	// ValidateAllowedRedirectUri). When empty or nil, any URI is accepted.
+	AllowedRedirectUris []string `json:"allowedRedirectUris,omitempty" mapstructure:"allowedRedirectUris,omitempty"`
 }
 
 type ScopeEntry struct {
