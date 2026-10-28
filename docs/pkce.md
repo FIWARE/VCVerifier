@@ -48,6 +48,19 @@ the challenge was stripped from the authorization request (a PKCE downgrade), so
 the exchange is rejected (RFC 9700 §2.1.1). As with a wrong verifier, the code
 stays available for the legitimate client.
 
+A request passed by reference (`request_uri`) takes its challenge from the
+request object only (RFC 9101 §6.3). A `code_challenge` in the query of such a
+request is ignored, since it is not covered by the client's signature.
+
+A code that cannot be exchanged is answered as RFC 6749 §5.2 requires, with
+`400` and `{"error":"invalid_grant","error_description":...}`: an unknown,
+expired or already used code, a `redirect_uri` other than the one the code was
+issued for, and a missing or wrong `code_verifier` (RFC 7636 §4.6). A failure on
+the verifier's side, such as signing the token, is `500` with
+`{"error":"server_error"}`. Both apply to the `authorization_code` grant; a
+token request that is missing its `code` is still `400` with the verifier's
+`ErrorMessage`.
+
 The implementation uses a method registry in `verifier/pkce.go`: adding a
 future method requires implementing its challenge validation and verifier
 comparison, registering its protocol name, updating the OpenAPI method enum,

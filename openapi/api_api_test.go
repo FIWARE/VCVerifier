@@ -300,7 +300,7 @@ func TestGetToken(t *testing.T) {
 		{testName: "If an invalid grant type is provided, the request should fail.", proofCheck: false, testGrantType: "my_special_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessageUnsupportedGrantType},
 		{testName: "If no auth code is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessageNoCode},
 		{testName: "If no redirect uri is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", expectedStatusCode: 400, expectedError: ErrorMessageInvalidTokenRequest},
-		{testName: "If the verify returns an error, a 403 should be answerd.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockError: errors.New("invalid"), expectedStatusCode: 403, expectedError: ErrorMessage{}},
+		{testName: "If the token cannot be issued, a 500 should be answered.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockError: errors.New("invalid"), expectedStatusCode: 500, expectedError: ErrorMessage{}},
 		{testName: "If no valid scope is provided, the request should be executed in the default scope.", proofCheck: false, testVPToken: getValidVPTokenJWT(), testGrantType: "vp_token", expectedStatusCode: 200},
 
 		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT"}},
@@ -1470,6 +1470,47 @@ func TestRequestObject_IgnoresPKCEOfTheQuery(t *testing.T) {
 			VerifierLoginQr(c)
 
 			assert.Equal(t, tc.expectedPKCE, mock.mockReceivedPKCE)
+		})
+	}
+}
+
+// TestCodeGrantErrors checks that a code that cannot be exchanged is answered as RFC 6749 §5.2 and
+// RFC 7636 §4.6 require: "invalid_grant" with 400 for the client's mistakes, 500 for the verifier's.
+func TestCodeGrantErrors(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName       string
+		mockError      error
+		expectedStatus int
+		expectedError  string
+	}
+	tests := []test{
+		{"an unknown code", verifier.ErrorNoSuchCode, http.StatusBadRequest, "invalid_grant"},
+		{"another redirect_uri", verifier.ErrorRedirectUriMismatch, http.StatusBadRequest, "invalid_grant"},
+		{"a wrong code_verifier", verifier.ErrorInvalidPKCEVerifier, http.StatusBadRequest, "invalid_grant"},
+		{"a token that cannot be signed", errors.New("signing failed"), http.StatusInternalServerError, "server_error"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			apiVerifier = &mockVerifier{mockError: tc.mockError}
+			t.Cleanup(func() { apiVerifier = nil })
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/token", strings.NewReader("grant_type=authorization_code&code=the-code&redirect_uri=https://rp.example/cb&code_verifier="+strings.Repeat("a", 43)))
+			c.Request.Header.Set("Content-Type", gin.MIMEPOSTForm)
+			GetToken(c)
+
+			assert.Equal(t, tc.expectedStatus, recorder.Code)
+			var body TokenErrorResponse
+			assert.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+			assert.Equal(t, tc.expectedError, body.Error)
+			if tc.expectedStatus == http.StatusInternalServerError {
+				assert.Empty(t, body.ErrorDescription, "a server error must not reveal its cause")
+			} else {
+				assert.NotEmpty(t, body.ErrorDescription)
+			}
 		})
 	}
 }

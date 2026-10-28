@@ -205,12 +205,26 @@ paths:
             application/json:
               schema: 
                 $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: An authorization code that cannot be exchanged - unknown, expired or already used, issued for another redirect_uri, or with a missing or wrong code_verifier (RFC 6749 §5.2, RFC 7636 §4.6). A request missing a parameter is answered with an ErrorMessage instead.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TokenErrorResponse'
+                  - $ref: '#/components/schemas/ErrorMessage'
         '403':
-          description: Whenever something is requested that is not allowed or existent
+          description: Whenever something is requested that is not allowed or existent (grants other than authorization_code)
           content:
             application/json:
               schema: 
                 $ref: '#/components/schemas/ErrorMessage'
+        '500':
+          description: The token for an authorization code could not be issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenErrorResponse'
   /.well-known/jwks:
     get: 
       tags:
@@ -260,12 +274,26 @@ paths:
             application/json:
               schema: 
                 $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: An authorization code that cannot be exchanged - unknown, expired or already used, issued for another redirect_uri, or with a missing or wrong code_verifier (RFC 6749 §5.2, RFC 7636 §4.6). A request missing a parameter is answered with an ErrorMessage instead.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TokenErrorResponse'
+                  - $ref: '#/components/schemas/ErrorMessage'
         '403':
-          description: Whenever something is requested that is not allowed or existent
+          description: Whenever something is requested that is not allowed or existent (grants other than authorization_code)
           content:
             application/json:
               schema: 
                 $ref: '#/components/schemas/ErrorMessage'
+        '500':
+          description: The token for an authorization code could not be issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenErrorResponse'
                 
 components:
   parameters:
@@ -678,6 +706,18 @@ components:
           items:
             type: string
           example: ["private_key_jwt"]
+    TokenErrorResponse:
+      type: object
+      description: Error response of the token endpoint (RFC 6749 §5.2)
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: invalid_grant
+        error_description:
+          type: string
+          example: The code_verifier does not match the code_challenge of the authorization request.
     ErrorMessage:
       type: object
       properties:

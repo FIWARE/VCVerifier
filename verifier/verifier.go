@@ -898,6 +898,7 @@ func (v *CredentialVerifier) claimCode(authorizationCode string, redirectUri str
 	// A failed proof of possession must not let someone who only intercepted the
 	// code invalidate it before the legitimate client can complete the exchange.
 	if err = verifyPKCE(tokenSession.pkce, codeVerifier); err != nil {
+		logging.Log().Infof("PKCE verification failed for authorization code of client %s, the code stays valid.", tokenSession.clientId)
 		return tokenSession, err
 	}
 	// We only allow retrieval once.

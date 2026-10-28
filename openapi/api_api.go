@@ -482,7 +482,7 @@ func handleTokenTypeCode(c *gin.Context) {
 	if redirectUriExists {
 		jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, redirectUri, false, codeVerifier)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
+			abortCodeGrant(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken, RefreshTokenExpiresIn: refreshTokenExpiresIn(refreshToken)})
@@ -493,6 +493,27 @@ func handleTokenTypeCode(c *gin.Context) {
 		return
 	}
 	c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidTokenRequest)
+}
+
+// abortCodeGrant answers an authorization code that could not be exchanged (RFC 6749 §5.2): an
+// unknown, expired or already used code, a redirect_uri other than the one the code was issued
+// for and a failed PKCE verification (RFC 7636 §4.6) are "invalid_grant" with 400; anything else
+// is a failure on the verifier's side.
+func abortCodeGrant(c *gin.Context, err error) {
+	var description string
+	switch {
+	case errors.Is(err, verifier.ErrorNoSuchCode):
+		description = "The authorization code is unknown, expired or already used."
+	case errors.Is(err, verifier.ErrorRedirectUriMismatch):
+		description = "The redirect_uri does not match the one the authorization code was issued for."
+	case errors.Is(err, verifier.ErrorInvalidPKCEVerifier):
+		description = "The code_verifier does not match the code_challenge of the authorization request."
+	default:
+		logging.Log().Warnf("Was not able to issue a token for an authorization code. Err: %v", err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, TokenErrorResponse{Error: "server_error"})
+		return
+	}
+	c.AbortWithStatusJSON(http.StatusBadRequest, TokenErrorResponse{Error: "invalid_grant", ErrorDescription: description})
 }
 
 func getScopesFromRequest(c *gin.Context, clientId string) (scopes []string) {
@@ -577,7 +598,7 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 
 	jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, "", true, codeVerifier)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
+		abortCodeGrant(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, TokenResponse{TokenType: "Bearer", ExpiresIn: float32(expiration), IdToken: jwt, AccessToken: jwt, RefreshToken: refreshToken, RefreshTokenExpiresIn: refreshTokenExpiresIn(refreshToken)})
