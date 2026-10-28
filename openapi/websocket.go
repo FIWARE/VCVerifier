@@ -277,7 +277,11 @@ func (c *wsClient) deliverLogin(message interface{}) (bool, error) {
 // not mean the page got it - a socket that died in the background still takes the bytes - so the
 // result stays pending until its code is exchanged, and a page that reconnects gets it again.
 func (c *wsClient) deliverLoginResult(redirectTarget string, externalState string, code string) (bool, error) {
-	return c.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": redirectTarget + "?state=" + externalState + "&code=" + code})
+	redirectUrl, err := codeRedirectUrl(redirectTarget, externalState, code, "")
+	if err != nil {
+		return false, err
+	}
+	return c.deliverLogin(gin.H{"type": "authenticated", "redirectUrl": redirectUrl})
 }
 
 // deliverPendingLogin hands the page the result of a completed login whose code was not exchanged

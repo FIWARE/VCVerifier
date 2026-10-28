@@ -1287,3 +1287,34 @@ func TestLoginStartRefusesRedirectUri(t *testing.T) {
 		})
 	}
 }
+
+// TestCodeRedirectUrl checks that the authorization response is appended to the redirect target as
+// escaped query parameters, keeping a query the target already has.
+func TestCodeRedirectUrl(t *testing.T) {
+	type test struct {
+		testName       string
+		redirectTarget string
+		state          string
+		code           string
+		nonce          string
+		expectedUrl    string
+	}
+	tests := []test{
+		{"A plain target gets the parameters as its query.", "https://rp.example/callback", "my-state", "my-code", "", "https://rp.example/callback?state=my-state&code=my-code"},
+		{"The nonce is added when there is one.", "https://rp.example/callback", "my-state", "my-code", "my-nonce", "https://rp.example/callback?state=my-state&code=my-code&nonce=my-nonce"},
+		{"A query of the target is kept.", "https://rp.example/callback?tenant=a", "my-state", "my-code", "", "https://rp.example/callback?tenant=a&state=my-state&code=my-code"},
+		{"A state cannot add parameters of its own.", "https://rp.example/callback", "s&code=injected", "my-code", "", "https://rp.example/callback?state=s%26code%3Dinjected&code=my-code"},
+		{"A state cannot move the code into a fragment.", "https://rp.example/callback", "s#", "my-code", "", "https://rp.example/callback?state=s%23&code=my-code"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			redirectUrl, err := codeRedirectUrl(tc.redirectTarget, tc.state, tc.code, tc.nonce)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedUrl, redirectUrl)
+			parsed, err := url.Parse(redirectUrl)
+			assert.NoError(t, err)
+			assert.Equal(t, []string{tc.code}, parsed.Query()["code"])
+			assert.Equal(t, tc.state, parsed.Query().Get("state"))
+		})
+	}
+}

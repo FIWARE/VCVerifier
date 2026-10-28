@@ -290,6 +290,26 @@ func abortLoginStart(c *gin.Context, err error, otherwise ErrorMessage) {
 	c.AbortWithStatusJSON(http.StatusInternalServerError, otherwise)
 }
 
+// codeRedirectUrl appends the authorization response to the client's redirect target (RFC 6749
+// §4.1.2). A query the target carries is kept, and every value is escaped, so a state chosen by
+// whoever started the login cannot add parameters of its own.
+func codeRedirectUrl(redirectTarget string, state string, code string, nonce string) (string, error) {
+	target, err := url.Parse(redirectTarget)
+	if err != nil {
+		return "", err
+	}
+	params := "state=" + url.QueryEscape(state) + "&code=" + url.QueryEscape(code)
+	if nonce != "" {
+		params += "&nonce=" + url.QueryEscape(nonce)
+	}
+	if target.RawQuery != "" {
+		target.RawQuery += "&" + params
+	} else {
+		target.RawQuery = params
+	}
+	return target.String(), nil
+}
+
 func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode string, pkceOptions ...verifier.PKCEChallenge) string {
 	pkce := verifier.PKCEChallenge{}
 	if len(pkceOptions) > 0 {
@@ -1098,11 +1118,13 @@ func handleAuthenticationResponse(c *gin.Context, state string, presentation *co
 		return
 	}
 	if response != (verifier.Response{}) && response.FlowVersion == verifier.SAME_DEVICE {
-		if response.Nonce != "" {
-			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s&nonce=%s", response.RedirectTarget, response.ExternalState, response.Code, response.Nonce))
-		} else {
-			c.Redirect(302, fmt.Sprintf("%s?state=%s&code=%s", response.RedirectTarget, response.ExternalState, response.Code))
+		redirect, err := codeRedirectUrl(response.RedirectTarget, response.ExternalState, response.Code, response.Nonce)
+		if err != nil {
+			logging.Log().Warnf("Was not able to build the redirect of session %s to %s. Err: %v", state, response.RedirectTarget, err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{Summary: "invalid_redirect_target"})
+			return
 		}
+		c.Redirect(302, redirect)
 		return
 	} else if response != (verifier.Response{}) && response.FlowVersion == verifier.CROSS_DEVICE_V2 {
 		// state here is the verifier's own internal session id (what the wallet echoed
