@@ -43,7 +43,7 @@ func ValidateAllowedRedirectUri(entry string) error {
 	}
 	if strings.HasSuffix(entry, redirectUriWildcard) {
 		if _, ok := normalizeWildcardPath(parsed.EscapedPath()); !ok {
-			return fmt.Errorf("%w: %q - a wildcard path cannot contain dot segments or encoded separators", ErrorInvalidAllowedRedirectUri, entry)
+			return fmt.Errorf("%w: %q - a wildcard path cannot contain dot segments, encoded separators or \";\"", ErrorInvalidAllowedRedirectUri, entry)
 		}
 	}
 	return nil
@@ -109,8 +109,9 @@ func RedirectUriAllowed(allowed []string, redirectUri string) bool {
 // matchesWildcardEntry reports whether the redirect URI is below the prefix of a wildcard entry
 // (which ends in "/"). Both are parsed, so the comparison is on scheme, host and port - never a
 // string prefix, which "https://rp.example.evil.com" would pass for "https://rp.example". Only the
-// path may vary: a query, a fragment or user info are rejected, as are dot segments and encoded
-// separators, which a browser, proxy or relying party may resolve to a path outside the prefix.
+// path may vary: a query, a fragment or user info are rejected, as are dot segments, encoded
+// separators and ";", which a browser, proxy or relying party may resolve to a path outside the
+// prefix - a servlet container reads "/callback/..;/admin" as "/admin" (path parameters).
 func matchesWildcardEntry(prefix string, redirectUri string) bool {
 	entry, err := url.Parse(prefix)
 	if err != nil {
@@ -138,7 +139,8 @@ func matchesWildcardEntry(prefix string, redirectUri string) bool {
 func normalizeWildcardPath(path string) (string, bool) {
 	for {
 		lowered := strings.ToLower(path)
-		if strings.Contains(lowered, "%2e") || strings.Contains(lowered, "%2f") || strings.Contains(lowered, "%5c") {
+		if strings.Contains(lowered, "%2e") || strings.Contains(lowered, "%2f") || strings.Contains(lowered, "%5c") ||
+			strings.Contains(lowered, "%3b") || strings.Contains(path, ";") {
 			return "", false
 		}
 		for segment := range strings.SplitSeq(path, "/") {
