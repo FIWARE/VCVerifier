@@ -541,7 +541,7 @@ func TestInitSiopFlow(t *testing.T) {
 			nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues(tc.testNonce, "my-super-random-id")}
 			credentialsConfig := mockCredentialConfig{mockScopes: tc.credentialScopes, mockError: tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, credentialsConfig: credentialsConfig, requestSigningKey: &testKey, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode)
+			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode, PKCEChallenge{})
 			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1, "my-super-random-id")
 		})
 	}
@@ -562,13 +562,13 @@ func TestStartSiopFlow(t *testing.T) {
 			nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues(tc.testNonce, "my-super-random-id")}
 			credentialsConfig := mockCredentialConfig{mockScopes: tc.credentialScopes, mockError: tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.StartSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode)
+			authReq, err := verifier.StartSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode, PKCEChallenge{})
 			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1, "my-super-random-id")
 		})
 	}
 }
 
-func TestStartSiopFlowWithPKCEStoresChallengeInV1Session(t *testing.T) {
+func TestStartSiopFlowStoresChallengeInV1Session(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	testKey := getECDSAKey()
@@ -597,7 +597,7 @@ func TestStartSiopFlowWithPKCEStoresChallengeInV1Session(t *testing.T) {
 		MethodSet:    true,
 	}
 
-	_, err := verifier.StartSiopFlowWithPKCE(
+	_, err := verifier.StartSiopFlow(
 		"verifier.org", "https", "https://client.org/callback", "external-state", "",
 		"", REQUEST_MODE_BY_VALUE, pkce,
 	)
@@ -715,7 +715,7 @@ func TestStartSameDeviceFlow(t *testing.T) {
 			nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues("", "my-random-session-id")}
 			credentialsConfig := mockCredentialConfig{mockScopes: tc.credentialScopes, mockError: tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.StartSameDeviceFlow(tc.testHost, tc.testProtocol, tc.testState, tc.testAddress, tc.testClientId, "", tc.requestMode, tc.testScope, tc.testRequestProtocol)
+			authReq, err := verifier.StartSameDeviceFlow(tc.testHost, tc.testProtocol, tc.testState, tc.testAddress, tc.testClientId, "", tc.requestMode, tc.testScope, tc.testRequestProtocol, PKCEChallenge{})
 			verifyInitTest(t, tc, authReq, err, sessionCache, SAME_DEVICE, "my-random-session-id")
 		})
 	}
@@ -746,7 +746,7 @@ func TestStartSameDeviceFlowRejectsUnknownClient(t *testing.T) {
 		"",
 		REQUEST_MODE_URL_ENCODED,
 		"scope",
-		"",
+		"", PKCEChallenge{},
 	)
 
 	assert.Error(t, err)
@@ -794,7 +794,7 @@ func TestReturnLoginQRV2_ScalesWithContent(t *testing.T) {
 	}
 
 	small := newVerifier(createMockCredentials("", "", "", "", "", false))
-	smallQr, err := small.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "small-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	smallQr, err := small.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "small-state", "", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -814,7 +814,7 @@ func TestReturnLoginQRV2_ScalesWithContent(t *testing.T) {
 		}
 	}
 	large := newVerifier(map[string]map[string]configModel.ScopeEntry{"": {"": {DCQL: largeDcql}}})
-	largeQr, err := large.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "large-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	largeQr, err := large.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "large-state", "", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -846,7 +846,7 @@ func TestReturnLoginQRV2_UsesGeneratedSessionId(t *testing.T) {
 		clientIdentification:  configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
 	}
 
-	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "generated-session-id", qrInfo.SessionId, "the QR info must carry the generated session id, not the external state")
 	assert.False(t, qrInfo.ExpireAt.IsZero(), "the expiry must be read from the generated session, otherwise the QR shows as expired immediately")
@@ -877,7 +877,7 @@ func TestCheckLoginPageSecret(t *testing.T) {
 		supportedRequestModes: []string{REQUEST_MODE_URL_ENCODED},
 		clientIdentification:  configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
 	}
-	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "the-page-secret", qrInfo.PageSecret)
 	assert.NotContains(t, qrInfo.QR+qrInfo.AuthenticationRequest, "the-page-secret", "the secret must never reach the QR")
@@ -951,19 +951,19 @@ func TestLoginFlowsRefuseRedirectUri(t *testing.T) {
 	}
 	tests := []test{
 		{"cross-device v2 refuses the redirect_uri", func(verifier *CredentialVerifier) error {
-			_, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", "", REQUEST_MODE_URL_ENCODED)
+			_, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 			return err
 		}},
 		{"cross-device v1 refuses the client_callback", func(verifier *CredentialVerifier) error {
-			_, err := verifier.StartSiopFlow("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", REQUEST_MODE_URL_ENCODED)
+			_, err := verifier.StartSiopFlow("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 			return err
 		}},
 		{"the cross-device v1 qr refuses the client_callback", func(verifier *CredentialVerifier) error {
-			_, err := verifier.ReturnLoginQR("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", REQUEST_MODE_URL_ENCODED)
+			_, err := verifier.ReturnLoginQR("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 			return err
 		}},
 		{"same-device refuses a callback on the verifier's host that is not listed", func(verifier *CredentialVerifier) error {
-			_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", "/redirect", "listed-client", "", REQUEST_MODE_URL_ENCODED, "", "")
+			_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", "/redirect", "listed-client", "", REQUEST_MODE_URL_ENCODED, "", "", PKCEChallenge{})
 			return err
 		}},
 	}
@@ -1015,7 +1015,7 @@ func TestStartSameDeviceFlowRejectsRedirectPathLeavingHost(t *testing.T) {
 				nonceGenerator:    &mockNonceGenerator{staticValues: []string{"session-id"}},
 				credentialsConfig: mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
 			}
-			_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", tc.redirectPath, "", "", REQUEST_MODE_URL_ENCODED, "", REDIRECT_PROTOCOL)
+			_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", tc.redirectPath, "", "", REQUEST_MODE_URL_ENCODED, "", REDIRECT_PROTOCOL, PKCEChallenge{})
 			assert.ErrorIs(t, err, ErrorInvalidRedirectPath)
 			assert.Empty(t, sessionCache.sessions, "no login session may be created")
 		})
@@ -1041,7 +1041,7 @@ func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
 
 	// "my-random-session-id" plays the external client's state here - it must be echoed
 	// back to that client, but must never appear as the wallet-facing state/session id.
-	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-random-session-id", "/redirect", "", "", REQUEST_MODE_URL_ENCODED, "", "")
+	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-random-session-id", "/redirect", "", "", REQUEST_MODE_URL_ENCODED, "", "", PKCEChallenge{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -1197,7 +1197,7 @@ func TestStartSameDeviceFlow_ResponseUriIncludesPathPrefix(t *testing.T) {
 	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-state", "/redirect", "", "", REQUEST_MODE_BY_VALUE, "", "")
+	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-state", "/redirect", "", "", REQUEST_MODE_BY_VALUE, "", "", PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }
@@ -1210,7 +1210,7 @@ func TestStartSiopFlow_ResponseUriIncludesPathPrefix(t *testing.T) {
 	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	authReq, err := verifier.StartSiopFlow("verifier.org", "https", "/redirect", "my-state", "", "", REQUEST_MODE_BY_VALUE)
+	authReq, err := verifier.StartSiopFlow("verifier.org", "https", "/redirect", "my-state", "", "", REQUEST_MODE_BY_VALUE, PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }
@@ -1223,7 +1223,7 @@ func TestInitOid4VPCrossDevice_ResponseUriIncludesPathPrefix(t *testing.T) {
 	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	_, _, authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE)
+	_, _, authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE, PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }
@@ -2331,7 +2331,7 @@ func TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus(t *testing.T)
 			// the requestor exchanges the code at the token endpoint, then answers 403
 			var exchangeErr error
 			httpClient = mockHttpClient{callbackStatus: http.StatusForbidden, onCallback: func(req *http.Request) {
-				_, _, _, exchangeErr = verifier.GetToken(req.URL.Query().Get("code"), tc.exchangeWith, false)
+				_, _, _, exchangeErr = verifier.GetToken(req.URL.Query().Get("code"), tc.exchangeWith, false, "")
 			}}
 			t.Cleanup(func() { httpClient = mockHttpClient{} })
 
@@ -2408,7 +2408,7 @@ func TestAuthenticationResponse_CallbackFailsWhileCodeIsExchanged(t *testing.T) 
 	exchanged := make(chan error, 1)
 	httpClient = mockHttpClient{callbackStatus: http.StatusGatewayTimeout, onCallback: func(req *http.Request) {
 		go func() {
-			_, _, _, err := verifier.GetToken(req.URL.Query().Get("code"), "https://myhost.org/callback", false)
+			_, _, _, err := verifier.GetToken(req.URL.Query().Get("code"), "https://myhost.org/callback", false, "")
 			exchanged <- err
 		}()
 		// answer only once the exchange is under way, but not finished
@@ -2455,7 +2455,7 @@ func TestReleaseCode_BeforeExchange(t *testing.T) {
 	_, found := sessionCache.Get("session-id")
 	assert.True(t, found)
 
-	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false, "")
 	assert.Equal(t, ErrorNoSuchCode, err, "a released code must not be exchangeable")
 }
 
@@ -2468,7 +2468,7 @@ func TestReleaseCode_SigningFailureCountsAsRedeemed(t *testing.T) {
 	sessionCache.Delete("session-id")
 	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
 
-	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false, "")
 	assert.Error(t, err)
 
 	assert.Equal(t, codeRedeemed, verifier.releaseCode("session-id", session.(loginSession), expiresAt, "the-code"))
@@ -2510,7 +2510,7 @@ func TestGetToken_ConcurrentExchangesOfOneCode(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			if _, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false); err == nil {
+			if _, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false, ""); err == nil {
 				successes.Add(1)
 			}
 		}()
@@ -2546,7 +2546,7 @@ func TestReleaseUndeliveredCode(t *testing.T) {
 			tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback",
 				sessionId: "session-id", session: session.(loginSession), sessionExpiresAt: expiresAt})
 			if tc.claimFirst {
-				_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+				_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false, "")
 				assert.NoError(t, err)
 			}
 
@@ -2579,7 +2579,7 @@ func TestPendingLogin(t *testing.T) {
 	tests := []test{
 		{"it is kept until its code is used", func(verifier *CredentialVerifier, code string) {}, true, false},
 		{"it goes once its code was exchanged", func(verifier *CredentialVerifier, code string) {
-			_, _, _, err := verifier.GetToken(code, "https://myhost.org/callback", false)
+			_, _, _, err := verifier.GetToken(code, "https://myhost.org/callback", false, "")
 			assert.NoError(t, err)
 		}, false, false},
 		{"it goes when its code is released and the session restored", func(verifier *CredentialVerifier, code string) {
@@ -2882,7 +2882,7 @@ func TestGetToken(t *testing.T) {
 
 			tokenCache := mockTokenCache{tokens: tc.tokenSession}
 			verifier := CredentialVerifier{tokenCache: &tokenCache, signingKey: testKey, clock: mockClock{}, tokenSigner: mockTokenSigner{tc.signingError}, signingAlgorithm: "ES256"}
-			jwtString, expiration, _, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false)
+			jwtString, expiration, _, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false, "")
 
 			if err != tc.expectedError {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
@@ -2911,7 +2911,7 @@ func TestGetToken(t *testing.T) {
 	}
 }
 
-func TestGetTokenWithCodeVerifierRetainsCodeAfterFailedProof(t *testing.T) {
+func TestGetTokenRetainsCodeAfterFailedProof(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	codeVerifier := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
@@ -2933,12 +2933,12 @@ func TestGetTokenWithCodeVerifierRetainsCodeAfterFailedProof(t *testing.T) {
 		signingAlgorithm: "ES256",
 	}
 
-	_, _, _, err := v.GetTokenWithCodeVerifier("pkce-code", "https://myhost.org/redirect", false, codeVerifier+"x")
+	_, _, _, err := v.GetToken("pkce-code", "https://myhost.org/redirect", false, codeVerifier+"x")
 	if !errors.Is(err, ErrorInvalidPKCEVerifier) {
 		t.Fatalf("expected invalid verifier error, got %v", err)
 	}
 
-	jwtString, _, _, err := v.GetTokenWithCodeVerifier("pkce-code", "https://myhost.org/redirect", false, codeVerifier)
+	jwtString, _, _, err := v.GetToken("pkce-code", "https://myhost.org/redirect", false, codeVerifier)
 	if err != nil {
 		t.Fatalf("expected the valid verifier to exchange the code after a failed attempt, got %v", err)
 	}
@@ -2947,10 +2947,10 @@ func TestGetTokenWithCodeVerifierRetainsCodeAfterFailedProof(t *testing.T) {
 	}
 }
 
-// TestGetTokenWithCodeVerifierRejectsDowngrade checks that a code issued without a challenge is not
+// TestGetTokenRejectsDowngrade checks that a code issued without a challenge is not
 // exchanged for a token request that sends a code_verifier (RFC 9700 §2.1.1), and that the code
 // stays available for the legitimate client.
-func TestGetTokenWithCodeVerifierRejectsDowngrade(t *testing.T) {
+func TestGetTokenRejectsDowngrade(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	codeVerifier := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
@@ -2966,10 +2966,10 @@ func TestGetTokenWithCodeVerifierRejectsDowngrade(t *testing.T) {
 		signingAlgorithm: "ES256",
 	}
 
-	_, _, _, err := v.GetTokenWithCodeVerifier("plain-code", "https://myhost.org/redirect", false, codeVerifier)
+	_, _, _, err := v.GetToken("plain-code", "https://myhost.org/redirect", false, codeVerifier)
 	assert.ErrorIs(t, err, ErrorInvalidPKCEVerifier)
 
-	jwtString, _, _, err := v.GetTokenWithCodeVerifier("plain-code", "https://myhost.org/redirect", false, "")
+	jwtString, _, _, err := v.GetToken("plain-code", "https://myhost.org/redirect", false, "")
 	assert.NoError(t, err, "the code must still be exchangeable without a verifier")
 	assert.NotEmpty(t, jwtString)
 }
@@ -3048,7 +3048,7 @@ func TestGetTokenWithRefreshToken(t *testing.T) {
 				refreshTokenExpiration: refreshTokenExpirationMinutes * time.Minute,
 				refreshTokenRepo:       tc.refreshTokenRepo,
 			}
-			jwtString, expiration, refreshToken, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false)
+			jwtString, expiration, refreshToken, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false, "")
 
 			if tc.expectedError != nil {
 				assert.ErrorIs(t, err, tc.expectedError)

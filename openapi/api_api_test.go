@@ -172,38 +172,19 @@ func (mV *mockVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCo
 	return true
 }
 
-func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestType string) (qr string, err error) {
-	return mV.mockQR, mV.mockError
-}
-func (mV *mockVerifier) ReturnLoginQRWithPKCE(host string, protocol string, callback string, state string, clientId string, nonce string, requestType string, pkce verifier.PKCEChallenge) (qr string, err error) {
+func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestType string, pkce verifier.PKCEChallenge) (qr string, err error) {
 	mV.mockReceivedPKCE = pkce
 	return mV.mockQR, mV.mockError
 }
-func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string) (qrInfo verifier.QRLoginInfo, err error) {
-	if mV.mockQRInfo != nil {
-		return *mV.mockQRInfo, mV.mockError
-	}
-	return verifier.QRLoginInfo{QR: mV.mockQR}, mV.mockError
-}
-func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (connectionString string, err error) {
-	return mV.mockConnectionString, mV.mockError
-}
-func (mV *mockVerifier) StartSiopFlowWithPKCE(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string, pkce verifier.PKCEChallenge) (connectionString string, err error) {
+func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string, pkce verifier.PKCEChallenge) (connectionString string, err error) {
 	mV.mockReceivedPKCE = pkce
 	return mV.mockConnectionString, mV.mockError
 }
-func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestType string, scope string, requestProtocol string) (authenticationRequest string, err error) {
-	mV.mockStartedScope = scope
-	return mV.mockAuthRequest, mV.mockError
-}
-func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
-	return mV.mockJWTString, mV.mockExpiration, mV.mockRefreshToken, mV.mockError
-}
-func (mV *mockVerifier) GetTokenWithCodeVerifier(authorizationCode string, redirectUri string, validated bool, codeVerifier string) (jwtString string, expiration int64, refreshToken string, err error) {
+func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool, codeVerifier string) (jwtString string, expiration int64, refreshToken string, err error) {
 	mV.mockReceivedCodeVerifier = codeVerifier
 	return mV.mockJWTString, mV.mockExpiration, mV.mockRefreshToken, mV.mockError
 }
-func (mV *mockVerifier) StartSameDeviceFlowWithPKCE(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce verifier.PKCEChallenge) (authenticationRequest string, err error) {
+func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce verifier.PKCEChallenge) (authenticationRequest string, err error) {
 	mV.mockStartedScope = scope
 	mV.mockReceivedPKCE = pkce
 	return mV.mockAuthRequest, mV.mockError
@@ -214,7 +195,7 @@ func (mV *mockVerifier) StartSameDeviceFlowForRedirectUri(host string, protocol 
 	mV.mockStartedRedirectUri = redirectUri
 	return mV.mockAuthRequest, mV.mockError
 }
-func (mV *mockVerifier) ReturnLoginQRV2WithPKCE(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string, pkce verifier.PKCEChallenge) (qrLoginInfo verifier.QRLoginInfo, err error) {
+func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string, pkce verifier.PKCEChallenge) (qrLoginInfo verifier.QRLoginInfo, err error) {
 	mV.mockReceivedPKCE = pkce
 	if mV.mockQRInfo != nil {
 		return *mV.mockQRInfo, mV.mockError
@@ -1125,7 +1106,7 @@ func TestBuildFrontendV2Address(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
-			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", tc.redirectUri, "", "my-nonce", "byReference")
+			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", tc.redirectUri, "", "my-nonce", "byReference", verifier.PKCEChallenge{})
 			parsed, err := url.Parse(actual)
 			if err != nil {
 				t.Fatalf("Could not parse frontend address %q: %v", actual, err)
@@ -1151,7 +1132,7 @@ func TestBuildFrontendV2Address(t *testing.T) {
 }
 
 func TestBuildFrontendV2Address_UsesProvidedRequestMode(t *testing.T) {
-	actual := buildFrontendV2Address("https", "verifier.org", "", "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "urlEncoded")
+	actual := buildFrontendV2Address("https", "verifier.org", "", "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "urlEncoded", verifier.PKCEChallenge{})
 	parsed, err := url.Parse(actual)
 	if err != nil {
 		t.Fatalf("Could not parse frontend address %q: %v", actual, err)

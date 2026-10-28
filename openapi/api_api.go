@@ -64,7 +64,7 @@ var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback addr
 // to report the error (RFC 6749 §4.1.2.1).
 var ErrorMessageRedirectUriNotAllowed = ErrorMessage{"redirect_uri_not_allowed", "The redirect_uri or client_callback is not registered for this client."}
 var ErrorMessageInvalidRedirectPath = ErrorMessage{"invalid_redirect_path", "The redirect_path has to be an absolute path on the verifier's host."}
-var ErrorMessageUnableToDecodeToken =ErrorMessage{"invalid_token", "Token could not be decoded."}
+var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could not be decoded."}
 var ErrorMessageInvalidTokenEncoding = ErrorMessage{"invalid_token", "The vp_token has to be base64url encoded without padding."}
 var ErrorMessageUnableToDecodeCredential = ErrorMessage{"invalid_token", "Could not read the credential(s) inside the token."}
 var ErrorMessageUnableToDecodeHolder = ErrorMessage{"invalid_token", "Could not read the holder inside the token."}
@@ -311,11 +311,7 @@ func codeRedirectUrl(redirectTarget string, state string, code string, nonce str
 	return target.String(), nil
 }
 
-func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode string, pkceOptions ...verifier.PKCEChallenge) string {
-	pkce := verifier.PKCEChallenge{}
-	if len(pkceOptions) > 0 {
-		pkce = pkceOptions[0]
-	}
+func buildFrontendV2Address(protocol, host, prefix, state, clientId, redirectUri, scope, nonce, requestMode string, pkce verifier.PKCEChallenge) string {
 	query := url.Values{
 		"state":        {state},
 		"client_id":    {clientId},
@@ -486,7 +482,7 @@ func handleTokenTypeCode(c *gin.Context) {
 	codeVerifier, _ := c.GetPostForm("code_verifier")
 	redirectUri, redirectUriExists := c.GetPostForm("redirect_uri")
 	if redirectUriExists {
-		jwt, expiration, refreshToken, err := getApiVerifier().GetTokenWithCodeVerifier(code, redirectUri, false, codeVerifier)
+		jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, redirectUri, false, codeVerifier)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 			return
@@ -581,7 +577,7 @@ func handleWithClientAssertion(c *gin.Context, assertionType string, code string
 		return
 	}
 
-	jwt, expiration, refreshToken, err := getApiVerifier().GetTokenWithCodeVerifier(code, "", true, codeVerifier)
+	jwt, expiration, refreshToken, err := getApiVerifier().GetToken(code, "", true, codeVerifier)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusForbidden, ErrorMessage{Summary: err.Error()})
 		return
@@ -637,7 +633,7 @@ func StartSIOPSameDevice(c *gin.Context) {
 		return
 	}
 
-	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, "", requestMode, scope, requestProtocol)
+	authenticationRequest, err := getApiVerifier().StartSameDeviceFlow(c.Request.Host, protocol, state, redirectPath, clientId, "", requestMode, scope, requestProtocol, verifier.PKCEChallenge{})
 	if err != nil {
 		logging.Log().Warnf("Error starting the same-device flow. Err: %v", err)
 		if errors.Is(err, verifier.ErrorUnknownClientOrScope) {
@@ -1204,7 +1200,7 @@ func VerifierAPIStartSIOP(c *gin.Context) {
 		requestMode = fallbackRequestMode
 	}
 
-	connectionString, err := getApiVerifier().StartSiopFlowWithPKCE(c.Request.Host, protocol, callback, state, clientId, "", requestMode, readPKCEChallenge(c))
+	connectionString, err := getApiVerifier().StartSiopFlow(c.Request.Host, protocol, callback, state, clientId, "", requestMode, readPKCEChallenge(c))
 	if err != nil {
 		abortLoginStart(c, err, ErrorMessage{err.Error(), "Was not able to generate the connection string."})
 		return

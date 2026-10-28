@@ -84,7 +84,7 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 		requestMode = fallbackRequestMode
 	}
 
-	qr, err := getFrontendVerifier().ReturnLoginQRWithPKCE(c.Request.Host, "https", callback, state, clientId, nonce, requestMode, readPKCEChallenge(c))
+	qr, err := getFrontendVerifier().ReturnLoginQR(c.Request.Host, "https", callback, state, clientId, nonce, requestMode, readPKCEChallenge(c))
 	if err != nil {
 		abortLoginStart(c, err, ErrorMessage{"qr_generation_error", err.Error()})
 		return
@@ -164,7 +164,7 @@ func VerifierLoginQr(c *gin.Context) {
 	}
 
 	pkce := verifier.PKCEChallenge{Value: codeChallenge, Method: codeChallengeMethod, ChallengeSet: codeChallengeSet, MethodSet: codeChallengeMethodSet}
-	qrInfo, err := getFrontendVerifier().ReturnLoginQRV2WithPKCE(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode, pkce)
+	qrInfo, err := getFrontendVerifier().ReturnLoginQRV2(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode, pkce)
 	if err != nil {
 		abortLoginStart(c, err, ErrorMessage{"qr_generation_error", err.Error()})
 		return
