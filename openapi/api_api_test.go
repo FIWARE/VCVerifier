@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/lestrrat-go/jwx/v3/jwk"
 	"github.com/lestrrat-go/jwx/v3/jws"
 	"github.com/multiformats/go-multibase"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/gin-gonic/gin"
 )
@@ -38,29 +40,32 @@ var LOGGING_CONFIG = logging.LoggingConfig{
 }
 
 type mockVerifier struct {
-	mockJWTString           string
-	mockQR                  string
-	mockConnectionString    string
-	mockAuthRequest         string
-	mockStartedScope        string
-	mockJWKS                jwk.Set
-	mockOpenIDConfig        common.OpenIDProviderMetadata
-	mockSameDevice          verifier.Response
-	mockExpiration          int64
-	mockError               error
-	mockAuthorizationType   string
-	mockRefreshTokenEnabled bool
-	mockRefreshToken        string
-	mockRefreshTokenError   error
-	mockExchangeJWT         string
-	mockExchangeExpiration  int64
-	mockExchangeRefresh     string
-	mockExchangeError       error
-	mockPathPrefix          string
-	mockRequestMode         string
-	mockDefaultScope        string
-	mockDefaultScopeError   error
-	mockHost                string
+	mockJWTString            string
+	mockQR                   string
+	mockConnectionString     string
+	mockAuthRequest          string
+	mockStartedScope         string
+	mockReceivedCodeVerifier string
+	mockReceivedPKCE         verifier.PKCEChallenge
+	mockJWKS                 jwk.Set
+	mockOpenIDConfig         common.OpenIDProviderMetadata
+	mockSameDevice           verifier.Response
+	mockExpiration           int64
+	mockError                error
+	mockAuthorizationType    string
+	mockStartedRedirectUri   string
+	mockRefreshTokenEnabled  bool
+	mockRefreshToken         string
+	mockRefreshTokenError    error
+	mockExchangeJWT          string
+	mockExchangeExpiration   int64
+	mockExchangeRefresh      string
+	mockExchangeError        error
+	mockPathPrefix           string
+	mockRequestMode          string
+	mockDefaultScope         string
+	mockDefaultScopeError    error
+	mockHost                 string
 	// sessions HasLoginSession reports as gone; every other session exists
 	mockMissingSessions map[string]bool
 	// guards mockMissingSessions once WebSocket handlers may read it (see endSession)
@@ -73,6 +78,8 @@ type mockVerifier struct {
 	mockOnHasLoginSession func(sessionId string)
 	// codes passed to ReleaseUndeliveredCode, by session id
 	releasedCodes map[string]string
+	// what CheckRedirectUri returns
+	mockRedirectUriError error
 	// completed logins whose page did not get the result yet, by session id; guarded by sessionsMu
 	mockPendingLogins map[string]verifier.PendingLogin
 	// called by PendingLogin before it answers
@@ -153,6 +160,10 @@ func (mV *mockVerifier) exchangeCode(sessionId string) {
 	delete(mV.mockPendingLogins, sessionId)
 }
 
+func (mV *mockVerifier) CheckRedirectUri(clientId string, redirectUri string) error {
+	return mV.mockRedirectUriError
+}
+
 func (mV *mockVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool {
 	if mV.releasedCodes == nil {
 		mV.releasedCodes = map[string]string{}
@@ -161,24 +172,35 @@ func (mV *mockVerifier) ReleaseUndeliveredCode(sessionId string, authorizationCo
 	return true
 }
 
-func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestType string) (qr string, err error) {
+func (mV *mockVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestType string, pkce verifier.PKCEChallenge) (qr string, err error) {
+	mV.mockReceivedPKCE = pkce
 	return mV.mockQR, mV.mockError
 }
-func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string) (qrInfo verifier.QRLoginInfo, err error) {
+func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string, pkce verifier.PKCEChallenge) (connectionString string, err error) {
+	mV.mockReceivedPKCE = pkce
+	return mV.mockConnectionString, mV.mockError
+}
+func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool, codeVerifier string) (jwtString string, expiration int64, refreshToken string, err error) {
+	mV.mockReceivedCodeVerifier = codeVerifier
+	return mV.mockJWTString, mV.mockExpiration, mV.mockRefreshToken, mV.mockError
+}
+func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce verifier.PKCEChallenge) (authenticationRequest string, err error) {
+	mV.mockStartedScope = scope
+	mV.mockReceivedPKCE = pkce
+	return mV.mockAuthRequest, mV.mockError
+}
+func (mV *mockVerifier) StartSameDeviceFlowForRedirectUri(host string, protocol string, state string, redirectUri string, clientId string, nonce string, requestMode string, scope string, pkce verifier.PKCEChallenge) (authenticationRequest string, err error) {
+	mV.mockStartedScope = scope
+	mV.mockReceivedPKCE = pkce
+	mV.mockStartedRedirectUri = redirectUri
+	return mV.mockAuthRequest, mV.mockError
+}
+func (mV *mockVerifier) ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string, pkce verifier.PKCEChallenge) (qrLoginInfo verifier.QRLoginInfo, err error) {
+	mV.mockReceivedPKCE = pkce
 	if mV.mockQRInfo != nil {
 		return *mV.mockQRInfo, mV.mockError
 	}
 	return verifier.QRLoginInfo{QR: mV.mockQR}, mV.mockError
-}
-func (mV *mockVerifier) StartSiopFlow(host string, protocol string, callback string, sessionId string, clientId string, nonce string, requestType string) (connectionString string, err error) {
-	return mV.mockConnectionString, mV.mockError
-}
-func (mV *mockVerifier) StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestType string, scope string, requestProtocol string) (authenticationRequest string, err error) {
-	mV.mockStartedScope = scope
-	return mV.mockAuthRequest, mV.mockError
-}
-func (mV *mockVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
-	return mV.mockJWTString, mV.mockExpiration, mV.mockRefreshToken, mV.mockError
 }
 func (mV *mockVerifier) GetJWKS() jwk.Set {
 	return mV.mockJWKS
@@ -250,6 +272,7 @@ func TestGetToken(t *testing.T) {
 		testGrantType          string
 		testCode               string
 		testRedirectUri        string
+		testCodeVerifier       string
 		testRefreshToken       string
 		testVPToken            string
 		testScope              string
@@ -272,11 +295,12 @@ func TestGetToken(t *testing.T) {
 	}
 	tests := []test{
 		{testName: "If a valid authorization_code request is received a token should be responded.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockJWTString: "theJWT", mockExpiration: 10, mockError: nil, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", IdToken: "theJWT"}, expectedError: ErrorMessage{}},
+		{testName: "authorization_code requests forward the PKCE verifier.", testGrantType: "authorization_code", testCode: "my-auth-code", testCodeVerifier: "the-pkce-verifier", testRedirectUri: "http://my-redirect.org", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200},
 		{testName: "If no grant type is provided, the request should fail.", proofCheck: false, testGrantType: "", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessagNoGrantType},
 		{testName: "If an invalid grant type is provided, the request should fail.", proofCheck: false, testGrantType: "my_special_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessageUnsupportedGrantType},
 		{testName: "If no auth code is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "", testRedirectUri: "http://my-redirect.org", expectedStatusCode: 400, expectedError: ErrorMessageNoCode},
 		{testName: "If no redirect uri is provided, the request should fail.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", expectedStatusCode: 400, expectedError: ErrorMessageInvalidTokenRequest},
-		{testName: "If the verify returns an error, a 403 should be answerd.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockError: errors.New("invalid"), expectedStatusCode: 403, expectedError: ErrorMessage{}},
+		{testName: "If the token cannot be issued, a 500 should be answered.", proofCheck: false, testGrantType: "authorization_code", testCode: "my-auth-code", testRedirectUri: "http://my-redirect.org", mockError: errors.New("invalid"), expectedStatusCode: 500, expectedError: ErrorMessage{}},
 		{testName: "If no valid scope is provided, the request should be executed in the default scope.", proofCheck: false, testVPToken: getValidVPTokenJWT(), testGrantType: "vp_token", expectedStatusCode: 200},
 
 		{testName: "If a valid vp_token request is received a token should be responded.", proofCheck: false, testGrantType: "vp_token", testVPToken: getValidVPTokenJWT(), testScope: "tir_read", mockJWTString: "theJWT", mockExpiration: 10, expectedStatusCode: 200, expectedResponse: TokenResponse{TokenType: "Bearer", ExpiresIn: 10, AccessToken: "theJWT", Scope: "tir_read", IssuedTokenType: common.TYPE_ACCESS_TOKEN, IdToken: "theJWT"}},
@@ -343,6 +367,9 @@ func TestGetToken(t *testing.T) {
 			if tc.testCode != "" {
 				formArray = append(formArray, "code="+tc.testCode)
 			}
+			if tc.testCodeVerifier != "" {
+				formArray = append(formArray, "code_verifier="+tc.testCodeVerifier)
+			}
 			if tc.testRedirectUri != "" {
 				formArray = append(formArray, "redirect_uri="+tc.testRedirectUri)
 			}
@@ -378,6 +405,9 @@ func TestGetToken(t *testing.T) {
 			testContext.Request.Header.Add("Content-Type", gin.MIMEPOSTForm)
 
 			GetToken(testContext)
+			if tc.testCodeVerifier != "" && apiVerifier.(*mockVerifier).mockReceivedCodeVerifier != tc.testCodeVerifier {
+				t.Errorf("Expected code_verifier %q to be forwarded, got %q", tc.testCodeVerifier, apiVerifier.(*mockVerifier).mockReceivedCodeVerifier)
+			}
 
 			if recorder.Code != tc.expectedStatusCode {
 				t.Errorf("%s - Expected status %v but was %v.", tc.testName, tc.expectedStatusCode, recorder.Code)
@@ -678,6 +708,32 @@ func TestVerifierAPIStartSIOP(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVerifierAPIStartSIOP_PassesPKCE(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	expectedPKCE := verifier.PKCEChallenge{
+		Value:        strings.Repeat("a", 43),
+		Method:       verifier.PKCES256,
+		ChallengeSet: true,
+		MethodSet:    true,
+	}
+	mock := &mockVerifier{mockConnectionString: "openid://mockConnectionString"}
+	apiVerifier = mock
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	testContext, _ := gin.CreateTestContext(recorder)
+	testContext.Request, _ = http.NewRequest(
+		"GET",
+		"https://verifier.org/api/v1/startsiop?state=state&client_callback=https://rp.example/callback&code_challenge="+expectedPKCE.Value+"&code_challenge_method="+expectedPKCE.Method,
+		nil,
+	)
+	VerifierAPIStartSIOP(testContext)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, expectedPKCE, mock.mockReceivedPKCE)
 }
 
 // buildJWTVPToken creates a JWT VP with the given payload (no signature
@@ -1039,28 +1095,74 @@ func TestAddPresentationSubmissionRequestIDs(t *testing.T) {
 
 func TestBuildFrontendV2Address(t *testing.T) {
 	tests := []struct {
-		testName string
-		prefix   string
-		want     string
+		testName    string
+		prefix      string
+		redirectUri string
+		wantPath    string
 	}{
-		{testName: "No prefix configured, path is unchanged", prefix: "", want: "https://verifier.org/api/v2/loginQR?state=my-state&client_id=my-client&redirect_uri=https://wallet.example/callback&scope=&nonce=my-nonce&request_mode=byReference"},
-		{testName: "Prefix is inserted before the loginQR path", prefix: "/myservice", want: "https://verifier.org/myservice/api/v2/loginQR?state=my-state&client_id=my-client&redirect_uri=https://wallet.example/callback&scope=&nonce=my-nonce&request_mode=byReference"},
+		{testName: "No prefix configured, path is unchanged", prefix: "", redirectUri: "https://wallet.example/callback", wantPath: "/api/v2/loginQR"},
+		{testName: "Prefix is inserted before the loginQR path", prefix: "/myservice", redirectUri: "https://wallet.example/callback", wantPath: "/myservice/api/v2/loginQR"},
+		{testName: "Redirect URI query parameters remain intact", prefix: "", redirectUri: "https://wallet.example/callback?tenant=one&mode=login", wantPath: "/api/v2/loginQR"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
-			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "byReference")
-			if actual != tc.want {
-				t.Errorf("%s - Expected %s but was %s", tc.testName, tc.want, actual)
+			actual := buildFrontendV2Address("https", "verifier.org", tc.prefix, "my-state", "my-client", tc.redirectUri, "", "my-nonce", "byReference", verifier.PKCEChallenge{})
+			parsed, err := url.Parse(actual)
+			if err != nil {
+				t.Fatalf("Could not parse frontend address %q: %v", actual, err)
+			}
+			if parsed.Scheme != "https" || parsed.Host != "verifier.org" || parsed.Path != tc.wantPath {
+				t.Errorf("Expected https://verifier.org%s, got %s", tc.wantPath, actual)
+			}
+			query := parsed.Query()
+			if got := query.Get("redirect_uri"); got != tc.redirectUri {
+				t.Errorf("Expected redirect_uri %q, got %q", tc.redirectUri, got)
+			}
+			if got := query.Get("state"); got != "my-state" {
+				t.Errorf("Expected state %q, got %q", "my-state", got)
+			}
+			if got := query.Get("client_id"); got != "my-client" {
+				t.Errorf("Expected client_id %q, got %q", "my-client", got)
+			}
+			if got := query.Get("request_mode"); got != "byReference" {
+				t.Errorf("Expected request_mode %q, got %q", "byReference", got)
 			}
 		})
 	}
 }
 
 func TestBuildFrontendV2Address_UsesProvidedRequestMode(t *testing.T) {
-	actual := buildFrontendV2Address("https", "verifier.org", "", "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "urlEncoded")
-	want := "https://verifier.org/api/v2/loginQR?state=my-state&client_id=my-client&redirect_uri=https://wallet.example/callback&scope=&nonce=my-nonce&request_mode=urlEncoded"
-	if actual != want {
-		t.Errorf("Expected %s but was %s", want, actual)
+	actual := buildFrontendV2Address("https", "verifier.org", "", "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "urlEncoded", verifier.PKCEChallenge{})
+	parsed, err := url.Parse(actual)
+	if err != nil {
+		t.Fatalf("Could not parse frontend address %q: %v", actual, err)
+	}
+	if got := parsed.Query().Get("request_mode"); got != "urlEncoded" {
+		t.Errorf("Expected request_mode %q, got %q", "urlEncoded", got)
+	}
+}
+
+func TestBuildFrontendV2Address_PropagatesPKCE(t *testing.T) {
+	pkce := verifier.PKCEChallenge{Value: "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG", Method: verifier.PKCES256}
+	actual := buildFrontendV2Address("https", "verifier.org", "", "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "urlEncoded", pkce)
+	parsed, err := url.Parse(actual)
+	if err != nil {
+		t.Fatalf("Could not parse frontend address %q: %v", actual, err)
+	}
+	if got := parsed.Query().Get("code_challenge"); got != pkce.Value {
+		t.Errorf("Expected code_challenge %q, got %q", pkce.Value, got)
+	}
+	if got := parsed.Query().Get("code_challenge_method"); got != pkce.Method {
+		t.Errorf("Expected code_challenge_method %q, got %q", pkce.Method, got)
+	}
+
+	methodOnly := buildFrontendV2Address("https", "verifier.org", "", "my-state", "my-client", "https://wallet.example/callback", "", "my-nonce", "urlEncoded", verifier.PKCEChallenge{Method: verifier.PKCES256})
+	methodOnlyURL, err := url.Parse(methodOnly)
+	if err != nil {
+		t.Fatalf("Could not parse frontend address %q: %v", methodOnly, err)
+	}
+	if got := methodOnlyURL.Query().Get("code_challenge_method"); got != verifier.PKCES256 {
+		t.Errorf("Expected method-only request to preserve %q so it can be rejected, got %q", verifier.PKCES256, got)
 	}
 }
 
@@ -1125,4 +1227,290 @@ func getNoHolderVPTokenJWT() string {
 			"verifiableCredential": []interface{}{buildFakeVCJWT()},
 		},
 	})
+}
+
+// TestLoginStartRefusesRedirectUri checks that every entry point of a login answers a redirect
+// URI the client does not allow, or one that is not an absolute http(s) URI, with 400, and never
+// redirects to it.
+func TestLoginStartRefusesRedirectUri(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	gin.SetMode(gin.TestMode)
+
+	type test struct {
+		testName string
+		path     string
+		handler  gin.HandlerFunc
+		mock     *mockVerifier
+		expected ErrorMessage
+	}
+	tests := []test{
+		{"the oidc authorization endpoint", "/api/v1/authorization?client_id=listed-client&response_type=code&scope=default&redirect_uri=https://evil.example/cb&state=s&nonce=n", AuthorizationEndpoint,
+			&mockVerifier{mockAuthorizationType: FRONTEND_V2, mockRedirectUriError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
+		{"the cross-device v2 login page", "/api/v2/loginQR?state=s&client_id=listed-client&redirect_uri=https://evil.example/cb", VerifierLoginQr,
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
+		{"the cross-device v1 login page", "/api/v1/loginQR?state=s&client_id=listed-client&client_callback=https://evil.example/cb", VerifierPageDisplayQRSIOP,
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
+		{"the cross-device v1 connection string", "/api/v1/startsiop?state=s&client_id=listed-client&client_callback=https://evil.example/cb", VerifierAPIStartSIOP,
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
+		{"the same-device flow", "/api/v1/samedevice?state=s&client_id=listed-client&scope=s&redirect_path=/cb", StartSIOPSameDevice,
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}, ErrorMessageRedirectUriNotAllowed},
+		{"the oidc authorization endpoint without a redirect_uri", "/api/v1/authorization?client_id=open-client&response_type=code&scope=default&state=s&nonce=n", AuthorizationEndpoint,
+			&mockVerifier{mockAuthorizationType: FRONTEND_V2, mockRedirectUriError: verifier.ErrorInvalidRedirectUri}, ErrorMessageInvalidRedirectUri},
+		{"the cross-device v2 login page with a javascript uri", "/api/v2/loginQR?state=s&client_id=open-client&redirect_uri=javascript:alert(1)//", VerifierLoginQr,
+			&mockVerifier{mockError: verifier.ErrorInvalidRedirectUri}, ErrorMessageInvalidRedirectUri},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			apiVerifier = tc.mock
+			frontendVerifier = tc.mock
+			t.Cleanup(func() { apiVerifier = nil; frontendVerifier = nil })
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, tc.path, nil)
+			tc.handler(c)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Errorf("Expected status 400, got %d", recorder.Code)
+			}
+			if location := recorder.Header().Get("Location"); location != "" {
+				t.Errorf("A refused redirect URI must not be redirected to, got Location %q", location)
+			}
+			var body ErrorMessage
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body != tc.expected {
+				t.Errorf("Expected %v, got %s (err %v)", tc.expected, recorder.Body.String(), err)
+			}
+		})
+	}
+}
+
+// TestCodeRedirectUrl checks that the authorization response is appended to the redirect target as
+// escaped query parameters, keeping a query the target already has.
+func TestCodeRedirectUrl(t *testing.T) {
+	type test struct {
+		testName       string
+		redirectTarget string
+		state          string
+		code           string
+		nonce          string
+		expectedUrl    string
+	}
+	tests := []test{
+		{"A plain target gets the parameters as its query.", "https://rp.example/callback", "my-state", "my-code", "", "https://rp.example/callback?state=my-state&code=my-code"},
+		{"The nonce is added when there is one.", "https://rp.example/callback", "my-state", "my-code", "my-nonce", "https://rp.example/callback?state=my-state&code=my-code&nonce=my-nonce"},
+		{"A query of the target is kept.", "https://rp.example/callback?tenant=a", "my-state", "my-code", "", "https://rp.example/callback?tenant=a&state=my-state&code=my-code"},
+		{"A state cannot add parameters of its own.", "https://rp.example/callback", "s&code=injected", "my-code", "", "https://rp.example/callback?state=s%26code%3Dinjected&code=my-code"},
+		{"A state cannot move the code into a fragment.", "https://rp.example/callback", "s#", "my-code", "", "https://rp.example/callback?state=s%23&code=my-code"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			redirectUrl, err := codeRedirectUrl(tc.redirectTarget, tc.state, tc.code, tc.nonce)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedUrl, redirectUrl)
+			parsed, err := url.Parse(redirectUrl)
+			assert.NoError(t, err)
+			assert.Equal(t, []string{tc.code}, parsed.Query()["code"])
+			assert.Equal(t, tc.state, parsed.Query().Get("state"))
+		})
+	}
+}
+
+// TestStartSIOPSameDeviceRejectsInvalidRedirectPath checks that a redirect_path leaving the
+// verifier's host is answered with 400 and never redirected to.
+func TestStartSIOPSameDeviceRejectsInvalidRedirectPath(t *testing.T) {
+	apiVerifier = &mockVerifier{mockError: verifier.ErrorInvalidRedirectPath}
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/samedevice?state=s&scope=s&redirect_path=@evil.example/cb", nil)
+	StartSIOPSameDevice(c)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Empty(t, recorder.Header().Get("Location"))
+	var body ErrorMessage
+	assert.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	assert.Equal(t, ErrorMessageInvalidRedirectPath, body)
+}
+
+// TestAuthorizationEndpointDeeplinkUsesRedirectUri checks that the same-device flow of the
+// authorization endpoint is started for the client's redirect_uri.
+func TestAuthorizationEndpointDeeplinkUsesRedirectUri(t *testing.T) {
+	mock := &mockVerifier{mockAuthorizationType: DEEPLINK, mockAuthRequest: "openid4vp://?request_uri=x"}
+	apiVerifier = mock
+	frontendVerifier = mock
+	t.Cleanup(func() { apiVerifier = nil; frontendVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v2/authorization?client_id=c&scope=s&state=st&response_type=code&redirect_uri="+url.QueryEscape("https://rp.example/callback"), nil)
+	AuthorizationEndpoint(c)
+
+	assert.Equal(t, http.StatusFound, recorder.Code)
+	assert.Equal(t, "https://rp.example/callback", mock.mockStartedRedirectUri)
+	assert.Equal(t, "openid4vp://?request_uri=x", recorder.Header().Get("Location"))
+}
+
+// TestStartSIOPSameDevice_PassesPKCE checks that the same-device flow binds the challenge of the
+// request instead of dropping it.
+func TestStartSIOPSameDevice_PassesPKCE(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	expectedPKCE := verifier.PKCEChallenge{
+		Value:        strings.Repeat("a", 43),
+		Method:       verifier.PKCES256,
+		ChallengeSet: true,
+		MethodSet:    true,
+	}
+	mock := &mockVerifier{mockAuthRequest: "openid4vp://?request_uri=x"}
+	apiVerifier = mock
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	testContext, _ := gin.CreateTestContext(recorder)
+	testContext.Request, _ = http.NewRequest(
+		"GET",
+		"https://verifier.org/api/v1/samedevice?state=state&scope=s&code_challenge="+expectedPKCE.Value+"&code_challenge_method="+expectedPKCE.Method,
+		nil,
+	)
+	StartSIOPSameDevice(testContext)
+
+	assert.Equal(t, http.StatusFound, recorder.Code)
+	assert.Equal(t, expectedPKCE, mock.mockReceivedPKCE)
+}
+
+// TestStartSIOPSameDevice_RejectsInvalidPKCE checks that an invalid challenge is answered with 400.
+func TestStartSIOPSameDevice_RejectsInvalidPKCE(t *testing.T) {
+	apiVerifier = &mockVerifier{mockError: verifier.ErrorInvalidPKCEChallenge}
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	testContext, _ := gin.CreateTestContext(recorder)
+	testContext.Request, _ = http.NewRequest("GET", "https://verifier.org/api/v1/samedevice?state=state&scope=s&code_challenge=short", nil)
+	StartSIOPSameDevice(testContext)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
+type staticKeyResolver struct{ key jwk.Key }
+
+func (r staticKeyResolver) ResolvePublicKeyFromDID(kid string) (jwk.Key, error) { return r.key, nil }
+func (r staticKeyResolver) ExtractKIDFromJWT(tokenString string) (string, error) {
+	return "did:key:client#key", nil
+}
+
+type staticResponseClient struct{ body string }
+
+func (c staticResponseClient) Do(req *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(c.body))}, nil
+}
+
+// useRequestObject makes the request object client return the given claims, signed by the client.
+func useRequestObject(t *testing.T, claims map[string]any) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	assert.NoError(t, err)
+	signingKey, _ := jwk.Import(privateKey)
+	publicKey, _ := signingKey.PublicKey()
+	payload, _ := json.Marshal(claims)
+	signed, err := jws.Sign(payload, jws.WithKey(jwa.ES256(), signingKey))
+	assert.NoError(t, err)
+	requestObjectClient = &verifier.RequestObjectClient{HttpClient: staticResponseClient{string(signed)}, KeyResolver: staticKeyResolver{publicKey}}
+	t.Cleanup(func() { requestObjectClient = nil })
+}
+
+// TestRequestObject_IgnoresPKCEOfTheQuery checks that a request passed by reference takes its PKCE
+// challenge from the request object only: a challenge added to the query is not the client's.
+func TestRequestObject_IgnoresPKCEOfTheQuery(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	injected := "&code_challenge=" + strings.Repeat("a", 43) + "&code_challenge_method=S256"
+	signedChallenge := strings.Repeat("b", 43)
+
+	type test struct {
+		name         string
+		claims       map[string]any
+		expectedPKCE verifier.PKCEChallenge
+	}
+	tests := []test{
+		{"no challenge in the request object", map[string]any{},
+			verifier.PKCEChallenge{}},
+		{"challenge in the request object", map[string]any{"code_challenge": signedChallenge, "code_challenge_method": "S256"},
+			verifier.PKCEChallenge{Value: signedChallenge, Method: "S256", ChallengeSet: true, MethodSet: true}},
+	}
+	for _, tc := range tests {
+		claims := map[string]any{"aud": []string{"https://verifier.org"}, "client_id": "client", "scope": "openid",
+			"redirect_uri": "https://rp.example/callback", "state": "state", "response_type": "code"}
+		for k, v := range tc.claims {
+			claims[k] = v
+		}
+
+		t.Run("authorization endpoint: "+tc.name, func(t *testing.T) {
+			useRequestObject(t, claims)
+			mock := &mockVerifier{mockHost: "https://verifier.org", mockAuthorizationType: DEEPLINK, mockAuthRequest: "openid4vp://?request_uri=x"}
+			apiVerifier, frontendVerifier = mock, mock
+			t.Cleanup(func() { apiVerifier, frontendVerifier = nil, nil })
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v2/authorization?client_id=client&request_uri=https://rp.example/ro"+injected, nil)
+			AuthorizationEndpoint(c)
+
+			assert.Equal(t, http.StatusFound, recorder.Code, recorder.Body.String())
+			assert.Equal(t, tc.expectedPKCE, mock.mockReceivedPKCE)
+		})
+
+		t.Run("login QR: "+tc.name, func(t *testing.T) {
+			useRequestObject(t, claims)
+			mock := &mockVerifier{mockHost: "https://verifier.org", mockError: errors.New("stop")}
+			frontendVerifier = mock
+			t.Cleanup(func() { frontendVerifier = nil })
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v2/loginQR?state=state&request_uri=https://rp.example/ro"+injected, nil)
+			VerifierLoginQr(c)
+
+			assert.Equal(t, tc.expectedPKCE, mock.mockReceivedPKCE)
+		})
+	}
+}
+
+// TestCodeGrantErrors checks that a code that cannot be exchanged is answered as RFC 6749 §5.2 and
+// RFC 7636 §4.6 require: "invalid_grant" with 400 for the client's mistakes, 500 for the verifier's.
+func TestCodeGrantErrors(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName       string
+		mockError      error
+		expectedStatus int
+		expectedError  string
+	}
+	tests := []test{
+		{"an unknown code", verifier.ErrorNoSuchCode, http.StatusBadRequest, "invalid_grant"},
+		{"another redirect_uri", verifier.ErrorRedirectUriMismatch, http.StatusBadRequest, "invalid_grant"},
+		{"a wrong code_verifier", verifier.ErrorInvalidPKCEVerifier, http.StatusBadRequest, "invalid_grant"},
+		{"a token that cannot be signed", errors.New("signing failed"), http.StatusInternalServerError, "server_error"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			apiVerifier = &mockVerifier{mockError: tc.mockError}
+			t.Cleanup(func() { apiVerifier = nil })
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/token", strings.NewReader("grant_type=authorization_code&code=the-code&redirect_uri=https://rp.example/cb&code_verifier="+strings.Repeat("a", 43)))
+			c.Request.Header.Set("Content-Type", gin.MIMEPOSTForm)
+			GetToken(c)
+
+			assert.Equal(t, tc.expectedStatus, recorder.Code)
+			var body TokenErrorResponse
+			assert.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+			assert.Equal(t, tc.expectedError, body.Error)
+			if tc.expectedStatus == http.StatusInternalServerError {
+				assert.Empty(t, body.ErrorDescription, "a server error must not reveal its cause")
+			} else {
+				assert.NotEmpty(t, body.ErrorDescription)
+			}
+		})
+	}
 }

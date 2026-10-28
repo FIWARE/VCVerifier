@@ -27,6 +27,9 @@ type ServiceRequest struct {
 	OidcScopes map[string]config.ScopeEntry `json:"oidcScopes"`
 	// AuthorizationType describes the authorization mode (e.g., "oidc").
 	AuthorizationType string `json:"authorizationType,omitempty"`
+	// AllowedRedirectUris lists where the service's authorization codes may be sent; empty
+	// accepts any URI (see config.ValidateAllowedRedirectUri).
+	AllowedRedirectUris []string `json:"allowedRedirectUris,omitempty"`
 }
 
 // ServiceResponse represents the JSON response body for a single service.
@@ -39,6 +42,8 @@ type ServiceResponse struct {
 	OidcScopes map[string]config.ScopeEntry `json:"oidcScopes"`
 	// AuthorizationType describes the authorization mode.
 	AuthorizationType string `json:"authorizationType,omitempty"`
+	// AllowedRedirectUris lists where the service's authorization codes may be sent.
+	AllowedRedirectUris []string `json:"allowedRedirectUris,omitempty"`
 }
 
 // ServicesListResponse represents the paginated JSON response for listing services.
@@ -72,10 +77,11 @@ type ProblemDetails struct {
 // config.ConfiguredService for persistence via the repository layer.
 func ServiceRequestToConfiguredService(req ServiceRequest, id string) config.ConfiguredService {
 	return config.ConfiguredService{
-		Id:                id,
-		DefaultOidcScope:  req.DefaultOidcScope,
-		ServiceScopes:     req.OidcScopes,
-		AuthorizationType: req.AuthorizationType,
+		Id:                  id,
+		DefaultOidcScope:    req.DefaultOidcScope,
+		ServiceScopes:       req.OidcScopes,
+		AuthorizationType:   req.AuthorizationType,
+		AllowedRedirectUris: req.AllowedRedirectUris,
 	}
 }
 
@@ -83,10 +89,11 @@ func ServiceRequestToConfiguredService(req ServiceRequest, id string) config.Con
 // ServiceResponse for the API response body.
 func ConfiguredServiceToResponse(svc config.ConfiguredService) ServiceResponse {
 	return ServiceResponse{
-		ID:                svc.Id,
-		DefaultOidcScope:  svc.DefaultOidcScope,
-		OidcScopes:        svc.ServiceScopes,
-		AuthorizationType: svc.AuthorizationType,
+		ID:                  svc.Id,
+		DefaultOidcScope:    svc.DefaultOidcScope,
+		OidcScopes:          svc.ServiceScopes,
+		AuthorizationType:   svc.AuthorizationType,
+		AllowedRedirectUris: svc.AllowedRedirectUris,
 	}
 }
 

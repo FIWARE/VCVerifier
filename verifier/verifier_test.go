@@ -250,6 +250,15 @@ type mockCredentialConfig struct {
 	// ServiceId->Scope->CredentialType-> TIR/TIL URLs
 	mockScopes map[string]map[string]configModel.ScopeEntry
 	mockError  error
+	// ServiceId -> allowed redirect URIs
+	mockAllowedRedirectUris map[string][]string
+}
+
+func (mcc mockCredentialConfig) GetAllowedRedirectUris(serviceIdentifier string) ([]string, error) {
+	if mcc.mockError != nil {
+		return nil, mcc.mockError
+	}
+	return mcc.mockAllowedRedirectUris[serviceIdentifier], nil
 }
 
 func createMockCredentials(serviceId, scope, credentialType, url, holderClaim string, holderVerfication bool) map[string]map[string]configModel.ScopeEntry {
@@ -530,9 +539,9 @@ func TestInitSiopFlow(t *testing.T) {
 			logging.Log().Info("TestInitSiopFlow +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}, errorToThrow: tc.sessionCacheError}
 			nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues(tc.testNonce, "my-super-random-id")}
-			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
+			credentialsConfig := mockCredentialConfig{mockScopes: tc.credentialScopes, mockError: tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, credentialsConfig: credentialsConfig, requestSigningKey: &testKey, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode)
+			authReq, err := verifier.initSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode, PKCEChallenge{})
 			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1, "my-super-random-id")
 		})
 	}
@@ -551,12 +560,87 @@ func TestStartSiopFlow(t *testing.T) {
 			logging.Log().Info("TestStartSiopFlow +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}, errorToThrow: tc.sessionCacheError}
 			nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues(tc.testNonce, "my-super-random-id")}
-			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
+			credentialsConfig := mockCredentialConfig{mockScopes: tc.credentialScopes, mockError: tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.StartSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode)
+			authReq, err := verifier.StartSiopFlow(tc.testHost, tc.testProtocol, tc.testAddress, tc.testState, tc.testClientId, tc.testNonce, tc.requestMode, PKCEChallenge{})
 			verifyInitTest(t, tc, authReq, err, sessionCache, CROSS_DEVICE_V1, "my-super-random-id")
 		})
 	}
+}
+
+// TestStartSameDeviceFlowStoresChallengeInSession checks that the same-device flow binds the
+// normalized challenge to its login session.
+func TestStartSameDeviceFlowStoresChallengeInSession(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	testKey := getECDSAKey()
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	verifier := CredentialVerifier{
+		host:                 "verifier.org",
+		did:                  "did:key:verifier",
+		sessionCache:         &sessionCache,
+		nonceGenerator:       &mockNonceGenerator{staticValues: []string{"session-id"}},
+		tokenSigner:          mockTokenSigner{},
+		clock:                mockClock{},
+		credentialsConfig:    mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
+		requestSigningKey:    &testKey,
+		clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"},
+		verifierConfig:       configModel.Verifier{AllowedCodeChallengeMethods: []string{PKCES256}},
+	}
+	pkce := PKCEChallenge{Value: strings.Repeat("a", 43), Method: "s256", ChallengeSet: true, MethodSet: true}
+
+	_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", "/redirect", "", "", REQUEST_MODE_BY_VALUE, "", REDIRECT_PROTOCOL, pkce)
+	assert.NoError(t, err)
+
+	assert.Len(t, sessionCache.sessions, 1)
+	for _, session := range sessionCache.sessions {
+		assert.Equal(t, PKCEChallenge{Value: pkce.Value, Method: PKCES256, ChallengeSet: true, MethodSet: true}, session.pkce)
+	}
+}
+
+func TestStartSiopFlowStoresChallengeInV1Session(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	testKey := getECDSAKey()
+	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+	nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues("", "my-super-random-id")}
+	verifier := CredentialVerifier{
+		host:              "verifier.org",
+		did:               "did:key:verifier",
+		sessionCache:      &sessionCache,
+		nonceGenerator:    &nonceGenerator,
+		tokenSigner:       mockTokenSigner{},
+		clock:             mockClock{},
+		credentialsConfig: mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
+		requestSigningKey: &testKey,
+		clientIdentification: configModel.ClientIdentification{
+			Id:           "did:key:verifier",
+			KeyPath:      "/my-signing-key.pem",
+			KeyAlgorithm: "ES256",
+		},
+		verifierConfig: configModel.Verifier{AllowedCodeChallengeMethods: []string{PKCES256}},
+	}
+	pkce := PKCEChallenge{
+		Value:        strings.Repeat("a", 43),
+		Method:       "s256",
+		ChallengeSet: true,
+		MethodSet:    true,
+	}
+
+	_, err := verifier.StartSiopFlow(
+		"verifier.org", "https", "https://client.org/callback", "external-state", "",
+		"", REQUEST_MODE_BY_VALUE, pkce,
+	)
+	assert.NoError(t, err)
+
+	session, exists := sessionCache.sessions["my-super-random-id"]
+	assert.True(t, exists)
+	assert.Equal(t, PKCEChallenge{
+		Value:        pkce.Value,
+		Method:       PKCES256,
+		ChallengeSet: true,
+		MethodSet:    true,
+	}, session.pkce)
 }
 
 // sessionIdStaticValues builds the mockNonceGenerator static values so that, regardless of
@@ -659,9 +743,9 @@ func TestStartSameDeviceFlow(t *testing.T) {
 			logging.Log().Info("TestSameDeviceFlow +++++++++++++++++ Running test: ", tc.testName)
 			sessionCache := mockSessionCache{sessions: map[string]loginSession{}, errorToThrow: tc.sessionCacheError}
 			nonceGenerator := mockNonceGenerator{staticValues: sessionIdStaticValues("", "my-random-session-id")}
-			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
+			credentialsConfig := mockCredentialConfig{mockScopes: tc.credentialScopes, mockError: tc.mockConfigError}
 			verifier := CredentialVerifier{host: tc.testHost, did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
-			authReq, err := verifier.StartSameDeviceFlow(tc.testHost, tc.testProtocol, tc.testState, tc.testAddress, tc.testClientId, "", tc.requestMode, tc.testScope, tc.testRequestProtocol)
+			authReq, err := verifier.StartSameDeviceFlow(tc.testHost, tc.testProtocol, tc.testState, tc.testAddress, tc.testClientId, "", tc.requestMode, tc.testScope, tc.testRequestProtocol, PKCEChallenge{})
 			verifyInitTest(t, tc, authReq, err, sessionCache, SAME_DEVICE, "my-random-session-id")
 		})
 	}
@@ -692,7 +776,7 @@ func TestStartSameDeviceFlowRejectsUnknownClient(t *testing.T) {
 		"",
 		REQUEST_MODE_URL_ENCODED,
 		"scope",
-		"",
+		"", PKCEChallenge{},
 	)
 
 	assert.Error(t, err)
@@ -740,7 +824,7 @@ func TestReturnLoginQRV2_ScalesWithContent(t *testing.T) {
 	}
 
 	small := newVerifier(createMockCredentials("", "", "", "", "", false))
-	smallQr, err := small.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "small-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	smallQr, err := small.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "small-state", "", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -760,7 +844,7 @@ func TestReturnLoginQRV2_ScalesWithContent(t *testing.T) {
 		}
 	}
 	large := newVerifier(map[string]map[string]configModel.ScopeEntry{"": {"": {DCQL: largeDcql}}})
-	largeQr, err := large.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "large-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	largeQr, err := large.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "large-state", "", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -792,7 +876,7 @@ func TestReturnLoginQRV2_UsesGeneratedSessionId(t *testing.T) {
 		clientIdentification:  configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
 	}
 
-	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "generated-session-id", qrInfo.SessionId, "the QR info must carry the generated session id, not the external state")
 	assert.False(t, qrInfo.ExpireAt.IsZero(), "the expiry must be read from the generated session, otherwise the QR shows as expired immediately")
@@ -823,7 +907,7 @@ func TestCheckLoginPageSecret(t *testing.T) {
 		supportedRequestModes: []string{REQUEST_MODE_URL_ENCODED},
 		clientIdentification:  configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
 	}
-	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED)
+	qrInfo, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://wallet.example/callback", "external-state", "", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "the-page-secret", qrInfo.PageSecret)
 	assert.NotContains(t, qrInfo.QR+qrInfo.AuthenticationRequest, "the-page-secret", "the secret must never reach the QR")
@@ -852,12 +936,137 @@ func TestCheckLoginPageSecret(t *testing.T) {
 	}
 }
 
+// TestCheckRedirectUri covers where a login may send its authorization code: to any absolute
+// http(s) URI for a client without allowedRedirectUris, only to a listed URI for one with them.
+func TestCheckRedirectUri(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+	configError := errors.New("config unavailable")
+
+	type test struct {
+		testName      string
+		clientId      string
+		redirectUri   string
+		configError   error
+		expectedError error
+	}
+	tests := []test{
+		{"a client without a list accepts any uri", "open-client", "https://anywhere.example/cb", nil, nil},
+		{"an unconfigured client accepts any uri", "unknown-client", "https://anywhere.example/cb", nil, nil},
+		{"a listed uri is accepted", "listed-client", "https://rp.example/callback", nil, nil},
+		{"a uri below a listed wildcard is accepted", "listed-client", "https://rp.example/tenants/a", nil, nil},
+		{"an unlisted uri is refused", "listed-client", "https://evil.example/callback", nil, ErrorRedirectUriNotAllowed},
+		{"a missing uri is refused for a client with a list", "listed-client", "", nil, ErrorInvalidRedirectUri},
+		{"a missing uri is refused for a client without a list", "open-client", "", nil, ErrorInvalidRedirectUri},
+		{"a plain http uri is accepted for a client without a list", "open-client", "http://anywhere.example/cb", nil, nil},
+		{"a javascript uri is refused for a client without a list", "open-client", "javascript:alert(1)//", nil, ErrorInvalidRedirectUri},
+		{"a data uri is refused for a client without a list", "unknown-client", "data:text/html,<script>alert(1)</script>", nil, ErrorInvalidRedirectUri},
+		{"a relative uri is refused for a client without a list", "open-client", "/cb", nil, ErrorInvalidRedirectUri},
+		{"a scheme-relative uri is refused for a client without a list", "open-client", "//anywhere.example/cb", nil, ErrorInvalidRedirectUri},
+		{"a uri with user info is refused for a client without a list", "open-client", "https://user@anywhere.example/cb", nil, ErrorInvalidRedirectUri},
+		{"a uri with a fragment is refused for a client without a list", "open-client", "https://anywhere.example/cb#x", nil, ErrorInvalidRedirectUri},
+		{"a malformed uri is refused before the configuration is read", "listed-client", "javascript:alert(1)", configError, ErrorInvalidRedirectUri},
+		{"a configuration that cannot be read refuses the login", "listed-client", "https://rp.example/callback", configError, configError},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			verifier := CredentialVerifier{credentialsConfig: mockCredentialConfig{mockError: tc.configError, mockAllowedRedirectUris: map[string][]string{
+				"open-client":   {},
+				"listed-client": {"https://rp.example/callback", "https://rp.example/tenants/*"},
+			}}}
+			assert.Equal(t, tc.expectedError, verifier.CheckRedirectUri(tc.clientId, tc.redirectUri))
+		})
+	}
+}
+
+// TestLoginFlowsRefuseRedirectUri checks that the cross-device flows refuse a redirect_uri or
+// client_callback the client does not allow before any login session exists, so no QR code or
+// connection string is ever handed out for it.
+func TestLoginFlowsRefuseRedirectUri(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName string
+		start    func(verifier *CredentialVerifier) error
+	}
+	tests := []test{
+		{"cross-device v2 refuses the redirect_uri", func(verifier *CredentialVerifier) error {
+			_, err := verifier.ReturnLoginQRV2("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
+			return err
+		}},
+		{"cross-device v1 refuses the client_callback", func(verifier *CredentialVerifier) error {
+			_, err := verifier.StartSiopFlow("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
+			return err
+		}},
+		{"the cross-device v1 qr refuses the client_callback", func(verifier *CredentialVerifier) error {
+			_, err := verifier.ReturnLoginQR("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", REQUEST_MODE_URL_ENCODED, PKCEChallenge{})
+			return err
+		}},
+		{"same-device refuses a callback on the verifier's host that is not listed", func(verifier *CredentialVerifier) error {
+			_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", "/redirect", "listed-client", "", REQUEST_MODE_URL_ENCODED, "", "", PKCEChallenge{})
+			return err
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			sessionCache := cache.New(time.Minute, time.Minute)
+			verifier := &CredentialVerifier{
+				host:                  "verifier.org",
+				did:                   "did:key:verifier",
+				sessionCache:          sessionCache,
+				sessionDuration:       time.Minute,
+				nonceGenerator:        &mockNonceGenerator{staticValues: []string{"session-id", "the-page-secret"}},
+				tokenSigner:           mockTokenSigner{},
+				clock:                 mockClock{},
+				supportedRequestModes: []string{REQUEST_MODE_URL_ENCODED},
+				clientIdentification:  configModel.ClientIdentification{Id: "redirect_uri:https://verifier.org/api/v1/authentication_response"},
+				credentialsConfig: mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false), mockAllowedRedirectUris: map[string][]string{
+					"listed-client": {"https://rp.example/callback"},
+				}},
+			}
+			assert.ErrorIs(t, tc.start(verifier), ErrorRedirectUriNotAllowed)
+			assert.Equal(t, 0, sessionCache.ItemCount(), "no login session may be created")
+		})
+	}
+}
+
+// TestStartSameDeviceFlowRejectsRedirectPathLeavingHost covers a redirect_path that, appended to
+// the verifier's host, names another host - the code would be sent there.
+func TestStartSameDeviceFlowRejectsRedirectPathLeavingHost(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName     string
+		redirectPath string
+	}
+	tests := []test{
+		{"user info", "@evil.example/cb"},
+		{"a subdomain of another host", ".evil.example/cb"},
+		{"a port", ":8443/cb"},
+		{"a protocol-relative path", "//evil.example/cb"},
+		{"a backslash", "/\\evil.example/cb"},
+		{"no leading slash", "evil.example/cb"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+			verifier := CredentialVerifier{
+				sessionCache:      &sessionCache,
+				nonceGenerator:    &mockNonceGenerator{staticValues: []string{"session-id"}},
+				credentialsConfig: mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
+			}
+			_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", tc.redirectPath, "", "", REQUEST_MODE_URL_ENCODED, "", REDIRECT_PROTOCOL, PKCEChallenge{})
+			assert.ErrorIs(t, err, ErrorInvalidRedirectPath)
+			assert.Empty(t, sessionCache.sessions, "no login session may be created")
+		})
+	}
+}
+
 func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
 	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
 	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce", "my-session-id"}}
-	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{
 		host:                 "verifier.org",
 		did:                  "did:key:verifier",
@@ -871,7 +1080,7 @@ func TestStartSameDeviceFlow_UrlEncoded(t *testing.T) {
 
 	// "my-random-session-id" plays the external client's state here - it must be echoed
 	// back to that client, but must never appear as the wallet-facing state/session id.
-	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-random-session-id", "/redirect", "", "", REQUEST_MODE_URL_ENCODED, "", "")
+	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-random-session-id", "/redirect", "", "", REQUEST_MODE_URL_ENCODED, "", "", PKCEChallenge{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -952,7 +1161,7 @@ func TestCreateAuthenticationRequestUrlEncoded_IncludesPresentationDefinitionAnd
 func TestCreateAuthenticationRequestUrlEncoded_DefaultsClientIdWhenIdNotConfigured(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
-	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{credentialsConfig: credentialsConfig}
 
 	authReq, err := verifier.createAuthenticationRequestUrlEncoded("openid4vp://", "https://verifier.org/api/v1/authentication_response", "state", "client", "scope", "nonce")
@@ -971,7 +1180,7 @@ func TestCreateAuthenticationRequestUrlEncoded_DefaultsClientIdWhenIdNotConfigur
 func TestCreateAuthenticationRequestUrlEncoded_RejectsClientIdHostMismatch(t *testing.T) {
 	logging.Configure(LOGGING_CONFIG)
 
-	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{
 		credentialsConfig:    credentialsConfig,
 		clientIdentification: configModel.ClientIdentification{Id: "redirect_uri:https://old-verifier.org/api/v1/authentication_response"},
@@ -1024,10 +1233,10 @@ func TestStartSameDeviceFlow_ResponseUriIncludesPathPrefix(t *testing.T) {
 	testKey := getECDSAKey()
 	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
 	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
-	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-state", "/redirect", "", "", REQUEST_MODE_BY_VALUE, "", "")
+	authReq, err := verifier.StartSameDeviceFlow("verifier.org", "https", "my-state", "/redirect", "", "", REQUEST_MODE_BY_VALUE, "", "", PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }
@@ -1037,10 +1246,10 @@ func TestStartSiopFlow_ResponseUriIncludesPathPrefix(t *testing.T) {
 	testKey := getECDSAKey()
 	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
 	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
-	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	authReq, err := verifier.StartSiopFlow("verifier.org", "https", "/redirect", "my-state", "", "", REQUEST_MODE_BY_VALUE)
+	authReq, err := verifier.StartSiopFlow("verifier.org", "https", "https://client.org/redirect", "my-state", "", "", REQUEST_MODE_BY_VALUE, PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }
@@ -1050,10 +1259,10 @@ func TestInitOid4VPCrossDevice_ResponseUriIncludesPathPrefix(t *testing.T) {
 	testKey := getECDSAKey()
 	sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
 	nonceGenerator := mockNonceGenerator{staticValues: []string{"randomNonce"}}
-	credentialsConfig := mockCredentialConfig{createMockCredentials("", "", "", "", "", false), nil}
+	credentialsConfig := mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)}
 	verifier := CredentialVerifier{host: "verifier.org", pathPrefix: "/myservice", did: "did:key:verifier", sessionCache: &sessionCache, nonceGenerator: &nonceGenerator, tokenSigner: mockTokenSigner{}, clock: mockClock{}, requestSigningKey: &testKey, credentialsConfig: credentialsConfig, clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"}}
 
-	_, _, authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE)
+	_, _, authReq, err := verifier.initOid4VPCrossDevice("verifier.org", "https", "https://wallet.example/callback", "my-state", "", "", "", REQUEST_MODE_BY_VALUE, PKCEChallenge{})
 	assert.NoError(t, err)
 	assert.Equal(t, "https://verifier.org/myservice/api/v1/authentication_response", extractResponseUri(t, authReq))
 }
@@ -1973,6 +2182,64 @@ func TestAuthenticationResponse_FailedResponseKeepsSession(t *testing.T) {
 	}
 }
 
+// TestAuthenticationResponse_RechecksRedirectUri checks that no code is issued for a login whose
+// redirect URI the client's allowedRedirectUris do not cover when it completes - the client may have
+// been unknown when the login started, or its list may have changed since - and that a failure to
+// read them is reported as a configuration failure.
+func TestAuthenticationResponse_RechecksRedirectUri(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName      string
+		allowed       []string
+		configError   error
+		expectedError error
+	}
+	tests := []test{
+		{"A callback that is no longer listed gets no code.", []string{"https://rp.example/callback"}, nil, ErrorRedirectUriNotAllowed},
+		{"A failure to read the list gets no code.", nil, errors.New("db_down"), ErrorVerficationContextSetup},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{
+				"session-id": {version: SAME_DEVICE, callback: "https://evil.example/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"},
+			}}
+			tokenCache := &mockTokenCache{tokens: map[string]tokenStore{}}
+			verifier := &CredentialVerifier{
+				did:                  "did:key:verifier",
+				sessionCache:         &sessionCache,
+				tokenCache:           tokenCache,
+				nonceGenerator:       &mockNonceGenerator{staticValues: []string{"authCode"}},
+				validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true, true}, nil}},
+				clock:                mockClock{},
+				credentialsConfig:    redirectUriErrorConfig{mockCredentialConfig: mockCredentialConfig{mockScopes: createMockCredentials("clientId", "", "VerifiableCredential", "", "", false), mockAllowedRedirectUris: map[string][]string{"clientId": tc.allowed}}, err: tc.configError},
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			vp := getVP([]string{"vc"})
+			_, err := verifier.AuthenticationResponse("session-id", &vp)
+			assert.ErrorIs(t, err, tc.expectedError)
+			assert.Empty(t, tokenCache.tokens, "no code may be issued")
+			_, found := sessionCache.sessions["session-id"]
+			assert.True(t, found, "the session is not consumed")
+		})
+	}
+}
+
+// redirectUriErrorConfig fails reading the allowed redirect URIs only, so a login gets as far as
+// issuing its code.
+type redirectUriErrorConfig struct {
+	mockCredentialConfig
+	err error
+}
+
+func (c redirectUriErrorConfig) GetAllowedRedirectUris(serviceIdentifier string) ([]string, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.mockCredentialConfig.GetAllowedRedirectUris(serviceIdentifier)
+}
+
 // TestAuthenticationResponse_FailedCallbackRestoresSession checks that, in the cross-device v1
 // flow, a code that could not be delivered to the requestor does not consume the session: the
 // code is discarded, the session keeps its remaining lifetime and a retry completes the login.
@@ -2103,7 +2370,7 @@ func TestAuthenticationResponse_CallbackRedeemedDespiteErrorStatus(t *testing.T)
 			// the requestor exchanges the code at the token endpoint, then answers 403
 			var exchangeErr error
 			httpClient = mockHttpClient{callbackStatus: http.StatusForbidden, onCallback: func(req *http.Request) {
-				_, _, _, exchangeErr = verifier.GetToken(req.URL.Query().Get("code"), tc.exchangeWith, false)
+				_, _, _, exchangeErr = verifier.GetToken(req.URL.Query().Get("code"), tc.exchangeWith, false, "")
 			}}
 			t.Cleanup(func() { httpClient = mockHttpClient{} })
 
@@ -2180,7 +2447,7 @@ func TestAuthenticationResponse_CallbackFailsWhileCodeIsExchanged(t *testing.T) 
 	exchanged := make(chan error, 1)
 	httpClient = mockHttpClient{callbackStatus: http.StatusGatewayTimeout, onCallback: func(req *http.Request) {
 		go func() {
-			_, _, _, err := verifier.GetToken(req.URL.Query().Get("code"), "https://myhost.org/callback", false)
+			_, _, _, err := verifier.GetToken(req.URL.Query().Get("code"), "https://myhost.org/callback", false, "")
 			exchanged <- err
 		}()
 		// answer only once the exchange is under way, but not finished
@@ -2227,7 +2494,7 @@ func TestReleaseCode_BeforeExchange(t *testing.T) {
 	_, found := sessionCache.Get("session-id")
 	assert.True(t, found)
 
-	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false, "")
 	assert.Equal(t, ErrorNoSuchCode, err, "a released code must not be exchangeable")
 }
 
@@ -2240,7 +2507,7 @@ func TestReleaseCode_SigningFailureCountsAsRedeemed(t *testing.T) {
 	sessionCache.Delete("session-id")
 	tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback"})
 
-	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+	_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false, "")
 	assert.Error(t, err)
 
 	assert.Equal(t, codeRedeemed, verifier.releaseCode("session-id", session.(loginSession), expiresAt, "the-code"))
@@ -2282,7 +2549,7 @@ func TestGetToken_ConcurrentExchangesOfOneCode(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			if _, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false); err == nil {
+			if _, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false, ""); err == nil {
 				successes.Add(1)
 			}
 		}()
@@ -2318,7 +2585,7 @@ func TestReleaseUndeliveredCode(t *testing.T) {
 			tokenCache.SetDefault("the-code", tokenStore{token: getToken(), redirect_uri: "https://myhost.org/callback",
 				sessionId: "session-id", session: session.(loginSession), sessionExpiresAt: expiresAt})
 			if tc.claimFirst {
-				_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false)
+				_, _, _, err := verifier.GetToken("the-code", "https://myhost.org/callback", false, "")
 				assert.NoError(t, err)
 			}
 
@@ -2351,7 +2618,7 @@ func TestPendingLogin(t *testing.T) {
 	tests := []test{
 		{"it is kept until its code is used", func(verifier *CredentialVerifier, code string) {}, true, false},
 		{"it goes once its code was exchanged", func(verifier *CredentialVerifier, code string) {
-			_, _, _, err := verifier.GetToken(code, "https://myhost.org/callback", false)
+			_, _, _, err := verifier.GetToken(code, "https://myhost.org/callback", false, "")
 			assert.NoError(t, err)
 		}, false, false},
 		{"it goes when its code is released and the session restored", func(verifier *CredentialVerifier, code string) {
@@ -2654,7 +2921,7 @@ func TestGetToken(t *testing.T) {
 
 			tokenCache := mockTokenCache{tokens: tc.tokenSession}
 			verifier := CredentialVerifier{tokenCache: &tokenCache, signingKey: testKey, clock: mockClock{}, tokenSigner: mockTokenSigner{tc.signingError}, signingAlgorithm: "ES256"}
-			jwtString, expiration, _, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false)
+			jwtString, expiration, _, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false, "")
 
 			if err != tc.expectedError {
 				t.Errorf("%s - Expected error %v but was %v.", tc.testName, tc.expectedError, err)
@@ -2681,6 +2948,69 @@ func TestGetToken(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetTokenRetainsCodeAfterFailedProof(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	codeVerifier := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
+	digest := sha256.Sum256([]byte(codeVerifier))
+	codeChallenge := base64.RawURLEncoding.EncodeToString(digest[:])
+	tokenCache := mockTokenCache{tokens: map[string]tokenStore{
+		"pkce-code": {
+			token:        getToken(),
+			redirect_uri: "https://myhost.org/redirect",
+			pkce:         PKCEChallenge{Value: codeChallenge, Method: PKCES256},
+		},
+	}}
+	testKey := getECDSAKey()
+	v := CredentialVerifier{
+		tokenCache:       &tokenCache,
+		signingKey:       testKey,
+		clock:            mockClock{},
+		tokenSigner:      mockTokenSigner{},
+		signingAlgorithm: "ES256",
+	}
+
+	_, _, _, err := v.GetToken("pkce-code", "https://myhost.org/redirect", false, codeVerifier+"x")
+	if !errors.Is(err, ErrorInvalidPKCEVerifier) {
+		t.Fatalf("expected invalid verifier error, got %v", err)
+	}
+
+	jwtString, _, _, err := v.GetToken("pkce-code", "https://myhost.org/redirect", false, codeVerifier)
+	if err != nil {
+		t.Fatalf("expected the valid verifier to exchange the code after a failed attempt, got %v", err)
+	}
+	if jwtString == "" {
+		t.Fatal("expected a signed token")
+	}
+}
+
+// TestGetTokenRejectsDowngrade checks that a code issued without a challenge is not
+// exchanged for a token request that sends a code_verifier (RFC 9700 §2.1.1), and that the code
+// stays available for the legitimate client.
+func TestGetTokenRejectsDowngrade(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	codeVerifier := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
+	tokenCache := mockTokenCache{tokens: map[string]tokenStore{
+		"plain-code": {token: getToken(), redirect_uri: "https://myhost.org/redirect"},
+	}}
+	testKey := getECDSAKey()
+	v := CredentialVerifier{
+		tokenCache:       &tokenCache,
+		signingKey:       testKey,
+		clock:            mockClock{},
+		tokenSigner:      mockTokenSigner{},
+		signingAlgorithm: "ES256",
+	}
+
+	_, _, _, err := v.GetToken("plain-code", "https://myhost.org/redirect", false, codeVerifier)
+	assert.ErrorIs(t, err, ErrorInvalidPKCEVerifier)
+
+	jwtString, _, _, err := v.GetToken("plain-code", "https://myhost.org/redirect", false, "")
+	assert.NoError(t, err, "the code must still be exchangeable without a verifier")
+	assert.NotEmpty(t, jwtString)
 }
 
 // TestGetTokenWithRefreshToken tests the GetToken method when the refresh
@@ -2757,7 +3087,7 @@ func TestGetTokenWithRefreshToken(t *testing.T) {
 				refreshTokenExpiration: refreshTokenExpirationMinutes * time.Minute,
 				refreshTokenRepo:       tc.refreshTokenRepo,
 			}
-			jwtString, expiration, refreshToken, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false)
+			jwtString, expiration, refreshToken, err := verifier.GetToken(tc.testCode, tc.testRedirectUri, false, "")
 
 			if tc.expectedError != nil {
 				assert.ErrorIs(t, err, tc.expectedError)
@@ -2846,7 +3176,7 @@ func TestGetOpenIDConfiguration(t *testing.T) {
 	for _, tc := range tests {
 		common.ResetGlobalCache()
 		t.Run(tc.testName, func(t *testing.T) {
-			credentialsConfig := mockCredentialConfig{tc.credentialScopes, tc.mockConfigError}
+			credentialsConfig := mockCredentialConfig{mockScopes: tc.credentialScopes, mockError: tc.mockConfigError}
 			verifier := CredentialVerifier{credentialsConfig: credentialsConfig, host: tc.host, signingAlgorithm: tc.signingAlgorithm}
 			actualOpenID, _ := verifier.GetOpenIDConfiguration(tc.serviceIdentifier)
 
@@ -5093,4 +5423,67 @@ func TestAuthenticationResponse_VCDataModelVersionFiltering(t *testing.T) {
 			assert.True(t, found, "token should be cached")
 		})
 	}
+}
+
+// TestStartSameDeviceFlowForRedirectUri checks that the same-device flow of the authorization
+// endpoint sends its code to the client's redirect_uri, checked against its allowedRedirectUris.
+func TestStartSameDeviceFlowForRedirectUri(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName         string
+		redirectUri      string
+		expectedCallback string
+		expectedError    error
+	}
+	tests := []test{
+		{"The code goes to the listed redirect_uri.", "https://rp.example/callback", "https://rp.example/callback", nil},
+		{"An unlisted redirect_uri is refused.", "https://evil.example/callback", "", ErrorRedirectUriNotAllowed},
+		{"Without a redirect_uri the code goes to the verifier's host, which has to be listed too.", "", "", ErrorRedirectUriNotAllowed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			testKey := getECDSAKey()
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+			verifier := CredentialVerifier{
+				host:                 "verifier.org",
+				did:                  "did:key:verifier",
+				sessionCache:         &sessionCache,
+				nonceGenerator:       &mockNonceGenerator{staticValues: []string{"session-id"}},
+				tokenSigner:          mockTokenSigner{},
+				clock:                mockClock{},
+				requestSigningKey:    &testKey,
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"},
+				credentialsConfig: mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false), mockAllowedRedirectUris: map[string][]string{
+					"": {"https://rp.example/callback"},
+				}},
+			}
+			_, err := verifier.StartSameDeviceFlowForRedirectUri("verifier.org", "https", "external-state", tc.redirectUri, "", "", REQUEST_MODE_BY_VALUE, "", PKCEChallenge{})
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError)
+				assert.Empty(t, sessionCache.sessions, "no login session may be created")
+				return
+			}
+			assert.NoError(t, err)
+			assert.Len(t, sessionCache.sessions, 1)
+			for _, session := range sessionCache.sessions {
+				assert.Equal(t, tc.expectedCallback, session.callback)
+				assert.Equal(t, SAME_DEVICE, session.version)
+			}
+		})
+	}
+}
+
+// TestGetOpenIDConfiguration_AdvertisesPKCEMethods checks that the discovery document tells clients
+// which PKCE methods the verifier accepts (RFC 8414 §2).
+func TestGetOpenIDConfiguration_AdvertisesPKCEMethods(t *testing.T) {
+	common.ResetGlobalCache()
+	credentialsConfig := mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {}}}
+	verifier := CredentialVerifier{credentialsConfig: credentialsConfig, host: "https://verifier.org",
+		verifierConfig: configModel.Verifier{AllowedCodeChallengeMethods: []string{PKCES256, PKCEPlain}}}
+
+	metadata, err := verifier.GetOpenIDConfiguration("serviceId")
+	assert.NoError(t, err)
+	encoded, _ := json.Marshal(metadata)
+	assert.Contains(t, string(encoded), `"code_challenge_methods_supported":["S256","plain"]`)
 }

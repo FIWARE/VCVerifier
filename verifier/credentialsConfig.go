@@ -46,6 +46,9 @@ type CredentialsConfig interface {
 	GetAuthorizationType(serviceIdentifier string) (path string, err error)
 	// GetAuthorizationPath returns the authorization path to be provided in the redirect.
 	GetAuthorizationPath(serviceIdentifier string) (path string)
+	// GetAllowedRedirectUris returns where the authorization code of the service may be sent; empty
+	// when the service restricts nothing or is not configured.
+	GetAllowedRedirectUris(serviceIdentifier string) (allowedRedirectUris []string, err error)
 	// GetPresentationDefinition returns the presentationDefinition be requested via the scope parameter.
 	GetPresentationDefinition(serviceIdentifier string, scope string) (presentationDefinition *config.PresentationDefinition, err error)
 	// GetDcqlQuery returns the DCQL query to be requested via the scope parameter.
@@ -248,6 +251,16 @@ func (cc cacheBasedCredentialsConfig) GetAuthorizationType(serviceIdentifier str
 	}
 	logging.Log().Debugf("No authorization-type entry for %s", serviceIdentifier)
 	return "", nil
+}
+
+// GetAllowedRedirectUris returns the allowed redirect URIs of the given service.
+func (cc cacheBasedCredentialsConfig) GetAllowedRedirectUris(serviceIdentifier string) (allowedRedirectUris []string, err error) {
+	cacheEntry, hit := common.GlobalCache.ServiceCache.Get(serviceIdentifier)
+	if !hit {
+		logging.Log().Debugf("No allowed redirect URIs for %s: the service is not configured.", serviceIdentifier)
+		return nil, nil
+	}
+	return cacheEntry.(config.ConfiguredService).AllowedRedirectUris, nil
 }
 
 // GetAuthorizationPath returns the authorization endpoint path for the given service.

@@ -31,6 +31,9 @@ type ServiceRow struct {
 	DefaultOidcScope *string
 	// AuthorizationType describes the authorization mode; may be nil.
 	AuthorizationType *string
+	// AllowedRedirectUris is the JSON array of the service's allowed redirect URIs; nil when the
+	// service restricts nothing.
+	AllowedRedirectUris *string
 }
 
 // ScopeEntryRow represents a row in the scope_entry table.
@@ -86,6 +89,12 @@ func ServiceToRow(service config.ConfiguredService) ServiceRow {
 	}
 	if service.AuthorizationType != "" {
 		row.AuthorizationType = &service.AuthorizationType
+	}
+	if service.AllowedRedirectUris != nil {
+		// a list of strings always marshals
+		allowedRedirectUris, _ := json.Marshal(service.AllowedRedirectUris)
+		serialized := string(allowedRedirectUris)
+		row.AllowedRedirectUris = &serialized
 	}
 	return row
 }
@@ -155,6 +164,11 @@ func RowToService(row ServiceRow, scopeRows []ScopeEntryRow) (config.ConfiguredS
 	}
 	if row.AuthorizationType != nil {
 		svc.AuthorizationType = *row.AuthorizationType
+	}
+	if row.AllowedRedirectUris != nil && *row.AllowedRedirectUris != "" {
+		if err := json.Unmarshal([]byte(*row.AllowedRedirectUris), &svc.AllowedRedirectUris); err != nil {
+			return svc, fmt.Errorf("service %q allowed_redirect_uris: %w", row.ID, err)
+		}
 	}
 
 	for _, sr := range scopeRows {

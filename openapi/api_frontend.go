@@ -39,6 +39,30 @@ func getRequestObjectClient() *verifier.RequestObjectClient {
 	return requestObjectClient
 }
 
+func readPKCEChallenge(c *gin.Context) verifier.PKCEChallenge {
+	value, challengeSet := c.GetQuery("code_challenge")
+	method, methodSet := c.GetQuery("code_challenge_method")
+	return verifier.PKCEChallenge{
+		Value:        value,
+		Method:       method,
+		ChallengeSet: challengeSet,
+		MethodSet:    methodSet,
+	}
+}
+
+// requestObjectPKCE reads the PKCE challenge of a request passed by reference. Only the request
+// object counts (RFC 9101 §6.3): a challenge in the query of the URL is not covered by the client's
+// request object, so whoever handles that URL could bind the code to a verifier of their own.
+func requestObjectPKCE(cro *verifier.ClientRequestObject) (value string, method string, challengeSet bool, methodSet bool) {
+	if cro.CodeChallenge != nil {
+		value, challengeSet = *cro.CodeChallenge, true
+	}
+	if cro.CodeChallengeMethod != nil {
+		method, methodSet = *cro.CodeChallengeMethod, true
+	}
+	return value, method, challengeSet, methodSet
+}
+
 // VerifierPageDisplayQRSIOP - Presents a qr as starting point for the auth process
 func VerifierPageDisplayQRSIOP(c *gin.Context) {
 
@@ -73,9 +97,9 @@ func VerifierPageDisplayQRSIOP(c *gin.Context) {
 		requestMode = fallbackRequestMode
 	}
 
-	qr, err := getFrontendVerifier().ReturnLoginQR(c.Request.Host, "https", callback, state, clientId, nonce, requestMode)
+	qr, err := getFrontendVerifier().ReturnLoginQR(c.Request.Host, "https", callback, state, clientId, nonce, requestMode, readPKCEChallenge(c))
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{"qr_generation_error", err.Error()})
+		abortLoginStart(c, err, ErrorMessage{"qr_generation_error", err.Error()})
 		return
 	}
 
@@ -94,6 +118,8 @@ func VerifierLoginQr(c *gin.Context) {
 
 	redirectUri, redirectUriExists := c.GetQuery("redirect_uri")
 	requestUri, requestUriExists := c.GetQuery("request_uri")
+	codeChallenge, codeChallengeSet := c.GetQuery("code_challenge")
+	codeChallengeMethod, codeChallengeMethodSet := c.GetQuery("code_challenge_method")
 
 	if !redirectUriExists && !requestUriExists {
 		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageNoRedircetUri)
@@ -128,6 +154,7 @@ func VerifierLoginQr(c *gin.Context) {
 		clientId = cro.ClientId
 		scope = cro.Scope
 		redirectUri = cro.RedirectUri
+		codeChallenge, codeChallengeMethod, codeChallengeSet, codeChallengeMethodSet = requestObjectPKCE(cro)
 	}
 
 	nonce, nonceExists := c.GetQuery("nonce")
@@ -142,9 +169,10 @@ func VerifierLoginQr(c *gin.Context) {
 		requestMode = fallbackRequestMode
 	}
 
-	qrInfo, err := getFrontendVerifier().ReturnLoginQRV2(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode)
+	pkce := verifier.PKCEChallenge{Value: codeChallenge, Method: codeChallengeMethod, ChallengeSet: codeChallengeSet, MethodSet: codeChallengeMethodSet}
+	qrInfo, err := getFrontendVerifier().ReturnLoginQRV2(c.Request.Host, "https", redirectUri, state, clientId, scope, nonce, requestMode, pkce)
 	if err != nil {
-		c.AbortWithStatusJSON(500, ErrorMessage{"qr_generation_error", err.Error()})
+		abortLoginStart(c, err, ErrorMessage{"qr_generation_error", err.Error()})
 		return
 	}
 

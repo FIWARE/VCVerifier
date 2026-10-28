@@ -84,6 +84,9 @@ var ErrorInvalidVC = errors.New("invalid_vc")
 var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorLoginPageSecretMismatch = errors.New("login_page_secret_mismatch")
+var ErrorRedirectUriNotAllowed = errors.New("redirect_uri_not_allowed")
+var ErrorInvalidRedirectUri = errors.New("invalid_redirect_uri")
+var ErrorInvalidRedirectPath = errors.New("invalid_redirect_path")
 
 // ErrorLoginCompletionFailed wraps a failure on the verifier's side after the presentation was
 // verified, so it is not reported as a rejected credential.
@@ -134,11 +137,14 @@ type QRLoginInfo struct {
 
 // verifier interface
 type Verifier interface {
-	ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (qr string, err error)
-	ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string) (qrLoginInfo QRLoginInfo, err error)
-	StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error)
-	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
-	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error)
+	ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string, pkce PKCEChallenge) (qr string, err error)
+	ReturnLoginQRV2(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string, pkce PKCEChallenge) (qrLoginInfo QRLoginInfo, err error)
+	StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string, pkce PKCEChallenge) (connectionString string, err error)
+	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce PKCEChallenge) (authenticationRequest string, err error)
+	// StartSameDeviceFlowForRedirectUri starts a same-device flow that sends its code to the
+	// client's redirect_uri instead of a path on the verifier's host
+	StartSameDeviceFlowForRedirectUri(host string, protocol string, state string, redirectUri string, clientId string, nonce string, requestMode string, scope string, pkce PKCEChallenge) (authenticationRequest string, err error)
+	GetToken(authorizationCode string, redirectUri string, validated bool, codeVerifier string) (jwtString string, expiration int64, refreshToken string, err error)
 	GetJWKS() jwk.Set
 	AuthenticationResponse(state string, verifiablePresentation *common.Presentation) (sameDevice Response, err error)
 	// HasLoginSession reports whether a login session is still open - not expired, not completed
@@ -147,6 +153,10 @@ type Verifier interface {
 	// session: ErrorNoSuchSession if the page may no longer wait on it (see AwaitsLoginPage),
 	// ErrorLoginPageSecretMismatch if the secret is not the one handed to the page that started it
 	CheckLoginPageSecret(sessionId string, secret string) error
+	// CheckRedirectUri checks where a login of the client may send its authorization code:
+	// ErrorInvalidRedirectUri if the URI is not an absolute http(s) URI, ErrorRedirectUriNotAllowed
+	// if the client has allowedRedirectUris and the URI matches none
+	CheckRedirectUri(clientId string, redirectUri string) error
 	// ReleaseUndeliveredCode restores the login session of a cross-device v2 login whose code
 	// could not be handed to the browser, unless the code was already redeemed
 	ReleaseUndeliveredCode(sessionId string, authorizationCode string) bool
@@ -362,6 +372,7 @@ type loginSession struct {
 	version int
 	// scope requested for the session
 	scope string
+	pkce  PKCEChallenge
 	// SHA-256 of the secret handed to the login page of a cross-device v2 session, which its
 	// WebSocket has to present. Only the hash is kept, so a dump of the session cannot leak it.
 	pageSecretHash [sha256.Size]byte
@@ -371,6 +382,7 @@ type loginSession struct {
 type tokenStore struct {
 	token        jwt.Token
 	redirect_uri string
+	pkce         PKCEChallenge
 	// clientId identifies the relying party for refresh token generation.
 	clientId string
 	// the redeemed login session the code was issued for and when it would have expired, so it can
@@ -473,6 +485,16 @@ func InitVerifier(config *configModel.Configuration, repo database.ServiceReposi
 		logging.Log().Errorf("Was not able to initiate the credentials config. Err: %v", err)
 	}
 	WarnLDPVCFormat(config.ConfigRepo.Services, verifierConfig.ClientIdentification.Id)
+	// an invalid entry would match nothing and refuse every login of its service
+	if err = configModel.ValidateServicesAllowedRedirectUris(config.ConfigRepo.Services); err != nil {
+		logging.Log().Errorf("Invalid configRepo.services allowedRedirectUris. Err: %v", err)
+		return
+	}
+	for _, service := range config.ConfigRepo.Services {
+		if len(service.AllowedRedirectUris) > 0 {
+			logging.Log().Infof("Service %q sends authorization codes only to its %d allowedRedirectUris.", service.Id, len(service.AllowedRedirectUris))
+		}
+	}
 
 	var tokenProvider tir.TokenProvider
 	if (&config.M2M).AuthEnabled {
@@ -656,7 +678,7 @@ func SetRefreshTokenRepo(repo database.RefreshTokenRepository) {
 /**
 *   Initializes the cross-device login flow and returns all neccessary information as a qr-code
 **/
-func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (qr string, err error) {
+func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string, pkce PKCEChallenge) (qr string, err error) {
 
 	for _, v := range v.supportedRequestModes {
 		logging.Log().Warnf("Supported: %s", v)
@@ -668,7 +690,7 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 	}
 
 	logging.Log().Debugf("Generate a login qr for %s.", callback)
-	authenticationRequest, err := v.initSiopFlow(host, protocol, callback, state, clientId, nonce, requestMode)
+	authenticationRequest, err := v.initSiopFlow(host, protocol, callback, state, clientId, nonce, requestMode, pkce)
 
 	if err != nil {
 		return qr, err
@@ -689,7 +711,7 @@ func (v *CredentialVerifier) ReturnLoginQR(host string, protocol string, callbac
 /**
 *   Initializes the cross-device login flow and returns all neccessary information as a qr-code
 **/
-func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redircetUri string, state string, clientId string, scope string, nonce string, requestMode string) (qrInfo QRLoginInfo, err error) {
+func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redircetUri string, state string, clientId string, scope string, nonce string, requestMode string, pkce PKCEChallenge) (qrInfo QRLoginInfo, err error) {
 
 	for _, v := range v.supportedRequestModes {
 		logging.Log().Warnf("Supported: %s", v)
@@ -701,7 +723,7 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 	}
 
 	logging.Log().Debugf("Generate a login qr for %s.", redircetUri)
-	sessionId, pageSecret, authenticationRequest, err := v.initOid4VPCrossDevice(host, protocol, redircetUri, state, clientId, scope, nonce, requestMode)
+	sessionId, pageSecret, authenticationRequest, err := v.initOid4VPCrossDevice(host, protocol, redircetUri, state, clientId, scope, nonce, requestMode, pkce)
 
 	if err != nil {
 		return qrInfo, err
@@ -731,19 +753,47 @@ func (v *CredentialVerifier) ReturnLoginQRV2(host string, protocol string, redir
 /**
 * Starts a siop-flow and returns the required connection information
 **/
-func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (connectionString string, err error) {
+func (v *CredentialVerifier) StartSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string, pkce PKCEChallenge) (connectionString string, err error) {
 	logging.Log().Debugf("Start a plain siop-flow for %s.", callback)
 
-	return v.initSiopFlow(host, protocol, callback, state, clientId, nonce, requestMode)
+	return v.initSiopFlow(host, protocol, callback, state, clientId, nonce, requestMode, pkce)
 }
 
 /**
 * Starts a same-device siop-flow and returns the required redirection information
 **/
-func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, state string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, state string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce PKCEChallenge) (authenticationRequest string, err error) {
+	callback, err := sameDeviceCallback(protocol, host, redirectPath)
+	if err != nil {
+		logging.Log().Infof("Rejecting same-device flow for client %s: redirect path %q does not stay on host %s.", clientId, redirectPath, host)
+		return authenticationRequest, err
+	}
+	return v.startSameDeviceFlow(host, protocol, state, callback, clientId, nonce, requestMode, scope, requestProtocol, pkce)
+}
+
+// StartSameDeviceFlowForRedirectUri starts the same-device flow of the OIDC authorization endpoint:
+// the wallet is opened through an openid4vp:// link, and the code goes to the client's redirect_uri.
+// Without a redirect_uri the code goes to the verifier's own host, as before redirect_uri was used.
+func (v *CredentialVerifier) StartSameDeviceFlowForRedirectUri(host string, protocol string, state string, redirectUri string, clientId string, nonce string, requestMode string, scope string, pkce PKCEChallenge) (authenticationRequest string, err error) {
+	if redirectUri == "" {
+		logging.Log().Infof("Same-device flow for client %s has no redirect_uri, the code is sent to the verifier's host.", clientId)
+		return v.StartSameDeviceFlow(host, protocol, state, "", clientId, nonce, requestMode, scope, OPENID4VP_PROTOCOL, pkce)
+	}
+	return v.startSameDeviceFlow(host, protocol, state, redirectUri, clientId, nonce, requestMode, scope, OPENID4VP_PROTOCOL, pkce)
+}
+
+func (v *CredentialVerifier) startSameDeviceFlow(host string, protocol string, state string, callback string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce PKCEChallenge) (authenticationRequest string, err error) {
 	logging.Log().Debugf("Initiate samedevice flow for %s - %s.", host, clientId)
+	pkce, err = validatePKCEChallenge(pkce, v.verifierConfig.AllowedCodeChallengeMethods)
+	if err != nil {
+		return authenticationRequest, err
+	}
 	if _, err = v.credentialsConfig.RequiredCredentialTypes(clientId, scope); err != nil {
 		logging.Log().Infof("Rejecting same-device flow for unconfigured client %s and scope %s: %v", clientId, scope, err)
+		return authenticationRequest, err
+	}
+	// the code is sent to the callback once the login completed
+	if err = v.CheckRedirectUri(clientId, callback); err != nil {
 		return authenticationRequest, err
 	}
 	if nonce == "" {
@@ -751,7 +801,7 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 	}
 	sessionId := v.nonceGenerator.GenerateNonce()
 
-	loginSession := loginSession{callback: fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: SAME_DEVICE, scope: scope}
+	loginSession := loginSession{callback: callback, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: SAME_DEVICE, scope: scope, pkce: pkce}
 	err = v.sessionCache.Add(sessionId, loginSession, cache.DefaultExpiration)
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the login session %s in cache. Err: %v", logging.PrettyPrintObject(loginSession), err)
@@ -763,17 +813,33 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 	if requestProtocol == OPENID4VP_PROTOCOL {
 		return v.generateAuthenticationRequest(requestProtocol+"://", clientId, scope, authResponseUri, sessionId, nonce, loginSession, requestMode)
 	} else {
-		return v.generateAuthenticationRequest(protocol+"://"+host+redirectPath, clientId, scope, authResponseUri, sessionId, nonce, loginSession, requestMode)
+		return v.generateAuthenticationRequest(callback, clientId, scope, authResponseUri, sessionId, nonce, loginSession, requestMode)
 	}
+}
+
+// sameDeviceCallback builds where a same-device login sends its code: the redirect path on the
+// verifier's own host. The path is appended to the host as a string, so it has to be a path -
+// "@evil.example" would turn the host into user info and ".evil.example" into a subdomain of
+// another host.
+func sameDeviceCallback(protocol string, host string, redirectPath string) (string, error) {
+	if redirectPath != "" && (!strings.HasPrefix(redirectPath, "/") || strings.HasPrefix(redirectPath, "//") || strings.Contains(redirectPath, "\\")) {
+		return "", ErrorInvalidRedirectPath
+	}
+	callback := fmt.Sprintf("%s://%s%s", protocol, host, redirectPath)
+	parsed, err := url.Parse(callback)
+	if err != nil || parsed.User != nil || !strings.EqualFold(parsed.Host, host) {
+		return "", ErrorInvalidRedirectPath
+	}
+	return callback, nil
 }
 
 // GetToken returns an already generated jwt from the cache to properly
 // authorized requests. Every token will only be returned once. When the
 // refresh token feature is enabled, a refresh token is generated and
 // returned alongside the access token; otherwise refreshToken is empty.
-func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error) {
+func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri string, validated bool, codeVerifier string) (jwtString string, expiration int64, refreshToken string, err error) {
 
-	tokenSession, err := v.claimCode(authorizationCode, redirectUri, validated)
+	tokenSession, err := v.claimCode(authorizationCode, redirectUri, validated, codeVerifier)
 	if err != nil {
 		return jwtString, expiration, "", err
 	}
@@ -817,9 +883,9 @@ func (v *CredentialVerifier) GetToken(authorizationCode string, redirectUri stri
 // claimCode takes the authorization code out of the cache, so it is retrieved only once, and
 // records it as redeemed once its redirect_uri matched. Both happen under codeMutex: a code
 // claimed here can no longer be released by ReleaseUndeliveredCode, and one released there is
-// gone here. A failed exchange removes the code without recording it, as it did not complete the
-// login. Signing happens afterwards, so a failure there still counts as a redeemed code.
-func (v *CredentialVerifier) claimCode(authorizationCode string, redirectUri string, validated bool) (tokenSession tokenStore, err error) {
+// gone here. An invalid PKCE proof leaves the code available for the legitimate client. Signing
+// happens after claiming, so a signing failure still counts as a redeemed code.
+func (v *CredentialVerifier) claimCode(authorizationCode string, redirectUri string, validated bool, codeVerifier string) (tokenSession tokenStore, err error) {
 	v.codeMutex.Lock()
 	defer v.codeMutex.Unlock()
 
@@ -828,10 +894,15 @@ func (v *CredentialVerifier) claimCode(authorizationCode string, redirectUri str
 		logging.Log().Infof("No such authorization code cached: %s.", authorizationCode)
 		return tokenSession, ErrorNoSuchCode
 	}
-	// we do only allow retrieval once.
-	v.tokenCache.Delete(authorizationCode)
-
 	tokenSession = tokenSessionInterface.(tokenStore)
+	// A failed proof of possession must not let someone who only intercepted the
+	// code invalidate it before the legitimate client can complete the exchange.
+	if err = verifyPKCE(tokenSession.pkce, codeVerifier); err != nil {
+		logging.Log().Infof("PKCE verification failed for authorization code of client %s, the code stays valid.", tokenSession.clientId)
+		return tokenSession, err
+	}
+	// We only allow retrieval once.
+	v.tokenCache.Delete(authorizationCode)
 	// a page reconnecting later would only get a code that no longer works
 	v.dropPendingLogin(tokenSession.sessionId, authorizationCode)
 	if !validated && tokenSession.redirect_uri != redirectUri {
@@ -1178,7 +1249,9 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 		ResponseModeSupported:            []string{"direct_post"},
 		SubjectTypesSupported:            []string{"public"},
 		IdTokenSigningAlgValuesSupported: supportedAlgorithms,
-		ScopesSupported:                  scopes}, err
+		// RFC 8414 §2: the PKCE methods allowedCodeChallengeMethods enables, normalized at startup
+		CodeChallengeMethodsSupported: v.verifierConfig.AllowedCodeChallengeMethods,
+		ScopesSupported:               scopes}, err
 }
 
 func (v *CredentialVerifier) GetAuthorizationType(serviceIdentifier string) string {
@@ -1410,13 +1483,22 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		return sameDevice, ErrorNoValidCredentialTypeProvided
 	}
 
+	// Checked again before a code is issued: when the login started, the client may not have been
+	// in the configuration yet (an unknown client accepts any URI), or its list may have changed.
+	if err = v.CheckRedirectUri(loginSession.clientId, loginSession.callback); err != nil {
+		if errors.Is(err, ErrorRedirectUriNotAllowed) || errors.Is(err, ErrorInvalidRedirectUri) {
+			return sameDevice, err
+		}
+		return sameDevice, fmt.Errorf("%w: %w", ErrorVerficationContextSetup, err)
+	}
+
 	token, err := v.generateJWT(credentialsToBeIncluded, verifiablePresentation.Holder, loginSession.clientId, flatClaims, loginSession.nonce)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)
 		return sameDevice, fmt.Errorf("%w: %w", ErrorLoginCompletionFailed, err)
 	}
 
-	tokenStore := tokenStore{token: token, redirect_uri: loginSession.callback, clientId: loginSession.clientId,
+	tokenStore := tokenStore{token: token, redirect_uri: loginSession.callback, pkce: loginSession.pkce, clientId: loginSession.clientId,
 		sessionId: state, session: loginSession, sessionExpiresAt: sessionExpiresAt}
 	authorizationCode := v.nonceGenerator.GenerateNonce()
 	// store for retrieval by token endpoint
@@ -2084,16 +2166,47 @@ func (v *CredentialVerifier) ReleaseUndeliveredCode(sessionId string, authorizat
 	return v.releaseCode(sessionId, tokenSession.session, tokenSession.sessionExpiresAt, authorizationCode) == sessionRestored
 }
 
+// CheckRedirectUri checks the URI a login of the client sends its authorization code to - the
+// redirect_uri of the cross-device v2 and OIDC flows, the client_callback of the cross-device v1
+// flow - against the client's allowedRedirectUris. Every URI has to be an absolute http(s) URI
+// (configModel.RedirectUriWellFormed); beyond that, a client without the list, or not configured
+// at all, accepts any URI - an unconfigured client never gets a code, as its presentation fails
+// verification. A failure to read the configuration is returned, so the login is refused rather
+// than left unchecked.
+func (v *CredentialVerifier) CheckRedirectUri(clientId string, redirectUri string) error {
+	if !configModel.RedirectUriWellFormed(redirectUri) {
+		logging.Log().Infof("Refused a login for client %s: %q is not an absolute http(s) URI.", clientId, redirectUri)
+		return ErrorInvalidRedirectUri
+	}
+	allowedRedirectUris, err := v.credentialsConfig.GetAllowedRedirectUris(clientId)
+	if err != nil {
+		logging.Log().Warnf("Was not able to read the allowed redirect URIs of client %s, refusing the login. Err: %v", clientId, err)
+		return err
+	}
+	if len(allowedRedirectUris) == 0 || configModel.RedirectUriAllowed(allowedRedirectUris, redirectUri) {
+		return nil
+	}
+	logging.Log().Infof("Refused a login for client %s: %q is not in its allowedRedirectUris.", clientId, redirectUri)
+	return ErrorRedirectUriNotAllowed
+}
+
 // intialize the OID4VP cross device flow
 // It returns the generated session id alongside the request, since the frontend needs it to
 // address the session (WebSocket, expiry) - the external state is not a lookup key.
-func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string, redirectUri string, state string, clientId string, scope string, nonce string, requestMode string) (sessionId string, pageSecret string, authenticationRequest string, err error) {
+func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string, redirectUri string, state string, clientId string, scope string, nonce string, requestMode string, pkce PKCEChallenge) (sessionId string, pageSecret string, authenticationRequest string, err error) {
+	if err = v.CheckRedirectUri(clientId, redirectUri); err != nil {
+		return sessionId, "", authenticationRequest, err
+	}
 
 	sessionId = v.nonceGenerator.GenerateNonce()
 	// The session id is in the QR, so anyone who sees the QR knows it. The page secret is what
 	// tells the page that started the login apart from them.
 	pageSecret = v.nonceGenerator.GenerateNonce()
-	loginSession := loginSession{callback: redirectUri, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V2, scope: scope, pageSecretHash: sha256.Sum256([]byte(pageSecret))}
+	pkce, err = validatePKCEChallenge(pkce, v.verifierConfig.AllowedCodeChallengeMethods)
+	if err != nil {
+		return sessionId, "", authenticationRequest, err
+	}
+	loginSession := loginSession{callback: redirectUri, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V2, scope: scope, pageSecretHash: sha256.Sum256([]byte(pageSecret)), pkce: pkce}
 	err = v.sessionCache.Add(sessionId, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
@@ -2108,7 +2221,12 @@ func (v *CredentialVerifier) initOid4VPCrossDevice(host string, protocol string,
 }
 
 // initializes the cross-device siop flow
-func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string) (authenticationRequest string, err error) {
+func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback string, state string, clientId string, nonce string, requestMode string, pkce PKCEChallenge) (authenticationRequest string, err error) {
+	pkce, err = validatePKCEChallenge(pkce, v.verifierConfig.AllowedCodeChallengeMethods)
+	if err != nil {
+		return authenticationRequest, err
+	}
+
 	scope, err := v.credentialsConfig.GetDefaultScope(clientId)
 	if err != nil {
 		return authenticationRequest, err
@@ -2117,12 +2235,17 @@ func (v *CredentialVerifier) initSiopFlow(host string, protocol string, callback
 		return authenticationRequest, ErrorNoDefaultScope
 	}
 
+	// the verifier calls the callback itself once the login completed
+	if err = v.CheckRedirectUri(clientId, callback); err != nil {
+		return authenticationRequest, err
+	}
+
 	if nonce == "" {
 		logging.Log().Debugf("No nonce provided, generate one.")
 		nonce = v.nonceGenerator.GenerateNonce()
 	}
 	sessionId := v.nonceGenerator.GenerateNonce()
-	loginSession := loginSession{callback: callback, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V1, scope: scope}
+	loginSession := loginSession{callback: callback, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: CROSS_DEVICE_V1, scope: scope, pkce: pkce}
 	err = v.sessionCache.Add(sessionId, loginSession, cache.DefaultExpiration)
 
 	if err != nil {
@@ -2512,6 +2635,11 @@ func verifyConfig(verifierConfig *configModel.Verifier) error {
 	if verifierConfig.TirAddress == "" {
 		return ErrorNoTIR
 	}
+	allowedPKCEMethods, err := validatePKCEConfiguration(verifierConfig.AllowedCodeChallengeMethods)
+	if err != nil {
+		return err
+	}
+	verifierConfig.AllowedCodeChallengeMethods = allowedPKCEMethods
 	if !slices.Contains(SupportedModes, verifierConfig.ValidationMode) { //nolint:govet
 		return ErrorUnsupportedValidationMode
 	}
