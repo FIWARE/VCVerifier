@@ -41,8 +41,11 @@ If `code_challenge_method` is omitted from a request that has a
 disabled by default, such a request is rejected unless `plain` is explicitly
 enabled. Supplying a method without a challenge is also rejected. Requests with
 empty PKCE parameters are rejected. Requests with no challenge continue to use
-the existing authorization-code behavior; a `code_verifier` in such an
-exchange is ignored.
+the existing authorization-code behavior, as long as the token request sends no
+`code_verifier` either: a verifier for a code issued without a challenge means
+the challenge was stripped from the authorization request (a PKCE downgrade), so
+the exchange is rejected (RFC 9700 §2.1.1). As with a wrong verifier, the code
+stays available for the legitimate client.
 
 The implementation uses a method registry in `verifier/pkce.go`: adding a
 future method requires implementing its challenge validation and verifier

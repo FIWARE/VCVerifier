@@ -142,6 +142,11 @@ func validatePKCEChallenge(challenge PKCEChallenge, allowedMethods []string) (PK
 
 func verifyPKCE(challenge PKCEChallenge, codeVerifier string) error {
 	if challenge.Value == "" {
+		// A verifier for a code issued without a challenge is a downgrade: the challenge was
+		// stripped from the authorization request, so the verifier proves nothing (RFC 9700 §2.1.1).
+		if codeVerifier != "" {
+			return ErrorInvalidPKCEVerifier
+		}
 		return nil
 	}
 	if !pkceValuePattern.MatchString(codeVerifier) {

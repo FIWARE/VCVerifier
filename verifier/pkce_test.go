@@ -67,6 +67,18 @@ func TestPKCEMethodValidationAndVerification(t *testing.T) {
 			wantVerifyErr: ErrorInvalidPKCEVerifier,
 		},
 		{
+			name:      "no challenge and no verifier keep the plain code exchange",
+			challenge: PKCEChallenge{},
+			allowed:   []string{PKCES256},
+		},
+		{
+			name:          "verifier for a code issued without a challenge is rejected",
+			challenge:     PKCEChallenge{},
+			allowed:       []string{PKCES256},
+			verifier:      verifier,
+			wantVerifyErr: ErrorInvalidPKCEVerifier,
+		},
+		{
 			name:      "method without challenge is rejected",
 			challenge: PKCEChallenge{Method: PKCES256},
 			allowed:   []string{PKCES256},

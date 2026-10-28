@@ -2947,6 +2947,33 @@ func TestGetTokenWithCodeVerifierRetainsCodeAfterFailedProof(t *testing.T) {
 	}
 }
 
+// TestGetTokenWithCodeVerifierRejectsDowngrade checks that a code issued without a challenge is not
+// exchanged for a token request that sends a code_verifier (RFC 9700 §2.1.1), and that the code
+// stays available for the legitimate client.
+func TestGetTokenWithCodeVerifierRejectsDowngrade(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	codeVerifier := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
+	tokenCache := mockTokenCache{tokens: map[string]tokenStore{
+		"plain-code": {token: getToken(), redirect_uri: "https://myhost.org/redirect"},
+	}}
+	testKey := getECDSAKey()
+	v := CredentialVerifier{
+		tokenCache:       &tokenCache,
+		signingKey:       testKey,
+		clock:            mockClock{},
+		tokenSigner:      mockTokenSigner{},
+		signingAlgorithm: "ES256",
+	}
+
+	_, _, _, err := v.GetTokenWithCodeVerifier("plain-code", "https://myhost.org/redirect", false, codeVerifier)
+	assert.ErrorIs(t, err, ErrorInvalidPKCEVerifier)
+
+	jwtString, _, _, err := v.GetTokenWithCodeVerifier("plain-code", "https://myhost.org/redirect", false, "")
+	assert.NoError(t, err, "the code must still be exchangeable without a verifier")
+	assert.NotEmpty(t, jwtString)
+}
+
 // TestGetTokenWithRefreshToken tests the GetToken method when the refresh
 // token feature is enabled, verifying that a refresh token is generated and
 // returned alongside the access token, and that failures in refresh token
