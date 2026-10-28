@@ -1503,6 +1503,15 @@ func (v *CredentialVerifier) AuthenticationResponse(state string, verifiablePres
 		return sameDevice, ErrorNoValidCredentialTypeProvided
 	}
 
+	// Checked again before a code is issued: when the login started, the client may not have been
+	// in the configuration yet (an unknown client accepts any URI), or its list may have changed.
+	if err = v.CheckRedirectUri(loginSession.clientId, loginSession.callback); err != nil {
+		if errors.Is(err, ErrorRedirectUriNotAllowed) {
+			return sameDevice, err
+		}
+		return sameDevice, fmt.Errorf("%w: %w", ErrorVerficationContextSetup, err)
+	}
+
 	token, err := v.generateJWT(credentialsToBeIncluded, verifiablePresentation.Holder, loginSession.clientId, flatClaims, loginSession.nonce)
 	if err != nil {
 		logging.Log().Warnf("Was not able to create a jwt for %s. Err: %v", state, err)

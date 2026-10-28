@@ -2143,6 +2143,64 @@ func TestAuthenticationResponse_FailedResponseKeepsSession(t *testing.T) {
 	}
 }
 
+// TestAuthenticationResponse_RechecksRedirectUri checks that no code is issued for a login whose
+// redirect URI the client's allowedRedirectUris do not cover when it completes - the client may have
+// been unknown when the login started, or its list may have changed since - and that a failure to
+// read them is reported as a configuration failure.
+func TestAuthenticationResponse_RechecksRedirectUri(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName      string
+		allowed       []string
+		configError   error
+		expectedError error
+	}
+	tests := []test{
+		{"A callback that is no longer listed gets no code.", []string{"https://rp.example/callback"}, nil, ErrorRedirectUriNotAllowed},
+		{"A failure to read the list gets no code.", nil, errors.New("db_down"), ErrorVerficationContextSetup},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{
+				"session-id": {version: SAME_DEVICE, callback: "https://evil.example/callback", sessionId: "session-id", externalState: "external-state", clientId: "clientId"},
+			}}
+			tokenCache := &mockTokenCache{tokens: map[string]tokenStore{}}
+			verifier := &CredentialVerifier{
+				did:                  "did:key:verifier",
+				sessionCache:         &sessionCache,
+				tokenCache:           tokenCache,
+				nonceGenerator:       &mockNonceGenerator{staticValues: []string{"authCode"}},
+				validationServices:   []ValidationService{&mockExternalSsiKit{[]bool{true, true}, nil}},
+				clock:                mockClock{},
+				credentialsConfig:    redirectUriErrorConfig{mockCredentialConfig: mockCredentialConfig{mockScopes: createMockCredentials("clientId", "", "VerifiableCredential", "", "", false), mockAllowedRedirectUris: map[string][]string{"clientId": tc.allowed}}, err: tc.configError},
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier"},
+			}
+
+			vp := getVP([]string{"vc"})
+			_, err := verifier.AuthenticationResponse("session-id", &vp)
+			assert.ErrorIs(t, err, tc.expectedError)
+			assert.Empty(t, tokenCache.tokens, "no code may be issued")
+			_, found := sessionCache.sessions["session-id"]
+			assert.True(t, found, "the session is not consumed")
+		})
+	}
+}
+
+// redirectUriErrorConfig fails reading the allowed redirect URIs only, so a login gets as far as
+// issuing its code.
+type redirectUriErrorConfig struct {
+	mockCredentialConfig
+	err error
+}
+
+func (c redirectUriErrorConfig) GetAllowedRedirectUris(serviceIdentifier string) ([]string, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.mockCredentialConfig.GetAllowedRedirectUris(serviceIdentifier)
+}
+
 // TestAuthenticationResponse_FailedCallbackRestoresSession checks that, in the cross-device v1
 // flow, a code that could not be delivered to the requestor does not consume the session: the
 // code is discarded, the session keeps its remaining lifetime and a retry completes the login.

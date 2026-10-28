@@ -545,7 +545,10 @@ func rejectionCategory(err error) string {
 		return rejectionCredentialNotAccepted
 	// ErrorVerficationContextSetup is a failure to read the trust, status or eIDAS configuration;
 	// an unknown credential type yields empty lists, not this error
-	case errors.Is(err, verifier.ErrorVerficationContextSetup), errors.Is(err, verifier.ErrorLoginCompletionFailed):
+	// ErrorRedirectUriNotAllowed at this point means the client's allowedRedirectUris no longer
+	// cover the URI the login was started with - the presentation itself was fine
+	case errors.Is(err, verifier.ErrorVerficationContextSetup), errors.Is(err, verifier.ErrorLoginCompletionFailed),
+		errors.Is(err, verifier.ErrorRedirectUriNotAllowed):
 		return rejectionServerError
 	default:
 		return rejectionVerificationFailed
