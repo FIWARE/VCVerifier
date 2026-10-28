@@ -33,6 +33,8 @@ verifier:
 ```
 
 When `allowedCodeChallengeMethods` is omitted or empty, only `S256` is enabled.
+The enabled methods are advertised as `code_challenge_methods_supported` in
+`/services/{service_id}/.well-known/openid-configuration` (RFC 8414 §2).
 Specifying a list replaces that default; `plain` must be explicitly included to
 be accepted. Unsupported configured methods cause verifier initialization to
 fail rather than silently weakening PKCE.

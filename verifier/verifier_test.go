@@ -5473,3 +5473,17 @@ func TestStartSameDeviceFlowForRedirectUri(t *testing.T) {
 		})
 	}
 }
+
+// TestGetOpenIDConfiguration_AdvertisesPKCEMethods checks that the discovery document tells clients
+// which PKCE methods the verifier accepts (RFC 8414 §2).
+func TestGetOpenIDConfiguration_AdvertisesPKCEMethods(t *testing.T) {
+	common.ResetGlobalCache()
+	credentialsConfig := mockCredentialConfig{mockScopes: map[string]map[string]configModel.ScopeEntry{"serviceId": {}}}
+	verifier := CredentialVerifier{credentialsConfig: credentialsConfig, host: "https://verifier.org",
+		verifierConfig: configModel.Verifier{AllowedCodeChallengeMethods: []string{PKCES256, PKCEPlain}}}
+
+	metadata, err := verifier.GetOpenIDConfiguration("serviceId")
+	assert.NoError(t, err)
+	encoded, _ := json.Marshal(metadata)
+	assert.Contains(t, string(encoded), `"code_challenge_methods_supported":["S256","plain"]`)
+}

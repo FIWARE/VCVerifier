@@ -1249,7 +1249,9 @@ func (v *CredentialVerifier) GetOpenIDConfiguration(serviceIdentifier string) (m
 		ResponseModeSupported:            []string{"direct_post"},
 		SubjectTypesSupported:            []string{"public"},
 		IdTokenSigningAlgValuesSupported: supportedAlgorithms,
-		ScopesSupported:                  scopes}, err
+		// RFC 8414 §2: the PKCE methods allowedCodeChallengeMethods enables, normalized at startup
+		CodeChallengeMethodsSupported: v.verifierConfig.AllowedCodeChallengeMethods,
+		ScopesSupported:               scopes}, err
 }
 
 func (v *CredentialVerifier) GetAuthorizationType(serviceIdentifier string) string {

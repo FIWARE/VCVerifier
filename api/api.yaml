@@ -706,6 +706,13 @@ components:
           items:
             type: string
           example: ["private_key_jwt"]
+        code_challenge_methods_supported:
+          type: array
+          description: The PKCE methods the verifier accepts (verifier.allowedCodeChallengeMethods)
+          items:
+            type: string
+            enum: ["S256", "plain"]
+          example: ["S256"]
     TokenErrorResponse:
       type: object
       description: Error response of the token endpoint (RFC 6749 §5.2)
