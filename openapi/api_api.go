@@ -63,7 +63,8 @@ var ErrorMessageNoCallback = ErrorMessage{"NoCallbackProvided", "A callback addr
 // is not in the client's allowedRedirectUris. The verifier never redirects to such a URI, not even
 // to report the error (RFC 6749 §4.1.2.1).
 var ErrorMessageRedirectUriNotAllowed = ErrorMessage{"redirect_uri_not_allowed", "The redirect_uri or client_callback is not registered for this client."}
-var ErrorMessageUnableToDecodeToken = ErrorMessage{"invalid_token", "Token could not be decoded."}
+var ErrorMessageInvalidRedirectPath = ErrorMessage{"invalid_redirect_path", "The redirect_path has to be an absolute path on the verifier's host."}
+var ErrorMessageUnableToDecodeToken =ErrorMessage{"invalid_token", "Token could not be decoded."}
 var ErrorMessageInvalidTokenEncoding = ErrorMessage{"invalid_token", "The vp_token has to be base64url encoded without padding."}
 var ErrorMessageUnableToDecodeCredential = ErrorMessage{"invalid_token", "Could not read the credential(s) inside the token."}
 var ErrorMessageUnableToDecodeHolder = ErrorMessage{"invalid_token", "Could not read the holder inside the token."}
@@ -643,7 +644,11 @@ func StartSIOPSameDevice(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageUnknownClientOrScope)
 			return
 		}
-		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
+		if errors.Is(err, verifier.ErrorInvalidRedirectPath) {
+			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorMessageInvalidRedirectPath)
+			return
+		}
+		abortLoginStart(c, err, ErrorMessage{err.Error(), "Was not able to start the same device flow."})
 		return
 	}
 

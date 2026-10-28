@@ -962,6 +962,10 @@ func TestLoginFlowsRefuseRedirectUri(t *testing.T) {
 			_, err := verifier.ReturnLoginQR("verifier.org", "https", "https://evil.example/cb", "external-state", "listed-client", "", REQUEST_MODE_URL_ENCODED)
 			return err
 		}},
+		{"same-device refuses a callback on the verifier's host that is not listed", func(verifier *CredentialVerifier) error {
+			_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", "/redirect", "listed-client", "", REQUEST_MODE_URL_ENCODED, "", "")
+			return err
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
@@ -982,6 +986,38 @@ func TestLoginFlowsRefuseRedirectUri(t *testing.T) {
 			}
 			assert.ErrorIs(t, tc.start(verifier), ErrorRedirectUriNotAllowed)
 			assert.Equal(t, 0, sessionCache.ItemCount(), "no login session may be created")
+		})
+	}
+}
+
+// TestStartSameDeviceFlowRejectsRedirectPathLeavingHost covers a redirect_path that, appended to
+// the verifier's host, names another host - the code would be sent there.
+func TestStartSameDeviceFlowRejectsRedirectPathLeavingHost(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName     string
+		redirectPath string
+	}
+	tests := []test{
+		{"user info", "@evil.example/cb"},
+		{"a subdomain of another host", ".evil.example/cb"},
+		{"a port", ":8443/cb"},
+		{"a protocol-relative path", "//evil.example/cb"},
+		{"a backslash", "/\\evil.example/cb"},
+		{"no leading slash", "evil.example/cb"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+			verifier := CredentialVerifier{
+				sessionCache:      &sessionCache,
+				nonceGenerator:    &mockNonceGenerator{staticValues: []string{"session-id"}},
+				credentialsConfig: mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false)},
+			}
+			_, err := verifier.StartSameDeviceFlow("verifier.org", "https", "external-state", tc.redirectPath, "", "", REQUEST_MODE_URL_ENCODED, "", REDIRECT_PROTOCOL)
+			assert.ErrorIs(t, err, ErrorInvalidRedirectPath)
+			assert.Empty(t, sessionCache.sessions, "no login session may be created")
 		})
 	}
 }

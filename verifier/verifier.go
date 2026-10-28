@@ -85,6 +85,7 @@ var ErrorInvalidVCHolder = errors.New("invalid_vc_holder")
 var ErrorNoSuchSession = errors.New("no_such_session")
 var ErrorLoginPageSecretMismatch = errors.New("login_page_secret_mismatch")
 var ErrorRedirectUriNotAllowed = errors.New("redirect_uri_not_allowed")
+var ErrorInvalidRedirectPath = errors.New("invalid_redirect_path")
 
 // ErrorLoginCompletionFailed wraps a failure on the verifier's side after the presentation was
 // verified, so it is not reported as a rejected credential.
@@ -787,12 +788,21 @@ func (v *CredentialVerifier) StartSameDeviceFlowWithPKCE(host string, protocol s
 		logging.Log().Infof("Rejecting same-device flow for unconfigured client %s and scope %s: %v", clientId, scope, err)
 		return authenticationRequest, err
 	}
+	callback, err := sameDeviceCallback(protocol, host, redirectPath)
+	if err != nil {
+		logging.Log().Infof("Rejecting same-device flow for client %s: redirect path %q does not stay on host %s.", clientId, redirectPath, host)
+		return authenticationRequest, err
+	}
+	// the code is sent to the callback once the login completed
+	if err = v.CheckRedirectUri(clientId, callback); err != nil {
+		return authenticationRequest, err
+	}
 	if nonce == "" {
 		nonce = v.nonceGenerator.GenerateNonce()
 	}
 	sessionId := v.nonceGenerator.GenerateNonce()
 
-	loginSession := loginSession{callback: fmt.Sprintf("%s://%s%s", protocol, host, redirectPath), sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: SAME_DEVICE, scope: scope, pkce: pkce}
+	loginSession := loginSession{callback: callback, sessionId: sessionId, externalState: state, nonce: nonce, clientId: clientId, version: SAME_DEVICE, scope: scope, pkce: pkce}
 	err = v.sessionCache.Add(sessionId, loginSession, cache.DefaultExpiration)
 	if err != nil {
 		logging.Log().Warnf("Was not able to store the login session %s in cache. Err: %v", logging.PrettyPrintObject(loginSession), err)
@@ -804,8 +814,24 @@ func (v *CredentialVerifier) StartSameDeviceFlowWithPKCE(host string, protocol s
 	if requestProtocol == OPENID4VP_PROTOCOL {
 		return v.generateAuthenticationRequest(requestProtocol+"://", clientId, scope, authResponseUri, sessionId, nonce, loginSession, requestMode)
 	} else {
-		return v.generateAuthenticationRequest(protocol+"://"+host+redirectPath, clientId, scope, authResponseUri, sessionId, nonce, loginSession, requestMode)
+		return v.generateAuthenticationRequest(callback, clientId, scope, authResponseUri, sessionId, nonce, loginSession, requestMode)
 	}
+}
+
+// sameDeviceCallback builds where a same-device login sends its code: the redirect path on the
+// verifier's own host. The path is appended to the host as a string, so it has to be a path -
+// "@evil.example" would turn the host into user info and ".evil.example" into a subdomain of
+// another host.
+func sameDeviceCallback(protocol string, host string, redirectPath string) (string, error) {
+	if redirectPath != "" && (!strings.HasPrefix(redirectPath, "/") || strings.HasPrefix(redirectPath, "//") || strings.Contains(redirectPath, "\\")) {
+		return "", ErrorInvalidRedirectPath
+	}
+	callback := fmt.Sprintf("%s://%s%s", protocol, host, redirectPath)
+	parsed, err := url.Parse(callback)
+	if err != nil || parsed.User != nil || !strings.EqualFold(parsed.Host, host) {
+		return "", ErrorInvalidRedirectPath
+	}
+	return callback, nil
 }
 
 // GetToken returns an already generated jwt from the cache to properly

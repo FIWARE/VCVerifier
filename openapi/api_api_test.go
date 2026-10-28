@@ -1262,6 +1262,8 @@ func TestLoginStartRefusesRedirectUri(t *testing.T) {
 			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
 		{"the cross-device v1 connection string", "/api/v1/startsiop?state=s&client_id=listed-client&client_callback=https://evil.example/cb", VerifierAPIStartSIOP,
 			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
+		{"the same-device flow", "/api/v1/samedevice?state=s&client_id=listed-client&scope=s&redirect_path=/cb", StartSIOPSameDevice,
+			&mockVerifier{mockError: verifier.ErrorRedirectUriNotAllowed}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
@@ -1317,4 +1319,22 @@ func TestCodeRedirectUrl(t *testing.T) {
 			assert.Equal(t, tc.state, parsed.Query().Get("state"))
 		})
 	}
+}
+
+// TestStartSIOPSameDeviceRejectsInvalidRedirectPath checks that a redirect_path leaving the
+// verifier's host is answered with 400 and never redirected to.
+func TestStartSIOPSameDeviceRejectsInvalidRedirectPath(t *testing.T) {
+	apiVerifier = &mockVerifier{mockError: verifier.ErrorInvalidRedirectPath}
+	t.Cleanup(func() { apiVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/samedevice?state=s&scope=s&redirect_path=@evil.example/cb", nil)
+	StartSIOPSameDevice(c)
+
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Empty(t, recorder.Header().Get("Location"))
+	var body ErrorMessage
+	assert.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	assert.Equal(t, ErrorMessageInvalidRedirectPath, body)
 }
