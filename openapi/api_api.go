@@ -259,7 +259,7 @@ func AuthorizationEndpoint(c *gin.Context) {
 	var err error
 	switch authorizationType {
 	case DEEPLINK:
-		redirect, err = getApiVerifier().StartSameDeviceFlowWithPKCE(c.Request.Host, protocol, state, "", clientId, nonce, fallbackRequestMode, scope, verifier.OPENID4VP_PROTOCOL, pkce)
+		redirect, err = getApiVerifier().StartSameDeviceFlowForRedirectUri(c.Request.Host, protocol, state, redirectUri, clientId, nonce, fallbackRequestMode, scope, pkce)
 		if err != nil {
 			logging.Log().Warnf("Was not able start a same device flow. Err: %v", err)
 			abortLoginStart(c, err, ErrorMessageFailedSameDevice)

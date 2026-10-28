@@ -53,6 +53,7 @@ type mockVerifier struct {
 	mockExpiration           int64
 	mockError                error
 	mockAuthorizationType    string
+	mockStartedRedirectUri   string
 	mockRefreshTokenEnabled  bool
 	mockRefreshToken         string
 	mockRefreshTokenError    error
@@ -205,6 +206,12 @@ func (mV *mockVerifier) GetTokenWithCodeVerifier(authorizationCode string, redir
 func (mV *mockVerifier) StartSameDeviceFlowWithPKCE(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce verifier.PKCEChallenge) (authenticationRequest string, err error) {
 	mV.mockStartedScope = scope
 	mV.mockReceivedPKCE = pkce
+	return mV.mockAuthRequest, mV.mockError
+}
+func (mV *mockVerifier) StartSameDeviceFlowForRedirectUri(host string, protocol string, state string, redirectUri string, clientId string, nonce string, requestMode string, scope string, pkce verifier.PKCEChallenge) (authenticationRequest string, err error) {
+	mV.mockStartedScope = scope
+	mV.mockReceivedPKCE = pkce
+	mV.mockStartedRedirectUri = redirectUri
 	return mV.mockAuthRequest, mV.mockError
 }
 func (mV *mockVerifier) ReturnLoginQRV2WithPKCE(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string, pkce verifier.PKCEChallenge) (qrLoginInfo verifier.QRLoginInfo, err error) {
@@ -1337,4 +1344,22 @@ func TestStartSIOPSameDeviceRejectsInvalidRedirectPath(t *testing.T) {
 	var body ErrorMessage
 	assert.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
 	assert.Equal(t, ErrorMessageInvalidRedirectPath, body)
+}
+
+// TestAuthorizationEndpointDeeplinkUsesRedirectUri checks that the same-device flow of the
+// authorization endpoint is started for the client's redirect_uri.
+func TestAuthorizationEndpointDeeplinkUsesRedirectUri(t *testing.T) {
+	mock := &mockVerifier{mockAuthorizationType: DEEPLINK, mockAuthRequest: "openid4vp://?request_uri=x"}
+	apiVerifier = mock
+	frontendVerifier = mock
+	t.Cleanup(func() { apiVerifier = nil; frontendVerifier = nil })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v2/authorization?client_id=c&scope=s&state=st&response_type=code&redirect_uri="+url.QueryEscape("https://rp.example/callback"), nil)
+	AuthorizationEndpoint(c)
+
+	assert.Equal(t, http.StatusFound, recorder.Code)
+	assert.Equal(t, "https://rp.example/callback", mock.mockStartedRedirectUri)
+	assert.Equal(t, "openid4vp://?request_uri=x", recorder.Header().Get("Location"))
 }

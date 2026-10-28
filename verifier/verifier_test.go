@@ -5300,3 +5300,52 @@ func TestAuthenticationResponse_VCDataModelVersionFiltering(t *testing.T) {
 		})
 	}
 }
+
+// TestStartSameDeviceFlowForRedirectUri checks that the same-device flow of the authorization
+// endpoint sends its code to the client's redirect_uri, checked against its allowedRedirectUris.
+func TestStartSameDeviceFlowForRedirectUri(t *testing.T) {
+	logging.Configure(LOGGING_CONFIG)
+
+	type test struct {
+		testName         string
+		redirectUri      string
+		expectedCallback string
+		expectedError    error
+	}
+	tests := []test{
+		{"The code goes to the listed redirect_uri.", "https://rp.example/callback", "https://rp.example/callback", nil},
+		{"An unlisted redirect_uri is refused.", "https://evil.example/callback", "", ErrorRedirectUriNotAllowed},
+		{"Without a redirect_uri the code goes to the verifier's host, which has to be listed too.", "", "", ErrorRedirectUriNotAllowed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.testName, func(t *testing.T) {
+			testKey := getECDSAKey()
+			sessionCache := mockSessionCache{sessions: map[string]loginSession{}}
+			verifier := CredentialVerifier{
+				host:                 "verifier.org",
+				did:                  "did:key:verifier",
+				sessionCache:         &sessionCache,
+				nonceGenerator:       &mockNonceGenerator{staticValues: []string{"session-id"}},
+				tokenSigner:          mockTokenSigner{},
+				clock:                mockClock{},
+				requestSigningKey:    &testKey,
+				clientIdentification: configModel.ClientIdentification{Id: "did:key:verifier", KeyPath: "/my-signing-key.pem", KeyAlgorithm: "ES256"},
+				credentialsConfig: mockCredentialConfig{mockScopes: createMockCredentials("", "", "", "", "", false), mockAllowedRedirectUris: map[string][]string{
+					"": {"https://rp.example/callback"},
+				}},
+			}
+			_, err := verifier.StartSameDeviceFlowForRedirectUri("verifier.org", "https", "external-state", tc.redirectUri, "", "", REQUEST_MODE_BY_VALUE, "", PKCEChallenge{})
+			if tc.expectedError != nil {
+				assert.ErrorIs(t, err, tc.expectedError)
+				assert.Empty(t, sessionCache.sessions, "no login session may be created")
+				return
+			}
+			assert.NoError(t, err)
+			assert.Len(t, sessionCache.sessions, 1)
+			for _, session := range sessionCache.sessions {
+				assert.Equal(t, tc.expectedCallback, session.callback)
+				assert.Equal(t, SAME_DEVICE, session.version)
+			}
+		})
+	}
+}

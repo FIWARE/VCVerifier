@@ -144,6 +144,9 @@ type Verifier interface {
 	StartSameDeviceFlow(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string) (authenticationRequest string, err error)
 	GetToken(authorizationCode string, redirectUri string, validated bool) (jwtString string, expiration int64, refreshToken string, err error)
 	StartSameDeviceFlowWithPKCE(host string, protocol string, sessionId string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce PKCEChallenge) (authenticationRequest string, err error)
+	// StartSameDeviceFlowForRedirectUri starts a same-device flow that sends its code to the
+	// client's redirect_uri instead of a path on the verifier's host
+	StartSameDeviceFlowForRedirectUri(host string, protocol string, state string, redirectUri string, clientId string, nonce string, requestMode string, scope string, pkce PKCEChallenge) (authenticationRequest string, err error)
 	ReturnLoginQRV2WithPKCE(host string, protocol string, callback string, state string, clientId string, scope string, nonce string, requestMode string, pkce PKCEChallenge) (qrLoginInfo QRLoginInfo, err error)
 	GetTokenWithCodeVerifier(authorizationCode string, redirectUri string, validated bool, codeVerifier string) (jwtString string, expiration int64, refreshToken string, err error)
 	GetJWKS() jwk.Set
@@ -779,6 +782,26 @@ func (v *CredentialVerifier) StartSameDeviceFlow(host string, protocol string, s
 }
 
 func (v *CredentialVerifier) StartSameDeviceFlowWithPKCE(host string, protocol string, state string, redirectPath string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce PKCEChallenge) (authenticationRequest string, err error) {
+	callback, err := sameDeviceCallback(protocol, host, redirectPath)
+	if err != nil {
+		logging.Log().Infof("Rejecting same-device flow for client %s: redirect path %q does not stay on host %s.", clientId, redirectPath, host)
+		return authenticationRequest, err
+	}
+	return v.startSameDeviceFlow(host, protocol, state, callback, clientId, nonce, requestMode, scope, requestProtocol, pkce)
+}
+
+// StartSameDeviceFlowForRedirectUri starts the same-device flow of the OIDC authorization endpoint:
+// the wallet is opened through an openid4vp:// link, and the code goes to the client's redirect_uri.
+// Without a redirect_uri the code goes to the verifier's own host, as before redirect_uri was used.
+func (v *CredentialVerifier) StartSameDeviceFlowForRedirectUri(host string, protocol string, state string, redirectUri string, clientId string, nonce string, requestMode string, scope string, pkce PKCEChallenge) (authenticationRequest string, err error) {
+	if redirectUri == "" {
+		logging.Log().Infof("Same-device flow for client %s has no redirect_uri, the code is sent to the verifier's host.", clientId)
+		return v.StartSameDeviceFlowWithPKCE(host, protocol, state, "", clientId, nonce, requestMode, scope, OPENID4VP_PROTOCOL, pkce)
+	}
+	return v.startSameDeviceFlow(host, protocol, state, redirectUri, clientId, nonce, requestMode, scope, OPENID4VP_PROTOCOL, pkce)
+}
+
+func (v *CredentialVerifier) startSameDeviceFlow(host string, protocol string, state string, callback string, clientId string, nonce string, requestMode string, scope string, requestProtocol string, pkce PKCEChallenge) (authenticationRequest string, err error) {
 	logging.Log().Debugf("Initiate samedevice flow for %s - %s.", host, clientId)
 	pkce, err = validatePKCEChallenge(pkce, v.verifierConfig.AllowedCodeChallengeMethods)
 	if err != nil {
@@ -786,11 +809,6 @@ func (v *CredentialVerifier) StartSameDeviceFlowWithPKCE(host string, protocol s
 	}
 	if _, err = v.credentialsConfig.RequiredCredentialTypes(clientId, scope); err != nil {
 		logging.Log().Infof("Rejecting same-device flow for unconfigured client %s and scope %s: %v", clientId, scope, err)
-		return authenticationRequest, err
-	}
-	callback, err := sameDeviceCallback(protocol, host, redirectPath)
-	if err != nil {
-		logging.Log().Infof("Rejecting same-device flow for client %s: redirect path %q does not stay on host %s.", clientId, redirectPath, host)
 		return authenticationRequest, err
 	}
 	// the code is sent to the callback once the login completed
