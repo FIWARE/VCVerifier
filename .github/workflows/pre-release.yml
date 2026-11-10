@@ -21,29 +21,15 @@ env:
   IMAGE_NAME: vcverifier
 
 jobs:
+  # The version from the semver label of the pull request, read when the job runs. See
+  # https://github.com/FIWARE/github-workflows
   generate-version:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.out.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - id: bump
-        uses: zwaldowski/match-label-action@v1
-        with:
-          allowed: major,minor,patch
-
-      - uses: zwaldowski/semver-release-action@v6
-        with:
-          dry_run: true
-          bump: ${{ steps.bump.outputs.match }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set pre-release version
-        id: out
-        run: echo "version=${VERSION}-PRE-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+    uses: FIWARE/github-workflows/.github/workflows/semver-version.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      tag-prefix: ""
 
   build-scan-push:
     needs: generate-version
@@ -131,29 +117,20 @@ jobs:
           path: vcverifier-${{ matrix.goos }}-${{ matrix.goarch }}
           retention-days: 1
 
+  # Publishes the pre-release, replacing the one of the previous push, see
+  # https://github.com/FIWARE/github-workflows
   git-release:
-    needs:
+    needs: 
       - generate-version
       - build-scan-push
       - build-binaries
-    runs-on: ubuntu-latest
+    uses: FIWARE/github-workflows/.github/workflows/github-release.yml@v1
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: release-assets
-          pattern: vcverifier-*
-          merge-multiple: true
-
-      - uses: marvinpinto/action-automatic-releases@latest
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          automatic_release_tag: ${{ needs.generate-version.outputs.version }}
-          prerelease: true
-          title: ${{ needs.generate-version.outputs.version }}
-          files: |
-            LICENSE
-            release-assets/vcverifier-*
+    with:
+      version: ${{ needs.generate-version.outputs.version }}
+      prerelease: true
+      files: |
+        LICENSE
+        release-assets/vcverifier-*
+      artifact-pattern: vcverifier-*
