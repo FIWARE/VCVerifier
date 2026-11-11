@@ -19,55 +19,39 @@ env:
   IMAGE_NAME: vcverifier
 
 jobs:
+  # The version from the semver label of the merged pull request; a push without one fails, as in
+  # the other FIWARE repositories. See https://github.com/FIWARE/github-workflows
+  semver:
+    if: inputs.version == ''
+    uses: FIWARE/github-workflows/.github/workflows/semver-version.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      tag-prefix: ""
+
+  # The version given by the caller, or the one from the label
   generate-version:
+    needs: semver
+    if: ${{ !cancelled() && (needs.semver.result == 'success' || needs.semver.result == 'skipped') }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       has_version: ${{ steps.version.outputs.has_version }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - id: pr
-        if: inputs.version == ''
-        uses: actions-ecosystem/action-get-merged-pull-request@v1.0.1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Detect semver label
-        if: inputs.version == ''
-        id: label
-        run: |
-          BUMP=""
-          while IFS= read -r label; do
-            case "$label" in
-              major|minor|patch) BUMP="$label"; break ;;
-            esac
-          done <<< "${{ steps.pr.outputs.labels }}"
-          echo "bump=$BUMP" >> $GITHUB_OUTPUT
-          [[ -n "$BUMP" ]] && echo "has_bump=true" >> $GITHUB_OUTPUT || echo "has_bump=false" >> $GITHUB_OUTPUT
-
-      - uses: zwaldowski/semver-release-action@v6
-        if: inputs.version == '' && steps.label.outputs.has_bump == 'true'
-        id: semver
-        with:
-          dry_run: true
-          bump: ${{ steps.label.outputs.bump }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Set version output
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          SEMVER_VERSION: ${{ needs.semver.outputs.version }}
         run: |
-          if [[ -n "${{ inputs.version }}" ]]; then
-            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-            echo "has_version=true" >> $GITHUB_OUTPUT
-          elif [[ "${{ steps.label.outputs.has_bump }}" == "true" ]]; then
-            echo "version=${{ steps.semver.outputs.version }}" >> $GITHUB_OUTPUT
-            echo "has_version=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_version=false" >> $GITHUB_OUTPUT
-          fi
+          version="${INPUT_VERSION:-$SEMVER_VERSION}"
+          if [ -n "$version" ]; then has_version=true; else has_version=false; fi
+          {
+            echo "version=$version"
+            echo "has_version=$has_version"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version: $version"
 
   build-scan-push:
     needs: generate-version
@@ -161,30 +145,20 @@ jobs:
           path: vcverifier-${{ matrix.goos }}-${{ matrix.goarch }}
           retention-days: 1
 
+  # Publishes the release, with the binaries, see https://github.com/FIWARE/github-workflows
   git-release:
     needs:
       - generate-version
       - build-scan-push
       - build-binaries
     if: needs.generate-version.outputs.has_version == 'true'
-    runs-on: ubuntu-latest
+    uses: FIWARE/github-workflows/.github/workflows/github-release.yml@v1
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: release-assets
-          pattern: vcverifier-*
-          merge-multiple: true
-
-      - uses: marvinpinto/action-automatic-releases@latest
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          automatic_release_tag: ${{ needs.generate-version.outputs.version }}
-          prerelease: false
-          title: ${{ needs.generate-version.outputs.version }}
-          files: |
-            LICENSE
-            release-assets/vcverifier-*
+    with:
+      version: ${{ needs.generate-version.outputs.version }}
+      prerelease: false
+      files: |
+        LICENSE
+        release-assets/vcverifier-*
+      artifact-pattern: vcverifier-*
